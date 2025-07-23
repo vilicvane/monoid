@@ -1,4 +1,4 @@
-import { Redirect, Route } from 'react-router-dom';
+import {Redirect, Route} from 'react-router-dom';
 import {
   IonApp,
   IonIcon,
@@ -7,10 +7,10 @@ import {
   IonTabBar,
   IonTabButton,
   IonTabs,
-  setupIonicReact
+  setupIonicReact,
 } from '@ionic/react';
-import { IonReactRouter } from '@ionic/react-router';
-import { ellipse, square, triangle } from 'ionicons/icons';
+import {IonReactRouter} from '@ionic/react-router';
+import {ellipse, square, triangle} from 'ionicons/icons';
 import Tab1 from './pages/Tab1';
 import Tab2 from './pages/Tab2';
 import Tab3 from './pages/Tab3';
@@ -44,44 +44,62 @@ import '@ionic/react/css/palettes/dark.system.css';
 
 /* Theme variables */
 import './theme/variables.css';
+import {useEffect, useState} from 'react';
+import {JavaCardApplet} from './lib/javacard';
+import {Nfc} from '@capawesome-team/capacitor-nfc';
 
 setupIonicReact();
 
-const App: React.FC = () => (
-  <IonApp>
-    <IonReactRouter>
-      <IonTabs>
-        <IonRouterOutlet>
-          <Route exact path="/tab1">
-            <Tab1 />
-          </Route>
-          <Route exact path="/tab2">
-            <Tab2 />
-          </Route>
-          <Route path="/tab3">
-            <Tab3 />
-          </Route>
-          <Route exact path="/">
-            <Redirect to="/tab1" />
-          </Route>
-        </IonRouterOutlet>
-        <IonTabBar slot="bottom">
-          <IonTabButton tab="tab1" href="/tab1">
-            <IonIcon aria-hidden="true" icon={triangle} />
-            <IonLabel>Tab 1</IonLabel>
-          </IonTabButton>
-          <IonTabButton tab="tab2" href="/tab2">
-            <IonIcon aria-hidden="true" icon={ellipse} />
-            <IonLabel>Tab 2</IonLabel>
-          </IonTabButton>
-          <IonTabButton tab="tab3" href="/tab3">
-            <IonIcon aria-hidden="true" icon={square} />
-            <IonLabel>Tab 3</IonLabel>
-          </IonTabButton>
-        </IonTabBar>
-      </IonTabs>
-    </IonReactRouter>
-  </IonApp>
-);
+const App: React.FC = () => {
+  const [applet] = useState(
+    () =>
+      new JavaCardApplet(
+        new Uint8Array([
+          0xf0, 0x6d, 0x6f, 0x6e, 0x6f, 0x69, 0x64, 0x01, 0x01, 0x00, 0x00,
+        ]),
+      ),
+  );
+
+  useEffect(() => {
+    Nfc.addListener('nfcTagScanned', async event => {
+      console.log('NFC Tag Scanned:', event);
+      // Handle NFC tag scanned event
+
+      for (let index = 0; index < 1000; index++) {
+        await applet.sendCommand(0x30, {
+          auth: {
+            pin: '123456',
+          },
+        });
+
+        await applet.sendCommand(0x2f, {
+          auth: {
+            pin: '123456',
+          },
+        });
+      }
+    });
+
+    return () => {
+      Nfc.removeAllListeners();
+    };
+  }, [applet]);
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+      }}
+    >
+      <button style={{padding: '12px 16px'}}>hello</button>
+    </div>
+    // <IonApp style={{display: 'flex', alignItems: 'center'}}>
+    //   <button>hello</button>
+    // </IonApp>
+  );
+};
 
 export default App;
