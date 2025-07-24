@@ -1,16 +1,36 @@
 import {Redirect, Route} from 'react-router-dom';
 import {
   IonApp,
+  IonContent,
+  IonHeader,
   IonIcon,
   IonLabel,
   IonRouterOutlet,
+  IonTab,
   IonTabBar,
   IonTabButton,
   IonTabs,
+  IonTitle,
+  IonToolbar,
   setupIonicReact,
 } from '@ionic/react';
 import {IonReactRouter} from '@ionic/react-router';
-import {ellipse, square, triangle} from 'ionicons/icons';
+import {
+  ellipse,
+  fileTrayFullOutline,
+  globe,
+  globeOutline,
+  globeSharp,
+  keyOutline,
+  library,
+  lockClosedOutline,
+  playCircle,
+  radio,
+  scan,
+  search,
+  square,
+  triangle,
+} from 'ionicons/icons';
 import Tab1 from './pages/Tab1';
 import Tab2 from './pages/Tab2';
 import Tab3 from './pages/Tab3';
@@ -51,54 +71,93 @@ import {Nfc} from '@capawesome-team/capacitor-nfc';
 setupIonicReact();
 
 const App: React.FC = () => {
-  const [applet] = useState(
-    () =>
-      new JavaCardApplet(
-        new Uint8Array([
-          0xf0, 0x6d, 0x6f, 0x6e, 0x6f, 0x69, 0x64, 0x01, 0x01, 0x00, 0x00,
-        ]),
-      ),
-  );
+  // const [applet] = useState(
+  //   () =>
+  //     new JavaCardApplet(
+  //       new Uint8Array([
+  //         0xf0, 0x6d, 0x6f, 0x6e, 0x6f, 0x69, 0x64, 0x01, 0x01, 0x00, 0x00,
+  //       ]),
+  //     ),
+  // );
 
-  useEffect(() => {
-    Nfc.addListener('nfcTagScanned', async event => {
-      console.log('NFC Tag Scanned:', event);
-      // Handle NFC tag scanned event
+  // useEffect(() => {
+  //   Nfc.addListener('nfcTagScanned', async event => {
+  //     console.log('NFC Tag Scanned:', event);
+  //     // Handle NFC tag scanned event
 
-      for (let index = 0; index < 1000; index++) {
-        await applet.sendCommand(0x30, {
-          auth: {
-            pin: '123456',
-          },
-        });
+  //     for (let index = 0; index < 1000; index++) {
+  //       await applet.sendCommand(0x30, {
+  //         auth: {
+  //           pin: '123456',
+  //         },
+  //       });
 
-        await applet.sendCommand(0x2f, {
-          auth: {
-            pin: '123456',
-          },
-        });
-      }
-    });
+  //       await applet.sendCommand(0x2f, {
+  //         auth: {
+  //           pin: '123456',
+  //         },
+  //       });
+  //     }
+  //   });
 
-    return () => {
-      Nfc.removeAllListeners();
-    };
-  }, [applet]);
+  //   return () => {
+  //     Nfc.removeAllListeners();
+  //   };
+  // }, [applet]);
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100vh',
-      }}
-    >
-      <button style={{padding: '12px 16px'}}>hello</button>
-    </div>
-    // <IonApp style={{display: 'flex', alignItems: 'center'}}>
-    //   <button>hello</button>
-    // </IonApp>
+    <IonApp>
+      <IonTabs>
+        <IonTab tab="sessions">
+          <div id="sessions-page">
+            <IonHeader>
+              <IonToolbar>
+                <IonTitle>Sessions</IonTitle>
+              </IonToolbar>
+            </IonHeader>
+            <IonContent>
+              <div className="example-content">Sessions content</div>
+            </IonContent>
+          </div>
+        </IonTab>
+        <IonTab tab="connect">
+          <div id="connect-page">
+            <IonHeader>
+              <IonToolbar>
+                <IonTitle>Connect</IonTitle>
+              </IonToolbar>
+            </IonHeader>
+            <IonContent>
+              <div className="example-content">Connect content</div>
+            </IonContent>
+          </div>
+        </IonTab>
+        <IonTab tab="safe">
+          <div id="safe-page">
+            <IonHeader>
+              <IonToolbar>
+                <IonTitle>Safe</IonTitle>
+              </IonToolbar>
+            </IonHeader>
+            <IonContent>
+              <div className="example-content">Safe content</div>
+            </IonContent>
+          </div>
+        </IonTab>
+
+        <IonTabBar slot="bottom">
+          <IonTabButton tab="sessions">
+            <IonIcon icon={globeOutline} />
+          </IonTabButton>
+          <IonTabButton tab="connect">
+            <IonIcon icon={scan} />
+          </IonTabButton>
+          <IonTabButton tab="safe">
+            <IonIcon icon={lockClosedOutline} />
+          </IonTabButton>
+        </IonTabBar>
+      </IonTabs>
+    </IonApp>
   );
 };
 
