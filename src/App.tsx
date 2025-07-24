@@ -31,7 +31,6 @@ import {
   triangle,
 } from 'ionicons/icons';
 import {useEffect, useState} from 'react';
-import {Redirect, Route} from 'react-router-dom';
 
 /* Core CSS required for Ionic components to work properly */
 import '@ionic/react/css/core.css';
