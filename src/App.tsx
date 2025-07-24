@@ -1,4 +1,3 @@
-import {Redirect, Route} from 'react-router-dom';
 import {
   IonApp,
   IonContent,
@@ -31,9 +30,8 @@ import {
   square,
   triangle,
 } from 'ionicons/icons';
-import Tab1 from './pages/Tab1';
-import Tab2 from './pages/Tab2';
-import Tab3 from './pages/Tab3';
+import {useEffect, useState} from 'react';
+import {Redirect, Route} from 'react-router-dom';
 
 /* Core CSS required for Ionic components to work properly */
 import '@ionic/react/css/core.css';
@@ -64,8 +62,9 @@ import '@ionic/react/css/palettes/dark.system.css';
 
 /* Theme variables */
 import './theme/variables.css';
-import {useEffect, useState} from 'react';
-import {JavaCardApplet} from './lib/javacard';
+
+import {JavaCardApplet} from './lib/javacard.js';
+
 import {Nfc} from '@capawesome-team/capacitor-nfc';
 
 setupIonicReact();

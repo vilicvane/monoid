@@ -1,0 +1,20 @@
+{
+  "$schema": "boilerplate.schema.json",
+  "boilerplate": "@mufan/code-boilerplates/typescript",
+  "options": {
+    "name": "monoid-app",
+    "license": "MIT",
+    "author": "vilicvane",
+    "defaultBranch": "main",
+    "type": "module",
+    "packageManager": "npm",
+    "projects": [
+      {
+        "name": "app",
+        "noEmit": true,
+        "dir": false,
+        "entrances": true
+      }
+    ]
+  }
+}
