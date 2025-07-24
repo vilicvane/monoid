@@ -1,0 +1,8 @@
+{
+  "terminal.integrated.env.windows": {
+    "JAVA_HOME": "C:\\Program Files\\Android\\Android Studio\\jbr",
+    "ANDROID_HOME": "C:\\Users\\vilicvane\\AppData\\Local\\Android\\Sdk"
+  },
+  "java.configuration.updateBuildConfiguration": "automatic",
+  "cSpell.words": ["cbor", "monoid", "transceive"]
+}
