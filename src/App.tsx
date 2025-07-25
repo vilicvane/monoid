@@ -62,9 +62,13 @@ import '@ionic/react/css/palettes/dark.system.css';
 /* Theme variables */
 import './theme/variables.css';
 
-import {JavaCardApplet} from './lib/javacard.js';
+import {Route} from 'react-router';
+
+import {JavaCardApplet} from './@lib/javacard.js';
 
 import {Nfc} from '@capawesome-team/capacitor-nfc';
+
+import {SafeView} from './@views/safe-view.js';
 
 setupIonicReact();
 
@@ -104,9 +108,13 @@ const App: React.FC = () => {
   // }, [applet]);
 
   return (
-    <IonApp>
-      <IonTabs>
-        <IonTab tab="sessions">
+    <IonReactRouter>
+      <IonApp>
+        <IonTabs>
+          <IonRouterOutlet>
+            <Route path="/safe" component={SafeView} />
+          </IonRouterOutlet>
+          {/* <IonTab tab="sessions">
           <div id="sessions-page">
             <IonHeader>
               <IonToolbar>
@@ -141,21 +149,22 @@ const App: React.FC = () => {
               <div className="example-content">Safe content</div>
             </IonContent>
           </div>
-        </IonTab>
+        </IonTab> */}
 
-        <IonTabBar slot="bottom">
-          <IonTabButton tab="sessions">
-            <IonIcon icon={globeOutline} />
-          </IonTabButton>
-          <IonTabButton tab="connect">
-            <IonIcon icon={scan} />
-          </IonTabButton>
-          <IonTabButton tab="safe">
-            <IonIcon icon={lockClosedOutline} />
-          </IonTabButton>
-        </IonTabBar>
-      </IonTabs>
-    </IonApp>
+          <IonTabBar slot="bottom">
+            <IonTabButton tab="sessions" href="/sessions">
+              <IonIcon icon={globeOutline} />
+            </IonTabButton>
+            <IonTabButton tab="connect" href="/connect">
+              <IonIcon icon={scan} />
+            </IonTabButton>
+            <IonTabButton tab="safe" href="/safe">
+              <IonIcon icon={lockClosedOutline} />
+            </IonTabButton>
+          </IonTabBar>
+        </IonTabs>
+      </IonApp>
+    </IonReactRouter>
   );
 };
 

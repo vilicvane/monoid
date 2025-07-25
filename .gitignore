@@ -3,8 +3,9 @@
 *.tgz
 node_modules/
 
-# IDE
+# Android
 .idea/
+*.orig
 
 # Package Manager
 npm-debug.log
