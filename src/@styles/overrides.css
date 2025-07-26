@@ -1,0 +1,8 @@
+ion-fab-button::part(native) {
+  border: solid 0.5px var(--ion-color-primary-shade);
+  box-shadow: none;
+}
+
+ion-fab-list > ion-fab-button::part(native) {
+  border-color: var(--ion-color-light-shade);
+}

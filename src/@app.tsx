@@ -30,6 +30,7 @@ import {
   square,
   triangle,
 } from 'ionicons/icons';
+import type {ReactNode} from 'react';
 import {useEffect, useState} from 'react';
 
 /* Core CSS required for Ionic components to work properly */
@@ -57,22 +58,21 @@ import '@ionic/react/css/display.css';
 
 /* import '@ionic/react/css/palettes/dark.always.css'; */
 /* import '@ionic/react/css/palettes/dark.class.css'; */
-import '@ionic/react/css/palettes/dark.system.css';
+import '@ionic/react/css/palettes/dark.class.css';
 
-/* Theme variables */
-import './theme/variables.css';
+import './@styles/variables.css';
+import './@styles/overrides.css';
 
 import {Route} from 'react-router';
 
-import {JavaCardApplet} from './@lib/javacard.js';
+import {NavBar, Views} from './@components/index.js';
+import {Applet} from './@lib/applet.js';
 
 import {Nfc} from '@capawesome-team/capacitor-nfc';
 
-import {SafeView} from './@views/safe-view.js';
-
 setupIonicReact();
 
-const App: React.FC = () => {
+const App = (): ReactNode => {
   // const [applet] = useState(
   //   () =>
   //     new JavaCardApplet(
@@ -108,63 +108,26 @@ const App: React.FC = () => {
   // }, [applet]);
 
   return (
-    <IonReactRouter>
-      <IonApp>
-        <IonTabs>
-          <IonRouterOutlet>
-            <Route path="/safe" component={SafeView} />
-          </IonRouterOutlet>
-          {/* <IonTab tab="sessions">
-          <div id="sessions-page">
-            <IonHeader>
-              <IonToolbar>
-                <IonTitle>Sessions</IonTitle>
-              </IonToolbar>
-            </IonHeader>
-            <IonContent>
-              <div className="example-content">Sessions content</div>
-            </IonContent>
-          </div>
-        </IonTab>
-        <IonTab tab="connect">
-          <div id="connect-page">
-            <IonHeader>
-              <IonToolbar>
-                <IonTitle>Connect</IonTitle>
-              </IonToolbar>
-            </IonHeader>
-            <IonContent>
-              <div className="example-content">Connect content</div>
-            </IonContent>
-          </div>
-        </IonTab>
-        <IonTab tab="safe">
-          <div id="safe-page">
-            <IonHeader>
-              <IonToolbar>
-                <IonTitle>Safe</IonTitle>
-              </IonToolbar>
-            </IonHeader>
-            <IonContent>
-              <div className="example-content">Safe content</div>
-            </IonContent>
-          </div>
-        </IonTab> */}
-
-          <IonTabBar slot="bottom">
-            <IonTabButton tab="sessions" href="/sessions">
-              <IonIcon icon={globeOutline} />
-            </IonTabButton>
-            <IonTabButton tab="connect" href="/connect">
-              <IonIcon icon={scan} />
-            </IonTabButton>
-            <IonTabButton tab="safe" href="/safe">
-              <IonIcon icon={lockClosedOutline} />
-            </IonTabButton>
-          </IonTabBar>
-        </IonTabs>
-      </IonApp>
-    </IonReactRouter>
+    <IonApp>
+      {/* <IonTabs>
+        <IonRouterOutlet>
+          <Route path="/safe" component={SafeView} />
+        </IonRouterOutlet>
+        <IonTabBar slot="bottom">
+          <IonTabButton tab="sessions" href="/sessions">
+            <IonIcon icon={globeOutline} />
+          </IonTabButton>
+          <IonTabButton tab="connect" href="/connect">
+            <IonIcon icon={scan} />
+          </IonTabButton>
+          <IonTabButton tab="safe" href="/safe">
+            <IonIcon icon={lockClosedOutline} />
+          </IonTabButton>
+        </IonTabBar>
+      </IonTabs> */}
+      <Views />
+      <NavBar />
+    </IonApp>
   );
 };
 

@@ -16,12 +16,12 @@ export type UsingXCBORMedium = {
 
 export type XCBORTypes = {
   packed: Uint8Array;
-  [x.neverTypeSymbol]: never;
-  [x.unknownTypeSymbol]: unknown;
-  [xUint8ArrayTypeSymbol]: Uint8Array;
-  [x.stringTypeSymbol]: string;
-  [x.numberTypeSymbol]: number;
-  [x.booleanTypeSymbol]: boolean;
+  // [x.neverTypeSymbol]: never;
+  // [x.unknownTypeSymbol]: unknown;
+  // [xUint8ArrayTypeSymbol]: Uint8Array;
+  // [x.stringTypeSymbol]: string;
+  // [x.numberTypeSymbol]: number;
+  // [x.booleanTypeSymbol]: boolean;
 };
 
 export const xCBOR = x.medium<UsingXCBORMedium>({

@@ -2,8 +2,12 @@ import {WalletKit} from '@reown/walletkit';
 import {Core} from '@walletconnect/core';
 import type {UpEntrances as UpEntrances_} from 'entrance-decorator';
 import {entrance} from 'entrance-decorator';
-import {createContext} from 'react';
+import {createContext, useContext} from 'react';
+import {routra} from 'routra';
+import {BrowserHistory, BrowserRouterPlugin} from 'routra/browser';
 
+import {createMonoidApplet} from './@lib/monoid-applet.js';
+import {ROUTE_SCHEMA} from './@routes.js';
 import {
   StorageService,
   WalletKitService,
@@ -12,6 +16,27 @@ import {
 
 export class Entrances {
   /* eslint-disable @typescript-eslint/explicit-function-return-type */
+
+  @entrance
+  get history() {
+    return new BrowserHistory();
+  }
+
+  @entrance
+  get router() {
+    const router = routra(ROUTE_SCHEMA);
+
+    router.$use(new BrowserRouterPlugin(router.sessions, this.history));
+
+    return router;
+  }
+
+  @entrance
+  get monoidApplet() {
+    return createMonoidApplet(
+      Uint8Array.from([0xf0, 0x6d, 0x6f, 0x6e, 0x6f, 0x69, 0x64, 0x01, 0x01]),
+    );
+  }
 
   @entrance
   get walletKit() {
@@ -55,3 +80,7 @@ export class Entrances {
 export type UpEntrances = UpEntrances_<Entrances, '*', never>;
 
 export const EntrancesContext = createContext<UpEntrances>(undefined!);
+
+export function useEntrances(): UpEntrances {
+  return useContext(EntrancesContext);
+}
