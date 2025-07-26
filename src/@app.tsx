@@ -1,37 +1,6 @@
-import {
-  IonApp,
-  IonContent,
-  IonHeader,
-  IonIcon,
-  IonLabel,
-  IonRouterOutlet,
-  IonTab,
-  IonTabBar,
-  IonTabButton,
-  IonTabs,
-  IonTitle,
-  IonToolbar,
-  setupIonicReact,
-} from '@ionic/react';
-import {IonReactRouter} from '@ionic/react-router';
-import {
-  ellipse,
-  fileTrayFullOutline,
-  globe,
-  globeOutline,
-  globeSharp,
-  keyOutline,
-  library,
-  lockClosedOutline,
-  playCircle,
-  radio,
-  scan,
-  search,
-  square,
-  triangle,
-} from 'ionicons/icons';
+import {IonApp, setupIonicReact} from '@ionic/react';
 import type {ReactNode} from 'react';
-import {useEffect, useState} from 'react';
+import {useEffect} from 'react';
 
 /* Core CSS required for Ionic components to work properly */
 import '@ionic/react/css/core.css';
@@ -63,68 +32,32 @@ import '@ionic/react/css/palettes/dark.class.css';
 import './@styles/variables.css';
 import './@styles/overrides.css';
 
-import {Route} from 'react-router';
-
 import {NavBar, Views} from './@components/index.js';
-import {Applet} from './@lib/applet.js';
-
-import {Nfc} from '@capawesome-team/capacitor-nfc';
+import {useEntrances} from './@entrances.js';
 
 setupIonicReact();
 
 const App = (): ReactNode => {
-  // const [applet] = useState(
-  //   () =>
-  //     new JavaCardApplet(
-  //       new Uint8Array([
-  //         0xf0, 0x6d, 0x6f, 0x6e, 0x6f, 0x69, 0x64, 0x01, 0x01, 0x00, 0x00,
-  //       ]),
-  //     ),
-  // );
+  const {router} = useEntrances();
 
-  // useEffect(() => {
-  //   Nfc.addListener('nfcTagScanned', async event => {
-  //     console.log('NFC Tag Scanned:', event);
-  //     // Handle NFC tag scanned event
+  useEffect(() => {
+    const listener = (event: any): void => {
+      event.detail.register(0, () => {
+        if (router.$ableToBack) {
+          router.$back();
+        }
+      });
+    };
 
-  //     for (let index = 0; index < 1000; index++) {
-  //       await applet.sendCommand(0x30, {
-  //         auth: {
-  //           pin: '123456',
-  //         },
-  //       });
+    document.addEventListener('ionBackButton', listener);
 
-  //       await applet.sendCommand(0x2f, {
-  //         auth: {
-  //           pin: '123456',
-  //         },
-  //       });
-  //     }
-  //   });
-
-  //   return () => {
-  //     Nfc.removeAllListeners();
-  //   };
-  // }, [applet]);
+    return () => {
+      document.removeEventListener('ionBackButton', listener);
+    };
+  }, [router]);
 
   return (
     <IonApp>
-      {/* <IonTabs>
-        <IonRouterOutlet>
-          <Route path="/safe" component={SafeView} />
-        </IonRouterOutlet>
-        <IonTabBar slot="bottom">
-          <IonTabButton tab="sessions" href="/sessions">
-            <IonIcon icon={globeOutline} />
-          </IonTabButton>
-          <IonTabButton tab="connect" href="/connect">
-            <IonIcon icon={scan} />
-          </IonTabButton>
-          <IonTabButton tab="safe" href="/safe">
-            <IonIcon icon={lockClosedOutline} />
-          </IonTabButton>
-        </IonTabBar>
-      </IonTabs> */}
       <Views />
       <NavBar />
     </IonApp>

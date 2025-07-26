@@ -16,3 +16,6 @@ project(':capacitor-status-bar').projectDir = new File('../node_modules/@capacit
 
 include ':capawesome-team-capacitor-nfc'
 project(':capawesome-team-capacitor-nfc').projectDir = new File('../node_modules/@capawesome-team/capacitor-nfc/android')
+
+include ':capawesome-team-capacitor-secure-preferences'
+project(':capawesome-team-capacitor-secure-preferences').projectDir = new File('../node_modules/@capawesome-team/capacitor-secure-preferences/android')

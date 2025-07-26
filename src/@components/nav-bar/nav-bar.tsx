@@ -1,6 +1,6 @@
-import {IonFab, IonFabButton, IonFabList, IonIcon} from '@ionic/react';
+import {IonFab, IonFabButton, IonIcon} from '@ionic/react';
 import classNames from 'classnames';
-import {addOutline, copyOutline, downloadOutline, key} from 'ionicons/icons';
+import {card} from 'ionicons/icons';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useState} from 'react';
 import {styled} from 'styled-components';
@@ -52,7 +52,7 @@ const Fab = styled(IonFab)`
 export const NavBar = observer((): ReactNode => {
   const {router} = useEntrances();
 
-  const safeFabActive = router.safe.$active;
+  const safeFabActive = router.safe.$exact.$active;
 
   const fabActive = safeFabActive;
 
@@ -82,10 +82,10 @@ export const NavBar = observer((): ReactNode => {
         horizontal="end"
         edge
       >
-        <IonFabButton>
-          <IonIcon icon={key} />
+        <IonFabButton onClick={() => router.safe.scanCard.$push()}>
+          <IonIcon icon={card} />
         </IonFabButton>
-        <IonFabList side="top">
+        {/* <IonFabList side="top">
           <IonFabButton>
             <IonIcon icon={addOutline} />
           </IonFabButton>
@@ -93,9 +93,9 @@ export const NavBar = observer((): ReactNode => {
             <IonIcon icon={downloadOutline} />
           </IonFabButton>
           <IonFabButton>
-            <IonIcon icon={copyOutline} />
+            <IonIcon icon={cardOutline} />
           </IonFabButton>
-        </IonFabList>
+        </IonFabList> */}
       </Fab>
     </Container>
   );

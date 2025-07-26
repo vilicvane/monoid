@@ -30,7 +30,7 @@
     "typescript",
     "typescriptreact"
   ],
-  "cSpell.ignoreRegExpList": ["/\\b[TX](?=[A-Z])/"],
+  "cSpell.ignoreRegExpList": ["/(?:\\b|(?<=[^A-Z]))[TX](?=[A-Z])/"],
   "cSpell.words": [
     "capawesome",
     "cbor",

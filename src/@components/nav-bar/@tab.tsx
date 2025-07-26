@@ -1,6 +1,5 @@
 import {IonIcon, IonRippleEffect} from '@ionic/react';
 import classnames from 'classnames';
-import {globeOutline} from 'ionicons/icons';
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 import type {RouteClass__} from 'routra';
@@ -34,16 +33,21 @@ const ActiveDot = styled.div`
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background-color: var(--ion-color-primary);
+  background-color: var(--ion-color-medium-tint);
   opacity: 0;
 
   transition:
+    background-color 0.2s linear,
     opacity 0.2s linear,
     transform 0.2s ease-in-out;
 
   ${Container}.active & {
     transform: translate(-50%, -50%) scale(1);
     opacity: 1;
+  }
+
+  ${Container}.exact-active & {
+    background-color: var(--ion-color-primary);
   }
 `;
 
@@ -65,6 +69,7 @@ export const Tab = observer(
       <Container
         className={classnames('ion-activatable', className, {
           active: route.$active,
+          'exact-active': route.$exact.$active,
         })}
         onClick={() => route.$reset()}
       >

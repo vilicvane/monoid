@@ -1,6 +1,34 @@
 import {css, keyframes} from 'styled-components';
 
-const popInKeyFrames = keyframes`
+const fadeInKeyFrames = keyframes`
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+`;
+
+export const fadeInAnimationCSS = css`
+  animation: ${fadeInKeyFrames} forwards 0.1s linear;
+`;
+
+const fadeOutKeyFrames = keyframes`
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+`;
+
+export const fadeOutAnimationCSS = css`
+  animation: ${fadeOutKeyFrames} forwards 0.1s linear;
+`;
+
+const scaleInKeyFrames = keyframes`
   from {
     transform: scale(0.5);
     opacity: 0;
@@ -12,8 +40,40 @@ const popInKeyFrames = keyframes`
   }
 `;
 
+export const scaleInAnimationCSS = css`
+  animation: ${scaleInKeyFrames} forwards 0.1s ease-in-out;
+`;
+
+const scaleOutKeyFrames = keyframes`
+  from {
+    transform: scale(1);
+    opacity: 1;
+  }
+
+  to {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+`;
+
+export const scaleOutAnimationCSS = css`
+  animation: ${scaleOutKeyFrames} forwards 0.1s ease-in-out;
+`;
+
+const popInKeyFrames = keyframes`
+  from {
+    transform: scale(0);
+    opacity: 0;
+  }
+
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+`;
+
 export const popInAnimationCSS = css`
-  animation: ${popInKeyFrames} forwards 0.25s cubic-bezier(0, 1.2, 1, 1.2);
+  animation: ${popInKeyFrames} forwards 0.1s cubic-bezier(0, 1.2, 1, 1.2);
 `;
 
 const popOutKeyFrames = keyframes`
@@ -29,5 +89,5 @@ const popOutKeyFrames = keyframes`
 `;
 
 export const popOutAnimationCSS = css`
-  animation: ${popOutKeyFrames} forwards 0.2s cubic-bezier(1, 0.4, 1, 0.4);
+  animation: ${popOutKeyFrames} forwards 0.1s cubic-bezier(1, 0.4, 1, 0.4);
 `;

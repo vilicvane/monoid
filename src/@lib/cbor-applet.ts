@@ -1,5 +1,5 @@
 import {decode, encode} from 'cbor2';
-import type * as x from 'x-value';
+import * as x from 'x-value';
 
 import type {AppletCommandDefinition} from './applet.js';
 import {Applet} from './applet.js';
@@ -8,11 +8,21 @@ export class CBORApplet<
   TCommandDefinitions,
 > extends Applet<TCommandDefinitions> {
   protected encode(data: unknown): Uint8Array {
+    console.debug('Encoding data:', data);
+
     return encode(data);
   }
 
   protected decode(data: Uint8Array): unknown {
-    return decode(data);
+    const decoded = decode(data);
+
+    console.debug('Decoding data:', decoded);
+
+    if (XCBORErrorResponse.is(decoded)) {
+      throw new CBORAppletError(decoded.error);
+    }
+
+    return decoded;
   }
 
   static create<TCBORCommandDefinitions extends CBORCommandDefinitions>(
@@ -74,3 +84,16 @@ type CBORCommandDefinitionsToMethods<
     request: x.TypeOf<TCBORCommandDefinitions[TCommandName]['request']>,
   ) => Promise<x.TypeOf<TCBORCommandDefinitions[TCommandName]['response']>>;
 };
+
+const XCBORErrorResponse = x.object({
+  error: x.object({
+    code: x.string,
+  }),
+});
+
+export class CBORAppletError extends Error {
+  constructor(readonly source: {code: string}) {
+    super(source.code);
+    this.name = new.target.name;
+  }
+}
