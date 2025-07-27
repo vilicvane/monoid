@@ -21,6 +21,13 @@ http://ionicframework.com/docs/theming/ */
   --ion-color-medium-shade: #666666;
   --ion-color-medium-tint: #aaaaaa;
 
+  --ion-color-danger: #ff2929;
+  --ion-color-danger-rgb: 255, 41, 41;
+  --ion-color-danger-contrast: #ffffff;
+  --ion-color-danger-contrast-rgb: 0, 0, 0;
+  --ion-color-danger-shade: #e02424;
+  --ion-color-danger-tint: #ff3e3e;
+
   --color-seed-light: #dcead4;
   --color-seed-light-shade: #b9e0a6;
   --color-seed-light-contrast: #233719;

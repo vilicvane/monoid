@@ -1,4 +1,4 @@
-import {IonApp, setupIonicReact} from '@ionic/react';
+import {IonApp, setupIonicReact, useIonAlert, useIonToast} from '@ionic/react';
 import type {ReactNode} from 'react';
 import {useEffect} from 'react';
 
@@ -38,7 +38,7 @@ import {useEntrances} from './@entrances.js';
 setupIonicReact();
 
 const App = (): ReactNode => {
-  const {router} = useEntrances();
+  const {router, errorService} = useEntrances();
 
   useEffect(() => {
     const listener = (event: any): void => {
@@ -55,6 +55,12 @@ const App = (): ReactNode => {
       document.removeEventListener('ionBackButton', listener);
     };
   }, [router]);
+
+  const [presentToast] = useIonToast();
+  const [presentAlert] = useIonAlert();
+
+  errorService.presentToast = presentToast;
+  errorService.presentAlert = presentAlert;
 
   return (
     <IonApp>

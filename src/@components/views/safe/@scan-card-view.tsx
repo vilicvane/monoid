@@ -5,13 +5,16 @@ import {type ReactNode, useEffect, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
+import type {BIP39PathString, CurveName} from '../../../@atomics.js';
 import {SafeKnownType} from '../../../@atomics.js';
 import {useEntrances} from '../../../@entrances.js';
 import {parseDerivationPath} from '../../../@lib/bip39.js';
 import {CBORAppletError} from '../../../@lib/cbor-applet.js';
-import type {MonoidAppletKey} from '../../../@lib/monoid-applet.js';
 import type {Router} from '../../../@routes.js';
-import {uint8ArrayToHex} from '../../../@utils/index.js';
+import {
+  computeEthereumAddress,
+  uint8ArrayToHex,
+} from '../../../@utils/index.js';
 import {
   breathAnimationCSS,
   scaleInAnimationCSS,
@@ -96,7 +99,7 @@ export const ScanCardView = ({
           for (const [index, item] of items.entries()) {
             setScanningState(['viewing', index, items.length]);
 
-            console.log(item);
+            const options = SAFE_ITEM_TYPE_TO_VIEW_KEY_OPTIONS[item.type];
 
             const metadata = await applet
               .viewKey({
@@ -104,7 +107,11 @@ export const ScanCardView = ({
                   pin: '123456',
                 },
                 index: item.index,
-                ...SAFE_ITEM_TYPE_TO_VIEW_KEY_OPTIONS[item.type],
+                ...options,
+                path:
+                  'path' in options
+                    ? parseDerivationPath(options.path)
+                    : undefined,
               })
               .catch(error => {
                 if (
@@ -121,11 +128,18 @@ export const ScanCardView = ({
               continue;
             }
 
+            const publicKeyHex = uint8ArrayToHex(metadata.publicKey);
+            const address = computeEthereumAddress(`0x${publicKeyHex}`);
+
             keys.push({
               type: SafeKnownType.satisfies(item.type),
               alias: item.alias,
               index: uint8ArrayToHex(item.index),
-              refPublicKey: uint8ArrayToHex(metadata.publicKey),
+              ref: {
+                ...('path' in options ? options : {}),
+                publicKey: publicKeyHex,
+                address,
+              },
             });
           }
 
@@ -239,19 +253,26 @@ const SCANNING_STATE_TO_TEXT: Record<
   ),
 };
 
-const ETHEREUM_DERIVATION_PATH = parseDerivationPath("m/44'/60'/0'/0/0");
+const ETHEREUM_SEED = 'Bitcoin seed';
+const ETHEREUM_CURVE = 'secp256k1';
+const ETHEREUM_DERIVATION_PATH = "m/44'/60'/0'/0/0";
 
-const SAFE_ITEM_TYPE_TO_VIEW_KEY_OPTIONS: Record<
-  string,
-  Omit<MonoidAppletKey, 'index'>
-> = {
+type ViewKeyOptions =
+  | {
+      seed?: string;
+      curve: CurveName;
+      path: BIP39PathString;
+    }
+  | {};
+
+const SAFE_ITEM_TYPE_TO_VIEW_KEY_OPTIONS: Record<string, ViewKeyOptions> = {
   seed: {
-    seed: 'Bitcoin seed',
-    curve: 'secp256k1',
+    seed: ETHEREUM_SEED,
+    curve: ETHEREUM_CURVE,
     path: ETHEREUM_DERIVATION_PATH,
   },
   master: {
-    curve: 'secp256k1',
+    curve: ETHEREUM_CURVE,
     path: ETHEREUM_DERIVATION_PATH,
   },
   secp256k1: {},

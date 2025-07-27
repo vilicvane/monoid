@@ -9,6 +9,7 @@ import {BrowserHistory, BrowserRouterPlugin} from 'routra/browser';
 import {createMonoidApplet} from './@lib/monoid-applet.js';
 import {ROUTE_SCHEMA} from './@routes.js';
 import {
+  ErrorService,
   StorageService,
   WalletKitService,
   WalletStorageService,
@@ -99,9 +100,14 @@ export class Entrances {
 
   @entrance
   get walletStorageService() {
-    return this.storageService.then(
-      storageService => new WalletStorageService(storageService),
+    return this.storageService.then(storageService =>
+      WalletStorageService.create(storageService),
     );
+  }
+
+  @entrance
+  get errorService() {
+    return new ErrorService();
   }
 
   /* eslint-enable @typescript-eslint/explicit-function-return-type */

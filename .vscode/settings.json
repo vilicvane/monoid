@@ -32,6 +32,7 @@
   ],
   "cSpell.ignoreRegExpList": ["/(?:\\b|(?<=[^A-Z]))[TX](?=[A-Z])/"],
   "cSpell.words": [
+    "autorun",
     "capawesome",
     "cbor",
     "monoid",

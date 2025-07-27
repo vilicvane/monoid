@@ -27,18 +27,22 @@ const SafeAuth = Auth.extend({
 
 const SafeItemType = x.union([SafeKnownType, SafeUnknownType]);
 
+const KeyOptions = x.union([
+  x.object({
+    seed: BIP39Seed.optional(),
+    curve: CurveName,
+    path: BIP39Path,
+  }),
+  x.object({}),
+]);
+
+export type MonoidAppletKeyOptions = x.TypeOf<typeof KeyOptions>;
+
 const Key = x.intersection([
   x.object({
     index: SafeIndex,
   }),
-  x.union([
-    x.object({
-      seed: BIP39Seed.optional(),
-      curve: CurveName,
-      path: BIP39Path,
-    }),
-    x.object({}),
-  ]),
+  KeyOptions,
 ]);
 
 export type MonoidAppletKey = x.TypeOf<typeof Key>;

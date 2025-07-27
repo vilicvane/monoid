@@ -1,5 +1,8 @@
+import type {BIP39Path, BIP39PathString} from '../@atomics.js';
+
 const HARDENED_FLAG = 0x80000000;
 
+export function parseDerivationPath(path: BIP39PathString): BIP39Path;
 export function parseDerivationPath(path: string): Uint8Array {
   const components = path.split('/');
 

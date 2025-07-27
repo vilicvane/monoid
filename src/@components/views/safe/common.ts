@@ -1,4 +1,7 @@
 import type {
+  BIP39PathString,
+  CurveName,
+  EthereumAddress,
   MonoidAppletIdHex,
   PublicKeyHex,
   SafeIndexHex,
@@ -7,9 +10,15 @@ import type {
 
 export type ScannedCardKeyData = {
   type: SafeKnownType;
-  alias: string | undefined;
   index: SafeIndexHex;
-  refPublicKey: PublicKeyHex;
+  alias: string | undefined;
+  ref: {
+    seed?: string;
+    curve?: CurveName;
+    path?: BIP39PathString;
+    publicKey: PublicKeyHex;
+    address: EthereumAddress;
+  };
 };
 
 export type ScannedCardData = {
