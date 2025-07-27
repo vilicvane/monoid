@@ -1,17 +1,18 @@
 import type {
-  MonoidAppletId,
-  PublicKey,
-  SafeIndex,
+  MonoidAppletIdHex,
+  PublicKeyHex,
+  SafeIndexHex,
   SafeKnownType,
 } from '../../../@atomics.js';
 
 export type ScannedCardKeyData = {
   type: SafeKnownType;
-  index: SafeIndex;
-  refPublicKey: PublicKey;
+  alias: string | undefined;
+  index: SafeIndexHex;
+  refPublicKey: PublicKeyHex;
 };
 
 export type ScannedCardData = {
-  id: MonoidAppletId;
+  id: MonoidAppletIdHex;
   keys: ScannedCardKeyData[];
 };

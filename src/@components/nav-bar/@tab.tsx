@@ -1,5 +1,5 @@
 import {IonIcon, IonRippleEffect} from '@ionic/react';
-import classnames from 'classnames';
+import classNames from 'classNames';
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 import type {RouteClass__} from 'routra';
@@ -67,7 +67,7 @@ export const Tab = observer(
   }): ReactNode => {
     return (
       <Container
-        className={classnames('ion-activatable', className, {
+        className={classNames('ion-activatable', className, {
           active: route.$active,
           'exact-active': route.$exact.$active,
         })}

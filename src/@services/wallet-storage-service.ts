@@ -13,5 +13,5 @@ export class WalletStorageService {
 
 export type WalletData = {
   alias: string;
-  index: string;
+  index: Uint8Array;
 };

@@ -1,5 +1,5 @@
 import {IonIcon} from '@ionic/react';
-import classNames from 'classnames';
+import classNames from 'classNames';
 import {card} from 'ionicons/icons';
 import {type ReactNode, useEffect, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
@@ -11,8 +11,13 @@ import {parseDerivationPath} from '../../../@lib/bip39.js';
 import {CBORAppletError} from '../../../@lib/cbor-applet.js';
 import type {MonoidAppletKey} from '../../../@lib/monoid-applet.js';
 import type {Router} from '../../../@routes.js';
-import {scaleInAnimationCSS, scaleOutAnimationCSS} from '../../@animations.js';
-import {View} from '../../@view.js';
+import {uint8ArrayToHex} from '../../../@utils/index.js';
+import {
+  breathAnimationCSS,
+  scaleInAnimationCSS,
+  scaleOutAnimationCSS,
+} from '../../@animations.js';
+import {View} from '../../@view/index.js';
 
 import type {ScannedCardKeyData} from './common.js';
 
@@ -34,6 +39,10 @@ const ScanCardGuideContainer = styled.div`
 const Icon = styled(IonIcon)`
   font-size: 72px;
   color: var(--ion-color-primary);
+
+  &.working {
+    ${breathAnimationCSS}
+  }
 
   &.error {
     color: var(--ion-color-danger);
@@ -114,8 +123,9 @@ export const ScanCardView = ({
 
             keys.push({
               type: SafeKnownType.satisfies(item.type),
-              index: item.index,
-              refPublicKey: metadata.publicKey,
+              alias: item.alias,
+              index: uint8ArrayToHex(item.index),
+              refPublicKey: uint8ArrayToHex(metadata.publicKey),
             });
           }
 
@@ -124,7 +134,7 @@ export const ScanCardView = ({
           router.safe
             .card({
               card: {
-                id,
+                id: uint8ArrayToHex(id),
                 keys,
               },
             })

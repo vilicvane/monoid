@@ -1,12 +1,19 @@
 import type {ReactNode} from 'react';
 
-import {View} from '../@view.js';
+import {
+  View,
+  ViewContent,
+  ViewHeader,
+  ViewHeaderTitle,
+} from '../@view/index.js';
 
 export const ScanView = (): ReactNode => {
   return (
     <View>
-      <h1>Scan View</h1>
-      <p>This is the scan view content.</p>
+      <ViewHeader>
+        <ViewHeaderTitle>Scan</ViewHeaderTitle>
+      </ViewHeader>
+      <ViewContent>This is the scan view content.</ViewContent>
     </View>
   );
 };

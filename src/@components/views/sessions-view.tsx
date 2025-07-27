@@ -1,12 +1,19 @@
 import type {ReactNode} from 'react';
 
-import {View} from '../@view.js';
+import {
+  View,
+  ViewContent,
+  ViewHeader,
+  ViewHeaderTitle,
+} from '../@view/index.js';
 
 export const SessionsView = (): ReactNode => {
   return (
     <View>
-      <h1>Sessions View</h1>
-      <p>This is the sessions view content.</p>
+      <ViewHeader>
+        <ViewHeaderTitle>Sessions</ViewHeaderTitle>
+      </ViewHeader>
+      <ViewContent>This is the sessions view content.</ViewContent>
     </View>
   );
 };

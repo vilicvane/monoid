@@ -5,6 +5,8 @@ http://ionicframework.com/docs/theming/ */
   --view-inset-top: env(safe-area-inset-top);
   --view-inset-bottom: max(3px, env(safe-area-inset-bottom));
 
+  --nav-bar-height: 50px;
+
   --ion-color-primary: #3377ff;
   --ion-color-primary-rgb: 51, 119, 255;
   --ion-color-primary-contrast: #ffffff;
@@ -18,4 +20,12 @@ http://ionicframework.com/docs/theming/ */
   --ion-color-medium-contrast-rgb: 0, 0, 0;
   --ion-color-medium-shade: #666666;
   --ion-color-medium-tint: #aaaaaa;
+
+  --color-seed-light: #dcead4;
+  --color-seed-light-shade: #b9e0a6;
+  --color-seed-light-contrast: #233719;
+
+  --color-master-light: #d1ddf7;
+  --color-master-light-shade: #9fbbf3;
+  --color-master-light-contrast: #2c3c5b;
 }

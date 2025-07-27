@@ -1,5 +1,5 @@
 import {IonFab, IonFabButton, IonIcon} from '@ionic/react';
-import classNames from 'classnames';
+import classNames from 'classNames';
 import {card} from 'ionicons/icons';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useState} from 'react';
@@ -11,7 +11,10 @@ import {popInAnimationCSS, popOutAnimationCSS} from '../@animations.js';
 import {Tabs as Tabs_} from './@tabs.js';
 
 const Container = styled.div`
-  --nav-bar-height: 50px;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
 
   border-top: solid 0.5px #eee;
   background-color: rgba(245, 245, 245, 0.8);
@@ -85,17 +88,6 @@ export const NavBar = observer((): ReactNode => {
         <IonFabButton onClick={() => router.safe.scanCard.$push()}>
           <IonIcon icon={card} />
         </IonFabButton>
-        {/* <IonFabList side="top">
-          <IonFabButton>
-            <IonIcon icon={addOutline} />
-          </IonFabButton>
-          <IonFabButton onClick={() => router.safe.import.$push()}>
-            <IonIcon icon={downloadOutline} />
-          </IonFabButton>
-          <IonFabButton>
-            <IonIcon icon={cardOutline} />
-          </IonFabButton>
-        </IonFabList> */}
       </Fab>
     </Container>
   );

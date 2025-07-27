@@ -1,11 +1,5 @@
-import classNames from 'classnames';
-import {
-  globeOutline,
-  lockClosed,
-  lockClosedOutline,
-  scan,
-  scanOutline,
-} from 'ionicons/icons';
+import classNames from 'classNames';
+import {globeOutline, lockClosedOutline, scanOutline} from 'ionicons/icons';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 

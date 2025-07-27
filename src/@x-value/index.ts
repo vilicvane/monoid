@@ -7,4 +7,5 @@ declare global {
   }
 }
 
+export * from './nominal.js';
 export * from './x-cbor/index.js';

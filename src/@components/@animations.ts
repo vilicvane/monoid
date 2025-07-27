@@ -91,3 +91,21 @@ const popOutKeyFrames = keyframes`
 export const popOutAnimationCSS = css`
   animation: ${popOutKeyFrames} forwards 0.1s cubic-bezier(1, 0.4, 1, 0.4);
 `;
+
+const breathKeyFrames = keyframes`
+  0% {
+    opacity: 1;
+  }
+
+  25% {
+    opacity: 0.5;
+  }
+
+  100% {
+    opacity: 1;
+  }
+`;
+
+export const breathAnimationCSS = css`
+  animation: ${breathKeyFrames} forwards 2s linear infinite;
+`;

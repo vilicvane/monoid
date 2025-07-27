@@ -5,8 +5,14 @@ import {XUint8Array} from './@x-value/index.js';
 export const MonoidAppletId = XUint8Array.nominal<'monoid applet id'>();
 export type MonoidAppletId = x.TypeOf<typeof MonoidAppletId>;
 
+export const MonoidAppletIdHex = x.string.nominal<'monoid applet id hex'>();
+export type MonoidAppletIdHex = x.TypeOf<typeof MonoidAppletIdHex>;
+
 export const SafeIndex = XUint8Array.nominal<'safe index'>();
 export type SafeIndex = x.TypeOf<typeof SafeIndex>;
+
+export const SafeIndexHex = x.string.nominal<'safe index hex'>();
+export type SafeIndexHex = x.TypeOf<typeof SafeIndexHex>;
 
 export const SafeKnownType = x.string.nominal<'safe known type'>();
 export type SafeKnownType = x.TypeOf<typeof SafeKnownType>;
@@ -22,8 +28,14 @@ export type CipherName = x.TypeOf<typeof CipherName>;
 export const PublicKey = XUint8Array.nominal<'public key'>();
 export type PublicKey = x.TypeOf<typeof PublicKey>;
 
+export const PublicKeyHex = x.string.nominal<'public key hex'>();
+export type PublicKeyHex = x.TypeOf<typeof PublicKeyHex>;
+
 export const ChainCode = XUint8Array.nominal<'chain code'>();
 export type ChainCode = x.TypeOf<typeof ChainCode>;
+
+export const ChainCodeHex = x.string.nominal<'chain code hex'>();
+export type ChainCodeHex = x.TypeOf<typeof ChainCodeHex>;
 
 export const BIP39Seed = XUint8Array.nominal<'bip39 seed'>();
 export type BIP39Seed = x.TypeOf<typeof BIP39Seed>;

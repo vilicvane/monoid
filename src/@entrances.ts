@@ -26,7 +26,37 @@ export class Entrances {
   get router() {
     const router = routra(ROUTE_SCHEMA);
 
-    router.$use(new BrowserRouterPlugin(router.sessions, this.history));
+    router.$use(
+      new BrowserRouterPlugin({
+        default: router.sessions,
+        history: this.history,
+        segments: {
+          encodeState(state) {
+            return JSON.stringify(state, (_key, value) => {
+              if (value instanceof Uint8Array) {
+                return {
+                  $type: 'Uint8Array',
+                  value: Array.from(value),
+                };
+              }
+
+              return value;
+            });
+          },
+          decodeState(state) {
+            return JSON.parse(state, (_key, value) => {
+              if (value && typeof value === 'object' && '$type' in value) {
+                if (value.$type === 'Uint8Array') {
+                  return Uint8Array.from(value.value);
+                }
+              }
+
+              return value;
+            });
+          },
+        },
+      }),
+    );
 
     return router;
   }
