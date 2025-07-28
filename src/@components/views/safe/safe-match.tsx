@@ -4,8 +4,8 @@ import {Route} from 'routra-react';
 
 import type {Router} from '../../../@routes.js';
 
-import {CardView} from './@card-view.js';
-import {SafeView} from './@safe-view.js';
+import {CardView} from './@card/index.js';
+import {SafeView} from './@safe/safe-view.js';
 import {ScanCardView} from './@scan-card-view.js';
 
 export const SafeMatch = ({

@@ -35,4 +35,7 @@ http://ionicframework.com/docs/theming/ */
   --color-master-light: #d1ddf7;
   --color-master-light-shade: #9fbbf3;
   --color-master-light-contrast: #2c3c5b;
+
+  --color-derivations-badge: #ffbb29;
+  --color-derivations-badge-contrast: #ffffff;
 }
