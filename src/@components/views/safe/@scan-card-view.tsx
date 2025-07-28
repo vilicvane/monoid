@@ -204,6 +204,10 @@ const ScanningStateTextHighlight = styled.span`
   color: var(--ion-color-medium);
 `;
 
+const ScanningStateTextFocus = styled.span`
+  color: var(--ion-color-primary);
+`;
+
 type ScanningState =
   | 'ready'
   | 'greeting'
@@ -224,26 +228,34 @@ const SCANNING_STATE_TO_TEXT: Record<
   ),
   greeting: () => (
     <ScanningStateText className="smaller">
-      Greeting to card...
+      <ScanningStateTextHighlight>
+        Greeting to card...
+      </ScanningStateTextHighlight>
     </ScanningStateText>
   ),
   listing: () => (
     <ScanningStateText className="smaller">
-      Listing safe items...
-    </ScanningStateText>
-  ),
-  viewing: (index, total) => (
-    <ScanningStateText className="smaller">
-      Fetching keys...
-      <br />
       <ScanningStateTextHighlight>
-        {index + 1}/{total}
+        Listing safe items...
       </ScanningStateTextHighlight>
     </ScanningStateText>
   ),
+  viewing: (index, total) => (
+    <>
+      <ScanningStateText className="smaller">
+        <ScanningStateTextHighlight>
+          Fetching keys, hold tight...
+        </ScanningStateTextHighlight>
+        <br />
+        <ScanningStateTextFocus>{index + 1}</ScanningStateTextFocus>/{total}
+      </ScanningStateText>
+    </>
+  ),
   complete: () => (
     <ScanningStateText className="smaller">
-      Scanning complete.
+      <ScanningStateTextHighlight>
+        Scanning complete.
+      </ScanningStateTextHighlight>
     </ScanningStateText>
   ),
   error: () => (
@@ -255,7 +267,7 @@ const SCANNING_STATE_TO_TEXT: Record<
 
 const ETHEREUM_SEED = 'Bitcoin seed';
 const ETHEREUM_CURVE = 'secp256k1';
-const ETHEREUM_DERIVATION_PATH = "m/44'/60'/0'/0/0";
+const ETHEREUM_DERIVATION_PATH = "m/44'/60'/0'/0/1";
 
 type ViewKeyOptions =
   | {

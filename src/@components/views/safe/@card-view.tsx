@@ -1,7 +1,13 @@
 import {IonIcon, IonRippleEffect} from '@ionic/react';
 import classNames from 'classNames';
-import {cardOutline, checkmark} from 'ionicons/icons';
-import {runInAction} from 'mobx';
+import {
+  cardOutline,
+  checkmark,
+  fileTrayFullOutline,
+  refresh,
+} from 'ionicons/icons';
+import {observable, runInAction} from 'mobx';
+import {observer} from 'mobx-react-lite';
 import {type ReactNode, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
@@ -9,10 +15,11 @@ import {styled} from 'styled-components';
 import type {SafeIndexHex} from '../../../@atomics.js';
 import {useEntrances} from '../../../@entrances.js';
 import type {Router} from '../../../@routes.js';
-import {
-  WalletKeyKnownType,
-  type WalletStorageService,
+import type {
+  WalletKeyData,
+  WalletStorageService,
 } from '../../../@services/index.js';
+import {WalletKeyKnownType} from '../../../@services/index.js';
 import {Address} from '../../@ui/address.js';
 import {Button} from '../../@ui/button.js';
 import {
@@ -56,57 +63,79 @@ const Buttons = styled.div`
   gap: 8px;
 `;
 
-export const CardView = ({
-  view,
-}: RouteComponentProps<Router['safe']['card']>): ReactNode => {
-  const {walletStorageService, errorService} = useEntrances();
+export const CardView = observer(
+  ({view}: RouteComponentProps<Router['safe']['card']>): ReactNode => {
+    const {walletStorageService, errorService} = useEntrances();
 
-  const [selectedIndexSet] = useState(
-    () => new Set(view.card.keys.map(key => key.index)),
-  );
+    const {indexToKeyMap} = walletStorageService;
 
-  return (
-    <View>
-      <ViewHeader>
-        <ViewHeaderTitle>Card</ViewHeaderTitle>
-        <Id>
-          <IdIcon icon={cardOutline} />
-          <IdNumber>{view.card.id}</IdNumber>
-        </Id>
-      </ViewHeader>
-      <ViewContent>
-        <List>
-          {view.card.keys.map(key => (
-            <KeyItem
-              key={key.index}
-              data={key}
-              selectedIndexSet={selectedIndexSet}
-            />
-          ))}
-        </List>
-        <Buttons>
-          <Button
-            onClick={errorService.catch(() =>
-              importSelectedKeys(
-                walletStorageService,
-                view.card,
-                selectedIndexSet,
-              ),
-            )}
-          >
-            Import
-          </Button>
-        </Buttons>
-      </ViewContent>
-    </View>
-  );
-};
+    const keyItems = view.card.keys.map(
+      (key): [ScannedCardKeyData, KeyItemState] => {
+        const existingKey = indexToKeyMap.get(key.index);
 
-async function importSelectedKeys(
+        if (existingKey) {
+          return [
+            key,
+            isWalletKeyUpToDate(key, existingKey) ? 'up-to-date' : 'outdated',
+          ];
+        } else {
+          return [key, 'new'];
+        }
+      },
+    );
+
+    const [selectedIndexSet] = useState(() => observable.set());
+
+    const selectedAny = keyItems.some(
+      ([key, state]) =>
+        state !== 'up-to-date' && selectedIndexSet.has(key.index),
+    );
+
+    return (
+      <View>
+        <ViewHeader>
+          <ViewHeaderTitle>Card</ViewHeaderTitle>
+          <Id>
+            <IdIcon icon={cardOutline} />
+            <IdNumber>{view.card.id}</IdNumber>
+          </Id>
+        </ViewHeader>
+        <ViewContent>
+          <List>
+            {keyItems.map(([key, state]) => (
+              <KeyItem
+                key={key.index}
+                data={key}
+                state={state}
+                selectedIndexSet={selectedIndexSet}
+              />
+            ))}
+          </List>
+          <Buttons>
+            <Button
+              disabled={!selectedAny}
+              onClick={errorService.catch(() =>
+                importSelectedKeys(
+                  walletStorageService,
+                  view.card,
+                  selectedIndexSet,
+                ),
+              )}
+            >
+              Import
+            </Button>
+          </Buttons>
+        </ViewContent>
+      </View>
+    );
+  },
+);
+
+function importSelectedKeys(
   walletStorageService: WalletStorageService,
-  {id, keys}: ScannedCardData,
+  {keys}: ScannedCardData,
   selectedIndexSet: Set<SafeIndexHex>,
-): Promise<void> {
+): void {
   const selectedKeys = keys.filter(key => selectedIndexSet.has(key.index));
 
   const existingKeys = new Map(
@@ -115,26 +144,62 @@ async function importSelectedKeys(
 
   runInAction(() => {
     for (const key of selectedKeys) {
-      if (existingKeys.has(key.index)) {
-        continue;
-      }
+      const existingKey = existingKeys.get(key.index);
 
-      walletStorageService.keys.push({
-        type: WalletKeyKnownType.satisfies(key.type),
-        index: key.index,
-        alias: key.alias,
-        wallets: [
-          {
-            seed: key.ref.seed,
-            curve: key.ref.curve,
-            path: key.ref.path,
-            address: key.ref.address,
-          },
-        ],
-        source: id,
-      });
+      if (existingKey) {
+        if (existingKey.alias === undefined && key.alias) {
+          existingKey.alias = key.alias;
+        }
+
+        if (
+          existingKey.wallets.some(wallet => wallet.address === key.ref.address)
+        ) {
+          console.debug('wallet already exists:', key.ref.address);
+          continue;
+        }
+
+        existingKey.wallets.push({
+          seed: key.ref.seed,
+          curve: key.ref.curve,
+          path: key.ref.path,
+          address: key.ref.address,
+        });
+      } else {
+        walletStorageService.keys.push({
+          type: WalletKeyKnownType.satisfies(key.type),
+          index: key.index,
+          alias: key.alias,
+          wallets: [
+            {
+              seed: key.ref.seed,
+              curve: key.ref.curve,
+              path: key.ref.path,
+              address: key.ref.address,
+            },
+          ],
+        });
+
+        console.debug('added new wallet key:', key.ref.address);
+      }
     }
   });
+}
+
+function isWalletKeyUpToDate(
+  key: ScannedCardKeyData,
+  existingKey: WalletKeyData,
+): boolean {
+  console.assert(key.index === existingKey.index);
+
+  if (existingKey.wallets.every(wallet => wallet.address !== key.ref.address)) {
+    return false;
+  }
+
+  if (existingKey.alias === undefined && key.alias) {
+    return false;
+  }
+
+  return true;
 }
 
 const Item = styled.div`
@@ -183,14 +248,20 @@ const KeyCheckbox = styled(KeyTag)`
   width: 22px;
   padding: 0;
 
-  background-color: var(--ion-color-dark-contrast);
-  border-color: var(--ion-color-light-shade);
-
   display: flex;
   align-items: center;
   justify-content: center;
 
+  background-color: var(--ion-color-dark-contrast);
+  border-color: var(--ion-color-medium-tint);
+
   transition: all 0.2s linear;
+
+  &.up-to-date {
+    background-color: var(--ion-color-light);
+    border-color: var(--ion-color-light-shade);
+    color: var(--ion-color-dark);
+  }
 
   &.checked {
     background-color: var(--ion-color-primary);
@@ -229,47 +300,74 @@ const KeyRefAddress = styled(Address)`
   color: var(--ion-color-dark);
 `;
 
-const KeyItem = ({
-  data: {
-    type,
-    index,
-    alias,
-    ref: {address},
-  },
-  selectedIndexSet,
-}: {
-  data: ScannedCardKeyData;
-  selectedIndexSet: Set<SafeIndexHex>;
-}): ReactNode => {
-  const [checked, setChecked] = useState(() => selectedIndexSet.has(index));
+type KeyItemState = 'new' | 'outdated' | 'up-to-date';
 
-  return (
-    <Item
-      className="ion-activatable"
-      onClick={() => {
-        if (checked) {
-          selectedIndexSet.delete(index);
-          setChecked(false);
-        } else {
-          selectedIndexSet.add(index);
-          setChecked(true);
+const KeyItem = observer(
+  ({
+    data: {
+      type,
+      index,
+      alias,
+      ref: {path, address},
+    },
+    state,
+    selectedIndexSet,
+  }: {
+    data: ScannedCardKeyData;
+    state: KeyItemState;
+    selectedIndexSet: Set<SafeIndexHex>;
+  }): ReactNode => {
+    const checkable = state !== 'up-to-date';
+
+    const checked = checkable && selectedIndexSet.has(index);
+
+    let icon: ReactNode | undefined;
+
+    switch (state) {
+      case 'new':
+        icon = checked ? <IonIcon icon={checkmark} /> : undefined;
+        break;
+      case 'outdated':
+        icon = <IonIcon icon={refresh} />;
+        break;
+      case 'up-to-date':
+        icon = <IonIcon icon={fileTrayFullOutline} />;
+        break;
+    }
+
+    return (
+      <Item
+        className="ion-activatable"
+        onClick={
+          checkable
+            ? () => {
+                if (checked) {
+                  selectedIndexSet.delete(index);
+                } else {
+                  selectedIndexSet.add(index);
+                }
+              }
+            : undefined
         }
-      }}
-    >
-      <ItemContent>
-        <KeyTags>
-          <KeyCheckbox className={classNames({checked})}>
-            <IonIcon icon={checkmark} />
-          </KeyCheckbox>
-          <KeyType className={type}>{type}</KeyType>
-          {(type === 'seed' || type === 'master') && (
-            <KeyDerivation>m/44'/60'/0'/0</KeyDerivation>
-          )}
-          {alias && <KeyAlias>{alias}</KeyAlias>}
-        </KeyTags>
-        <KeyRefAddress>{address}</KeyRefAddress>
-      </ItemContent>
-      <IonRippleEffect />
-    </Item>
-  );
-};
+      >
+        <ItemContent>
+          <KeyTags>
+            <KeyCheckbox
+              className={classNames({
+                checked,
+                [state]: true,
+              })}
+            >
+              {icon}
+            </KeyCheckbox>
+            <KeyType className={type}>{type}</KeyType>
+            {path && <KeyDerivation>{path}</KeyDerivation>}
+            {alias && <KeyAlias>{alias}</KeyAlias>}
+          </KeyTags>
+          <KeyRefAddress>{address}</KeyRefAddress>
+        </ItemContent>
+        {checkable && <IonRippleEffect />}
+      </Item>
+    );
+  },
+);

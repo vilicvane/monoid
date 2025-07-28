@@ -1,12 +1,11 @@
 import type {IObservableArray} from 'mobx';
-import {observable, reaction, toJS} from 'mobx';
+import {computed, observable, reaction, toJS} from 'mobx';
 import * as x from 'x-value';
 
 import type {
   BIP39PathString,
   CurveName,
   EthereumAddress,
-  MonoidAppletIdHex,
   SafeIndexHex,
 } from '../@atomics.js';
 
@@ -32,6 +31,16 @@ export class WalletStorageService {
         storage.set('walletKeys', keys).catch(console.error);
       },
     );
+
+    // this.keys.clear();
+  }
+
+  private computedIndexToKeyMap = computed(
+    () => new Map(this.keys.map(key => [key.index, key])),
+  );
+
+  get indexToKeyMap(): Map<SafeIndexHex, WalletKeyData> {
+    return this.computedIndexToKeyMap.get();
   }
 
   static async create(storage: StorageService): Promise<WalletStorageService> {
@@ -46,7 +55,6 @@ export type WalletKeyData = {
   index: SafeIndexHex;
   alias: string | undefined;
   wallets: WalletKeyWalletData[];
-  source: MonoidAppletIdHex;
 };
 
 export type WalletKeyWalletData = {
