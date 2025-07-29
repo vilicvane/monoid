@@ -1,9 +1,11 @@
-import {IonIcon, IonRippleEffect} from '@ionic/react';
+import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 import type {RouteClass__} from 'routra';
 import {styled} from 'styled-components';
+
+import {RippleEffect as RippleEffect_} from '../@ui/ripple-effect.js';
 
 export const Container = styled.div`
   position: relative;
@@ -51,7 +53,7 @@ const ActiveDot = styled.div`
   }
 `;
 
-const RippleEffect = styled(IonRippleEffect)`
+const RippleEffect = styled(RippleEffect_)`
   margin: calc(var(--view-inset-bottom) / 2) -20px 0;
 `;
 

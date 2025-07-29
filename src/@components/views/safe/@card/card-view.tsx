@@ -1,4 +1,3 @@
-import {IonIcon} from '@ionic/react';
 import {cardOutline} from 'ionicons/icons';
 import {observable, runInAction} from 'mobx';
 import {observer} from 'mobx-react-lite';
@@ -14,11 +13,12 @@ import type {
   WalletStorageService,
 } from '../../../../@services/index.js';
 import {WalletKeyKnownType} from '../../../../@services/index.js';
-import {Button} from '../../../@ui/button.js';
+import {Button, Buttons} from '../../../@ui/button.js';
 import {
   View,
-  ViewContent as ViewContent_,
+  ViewContent,
   ViewHeader,
+  ViewHeaderIdentifier,
   ViewHeaderTitle,
 } from '../../../@view/index.js';
 import type {ScannedCardData, ScannedCardKeyData} from '../common.js';
@@ -26,39 +26,9 @@ import type {ScannedCardData, ScannedCardKeyData} from '../common.js';
 import type {KeyItemState} from './@key-item.js';
 import {KeyItem} from './@key-item.js';
 
-const ViewContent = styled(ViewContent_)`
-  padding-left: 0;
-  padding-right: 0;
-`;
-
-const Id = styled.div`
-  color: var(--ion-color-medium);
-  background-color: var(--ion-color-light);
-  border-radius: 4px;
-
-  height: 24px;
-  padding: 0 6px 0 4px;
-  border: solid 0.5px var(--ion-color-light-shade);
-
-  display: flex;
-  align-items: center;
-  gap: 4px;
-`;
-
-const IdIcon = styled(IonIcon)`
-  font-size: 20px;
-`;
-
-const IdNumber = styled.span``;
-
 const List = styled.div`
   flex: 1;
-`;
-
-const Buttons = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  margin: 0 calc(-1 * var(--view-padding));
 `;
 
 export const CardView = observer(
@@ -93,10 +63,9 @@ export const CardView = observer(
       <View>
         <ViewHeader>
           <ViewHeaderTitle>Card</ViewHeaderTitle>
-          <Id>
-            <IdIcon icon={cardOutline} />
-            <IdNumber>{view.card.id}</IdNumber>
-          </Id>
+          <ViewHeaderIdentifier icon={cardOutline}>
+            {view.card.id}
+          </ViewHeaderIdentifier>
         </ViewHeader>
         <ViewContent>
           <List>

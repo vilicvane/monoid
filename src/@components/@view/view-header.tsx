@@ -1,3 +1,4 @@
+import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
 import {observer} from 'mobx-react-lite';
 import type {HTMLAttributes, ReactNode} from 'react';
@@ -42,3 +43,40 @@ export const ViewHeader = observer(
 export const ViewHeaderTitle = styled.h1`
   margin: 0;
 `;
+
+const IdentifierContainer = styled.div`
+  background-color: var(--ion-color-light);
+  border-radius: 4px;
+
+  height: 24px;
+  padding: 0 6px 0 4px;
+  border: solid 0.5px var(--ion-color-light-shade);
+
+  display: flex;
+  align-items: center;
+  gap: 4px;
+`;
+
+const IdentifierIcon = styled(IonIcon)`
+  color: var(--ion-color-medium-tint);
+`;
+
+const Identifier = styled.span`
+  font-size: 14px;
+  color: var(--ion-color-medium);
+`;
+
+export const ViewHeaderIdentifier = ({
+  icon,
+  children,
+}: {
+  icon: string;
+  children: ReactNode;
+}): ReactNode => {
+  return (
+    <IdentifierContainer>
+      <IdentifierIcon icon={icon} />
+      <Identifier>{children}</Identifier>
+    </IdentifierContainer>
+  );
+};

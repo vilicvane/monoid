@@ -1,4 +1,4 @@
-import {IonIcon, IonRippleEffect} from '@ionic/react';
+import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
 import {checkmark, fileTrayFullOutline, refresh} from 'ionicons/icons';
 import {observer} from 'mobx-react-lite';
@@ -7,13 +7,14 @@ import {styled} from 'styled-components';
 
 import type {SafeIndexHex} from '../../../../@atomics.js';
 import {
-  KeyAlias,
-  KeyDerivation,
+  KeyAliasTag,
+  KeyDerivationTag,
   KeyTag,
   KeyTags,
-  KeyType,
-} from '../../../@key/key-tag.js';
+  KeyTypeTag,
+} from '../../../@key/key-tags.js';
 import {Address} from '../../../@ui/address.js';
+import {RippleEffect} from '../../../@ui/ripple-effect.js';
 import type {ScannedCardKeyData} from '../common.js';
 
 const Item = styled.div`
@@ -127,13 +128,13 @@ export const KeyItem = observer(
             >
               {icon}
             </KeyCheckbox>
-            <KeyType className={type}>{type}</KeyType>
-            {path && <KeyDerivation>{path}</KeyDerivation>}
-            {alias && <KeyAlias>{alias}</KeyAlias>}
+            <KeyTypeTag className={type}>{type}</KeyTypeTag>
+            {path && <KeyDerivationTag>{path}</KeyDerivationTag>}
+            {alias && <KeyAliasTag>{alias}</KeyAliasTag>}
           </KeyTags>
           <KeyRefAddress>{address}</KeyRefAddress>
         </ItemContent>
-        {checkable && <IonRippleEffect />}
+        {checkable && <RippleEffect />}
       </Item>
     );
   },

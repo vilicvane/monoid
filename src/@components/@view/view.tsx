@@ -18,13 +18,25 @@ const Container = styled.div`
     var(--view-inset-bottom) + var(--nav-bar-height) + var(--view-padding)
   );
 
-  flex: 1;
+  position: absolute;
+  z-index: 0;
+
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
 
   display: flex;
   flex-direction: column;
 
-  &:not(.no-animation) {
-    ${fadeInAnimationCSS}
+  background-color: var(--ion-color-primary-contrast);
+
+  &.animation {
+    &.entering {
+      ${fadeInAnimationCSS}
+
+      z-index: 1;
+    }
 
     &.leaving {
       ${fadeOutAnimationCSS}
@@ -34,10 +46,10 @@ const Container = styled.div`
 
 export const View = observer(
   ({
-    noAnimation = false,
+    animation = true,
     children,
   }: {
-    noAnimation?: boolean;
+    animation?: boolean;
     children: ReactNode;
   }): ReactNode => {
     const {view, transition} = useContext(RouteContext);
@@ -51,19 +63,17 @@ export const View = observer(
     useEffect(
       () =>
         view.$transition({
-          leaving: !noAnimation,
+          entering: animation,
+          leaving: animation,
         }),
-      [noAnimation, view],
+      [animation, view],
     );
-
-    if (view.$entering) {
-      return null;
-    }
 
     return (
       <Container
         className={classNames({
-          'no-animation': noAnimation,
+          animation,
+          entering: view.$entering,
           leaving: view.$leaving,
         })}
         {...transition.events}

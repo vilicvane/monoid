@@ -43,7 +43,14 @@ export type BIP39Seed = x.TypeOf<typeof BIP39Seed>;
 export const BIP39Path = XUint8Array.nominal<'bip39 path'>();
 export type BIP39Path = x.TypeOf<typeof BIP39Path>;
 
-export const BIP39PathString = x.string.nominal<'bip39 path string'>();
+export const BIP39PathString = x.string.refined<'bip39 path string', unknown>(
+  value =>
+    x.refinement(
+      /^m(?:\/(?:[1-9]\d*|0)'?)+$/.test(value),
+      value,
+      'Invalid BIP39 path.',
+    ),
+);
 export type BIP39PathString = x.TypeOf<typeof BIP39PathString>;
 
 export const EthereumAddress = x.string.nominal<'ethereum address'>();

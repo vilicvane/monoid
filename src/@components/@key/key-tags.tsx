@@ -23,7 +23,7 @@ export const KeyTag = styled.div`
   justify-content: center;
 `;
 
-export const KeyType = styled(KeyTag)`
+export const KeyTypeTag = styled(KeyTag)`
   &.seed {
     background-color: var(--color-seed-light);
     border-color: var(--color-seed-light-shade);
@@ -37,19 +37,19 @@ export const KeyType = styled(KeyTag)`
   }
 `;
 
-export const KeyAlias = styled(KeyTag)`
+export const KeyAliasTag = styled(KeyTag)`
   background-color: var(--ion-color-primary);
   border-color: var(--ion-color-primary-shade);
   color: var(--ion-color-primary-contrast);
 `;
 
-export const KeyDerivation = styled(KeyTag)`
+export const KeyDerivationTag = styled(KeyTag)`
   background-color: var(--ion-color-dark-contrast);
   border-color: var(--ion-color-light-shade);
   color: var(--ion-color-dark);
 `;
 
-export const KeyExtraDerivations = styled(KeyTag)`
+export const KeyExtraDerivationsTag = styled(KeyTag)`
   margin-left: -12px;
   height: 20px;
   width: 20px;

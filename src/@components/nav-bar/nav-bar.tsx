@@ -1,13 +1,12 @@
-import {IonFab, IonFabButton, IonIcon} from '@ionic/react';
 import classNames from 'classNames';
-import {card} from 'ionicons/icons';
 import {observer} from 'mobx-react-lite';
-import {type ReactNode, useEffect, useState} from 'react';
+import {type ReactNode} from 'react';
+import {Route} from 'routra-react';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
-import {popInAnimationCSS, popOutAnimationCSS} from '../@animations.js';
 
+import {SafeViewFab} from './@safe-view-fab.js';
 import {Tabs as Tabs_} from './@tabs.js';
 
 const Container = styled.div`
@@ -21,74 +20,36 @@ const Container = styled.div`
   backdrop-filter: blur(4px);
 
   display: flex;
+
+  z-index: 2;
 `;
 
 const Tabs = styled(Tabs_)`
   flex: 1;
 
   transition: padding-right 0.2s ease-out;
-  transition-delay: 0.1s;
 
   ${Container}.fab-active & {
-    transition-delay: 0s;
     padding-right: 25%;
-  }
-`;
-
-const Fab = styled(IonFab)`
-  opacity: 0;
-  transform: scale(0);
-
-  pointer-events: none;
-
-  &.animate-in {
-    ${popInAnimationCSS}
-
-    pointer-events: unset;
-  }
-
-  &.animate-out {
-    ${popOutAnimationCSS}
   }
 `;
 
 export const NavBar = observer((): ReactNode => {
   const {router} = useEntrances();
 
-  const safeFabActive = router.safe.$exact.$active;
+  const safeFabMatched = router.safe.$exact.$matched;
 
-  const fabActive = safeFabActive;
-
-  const [safeFabWasEverActive, setSafeFabWasEverActive] =
-    useState(safeFabActive);
-
-  useEffect(() => {
-    setSafeFabWasEverActive(value => value || safeFabActive);
-  }, [safeFabActive]);
+  const fabActive = safeFabMatched;
 
   return (
     <Container
+      id="nav-bar"
       className={classNames({
         'fab-active': fabActive,
       })}
     >
       <Tabs />
-      <Fab
-        className={
-          safeFabActive
-            ? 'animate-in'
-            : safeFabWasEverActive
-              ? 'animate-out'
-              : undefined
-        }
-        vertical="top"
-        horizontal="end"
-        edge
-      >
-        <IonFabButton onClick={() => router.safe.scanCard.$push()}>
-          <IonIcon icon={card} />
-        </IonFabButton>
-      </Fab>
+      <Route view={router.safe.$exact.$view()} component={SafeViewFab} />
     </Container>
   );
 });

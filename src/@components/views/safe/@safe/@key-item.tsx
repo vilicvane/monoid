@@ -1,17 +1,18 @@
-import {IonRippleEffect} from '@ionic/react';
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
+import {useEntrances} from '../../../../@entrances.js';
 import type {WalletKeyData} from '../../../../@services/index.js';
 import {
-  KeyAlias,
-  KeyDerivation,
-  KeyExtraDerivations,
+  KeyAliasTag,
+  KeyDerivationTag,
+  KeyExtraDerivationsTag,
   KeyTags,
-  KeyType,
-} from '../../../@key/key-tag.js';
+  KeyTypeTag,
+} from '../../../@key/key-tags.js';
 import {Address} from '../../../@ui/address.js';
+import {RippleEffect} from '../../../@ui/ripple-effect.js';
 
 const Item = styled.div`
   position: relative;
@@ -39,29 +40,34 @@ const KeyRefAddress = styled(Address)`
 `;
 
 export const KeyItem = observer(
-  ({data: {type, alias, wallets}}: {data: WalletKeyData}): ReactNode => {
+  ({data: {type, index, alias, wallets}}: {data: WalletKeyData}): ReactNode => {
+    const {router} = useEntrances();
+
     const [wallet] = wallets;
 
     return (
-      <Item className="ion-activatable">
+      <Item
+        className="ion-activatable"
+        onClick={() => router.safe.key({index}).$push()}
+      >
         <ItemContent>
           <KeyTags>
-            <KeyType className={type}>{type}</KeyType>
+            <KeyTypeTag className={type}>{type}</KeyTypeTag>
             {wallet.path && (
               <>
-                <KeyDerivation>{wallet.path}</KeyDerivation>
+                <KeyDerivationTag>{wallet.path}</KeyDerivationTag>
                 {wallets.length > 1 && (
-                  <KeyExtraDerivations>
+                  <KeyExtraDerivationsTag>
                     {wallets.length - 1}
-                  </KeyExtraDerivations>
+                  </KeyExtraDerivationsTag>
                 )}
               </>
             )}
-            {alias && <KeyAlias>{alias}</KeyAlias>}
+            {alias && <KeyAliasTag>{alias}</KeyAliasTag>}
           </KeyTags>
           <KeyRefAddress>{wallet.address}</KeyRefAddress>
         </ItemContent>
-        <IonRippleEffect />
+        <RippleEffect />
       </Item>
     );
   },

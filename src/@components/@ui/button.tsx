@@ -1,11 +1,10 @@
-import {IonRippleEffect} from '@ionic/react';
 import classNames from 'classNames';
 import type {ButtonHTMLAttributes, ReactNode} from 'react';
 import {styled} from 'styled-components';
 
-const Container = styled.button`
-  margin: 0 -2px;
+import {RippleEffect} from './ripple-effect.js';
 
+const Container = styled.button`
   position: relative;
 
   height: 40px;
@@ -38,7 +37,15 @@ export const Button = ({
       {...props}
     >
       {children}
-      {!disabled && <IonRippleEffect />}
+      {!disabled && <RippleEffect />}
     </Container>
   );
 };
+
+export const Buttons = styled.div`
+  margin: auto -2px 0;
+
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+`;

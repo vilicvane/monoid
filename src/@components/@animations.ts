@@ -11,7 +11,7 @@ const fadeInKeyFrames = keyframes`
 `;
 
 export const fadeInAnimationCSS = css`
-  animation: ${fadeInKeyFrames} forwards 0.1s linear;
+  animation: ${fadeInKeyFrames} forwards 0.2s linear;
 `;
 
 const fadeOutKeyFrames = keyframes`
@@ -25,9 +25,36 @@ const fadeOutKeyFrames = keyframes`
 `;
 
 export const fadeOutAnimationCSS = css`
-  animation: ${fadeOutKeyFrames} forwards 0.1s linear;
+  animation: ${fadeOutKeyFrames} forwards 0.2s linear;
 `;
 
+const slideInKeyFrames = keyframes`
+  from {
+    transform: translateX(100%);
+  }
+
+  to {
+    transform: translateX(0);
+  }
+`;
+
+export const slideInAnimationCSS = css`
+  animation: ${slideInKeyFrames} forwards 0.2s ease-in-out;
+`;
+
+const slideOutKeyFrames = keyframes`
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(100%);
+  }
+`;
+
+export const slideOutAnimationCSS = css`
+  animation: ${slideOutKeyFrames} forwards 0.2s ease-in-out;
+`;
 const scaleInKeyFrames = keyframes`
   from {
     transform: scale(0.5);

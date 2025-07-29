@@ -1,22 +1,23 @@
+import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../../../@entrances.js';
 import {
   View,
-  ViewContent as ViewContent_,
+  ViewContent,
   ViewHeader,
   ViewHeaderTitle,
 } from '../../../@view/index.js';
 
 import {KeyItem} from './@key-item.js';
 
-const ViewContent = styled(ViewContent_)`
-  padding-left: 0;
-  padding-right: 0;
+const List = styled.div`
+  flex: 1;
+  margin: 0 calc(-1 * var(--view-padding));
 `;
 
-export const SafeView = (): ReactNode => {
+export const SafeView = observer((): ReactNode => {
   const {walletStorageService} = useEntrances();
 
   return (
@@ -25,10 +26,12 @@ export const SafeView = (): ReactNode => {
         <ViewHeaderTitle>Safe</ViewHeaderTitle>
       </ViewHeader>
       <ViewContent>
-        {walletStorageService.keys.map(key => (
-          <KeyItem key={key.index} data={key} />
-        ))}
+        <List>
+          {walletStorageService.keys.map(key => (
+            <KeyItem key={key.index} data={key} />
+          ))}
+        </List>
       </ViewContent>
     </View>
   );
-};
+});

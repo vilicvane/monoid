@@ -7,6 +7,11 @@ import {styled} from 'styled-components';
 
 import type {BIP39PathString, CurveName} from '../../../@atomics.js';
 import {SafeKnownType} from '../../../@atomics.js';
+import {
+  ETHEREUM_CURVE,
+  ETHEREUM_DERIVATION_PATH,
+  ETHEREUM_SEED,
+} from '../../../@constants.js';
 import {useEntrances} from '../../../@entrances.js';
 import {parseDerivationPath} from '../../../@lib/bip39.js';
 import {CBORAppletError} from '../../../@lib/cbor-applet.js';
@@ -163,7 +168,7 @@ export const ScanCardView = ({
   );
 
   return (
-    <View noAnimation>
+    <View animation={false}>
       <ScanCardGuideContainer
         className={classNames({
           leaving: view.$leaving,
@@ -265,10 +270,6 @@ const SCANNING_STATE_TO_TEXT: Record<
   ),
 };
 
-const ETHEREUM_SEED = 'Bitcoin seed';
-const ETHEREUM_CURVE = 'secp256k1';
-const ETHEREUM_DERIVATION_PATH = "m/44'/60'/0'/0/1";
-
 type ViewKeyOptions =
   | {
       seed?: string;
@@ -281,11 +282,11 @@ const SAFE_ITEM_TYPE_TO_VIEW_KEY_OPTIONS: Record<string, ViewKeyOptions> = {
   seed: {
     seed: ETHEREUM_SEED,
     curve: ETHEREUM_CURVE,
-    path: ETHEREUM_DERIVATION_PATH,
+    path: ETHEREUM_DERIVATION_PATH(),
   },
   master: {
     curve: ETHEREUM_CURVE,
-    path: ETHEREUM_DERIVATION_PATH,
+    path: ETHEREUM_DERIVATION_PATH(),
   },
   secp256k1: {},
 };
