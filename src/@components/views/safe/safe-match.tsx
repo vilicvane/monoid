@@ -5,7 +5,12 @@ import {Route} from 'routra-react';
 import type {Router} from '../../../@routes.js';
 
 import {CardView} from './@card/index.js';
-import {KeyDeriveView, KeyView, SafeView} from './@safe/index.js';
+import {
+  DerivableKeyView,
+  DeriveKeyView,
+  RawKeyView,
+  SafeView,
+} from './@safe/index.js';
 import {ScanCardView} from './@scan-card-view.js';
 
 export const SafeMatch = ({
@@ -14,8 +19,15 @@ export const SafeMatch = ({
   return (
     <>
       <Route view={route.$exact.$view()} component={SafeView} />
-      <Route view={route.key.$exact.$view()} component={KeyView} />
-      <Route view={route.key.derive.$view()} component={KeyDeriveView} />
+      <Route
+        view={route.derivableKey.$exact.$view()}
+        component={DerivableKeyView}
+      />
+      <Route
+        view={route.derivableKey.derive.$view()}
+        component={DeriveKeyView}
+      />
+      <Route view={route.rawKey.$exact.$view()} component={RawKeyView} />
       <Route view={route.scanCard.$view()} component={ScanCardView} />
       <Route view={route.card.$view()} component={CardView} />
     </>

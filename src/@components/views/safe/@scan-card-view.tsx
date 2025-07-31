@@ -84,9 +84,8 @@ export const ScanCardView = ({
           setScanningState(['greeting', 0, 0]);
 
           const {
-            id,
             pin,
-            safe: {pin: safePIN},
+            safe: {id, pin: safePIN},
           } = await applet.hello({});
 
           setScanningState(['listing', 0, 0]);

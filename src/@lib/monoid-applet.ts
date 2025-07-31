@@ -6,7 +6,7 @@ import {
   ChainCode,
   CipherName,
   CurveName,
-  MonoidAppletId,
+  MonoidSafeId,
   PublicKey,
   SafeIndex,
   SafeKnownType,
@@ -54,7 +54,6 @@ export function createMonoidApplet(aid: Uint8Array) {
       ins: 0x20,
       request: x.object({}),
       response: x.object({
-        id: MonoidAppletId,
         version: x.number,
         features: x.object({
           curves: x.array(CurveName),
@@ -62,6 +61,7 @@ export function createMonoidApplet(aid: Uint8Array) {
         }),
         pin: x.union([x.number, x.literal(false)]),
         safe: x.object({
+          id: MonoidSafeId,
           pin: x.union([x.number, x.literal(false)]),
           unlocked: x.boolean,
         }),

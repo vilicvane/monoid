@@ -3,6 +3,7 @@ import classNames from 'classNames';
 import type {ReactNode} from 'react';
 import {useEffect} from 'react';
 import type {ViewEntry__} from 'routra';
+import type {RouteViewComponentTransition} from 'routra-react';
 import {styled} from 'styled-components';
 
 import {popInAnimationCSS, popOutAnimationCSS} from '../@animations.js';
@@ -14,14 +15,18 @@ const Fab = styled(IonFab)`
 
   &.leaving {
     ${popOutAnimationCSS}
+
+    pointer-events: none;
   }
 `;
 
 export const ViewFab = ({
   view,
+  transition,
   children,
 }: {
   view: ViewEntry__;
+  transition: RouteViewComponentTransition;
   children: ReactNode;
 }): ReactNode => {
   useEffect(
@@ -42,6 +47,7 @@ export const ViewFab = ({
       vertical="top"
       horizontal="end"
       edge
+      {...transition.events}
     >
       {children}
     </Fab>

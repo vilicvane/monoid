@@ -6,6 +6,7 @@ import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
 
+import {SafeDerivableKeyViewFab} from './@safe-derivable-key-view-fab.js';
 import {SafeViewFab} from './@safe-view-fab.js';
 import {Tabs as Tabs_} from './@tabs.js';
 
@@ -37,9 +38,8 @@ const Tabs = styled(Tabs_)`
 export const NavBar = observer((): ReactNode => {
   const {router} = useEntrances();
 
-  const safeFabMatched = router.safe.$exact.$matched;
-
-  const fabActive = safeFabMatched;
+  const fabActive =
+    router.safe.$exact.$matched || router.safe.derivableKey.$exact.$matched;
 
   return (
     <Container
@@ -50,6 +50,10 @@ export const NavBar = observer((): ReactNode => {
     >
       <Tabs />
       <Route view={router.safe.$exact.$view()} component={SafeViewFab} />
+      <Route
+        view={router.safe.derivableKey.$exact.$view()}
+        component={SafeDerivableKeyViewFab}
+      />
     </Container>
   );
 });

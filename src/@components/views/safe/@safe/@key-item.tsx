@@ -48,7 +48,17 @@ export const KeyItem = observer(
     return (
       <Item
         className="ion-activatable"
-        onClick={() => router.safe.key({index}).$push()}
+        onClick={() => {
+          switch (type) {
+            case 'seed':
+            case 'master':
+              router.safe.derivableKey({index}).$push();
+              break;
+            default:
+              router.safe.rawKey({index}).$push();
+              break;
+          }
+        }}
       >
         <ItemContent>
           <KeyTags>

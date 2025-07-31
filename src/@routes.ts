@@ -7,7 +7,12 @@ export const ROUTE_SCHEMA = {
   sessions: true,
   scan: true,
   safe: {
-    key: {
+    rawKey: {
+      $state: undefined! as {
+        index: SafeIndexHex;
+      },
+    },
+    derivableKey: {
       $state: undefined! as {
         index: SafeIndexHex;
       },

@@ -9,8 +9,8 @@ import {
   ViewHeaderTitle,
 } from '../../../../@view/index.js';
 
-export const KeyDeriveView = ({}: RouteComponentProps<
-  Router['safe']['key']['derive']
+export const DeriveKeyView = ({}: RouteComponentProps<
+  Router['safe']['derivableKey']['derive']
 >): ReactNode => {
   return (
     <View>

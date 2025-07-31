@@ -10,11 +10,12 @@ import {ViewFab} from './@view-fab.js';
 
 export const SafeViewFab = ({
   view,
+  transition,
 }: RouteComponentProps<Router['safe']>): ReactNode => {
   const {router} = useEntrances();
 
   return (
-    <ViewFab view={view}>
+    <ViewFab view={view} transition={transition}>
       <IonFabButton onClick={() => router.safe.scanCard.$push()}>
         <IonIcon icon={card} />
       </IonFabButton>

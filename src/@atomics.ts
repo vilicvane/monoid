@@ -2,11 +2,11 @@ import * as x from 'x-value';
 
 import {XUint8Array} from './@x-value/index.js';
 
-export const MonoidAppletId = XUint8Array.nominal<'monoid applet id'>();
-export type MonoidAppletId = x.TypeOf<typeof MonoidAppletId>;
+export const MonoidSafeId = XUint8Array.nominal<'monoid safe id'>();
+export type MonoidSafeId = x.TypeOf<typeof MonoidSafeId>;
 
-export const MonoidAppletIdHex = x.string.nominal<'monoid applet id hex'>();
-export type MonoidAppletIdHex = x.TypeOf<typeof MonoidAppletIdHex>;
+export const MonoidSafeIdHex = x.string.nominal<'monoid safe id hex'>();
+export type MonoidSafeIdHex = x.TypeOf<typeof MonoidSafeIdHex>;
 
 export const SafeIndex = XUint8Array.nominal<'safe index'>();
 export type SafeIndex = x.TypeOf<typeof SafeIndex>;

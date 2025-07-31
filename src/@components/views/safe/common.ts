@@ -2,7 +2,7 @@ import type {
   BIP39PathString,
   CurveName,
   EthereumAddress,
-  MonoidAppletIdHex,
+  MonoidSafeIdHex,
   PublicKeyHex,
   SafeIndexHex,
   SafeKnownType,
@@ -22,6 +22,6 @@ export type ScannedCardKeyData = {
 };
 
 export type ScannedCardData = {
-  id: MonoidAppletIdHex;
+  id: MonoidSafeIdHex;
   keys: ScannedCardKeyData[];
 };
