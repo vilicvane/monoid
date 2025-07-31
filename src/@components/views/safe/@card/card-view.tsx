@@ -1,4 +1,5 @@
-import {cardOutline} from 'ionicons/icons';
+import {IonIcon} from '@ionic/react';
+import {cardOutline, checkmarkDone} from 'ionicons/icons';
 import {observable, runInAction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useState} from 'react';
@@ -13,7 +14,9 @@ import type {
   WalletStorageService,
 } from '../../../../@services/index.js';
 import {WalletKeyKnownType} from '../../../../@services/index.js';
+import {useTemporaryState} from '../../../@hooks/interactions.js';
 import {Button, Buttons} from '../../../@ui/button.js';
+import {BUTTON_FEEDBACK_DURATION} from '../../../@ui/constants.js';
 import {
   View,
   ViewContent,
@@ -59,6 +62,11 @@ export const CardView = observer(
         state !== 'up-to-date' && selectedIndexSet.has(key.index),
     );
 
+    const [imported, setImported] = useTemporaryState(
+      false,
+      BUTTON_FEEDBACK_DURATION,
+    );
+
     return (
       <View>
         <ViewHeader>
@@ -80,16 +88,26 @@ export const CardView = observer(
           </List>
           <Buttons>
             <Button
+              id="import-button"
               disabled={!selectedAny}
-              onClick={errorService.catch(() =>
+              onClick={errorService.catch(async () => {
                 importSelectedKeys(
                   walletStorageService,
                   view.card,
                   selectedIndexSet,
-                ),
-              )}
+                );
+
+                setImported(true);
+              })}
             >
-              Import
+              {imported ? (
+                <>
+                  <IonIcon icon={checkmarkDone} />
+                  Import successful
+                </>
+              ) : (
+                'Import'
+              )}
             </Button>
           </Buttons>
         </ViewContent>

@@ -73,7 +73,7 @@ export const DerivableKeyView = ({
       <ViewContent>
         <InfoSection>
           <InfoSectionItem>
-            <InfoSectionItemLabel>Address</InfoSectionItemLabel>
+            <InfoSectionItemLabel>Addresses</InfoSectionItemLabel>
             <InfoSectionItemContent>
               {wallets.map(wallet => (
                 <Item key={wallet.address}>

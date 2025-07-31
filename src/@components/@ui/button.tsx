@@ -12,10 +12,15 @@ const Container = styled.button`
   background-color: var(--ion-color-primary);
   border: solid 0.5px var(--ion-color-primary-shade);
   color: var(--ion-color-primary-contrast);
-  border-radius: 8px;
+  border-radius: 20px;
   font-size: 16px;
 
   transition: all 0.2s linear;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 
   &:disabled {
     background-color: transparent;
