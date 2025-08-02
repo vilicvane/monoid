@@ -37,7 +37,7 @@ export type ChainCode = x.TypeOf<typeof ChainCode>;
 export const ChainCodeHex = x.string.nominal<'chain code hex'>();
 export type ChainCodeHex = x.TypeOf<typeof ChainCodeHex>;
 
-export const BIP39Seed = XUint8Array.nominal<'bip39 seed'>();
+export const BIP39Seed = x.string.nominal<'bip39 seed'>();
 export type BIP39Seed = x.TypeOf<typeof BIP39Seed>;
 
 export const BIP39Path = XUint8Array.nominal<'bip39 path'>();

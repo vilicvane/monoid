@@ -1,6 +1,6 @@
 import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
-import {checkmark, fileTrayFullOutline, refresh} from 'ionicons/icons';
+import {checkmark, checkmarkDone, refresh} from 'ionicons/icons';
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
@@ -99,7 +99,7 @@ export const KeyItem = observer(
         icon = <IonIcon icon={refresh} />;
         break;
       case 'up-to-date':
-        icon = <IonIcon icon={fileTrayFullOutline} />;
+        icon = <IonIcon icon={checkmarkDone} />;
         break;
     }
 

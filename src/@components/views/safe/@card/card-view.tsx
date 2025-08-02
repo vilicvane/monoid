@@ -1,5 +1,5 @@
 import {IonIcon} from '@ionic/react';
-import {cardOutline, checkmarkDone} from 'ionicons/icons';
+import {checkmarkDone} from 'ionicons/icons';
 import {observable, runInAction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useState} from 'react';
@@ -71,9 +71,7 @@ export const CardView = observer(
       <View>
         <ViewHeader>
           <ViewHeaderTitle>Card</ViewHeaderTitle>
-          <ViewHeaderIdentifier icon={cardOutline}>
-            {view.card.id}
-          </ViewHeaderIdentifier>
+          <ViewHeaderIdentifier identifier={{type: 'card', id: view.card.id}} />
         </ViewHeader>
         <ViewContent>
           <List>

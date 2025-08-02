@@ -100,7 +100,7 @@ const popInKeyFrames = keyframes`
 `;
 
 export const popInAnimationCSS = css`
-  animation: ${popInKeyFrames} forwards 0.1s cubic-bezier(0, 1.2, 1, 1.2);
+  animation: ${popInKeyFrames} forwards 0.2s cubic-bezier(0, 1.2, 1, 1.2);
 `;
 
 const popOutKeyFrames = keyframes`
@@ -116,7 +116,7 @@ const popOutKeyFrames = keyframes`
 `;
 
 export const popOutAnimationCSS = css`
-  animation: ${popOutKeyFrames} forwards 0.1s cubic-bezier(1, 0.4, 1, 0.4);
+  animation: ${popOutKeyFrames} forwards 0.2s cubic-bezier(1, 0.4, 1, 0.4);
 `;
 
 const breathKeyFrames = keyframes`

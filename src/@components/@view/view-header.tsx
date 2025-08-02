@@ -1,9 +1,12 @@
 import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
+import {card, key} from 'ionicons/icons';
 import {observer} from 'mobx-react-lite';
 import type {HTMLAttributes, ReactNode} from 'react';
 import {useContext} from 'react';
 import {styled} from 'styled-components';
+
+import type {MonoidSafeIdHex, SafeIndexHex} from '../../@atomics.js';
 
 import {ViewContext} from './@view-context.js';
 
@@ -66,13 +69,39 @@ const Identifier = styled.span`
   color: var(--ion-color-medium);
 `;
 
+const INDEX_DISPLAY_OFFSET = 2;
+const INDEX_DISPLAY_END = INDEX_DISPLAY_OFFSET + 8;
+
 export const ViewHeaderIdentifier = ({
-  icon,
-  children,
+  identifier,
 }: {
-  icon: string;
-  children: ReactNode;
+  identifier:
+    | {
+        type: 'card';
+        id: MonoidSafeIdHex;
+      }
+    | {
+        type: 'safe-item';
+        index: SafeIndexHex;
+        alias?: string;
+      };
 }): ReactNode => {
+  let icon: string;
+  let children: string;
+
+  switch (identifier.type) {
+    case 'card':
+      icon = card;
+      children = identifier.id;
+      break;
+    case 'safe-item':
+      icon = key;
+      children =
+        identifier.alias ??
+        identifier.index.slice(INDEX_DISPLAY_OFFSET, INDEX_DISPLAY_END);
+      break;
+  }
+
   return (
     <IdentifierContainer>
       <IdentifierIcon icon={icon} />

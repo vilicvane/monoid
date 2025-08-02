@@ -1,4 +1,3 @@
-import {keyOutline} from 'ionicons/icons';
 import {type ReactNode, useEffect} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
@@ -19,9 +18,6 @@ import {
   ViewHeaderIdentifier,
   ViewHeaderTitle,
 } from '../../../@view/index.js';
-
-const INDEX_DISPLAY_OFFSET = 2;
-const INDEX_DISPLAY_END = INDEX_DISPLAY_OFFSET + 8;
 
 export const RawKeyView = ({
   view,
@@ -54,9 +50,7 @@ export const RawKeyView = ({
         <ViewHeaderTitle>
           <KeyType type={type} />
         </ViewHeaderTitle>
-        <ViewHeaderIdentifier icon={keyOutline}>
-          {alias ?? index.slice(INDEX_DISPLAY_OFFSET, INDEX_DISPLAY_END)}
-        </ViewHeaderIdentifier>
+        <ViewHeaderIdentifier identifier={{type: 'safe-item', index, alias}} />
       </ViewHeader>
       <ViewContent>
         <InfoSection>

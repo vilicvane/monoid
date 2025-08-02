@@ -133,7 +133,7 @@ export const ScanCardView = ({
             }
 
             const publicKeyHex = uint8ArrayToHex(metadata.publicKey);
-            const address = computeEthereumAddress(`0x${publicKeyHex}`);
+            const address = computeEthereumAddress(publicKeyHex);
 
             keys.push({
               type: SafeKnownType.satisfies(item.type),

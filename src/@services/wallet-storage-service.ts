@@ -8,6 +8,7 @@ import type {
   EthereumAddress,
   SafeIndexHex,
 } from '../@atomics.js';
+import {ETHEREUM_DERIVATION_PATH} from '../@constants.js';
 
 import type {StorageService} from './index.js';
 
@@ -41,6 +42,21 @@ export class WalletStorageService {
 
   get indexToKeyMap(): Map<SafeIndexHex, WalletKeyData> {
     return this.computedIndexToKeyMap.get();
+  }
+
+  suggestNextDerivationPath(index: SafeIndexHex): BIP39PathString {
+    const key = this.indexToKeyMap.get(index);
+
+    const pathSet = new Set(key?.wallets.map(wallet => wallet.path));
+
+    // eslint-disable-next-line no-constant-condition
+    for (let index = 0; true; index++) {
+      const path = ETHEREUM_DERIVATION_PATH(index);
+
+      if (!pathSet.has(path)) {
+        return path;
+      }
+    }
   }
 
   static async create(storage: StorageService): Promise<WalletStorageService> {
