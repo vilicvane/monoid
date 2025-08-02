@@ -10,6 +10,7 @@ import {createMonoidApplet} from './@lib/monoid-applet.js';
 import {ROUTE_SCHEMA} from './@routes.js';
 import {
   ErrorService,
+  PortalsService,
   StorageService,
   WalletKitService,
   WalletStorageService,
@@ -108,6 +109,11 @@ export class Entrances {
   @entrance
   get errorService() {
     return new ErrorService();
+  }
+
+  @entrance
+  get portalsService() {
+    return new PortalsService();
   }
 
   /* eslint-enable @typescript-eslint/explicit-function-return-type */

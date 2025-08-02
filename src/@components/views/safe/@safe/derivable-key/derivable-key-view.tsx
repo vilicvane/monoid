@@ -1,4 +1,5 @@
-import {keyOutline} from 'ionicons/icons';
+import {IonFabButton, IonIcon} from '@ionic/react';
+import {keyOutline, linkOutline} from 'ionicons/icons';
 import {type ReactNode, useEffect} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
@@ -17,6 +18,7 @@ import {InteractiveAddress} from '../../../../@ui/interactive-address.js';
 import {
   View,
   ViewContent,
+  ViewFab,
   ViewHeader,
   ViewHeaderIdentifier,
   ViewHeaderTitle,
@@ -41,6 +43,7 @@ const Item = styled.div`
 
 export const DerivableKeyView = ({
   view,
+  transition,
 }: RouteComponentProps<Router['safe']['derivableKey']>): ReactNode => {
   const {router, walletStorageService} = useEntrances();
 
@@ -89,6 +92,11 @@ export const DerivableKeyView = ({
           </InfoSectionItem>
         </InfoSection>
       </ViewContent>
+      <ViewFab view={view} transition={transition}>
+        <IonFabButton onClick={() => view.$match.derive.$push()}>
+          <IonIcon icon={linkOutline} />
+        </IonFabButton>
+      </ViewFab>
     </View>
   );
 };

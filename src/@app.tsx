@@ -1,6 +1,6 @@
 import {IonApp, setupIonicReact, useIonAlert, useIonToast} from '@ionic/react';
 import type {ReactNode} from 'react';
-import {useEffect} from 'react';
+import {useEffect, useLayoutEffect, useRef} from 'react';
 
 /* Core CSS required for Ionic components to work properly */
 import '@ionic/react/css/core.css';
@@ -38,7 +38,13 @@ import {useEntrances} from './@entrances.js';
 setupIonicReact();
 
 const App = (): ReactNode => {
-  const {router, errorService} = useEntrances();
+  const {router, errorService, portalsService} = useEntrances();
+
+  const fabAnchorRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    fabAnchorRef.current!.replaceWith(portalsService.fab);
+  }, [portalsService.fab]);
 
   useEffect(() => {
     const listener = (event: any): void => {
@@ -66,6 +72,7 @@ const App = (): ReactNode => {
     <IonApp>
       <Views />
       <NavBar />
+      <div ref={fabAnchorRef} />
     </IonApp>
   );
 };

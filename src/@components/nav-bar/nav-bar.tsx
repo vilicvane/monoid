@@ -1,13 +1,10 @@
 import classNames from 'classNames';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode} from 'react';
-import {Route} from 'routra-react';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
 
-import {SafeDerivableKeyViewFab} from './@safe-derivable-key-view-fab.js';
-import {SafeViewFab} from './@safe-view-fab.js';
 import {Tabs as Tabs_} from './@tabs.js';
 
 const Container = styled.div`
@@ -36,24 +33,16 @@ const Tabs = styled(Tabs_)`
 `;
 
 export const NavBar = observer((): ReactNode => {
-  const {router} = useEntrances();
-
-  const fabActive =
-    router.safe.$exact.$matched || router.safe.derivableKey.$exact.$matched;
+  const {portalsService} = useEntrances();
 
   return (
     <Container
       id="nav-bar"
       className={classNames({
-        'fab-active': fabActive,
+        'fab-active': portalsService.fabActive,
       })}
     >
       <Tabs />
-      <Route view={router.safe.$exact.$view()} component={SafeViewFab} />
-      <Route
-        view={router.safe.derivableKey.$exact.$view()}
-        component={SafeDerivableKeyViewFab}
-      />
     </Container>
   );
 });
