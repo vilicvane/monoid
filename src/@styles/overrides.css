@@ -6,3 +6,7 @@ ion-fab-button::part(native) {
 ion-fab-list > ion-fab-button::part(native) {
   border-color: var(--ion-color-light-shade);
 }
+
+ion-toast {
+  --box-shadow: none;
+}
