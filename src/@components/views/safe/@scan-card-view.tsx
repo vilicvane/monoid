@@ -1,7 +1,7 @@
 import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
 import {card} from 'ionicons/icons';
-import {type ReactNode, useEffect, useState} from 'react';
+import {type ReactNode, useCallback, useEffect, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
@@ -25,6 +25,7 @@ import {
   scaleInAnimationCSS,
   scaleOutAnimationCSS,
 } from '../../@animations.js';
+import {useMonoidApplet} from '../../@monoid/use-monoid-applet.js';
 import {View} from '../../@view/index.js';
 
 import type {ScannedCardKeyData} from './common.js';
@@ -61,7 +62,7 @@ export const ScanCardView = ({
   view,
   transition,
 }: RouteComponentProps<Router['safe']['scanCard']>): ReactNode => {
-  const {monoidApplet, router} = useEntrances();
+  const {router} = useEntrances();
 
   useEffect(
     () =>
@@ -71,99 +72,103 @@ export const ScanCardView = ({
     [view],
   );
 
-  const [[state, index, total], setScanningState] = useState<
-    [ScanningState, number, number]
-  >(['ready', 0, 0]);
+  const [[state, index, total, code], setScanningState] = useState<
+    [ScanningState, number, number, string?]
+  >(['ready', 0, 0, undefined]);
 
-  useEffect(
-    () =>
-      monoidApplet.standby(
-        async applet => {
-          const keys: ScannedCardKeyData[] = [];
+  useMonoidApplet(
+    useCallback(
+      async applet => {
+        const keys: ScannedCardKeyData[] = [];
 
-          setScanningState(['greeting', 0, 0]);
+        setScanningState(['greeting', 0, 0]);
 
-          const {
-            pin,
-            safe: {id, pin: safePIN},
-          } = await applet.hello({});
+        const {
+          pin,
+          safe: {id, pin: safePIN},
+        } = await applet.hello({});
 
-          setScanningState(['listing', 0, 0]);
+        setScanningState(['listing', 0, 0]);
 
-          let {items} = await applet.list({
-            auth: {
-              pin: '123456',
-            },
-          });
+        let {items} = await applet.list({
+          auth: {
+            pin: '123456',
+          },
+        });
 
-          items = items.filter(item =>
-            Object.hasOwn(SAFE_ITEM_TYPE_TO_VIEW_KEY_OPTIONS, item.type),
-          );
+        items = items.filter(item =>
+          Object.hasOwn(SAFE_ITEM_TYPE_TO_VIEW_KEY_OPTIONS, item.type),
+        );
 
-          for (const [index, item] of items.entries()) {
-            setScanningState(['viewing', index, items.length]);
+        for (const [index, item] of items.entries()) {
+          setScanningState(['viewing', index, items.length]);
 
-            const options = SAFE_ITEM_TYPE_TO_VIEW_KEY_OPTIONS[item.type];
+          const options = SAFE_ITEM_TYPE_TO_VIEW_KEY_OPTIONS[item.type];
 
-            const metadata = await applet
-              .viewKey({
-                auth: {
-                  pin: '123456',
-                },
-                index: item.index,
-                ...options,
-                path:
-                  'path' in options
-                    ? parseDerivationPath(options.path)
-                    : undefined,
-              })
-              .catch(error => {
-                if (
-                  error instanceof CBORAppletError &&
-                  error.source.code.startsWith('UNSUPPORTED_')
-                ) {
-                  return undefined;
-                }
-
-                throw error;
-              });
-
-            if (!metadata) {
-              continue;
-            }
-
-            const publicKeyHex = uint8ArrayToHex(metadata.publicKey);
-            const address = computeEthereumAddress(publicKeyHex);
-
-            keys.push({
-              type: SafeKnownType.satisfies(item.type),
-              alias: item.alias,
-              index: uint8ArrayToHex(item.index),
-              ref: {
-                ...('path' in options ? options : {}),
-                publicKey: publicKeyHex,
-                address,
+          const metadata = await applet
+            .viewKey({
+              auth: {
+                pin: '123456',
               },
+              index: item.index,
+              ...options,
+              path:
+                'path' in options
+                  ? parseDerivationPath(options.path)
+                  : undefined,
+            })
+            .catch(error => {
+              if (
+                error instanceof CBORAppletError &&
+                error.source.code.startsWith('UNSUPPORTED_')
+              ) {
+                return undefined;
+              }
+
+              throw error;
             });
+
+          if (!metadata) {
+            continue;
           }
 
-          setScanningState(['complete', 0, 0]);
+          const publicKeyHex = uint8ArrayToHex(metadata.publicKey);
+          const address = computeEthereumAddress(publicKeyHex);
 
-          router.safe
-            .card({
-              card: {
-                id: uint8ArrayToHex(id),
-                keys,
-              },
-            })
-            .$push();
-        },
-        error => {
-          console.error(error);
-          setScanningState(['error', 0, 0]);
-        },
-      ),
-    [monoidApplet, router.safe],
+          keys.push({
+            type: SafeKnownType.satisfies(item.type),
+            alias: item.alias,
+            index: uint8ArrayToHex(item.index),
+            ref: {
+              ...('path' in options ? options : {}),
+              publicKey: publicKeyHex,
+              address,
+            },
+          });
+        }
+
+        setScanningState(['complete', 0, 0]);
+
+        router.safe
+          .card({
+            card: {
+              id: uint8ArrayToHex(id),
+              keys,
+            },
+          })
+          .$push();
+      },
+      [router.safe],
+    ),
+    error => {
+      console.error(error);
+      setScanningState([
+        'error',
+        0,
+        0,
+        error instanceof CBORAppletError ? error.source.code : undefined,
+      ]);
+    },
   );
 
   return (
@@ -181,7 +186,7 @@ export const ScanCardView = ({
           })}
           icon={card}
         />
-        {SCANNING_STATE_TO_TEXT[state](index, total)}
+        {SCANNING_STATE_TO_TEXT[state](index, total, code)}
       </ScanCardGuideContainer>
     </View>
   );
@@ -222,7 +227,7 @@ type ScanningState =
 
 const SCANNING_STATE_TO_TEXT: Record<
   ScanningState,
-  (index: number, total: number) => ReactNode
+  (index: number, total: number, code: string | undefined) => ReactNode
 > = {
   ready: () => (
     <ScanningStateText>
@@ -262,9 +267,17 @@ const SCANNING_STATE_TO_TEXT: Record<
       </ScanningStateTextHighlight>
     </ScanningStateText>
   ),
-  error: () => (
+  error: (_index, _total, code) => (
     <ScanningStateText className="smaller error">
-      Oops, an error occurred.
+      {code ? (
+        <>
+          Oops, an error occurred:
+          <br />
+          {code}
+        </>
+      ) : (
+        <>Oops, an error occurred.</>
+      )}
     </ScanningStateText>
   ),
 };

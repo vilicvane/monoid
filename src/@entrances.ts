@@ -6,7 +6,7 @@ import {createContext, useContext} from 'react';
 import {routra} from 'routra';
 import {BrowserHistory, BrowserRouterPlugin} from 'routra/browser';
 
-import {createMonoidApplet} from './@lib/monoid-applet.js';
+import {createMonoidApplet} from './@lib/monoid/monoid-applet.js';
 import {ROUTE_SCHEMA} from './@routes.js';
 import {
   ErrorService,

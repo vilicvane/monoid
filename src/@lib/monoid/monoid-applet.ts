@@ -6,17 +6,18 @@ import {
   ChainCode,
   CipherName,
   CurveName,
+  MonoidPIN,
   MonoidSafeId,
   PublicKey,
   SafeIndex,
   SafeKnownType,
   SafeUnknownType,
-} from '../@atomics.js';
-
-import {CBORApplet} from './cbor-applet.js';
+} from '../../@atomics.js';
+import {CBORApplet} from '../cbor-applet.js';
 
 const Auth = x.object({
   pin: x.string,
+  safe: x.literal(true).optional(),
 });
 
 export type MonoidAppletAuth = x.TypeOf<typeof Auth>;
@@ -47,6 +48,8 @@ const Key = x.intersection([
 
 export type MonoidAppletKey = x.TypeOf<typeof Key>;
 
+export type MonoidApplet = ReturnType<typeof createMonoidApplet>;
+
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
 export function createMonoidApplet(aid: Uint8Array) {
   return CBORApplet.create(aid, {
@@ -66,6 +69,16 @@ export function createMonoidApplet(aid: Uint8Array) {
           unlocked: x.boolean,
         }),
       }),
+    },
+
+    setPIN: {
+      ins: 0x21,
+      request: x.object({
+        auth: Auth.optional(),
+        pin: MonoidPIN,
+        safe: x.literal(true).optional(),
+      }),
+      response: x.object({}),
     },
 
     list: {

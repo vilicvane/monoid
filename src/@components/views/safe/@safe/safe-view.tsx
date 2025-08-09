@@ -19,7 +19,7 @@ import {KeyItem} from './@key-item.js';
 
 const List = styled.div`
   flex: 1;
-  margin: 0 calc(-1 * var(--view-padding));
+  margin: calc(-1 * var(--view-padding)) calc(-1 * var(--view-padding)) 0;
 `;
 
 export const SafeView = observer(

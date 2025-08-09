@@ -1,8 +1,24 @@
+import {IonSpinner} from '@ionic/react';
 import classNames from 'classNames';
-import type {ButtonHTMLAttributes, ReactNode} from 'react';
+import {
+  type ButtonHTMLAttributes,
+  type ReactNode,
+  useCallback,
+  useState,
+} from 'react';
 import {styled} from 'styled-components';
 
+import {useEntrances} from '../../@entrances.js';
+
 import {RippleEffect} from './ripple-effect.js';
+
+export const Buttons = styled.div`
+  margin: auto -2px 0;
+
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+`;
 
 const Container = styled.button`
   position: relative;
@@ -47,10 +63,28 @@ export const Button = ({
   );
 };
 
-export const Buttons = styled.div`
-  margin: auto -2px 0;
+export const AsyncButton = ({
+  disabled,
+  handler,
+  children,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  handler: () => Promise<void>;
+}): ReactNode => {
+  const {errorService} = useEntrances();
 
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-`;
+  const [loading, setLoading] = useState(false);
+
+  const onClick = useCallback(() => {
+    setLoading(true);
+
+    errorService.catch(handler().finally(() => setLoading(false)));
+  }, [errorService, handler]);
+
+  return (
+    <Button {...props} disabled={disabled || loading} onClick={onClick}>
+      {loading && <IonSpinner />}
+      {children}
+    </Button>
+  );
+};

@@ -12,6 +12,8 @@ export abstract class Applet<TCommandDefinitions> {
   standby(
     callback: (applet: this) => Promise<void>,
     onError: (error: unknown) => void = console.error,
+    /** Will be called only if `callback` has been called. */
+    onCleanup?: () => void,
   ): () => void {
     let disposed = false;
     let listenerHandle: PluginListenerHandle | undefined;
@@ -32,6 +34,7 @@ export abstract class Applet<TCommandDefinitions> {
         onError(error);
       } finally {
         await Nfc.close();
+        onCleanup?.();
       }
     })
       .then(handle => {

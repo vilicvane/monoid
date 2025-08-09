@@ -12,7 +12,9 @@ export class CBORApplet<
   protected encode(data: unknown): Uint8Array {
     console.debug('Encoding data:', data);
 
-    const encoded = encode(data);
+    const encoded = encode(data, {
+      rejectUndefined: true,
+    });
 
     console.debug('Encoded data:', uint8ArrayToHex(encoded));
 

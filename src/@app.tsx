@@ -41,10 +41,12 @@ const App = (): ReactNode => {
   const {router, errorService, portalsService} = useEntrances();
 
   const fabAnchorRef = useRef<HTMLDivElement>(null);
+  const popupAnchorRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
     fabAnchorRef.current!.replaceWith(portalsService.fab);
-  }, [portalsService.fab]);
+    popupAnchorRef.current!.replaceWith(portalsService.popup);
+  }, [portalsService.fab, portalsService.popup]);
 
   useEffect(() => {
     const listener = (event: any): void => {
@@ -73,6 +75,7 @@ const App = (): ReactNode => {
       <Views />
       <NavBar />
       <div ref={fabAnchorRef} />
+      <div ref={popupAnchorRef} />
     </IonApp>
   );
 };

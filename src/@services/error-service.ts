@@ -7,43 +7,56 @@ export class ErrorService {
   presentToast: UseIonToastResult[0] | undefined;
   presentAlert: UseIonAlertResult[0] | undefined;
 
+  catch(promise: Promise<void>, message?: string): void;
   catch<TArgs extends unknown[]>(
     callback: (...args: TArgs) => Promise<void> | void,
     message?: string,
-  ): (...args: TArgs) => void {
-    return (...args: TArgs): void => {
-      (async () => {
-        await callback(...args);
-      })().catch(error => {
-        console.error(error);
+  ): (...args: TArgs) => void;
+  catch(
+    promiseOrCallback:
+      | ((...args: unknown[]) => Promise<void> | void)
+      | Promise<void>,
+    message?: string,
+  ): ((...args: unknown[]) => void) | void {
+    if (promiseOrCallback instanceof Promise) {
+      promiseOrCallback.catch(error => this.handleError(error, message));
+    } else {
+      return (...args: unknown[]): void => {
+        (async () => {
+          await promiseOrCallback(...args);
+        })().catch(error => this.handleError(error, message));
+      };
+    }
+  }
 
-        void this.presentToast?.({
-          icon: bug,
-          header: message ?? 'An error occurred',
-          message: error instanceof Error ? error.message : String(error),
-          duration: ERROR_TOAST_DURATION,
-          color: 'danger',
-          position: 'top',
-          layout: 'stacked',
-          swipeGesture: 'vertical',
-          buttons: [
-            {
-              text: 'Details',
-              handler: () => {
-                void this.presentAlert?.({
-                  header: 'Error Details',
-                  message: error instanceof Error ? error.stack : String(error),
-                  buttons: ['Close'],
-                });
-              },
-            },
-            {
-              text: 'Dismiss',
-              role: 'cancel',
-            },
-          ],
-        });
-      });
-    };
+  private handleError(error: unknown, message?: string): void {
+    console.error(error);
+
+    void this.presentToast?.({
+      icon: bug,
+      header: message ?? 'An error occurred',
+      message: error instanceof Error ? error.message : String(error),
+      duration: ERROR_TOAST_DURATION,
+      color: 'danger',
+      position: 'top',
+      layout: 'stacked',
+      swipeGesture: 'vertical',
+      buttons: [
+        {
+          text: 'Details',
+          handler: () => {
+            void this.presentAlert?.({
+              header: 'Error Details',
+              message: error instanceof Error ? error.stack : String(error),
+              buttons: ['Close'],
+            });
+          },
+        },
+        {
+          text: 'Dismiss',
+          role: 'cancel',
+        },
+      ],
+    });
   }
 }

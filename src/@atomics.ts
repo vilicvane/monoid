@@ -8,6 +8,9 @@ export type MonoidSafeId = x.TypeOf<typeof MonoidSafeId>;
 export const MonoidSafeIdHex = x.string.nominal<'monoid safe id hex'>();
 export type MonoidSafeIdHex = x.TypeOf<typeof MonoidSafeIdHex>;
 
+export const MonoidPIN = x.pattern(/^[\x20-\x7E]{6,16}$/);
+export type MonoidPIN = x.TypeOf<typeof MonoidPIN>;
+
 export const SafeIndex = XUint8Array.nominal<'safe index'>();
 export type SafeIndex = x.TypeOf<typeof SafeIndex>;
 

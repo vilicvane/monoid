@@ -16,8 +16,8 @@
       }
     },
     {
-      "files": "vite.config.ts",
-      "extends": ["plugin:@mufan/dev"]
+      "files": ["vite.config.ts", "capacitor.config.ts"],
+      "extends": ["plugin:@mufan/typescript", "plugin:@mufan/dev"]
     }
   ]
 }

@@ -5,6 +5,8 @@ export class PortalsService {
 
   fabActive = false;
 
+  popup = document.createElement('div');
+
   constructor() {
     makeObservable(this, {
       fabActive: true,

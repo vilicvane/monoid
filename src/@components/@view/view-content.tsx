@@ -8,7 +8,7 @@ const Container = styled.div`
   flex: 1 1 auto;
   height: 0;
   overflow-y: auto;
-  padding: 0 var(--view-padding) var(--view-padding-bottom);
+  padding: 8px var(--view-padding) var(--view-padding-bottom);
 
   display: flex;
   flex-direction: column;
