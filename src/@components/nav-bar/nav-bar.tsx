@@ -19,7 +19,7 @@ const Container = styled.div`
 
   display: flex;
 
-  z-index: 2;
+  z-index: var(--nav-bar-z-index);
 `;
 
 const Tabs = styled(Tabs_)`
@@ -33,13 +33,13 @@ const Tabs = styled(Tabs_)`
 `;
 
 export const NavBar = observer((): ReactNode => {
-  const {portalsService} = useEntrances();
+  const {portals} = useEntrances();
 
   return (
     <Container
       id="nav-bar"
       className={classNames({
-        'fab-active': portalsService.fabActive,
+        'fab-active': portals.fabActive,
       })}
     >
       <Tabs />

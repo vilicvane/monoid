@@ -1,14 +1,15 @@
+import {closeOutline} from 'ionicons/icons';
 import {type ReactNode, useMemo, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
-import {styled} from 'styled-components';
 
 import {MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import type {Router} from '../../../../@routes.js';
 import {useMonoidScanPrompt} from '../../../@monoid/monoid-scan-prompt.js';
 import {Button, Buttons} from '../../../@ui/button.js';
-import {Input} from '../../../@ui/input.js';
 import {Step, Steps} from '../../../@ui/step.js';
+import {useToast} from '../../../@ui/toast.js';
+import {useInputModal} from '../../../@ui/use-input-modal.js';
 import {
   View,
   ViewContent,
@@ -17,20 +18,15 @@ import {
   ViewHeaderTitle,
 } from '../../../@view/index.js';
 
-const PINInput = styled(Input)`
-  &:not(:focus):invalid {
-    outline: 2px solid var(--ion-color-danger);
-    outline-offset: -1px;
-  }
-`;
-
 export const SetupCardView = ({
   view,
 }: RouteComponentProps<Router['safe']['setupCard']>): ReactNode => {
   const {errorService} = useEntrances();
 
-  const [pinSet, setPinSet] = useState(view.pin);
-  const [safePinSet, setSafePinSet] = useState(view.safe.pin);
+  const toast = useToast();
+
+  const [pinSet, setPINSet] = useState(view.pin);
+  const [safePINSet, setSafePINSet] = useState(view.safe.pin);
   const [safeUnlocked, setSafeUnlocked] = useState(view.safe.unlocked);
 
   const [step, setStep] = useState(() => {
@@ -41,40 +37,58 @@ export const SetupCardView = ({
     return 2;
   });
 
-  const [toUnlockSafe] = useState(() => view.safe.pin !== false);
-  const [safePin, setSafePin] = useState('');
+  const [safePINInput, showSafePINInput] = useInputModal();
 
-  const step1_safePinReady = useMemo(() => MonoidPIN.is(safePin), [safePin]);
+  const [toUnlockSafe] = useState(() => view.safe.pin !== false);
+  const [safePIN, setSafePIN] = useState<string>();
+
+  const step1_safePINReady = useMemo(() => MonoidPIN.is(safePIN), [safePIN]);
 
   const step2_pinReady = useMemo(() => MonoidPIN.is(pinSet), [pinSet]);
 
-  const [settingSafePinScanPromptContent, settingSafePinScanPrompt] =
+  const [settingSafePINScanPromptContent, settingSafePINScanPrompt] =
     useMonoidScanPrompt(false);
 
-  const onSaveSafePinButtonClick = (): void => {
-    errorService.catch(
-      settingSafePinScanPrompt(async (applet, setStateContent) => {
+  const onSetSafePINScanButtonClick = errorService.catch(
+    async (): Promise<void> => {
+      const safePIN = await showSafePINInput({
+        // type: 'password',
+        placeholder: 'Enter safe PIN',
+        center: true,
+      });
+
+      if (!MonoidPIN.is(safePIN)) {
+        toast({
+          message: 'Incorrect PIN format, expected 6 to 16 characters.',
+          color: 'danger',
+          icon: closeOutline,
+          position: 'top',
+        });
+        return;
+      }
+
+      await settingSafePINScanPrompt(async (applet, setStateContent) => {
         setStateContent(
-          toUnlockSafe ? 'Unlocking safe...' : 'Setting safe pin...',
+          toUnlockSafe ? 'Unlocking safe...' : 'Setting safe PIN...',
         );
 
         await applet.setPIN({
           ...(toUnlockSafe
             ? {
                 auth: {
-                  pin: safePin,
+                  pin: safePIN,
                   safe: true,
                 },
               }
             : undefined),
-          pin: safePin,
+          pin: safePIN,
           safe: true,
         });
 
         setStep(step + 1);
-      }),
-    );
-  };
+      });
+    },
+  );
 
   return (
     <>
@@ -94,25 +108,17 @@ export const SetupCardView = ({
               title={toUnlockSafe ? 'Unlock safe' : 'Set safe pin'}
               numero={1}
               activeNumero={step}
-            >
-              <PINInput
-                type="password"
-                value={safePin}
-                required
-                minLength={6}
-                maxLength={16}
-                onChange={event => setSafePin(event.target.value)}
-              />
-            </Step>
+            />
           </Steps>
-          <Buttons>
+          <Buttons id="buttons">
             {step === 1 && (
-              <Button onClick={onSaveSafePinButtonClick}>Next</Button>
+              <Button onClick={onSetSafePINScanButtonClick}>Scan</Button>
             )}
           </Buttons>
         </ViewContent>
       </View>
-      {settingSafePinScanPromptContent}
+      {safePINInput}
+      {settingSafePINScanPromptContent}
     </>
   );
 };

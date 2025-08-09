@@ -1,6 +1,6 @@
 import {makeObservable, runInAction} from 'mobx';
 
-export class PortalsService {
+export class Portals {
   fab = document.createElement('div');
 
   fabActive = false;

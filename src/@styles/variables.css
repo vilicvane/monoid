@@ -7,6 +7,11 @@ http://ionicframework.com/docs/theming/ */
 
   --nav-bar-height: 50px;
 
+  --view-z-index: 0;
+  --view-entering-z-index: 1;
+  --nav-bar-z-index: 2;
+  --popup-z-index: 3;
+
   --color-text-secondary: #666666;
   --color-text-dim: #999999;
 

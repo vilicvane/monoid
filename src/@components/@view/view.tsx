@@ -19,7 +19,7 @@ const Container = styled.div`
   );
 
   position: absolute;
-  z-index: 0;
+  z-index: var(--view-z-index);
 
   top: 0;
   left: 0;
@@ -35,7 +35,7 @@ const Container = styled.div`
     &.entering {
       ${fadeInAnimationCSS}
 
-      z-index: 1;
+      z-index: var(--view-entering-z-index);
     }
 
     &.leaving {

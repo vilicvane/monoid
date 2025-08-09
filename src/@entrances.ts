@@ -6,11 +6,12 @@ import {createContext, useContext} from 'react';
 import {routra} from 'routra';
 import {BrowserHistory, BrowserRouterPlugin} from 'routra/browser';
 
-import {createMonoidApplet} from './@lib/monoid/monoid-applet.js';
+import {Keyboard} from './@keyboard.js';
+import {createMonoidApplet} from './@lib/monoid/index.js';
+import {Portals} from './@portals.js';
 import {ROUTE_SCHEMA} from './@routes.js';
 import {
   ErrorService,
-  PortalsService,
   StorageService,
   WalletKitService,
   WalletStorageService,
@@ -64,6 +65,16 @@ export class Entrances {
   }
 
   @entrance
+  get keyboard() {
+    return new Keyboard();
+  }
+
+  @entrance
+  get portals() {
+    return new Portals();
+  }
+
+  @entrance
   get monoidApplet() {
     return createMonoidApplet(
       Uint8Array.from([0xf0, 0x6d, 0x6f, 0x6e, 0x6f, 0x69, 0x64, 0x01, 0x01]),
@@ -109,11 +120,6 @@ export class Entrances {
   @entrance
   get errorService() {
     return new ErrorService();
-  }
-
-  @entrance
-  get portalsService() {
-    return new PortalsService();
   }
 
   /* eslint-enable @typescript-eslint/explicit-function-return-type */

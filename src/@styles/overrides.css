@@ -1,3 +1,12 @@
+ion-app {
+  transition: margin-bottom 0.3s ease;
+}
+
+ion-app.keyboard-shown {
+  transition: none;
+  margin-bottom: calc(-1 * (var(--view-inset-bottom) + var(--nav-bar-height)));
+}
+
 ion-fab-button::part(native) {
   border: solid 0.5px var(--ion-color-primary-shade);
   box-shadow: none;

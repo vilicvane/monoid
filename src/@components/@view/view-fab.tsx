@@ -35,7 +35,7 @@ export const ViewFab = observer(
     view: ViewEntry__;
     transition: RouteViewComponentTransition;
   } & HTMLProps<HTMLIonFabElement>): ReactNode => {
-    const {portalsService} = useEntrances();
+    const {portals} = useEntrances();
 
     useEffect(
       () =>
@@ -56,7 +56,7 @@ export const ViewFab = observer(
         {...transition.events}
         {...props}
       />,
-      portalsService.fab,
+      portals.fab,
     );
   },
 );
