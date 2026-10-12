@@ -2,6 +2,12 @@ import * as x from 'x-value';
 
 import {XUint8Array} from './@x-value/index.js';
 
+export const MonoidId = XUint8Array.nominal<'monoid id'>();
+export type MonoidId = x.TypeOf<typeof MonoidId>;
+
+export const MonoidIdHex = x.string.nominal<'monoid id hex'>();
+export type MonoidIdHex = x.TypeOf<typeof MonoidIdHex>;
+
 export const MonoidSafeId = XUint8Array.nominal<'monoid safe id'>();
 export type MonoidSafeId = x.TypeOf<typeof MonoidSafeId>;
 

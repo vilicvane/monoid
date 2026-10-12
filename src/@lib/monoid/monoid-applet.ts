@@ -6,6 +6,7 @@ import {
   ChainCode,
   CipherName,
   CurveName,
+  MonoidId,
   MonoidPIN,
   MonoidSafeId,
   PublicKey,
@@ -14,17 +15,6 @@ import {
   SafeUnknownType,
 } from '../../@atomics.js';
 import {CBORApplet} from '../cbor-applet.js';
-
-const Auth = x.object({
-  pin: x.string,
-  safe: x.literal(true).optional(),
-});
-
-export type MonoidAppletAuth = x.TypeOf<typeof Auth>;
-
-const SafeAuth = Auth.extend({
-  safe: x.literal(true),
-});
 
 const SafeItemType = x.union([SafeKnownType, SafeUnknownType]);
 
@@ -48,6 +38,11 @@ const Key = x.intersection([
 
 export type MonoidAppletKey = x.TypeOf<typeof Key>;
 
+export const MonoidAppletInvalidPINError = x.object({
+  code: x.literal('INVALID_PIN'),
+  tries: x.number,
+});
+
 export type MonoidApplet = ReturnType<typeof createMonoidApplet>;
 
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
@@ -58,9 +53,14 @@ export function createMonoidApplet(aid: Uint8Array) {
       request: x.object({}),
       response: x.object({
         version: x.number,
+        id: MonoidId,
         features: x.object({
-          curves: x.array(CurveName),
-          ciphers: x.array(CipherName),
+          curves: x.array(
+            x.object({
+              name: CurveName,
+              ciphers: x.array(CipherName),
+            }),
+          ),
         }),
         pin: x.union([x.number, x.literal(false)]),
         safe: x.object({
@@ -71,10 +71,18 @@ export function createMonoidApplet(aid: Uint8Array) {
       }),
     },
 
-    setPIN: {
+    authenticate: {
       ins: 0x21,
       request: x.object({
-        auth: Auth.optional(),
+        pin: x.string,
+        safe: x.literal(true).optional(),
+      }),
+      response: x.object({}),
+    },
+
+    setPIN: {
+      ins: 0x22,
+      request: x.object({
         pin: MonoidPIN,
         safe: x.literal(true).optional(),
       }),
@@ -83,9 +91,7 @@ export function createMonoidApplet(aid: Uint8Array) {
 
     list: {
       ins: 0x30,
-      request: x.object({
-        auth: Auth,
-      }),
+      request: x.object({}),
       response: x.object({
         items: x.array(
           x.object({
@@ -99,12 +105,7 @@ export function createMonoidApplet(aid: Uint8Array) {
 
     viewKey: {
       ins: 0x40,
-      request: x.intersection([
-        x.object({
-          auth: Auth,
-        }),
-        Key,
-      ]),
+      request: Key,
       response: x.object({
         publicKey: PublicKey,
         chainCode: ChainCode.optional(),

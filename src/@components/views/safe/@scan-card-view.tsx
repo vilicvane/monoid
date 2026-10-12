@@ -76,25 +76,15 @@ export const ScanCardView = ({
     [ScanningState, number, number, string?]
   >(['ready', 0, 0, undefined]);
 
-  useMonoidApplet(
+  const monoidAppletContent = useMonoidApplet(
+    {auth: 'access'},
     useCallback(
-      async applet => {
+      async (applet, hello) => {
         const keys: ScannedCardKeyData[] = [];
-
-        setScanningState(['greeting', 0, 0]);
-
-        const {
-          pin,
-          safe: {id, pin: safePIN},
-        } = await applet.hello({});
 
         setScanningState(['listing', 0, 0]);
 
-        let {items} = await applet.list({
-          auth: {
-            pin: '123456',
-          },
-        });
+        let {items} = await applet.list({});
 
         items = items.filter(item =>
           Object.hasOwn(SAFE_ITEM_TYPE_TO_VIEW_KEY_OPTIONS, item.type),
@@ -107,9 +97,6 @@ export const ScanCardView = ({
 
           const metadata = await applet
             .viewKey({
-              auth: {
-                pin: '123456',
-              },
               index: item.index,
               ...options,
               path:
@@ -152,7 +139,7 @@ export const ScanCardView = ({
         router.safe
           .card({
             card: {
-              id: uint8ArrayToHex(id),
+              id: uint8ArrayToHex(hello.safe.id),
               keys,
             },
           })
@@ -172,23 +159,26 @@ export const ScanCardView = ({
   );
 
   return (
-    <View animation={false}>
-      <ScanCardGuideContainer
-        className={classNames({
-          leaving: view.$leaving,
-        })}
-        {...transition.events}
-      >
-        <Icon
+    <>
+      <View animation={false}>
+        <ScanCardGuideContainer
           className={classNames({
-            error: state === 'error',
-            working: state !== 'ready' && state !== 'error',
+            leaving: view.$leaving,
           })}
-          icon={card}
-        />
-        {SCANNING_STATE_TO_TEXT[state](index, total, code)}
-      </ScanCardGuideContainer>
-    </View>
+          {...transition.events}
+        >
+          <Icon
+            className={classNames({
+              error: state === 'error',
+              working: state !== 'ready' && state !== 'error',
+            })}
+            icon={card}
+          />
+          {SCANNING_STATE_TO_TEXT[state](index, total, code)}
+        </ScanCardGuideContainer>
+      </View>
+      {monoidAppletContent}
+    </>
   );
 };
 
@@ -217,13 +207,7 @@ const ScanningStateTextFocus = styled.span`
   color: var(--ion-color-primary);
 `;
 
-type ScanningState =
-  | 'ready'
-  | 'greeting'
-  | 'listing'
-  | 'viewing'
-  | 'complete'
-  | 'error';
+type ScanningState = 'ready' | 'listing' | 'viewing' | 'complete' | 'error';
 
 const SCANNING_STATE_TO_TEXT: Record<
   ScanningState,
@@ -233,13 +217,6 @@ const SCANNING_STATE_TO_TEXT: Record<
     <ScanningStateText>
       Scan a <ScanningStateTextHighlight>monoid</ScanningStateTextHighlight>{' '}
       card
-    </ScanningStateText>
-  ),
-  greeting: () => (
-    <ScanningStateText className="smaller">
-      <ScanningStateTextHighlight>
-        Greeting to card...
-      </ScanningStateTextHighlight>
     </ScanningStateText>
   ),
   listing: () => (

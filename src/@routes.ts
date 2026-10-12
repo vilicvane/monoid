@@ -1,6 +1,6 @@
 import type {Router as RoutraRouter, SchemaRecord} from 'routra';
 
-import type {MonoidSafeIdHex, SafeIndexHex} from './@atomics.js';
+import type {MonoidIdHex, MonoidSafeIdHex, SafeIndexHex} from './@atomics.js';
 import type {ScannedCardData} from './@components/views/safe/index.js';
 
 export const ROUTE_SCHEMA = {
@@ -21,6 +21,7 @@ export const ROUTE_SCHEMA = {
     scanCard: true,
     setupCard: {
       $state: undefined! as {
+        id: MonoidIdHex;
         pin: boolean;
         safe: {
           id: MonoidSafeIdHex;

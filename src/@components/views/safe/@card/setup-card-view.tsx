@@ -5,7 +5,10 @@ import type {RouteComponentProps} from 'routra-react';
 import {MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import type {Router} from '../../../../@routes.js';
-import {useMonoidScanPrompt} from '../../../@monoid/monoid-scan-prompt.js';
+import {
+  MonoidScanStatePromptContentHighlight,
+  useMonoidScanPrompt,
+} from '../../../@monoid/monoid-scan-prompt.js';
 import {Button, Buttons} from '../../../@ui/button.js';
 import {Step, Steps} from '../../../@ui/step.js';
 import {useToast} from '../../../@ui/toast.js';
@@ -52,7 +55,7 @@ export const SetupCardView = ({
   const onSetSafePINScanButtonClick = errorService.catch(
     async (): Promise<void> => {
       const safePIN = await showSafePINInput({
-        // type: 'password',
+        type: 'password',
         placeholder: 'Enter safe PIN',
         center: true,
       });
@@ -67,26 +70,33 @@ export const SetupCardView = ({
         return;
       }
 
-      await settingSafePINScanPrompt(async (applet, setStateContent) => {
-        setStateContent(
-          toUnlockSafe ? 'Unlocking safe...' : 'Setting safe PIN...',
-        );
+      await settingSafePINScanPrompt(
+        <>
+          Scan card{' '}
+          <MonoidScanStatePromptContentHighlight>
+            {view.safe.id}
+          </MonoidScanStatePromptContentHighlight>
+        </>,
+        async (applet, setStateContent) => {
+          setStateContent(
+            toUnlockSafe ? 'Unlocking safe...' : 'Setting safe PIN...',
+          );
 
-        await applet.setPIN({
-          ...(toUnlockSafe
-            ? {
-                auth: {
-                  pin: safePIN,
-                  safe: true,
-                },
-              }
-            : undefined),
-          pin: safePIN,
-          safe: true,
-        });
+          if (toUnlockSafe) {
+            await applet.authenticate({
+              pin: safePIN,
+              safe: true,
+            });
+          }
 
-        setStep(step + 1);
-      });
+          await applet.setPIN({
+            pin: safePIN,
+            safe: true,
+          });
+
+          setStep(step + 1);
+        },
+      );
     },
   );
 
@@ -112,7 +122,9 @@ export const SetupCardView = ({
           </Steps>
           <Buttons id="buttons">
             {step === 1 && (
-              <Button onClick={onSetSafePINScanButtonClick}>Scan</Button>
+              <Button onClick={onSetSafePINScanButtonClick}>
+                {toUnlockSafe ? 'Unlock safe' : 'Set safe pin'}
+              </Button>
             )}
           </Buttons>
         </ViewContent>

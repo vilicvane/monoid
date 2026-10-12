@@ -79,9 +79,6 @@ export const DeriveKeyView = observer(
           setScanning(true);
 
           const {publicKey} = await applet.viewKey({
-            auth: {
-              pin: '123456',
-            },
             index: hexToUint8Array(view.index),
             ...(key.type === 'seed' && {
               seed: ETHEREUM_SEED,

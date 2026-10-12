@@ -24,9 +24,15 @@ const Backdrop = styled.div`
 `;
 
 const PromptContainer = styled.div`
+  box-sizing: border-box;
+  width: 100%;
+  padding: 40px 20px;
   background-color: var(--ion-color-dark-contrast);
-  padding: 20px;
-  border-radius: 8px;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 `;
 
 const Icon = styled(IonIcon)`
@@ -42,6 +48,24 @@ const Icon = styled(IonIcon)`
   }
 `;
 
+const PromptStateContent = styled.div`
+  margin-top: 10px;
+  margin-bottom: -20px;
+  height: 50px;
+  line-height: 25px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--ion-color-medium-tint);
+
+  &.error {
+    color: var(--ion-color-danger);
+  }
+`;
+
+export const MonoidScanStatePromptContentHighlight = styled.span`
+  color: var(--ion-color-medium);
+`;
+
 export type MonoidScanPromptSetStateContentCallback = (
   content: ReactNode,
 ) => void;
@@ -51,7 +75,8 @@ export function useMonoidScanPrompt(
 ): [
   ReactNode,
   (
-    callback: (
+    initialStateContent: ReactNode,
+    appletCallback: (
       applet: MonoidApplet,
       setStateContent: MonoidScanPromptSetStateContentCallback,
     ) => Promise<void>,
@@ -93,7 +118,8 @@ export function useMonoidScanPrompt(
           if (hello.pin === false) {
             router.safe
               .setupCard({
-                pin: hello.safe.pin !== false,
+                id: uint8ArrayToHex(hello.id),
+                pin: hello.pin !== false,
                 safe: {
                   id: uint8ArrayToHex(hello.safe.id),
                   pin: hello.safe.pin !== false,
@@ -135,13 +161,13 @@ export function useMonoidScanPrompt(
           })}
           icon={card}
         />
-        <MonoidScanStatePromptContent
+        <PromptStateContent
           className={classNames({
             [state]: true,
           })}
         >
           {state === 'error' ? 'Oops, an error occurred.' : stateContent}
-        </MonoidScanStatePromptContent>
+        </PromptStateContent>
       </PromptContainer>
     </Backdrop>
   );
@@ -149,25 +175,14 @@ export function useMonoidScanPrompt(
   return [
     content,
     useCallback(
-      callback =>
-        new Promise((resolve, reject) =>
-          setAppletCallbackAndPromise([callback, {resolve, reject}]),
-        ),
+      (initialStateContent, appletCallback) =>
+        new Promise((resolve, reject) => {
+          setState('ready');
+          setStateContent(initialStateContent);
+
+          setAppletCallbackAndPromise([appletCallback, {resolve, reject}]);
+        }),
       [],
     ),
   ];
 }
-
-export const MonoidScanStatePromptContent = styled.div`
-  margin-top: 10px;
-  margin-bottom: -20px;
-  height: 50px;
-  line-height: 25px;
-  text-align: center;
-  font-size: 14px;
-  color: var(--ion-color-medium-tint);
-
-  &.error {
-    color: var(--ion-color-danger);
-  }
-`;

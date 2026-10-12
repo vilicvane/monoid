@@ -12,6 +12,8 @@ import {Portals} from './@portals.js';
 import {ROUTE_SCHEMA} from './@routes.js';
 import {
   ErrorService,
+  MonoidCredentialsStore,
+  MonoidStorageService,
   StorageService,
   WalletKitService,
   WalletStorageService,
@@ -114,6 +116,20 @@ export class Entrances {
   get walletStorageService() {
     return this.storageService.then(storageService =>
       WalletStorageService.create(storageService),
+    );
+  }
+
+  @entrance
+  get monoidStorageService() {
+    return this.storageService.then(
+      storageService => new MonoidStorageService(storageService),
+    );
+  }
+
+  @entrance
+  get monoidCredentialsStore() {
+    return this.storageService.then(
+      storageService => new MonoidCredentialsStore(storageService),
     );
   }
 

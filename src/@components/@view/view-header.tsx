@@ -6,7 +6,11 @@ import type {HTMLAttributes, ReactNode} from 'react';
 import {useContext} from 'react';
 import {styled} from 'styled-components';
 
-import type {MonoidSafeIdHex, SafeIndexHex} from '../../@atomics.js';
+import type {
+  MonoidIdHex,
+  MonoidSafeIdHex,
+  SafeIndexHex,
+} from '../../@atomics.js';
 
 import {ViewContext} from './@view-context.js';
 

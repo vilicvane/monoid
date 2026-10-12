@@ -97,6 +97,7 @@ export function useInputModal(): [
                   return;
                 }
 
+                setValue('');
                 setInstance(undefined);
                 resolve(value);
               }}

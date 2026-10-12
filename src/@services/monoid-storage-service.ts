@@ -1,4 +1,6 @@
-import type {MonoidSafeIdHex} from '../@atomics.js';
+import type {MonoidIdHex} from '../@atomics.js';
+
+import type {StorageService} from './storage-service.js';
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/consistent-type-definitions
@@ -7,8 +9,10 @@ declare global {
   }
 }
 
-export class MonoidStorageService {}
+export class MonoidStorageService {
+  constructor(storage: StorageService) {}
+}
 
 export type MonoidData = {
-  id: MonoidSafeIdHex;
+  id: MonoidIdHex;
 };

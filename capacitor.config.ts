@@ -9,5 +9,8 @@ export default {
       resize: 'body',
       resizeOnFullScreen: true,
     },
+    StatusBar: {
+      style: 'LIGHT',
+    },
   },
 } satisfies CapacitorConfig;

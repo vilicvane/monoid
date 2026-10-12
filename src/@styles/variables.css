@@ -4,6 +4,8 @@ http://ionicframework.com/docs/theming/ */
 :root {
   --view-inset-top: env(safe-area-inset-top);
   --view-inset-bottom: max(3px, env(safe-area-inset-bottom));
+  --view-inset-left: env(safe-area-inset-left);
+  --view-inset-right: env(safe-area-inset-right);
 
   --nav-bar-height: 50px;
 
