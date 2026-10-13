@@ -1,75 +1,12 @@
 <svg width="320" height="320" viewBox="0 0 320 320" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect width="320" height="320" fill="#0088FF"/>
-<rect x="240" y="30" width="10" height="10" fill="#084C97"/>
-<rect x="240" y="40" width="10" height="10" fill="#084C97"/>
-<rect x="240" y="50" width="10" height="10" fill="#084C97"/>
-<rect x="240" y="60" width="10" height="10" fill="#084C97"/>
-<rect x="250" y="60" width="10" height="10" fill="#084C97"/>
-<rect x="260" y="40" width="10" height="10" fill="#084C97"/>
-<rect x="260" y="50" width="10" height="10" fill="#084C97"/>
-<rect x="260" y="30" width="10" height="10" fill="#084C97"/>
-<rect x="30" y="30" width="10" height="10" fill="#084C97"/>
-<rect x="30" y="40" width="10" height="10" fill="#084C97"/>
-<rect x="30" y="50" width="10" height="10" fill="#084C97"/>
-<rect x="60" y="40" width="10" height="10" fill="#084C97"/>
-<rect x="60" y="30" width="10" height="10" fill="#084C97"/>
-<rect x="30" y="60" width="10" height="10" fill="#084C97"/>
-<rect x="60" y="50" width="10" height="10" fill="#084C97"/>
-<rect x="60" y="60" width="10" height="10" fill="#084C97"/>
-<rect x="50" y="30" width="10" height="10" fill="#084C97"/>
-<rect x="40" y="40" width="10" height="10" fill="#084C97"/>
-<rect x="250" y="30" width="10" height="10" fill="#084C97"/>
-<rect x="170" y="60" width="10" height="10" fill="#084C97"/>
-<rect x="180" y="60" width="10" height="10" fill="#084C97"/>
-<rect x="160" y="40" width="10" height="10" fill="#084C97"/>
-<rect x="120" y="40" width="10" height="10" fill="#084C97"/>
-<rect x="170" y="30" width="10" height="10" fill="#084C97"/>
-<rect x="160" y="30" width="10" height="10" fill="#084C97"/>
-<path d="M130 30H140V40H130V30Z" fill="#084C97"/>
-<path d="M120 30H130V40H120V30Z" fill="#084C97"/>
-<path d="M140 40H150V50H140V40Z" fill="#084C97"/>
-<path d="M140 50H150V60H140V50Z" fill="#084C97"/>
-<path d="M140 60H150V70H140V60Z" fill="#084C97"/>
-<path d="M120 60H130V70H120V60Z" fill="#084C97"/>
-<rect x="160" y="50" width="10" height="10" fill="#084C97"/>
-<rect x="120" y="50" width="10" height="10" fill="#084C97"/>
-<rect x="160" y="60" width="10" height="10" fill="#084C97"/>
-<rect x="180" y="40" width="10" height="10" fill="#084C97"/>
-<rect x="180" y="30" width="10" height="10" fill="#084C97"/>
-<rect x="180" y="50" width="10" height="10" fill="#084C97"/>
-<rect x="90" y="60" width="10" height="10" fill="#084C97"/>
-<rect x="100" y="60" width="10" height="10" fill="#084C97"/>
-<rect x="80" y="40" width="10" height="10" fill="#084C97"/>
-<rect x="90" y="30" width="10" height="10" fill="#084C97"/>
-<rect x="80" y="30" width="10" height="10" fill="#084C97"/>
-<rect x="80" y="50" width="10" height="10" fill="#084C97"/>
-<rect x="80" y="60" width="10" height="10" fill="#084C97"/>
-<rect x="100" y="40" width="10" height="10" fill="#084C97"/>
-<rect x="100" y="30" width="10" height="10" fill="#084C97"/>
-<rect x="100" y="50" width="10" height="10" fill="#084C97"/>
-<rect x="200" y="30" width="10" height="10" fill="#084C97"/>
-<rect x="210" y="30" width="10" height="10" fill="#084C97"/>
-<rect x="210" y="40" width="10" height="10" fill="#084C97"/>
-<rect x="210" y="50" width="10" height="10" fill="#084C97"/>
-<rect x="210" y="60" width="10" height="10" fill="#084C97"/>
-<rect x="220" y="60" width="10" height="10" fill="#084C97"/>
-<rect x="200" y="60" width="10" height="10" fill="#084C97"/>
-<rect x="220" y="30" width="10" height="10" fill="#084C97"/>
-<rect x="90" y="230" width="20" height="20" fill="white"/>
-<rect x="110" y="230" width="20" height="20" fill="white"/>
-<rect x="110" y="270" width="20" height="20" fill="white"/>
-<rect x="110" y="250" width="20" height="20" fill="white"/>
-<rect x="230" y="230" width="20" height="20" fill="white"/>
-<rect x="250" y="230" width="20" height="20" fill="white"/>
-<rect x="250" y="270" width="20" height="20" fill="white"/>
-<rect x="270" y="230" width="20" height="20" fill="white"/>
-<rect x="270" y="250" width="20" height="20" fill="white"/>
-<rect x="270" y="270" width="20" height="20" fill="white"/>
-<rect x="230" y="270" width="20" height="20" fill="white"/>
-<rect x="230" y="250" width="20" height="20" fill="white"/>
-<rect x="170" y="230" width="20" height="20" fill="white"/>
-<rect x="190" y="250" width="20" height="20" fill="white"/>
-<rect x="150" y="250" width="20" height="20" fill="white"/>
-<rect x="170" y="250" width="20" height="20" fill="white"/>
-<rect x="170" y="270" width="20" height="20" fill="white"/>
+<path d="M40 40H50V30H70V70H60V40H50V50H40V70H30V30H40V40Z" fill="black" fill-opacity="0.4"/>
+<path fill-rule="evenodd" clip-rule="evenodd" d="M110 70H80V30H110V70ZM90 60H100V40H90V60Z" fill="black" fill-opacity="0.4"/>
+<path d="M140 40H130V70H120V30H140V40Z" fill="black" fill-opacity="0.4"/>
+<path d="M150 70H140V40H150V70Z" fill="black" fill-opacity="0.4"/>
+<path fill-rule="evenodd" clip-rule="evenodd" d="M190 70H160V30H190V70ZM170 60H180V40H170V60Z" fill="black" fill-opacity="0.4"/>
+<path d="M230 30V40H220V60H230V70H200V60H210V40H200V30H230Z" fill="black" fill-opacity="0.4"/>
+<path d="M270 60H260V40H250V60H260V70H240V30H270V60Z" fill="black" fill-opacity="0.4"/>
+<path d="M130 290H110V250H90V230H130V290Z" fill="white"/>
+<path d="M190 290H170V270H150V250H170V230H190V250H210V270H190V290Z" fill="white"/>
+<path fill-rule="evenodd" clip-rule="evenodd" d="M290 290H230V230H290V290ZM250 270H270V250H250V270Z" fill="white"/>
 </svg>

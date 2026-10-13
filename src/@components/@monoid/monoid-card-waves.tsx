@@ -4,6 +4,8 @@ import {styled} from 'styled-components';
 
 const WAVE_WIDTH_RATIO = 0.1;
 const WAVE_FADE_IN_SECONDS = 1;
+const WAVE_ORIGIN_X_RATIO = 56 / 430;
+const WAVE_ORIGIN_Y_RATIO = 56 / 270;
 const OUTSIDE_MARGIN = 64;
 
 const Canvas = styled.canvas`
@@ -41,7 +43,7 @@ type BoundaryPoint = {
 type Wave = {radius: number; age: number};
 
 function createBoundary(width: number, height: number): BoundaryPoint[] {
-  const radius = (width * 3.18) / 85.6;
+  const radius = (width * 20) / 430;
   const points: BoundaryPoint[] = [];
   const corners = [
     [width - radius, radius, -Math.PI / 2],
@@ -61,7 +63,10 @@ function createBoundary(width: number, height: number): BoundaryPoint[] {
       y,
       normalX,
       normalY,
-      distance: Math.hypot(x - width / 4, y - height / 2),
+      distance: Math.hypot(
+        x - width * WAVE_ORIGIN_X_RATIO,
+        y - height * WAVE_ORIGIN_Y_RATIO,
+      ),
     });
   };
 
@@ -140,7 +145,7 @@ export function MonoidCardWaves({
           0,
           Math.min(
             wave.age / WAVE_FADE_IN_SECONDS,
-            (maximumRadius - wave.radius) / 96,
+            (maximumRadius - wave.radius) / (maximumRadius * 0.7),
             1,
           ),
         );
@@ -148,10 +153,16 @@ export function MonoidCardWaves({
         context.clip(cardPath);
         context.fillStyle = 'rgba(145, 153, 163, 0.09)';
         context.beginPath();
-        context.arc(width / 4, height / 2, wave.radius, 0, Math.PI * 2);
         context.arc(
-          width / 4,
-          height / 2,
+          width * WAVE_ORIGIN_X_RATIO,
+          height * WAVE_ORIGIN_Y_RATIO,
+          wave.radius,
+          0,
+          Math.PI * 2,
+        );
+        context.arc(
+          width * WAVE_ORIGIN_X_RATIO,
+          height * WAVE_ORIGIN_Y_RATIO,
           Math.max(0, wave.radius - waveWidth),
           0,
           Math.PI * 2,
@@ -236,7 +247,7 @@ export function MonoidCardWaves({
         OUTSIDE_MARGIN +
         waveWidth;
       cardPath = new Path2D();
-      cardPath.roundRect(0, 0, width, height, (width * 3.18) / 85.6);
+      cardPath.roundRect(0, 0, width, height, (width * 20) / 430);
       outsidePath = new Path2D();
       outsidePath.rect(
         -OUTSIDE_MARGIN,
@@ -255,9 +266,10 @@ export function MonoidCardWaves({
         previousTime === undefined
           ? 0
           : Math.min((time - previousTime) / 1000, 0.05);
-      const interval = scanningRef.current ? 0.55 : 1.8;
       const speed = width * (scanningRef.current ? 0.3 : 0.23);
-      const spacing = Math.max(waveWidth * 1.5, speed * interval);
+      const spacing = scanningRef.current
+        ? Math.max(waveWidth * 1.5, speed * 0.55)
+        : width * 0.6;
 
       previousTime = time;
 

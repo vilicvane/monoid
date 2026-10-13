@@ -8,7 +8,10 @@ import {styled} from 'styled-components';
 import {useEntrances} from '../../../../@entrances.js';
 import type {Router} from '../../../../@routes.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
-import {useMonoidScanPrompt} from '../../../@monoid/monoid-scan-prompt.js';
+import {
+  MonoidScanStatePromptContentHighlight,
+  useMonoidScanPrompt,
+} from '../../../@monoid/monoid-scan-prompt.js';
 import {
   View,
   ViewContent,
@@ -49,7 +52,10 @@ export const SafeView = observer(
                 <>
                   Fetching keys, hold tight...
                   <br />
-                  {index + 1}/{total}
+                  <MonoidScanStatePromptContentHighlight>
+                    {index + 1}
+                  </MonoidScanStatePromptContentHighlight>
+                  /{total}
                 </>,
               );
             });

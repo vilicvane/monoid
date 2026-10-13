@@ -2,31 +2,31 @@ import type {ReactNode} from 'react';
 import {useEffect, useRef} from 'react';
 import {styled} from 'styled-components';
 
-import monoidCardChip from '../../@assets/monoid-card-chip.svg';
+import monoidCardWirelessInterface from '../../@assets/monoid-card-wireless-interface.svg';
 import monoidLogo from '../../@assets/monoid.svg';
 
 import {MonoidCardWaves} from './monoid-card-waves.js';
 
 const CardFrame = styled.div`
   position: relative;
-  aspect-ratio: 85.6 / 53.98;
-  border-radius: calc(3.18 / 85.6 * 100%) / calc(3.18 / 53.98 * 100%);
+  aspect-ratio: 430 / 270;
+  border-radius: calc(20 / 430 * 100%) / calc(20 / 270 * 100%);
   background-color: var(--ion-color-dark-contrast);
 `;
 
-const CardChip = styled.img`
+const CardWirelessInterface = styled.img`
   position: absolute;
-  top: calc(96 / 270 * 100%);
+  top: calc(43 / 270 * 100%);
   left: calc(40 / 430 * 100%);
-  width: calc(56 / 430 * 100%);
+  width: calc(32 / 430 * 100%);
 `;
 
 const CardLogo = styled.img`
   position: absolute;
-  top: 50%;
+  top: calc(170 / 270 * 100%);
   right: 0;
   width: calc(60 / 430 * 100%);
-  transform: translateY(-50%) rotate(-90deg);
+  background-color: var(--ion-color-primary);
 `;
 
 export function MonoidScanCard({
@@ -78,7 +78,7 @@ export function MonoidScanCard({
   return (
     <CardFrame ref={frameRef}>
       <MonoidCardWaves scanning={scanning} active={wavesActive} />
-      <CardChip src={monoidCardChip} alt="" />
+      <CardWirelessInterface src={monoidCardWirelessInterface} alt="" />
       <CardLogo src={monoidLogo} alt="" />
     </CardFrame>
   );
