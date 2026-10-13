@@ -2,7 +2,7 @@ import type {ReactNode} from 'react';
 import {useEffect, useRef} from 'react';
 import {styled} from 'styled-components';
 
-const WAVE_WIDTH = 36;
+const WAVE_WIDTH_RATIO = 0.1;
 const OUTSIDE_MARGIN = 64;
 
 const Canvas = styled.canvas`
@@ -90,15 +90,23 @@ function createBoundary(width: number, height: number): BoundaryPoint[] {
   return points;
 }
 
-export function MonoidCardWaves({scanning}: {scanning: boolean}): ReactNode {
+export function MonoidCardWaves({
+  scanning,
+  active,
+}: {
+  scanning: boolean;
+  active: boolean;
+}): ReactNode {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const scanningRef = useRef(scanning);
+  const activeRef = useRef(active);
   const drawStaticRef = useRef<() => void>(undefined);
 
   useEffect(() => {
     scanningRef.current = scanning;
+    activeRef.current = active;
     drawStaticRef.current?.();
-  }, [scanning]);
+  }, [scanning, active]);
 
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -108,6 +116,7 @@ export function MonoidCardWaves({scanning}: {scanning: boolean}): ReactNode {
 
     let width: number;
     let height: number;
+    let waveWidth: number;
     let boundary: BoundaryPoint[];
     let cardPath: Path2D;
     let outsidePath: Path2D;
@@ -138,7 +147,7 @@ export function MonoidCardWaves({scanning}: {scanning: boolean}): ReactNode {
         context.arc(
           width / 4,
           height / 2,
-          Math.max(0, wave.radius - WAVE_WIDTH),
+          Math.max(0, wave.radius - waveWidth),
           0,
           Math.PI * 2,
         );
@@ -151,11 +160,11 @@ export function MonoidCardWaves({scanning}: {scanning: boolean}): ReactNode {
 
         context.save();
         context.clip(outsidePath, 'evenodd');
-        context.fillStyle = 'rgba(225, 232, 240, 0.14)';
+        context.fillStyle = 'rgba(225, 232, 240, 0.07)';
         context.beginPath();
 
         // Each point emits outward only after this wave reaches the card edge.
-        for (const offset of [0, WAVE_WIDTH]) {
+        for (const offset of [0, waveWidth]) {
           for (const [index, point] of boundary.entries()) {
             const distance = Math.max(0, wave.radius - offset - point.distance);
             const x = point.x + point.normalX * distance;
@@ -188,7 +197,15 @@ export function MonoidCardWaves({scanning}: {scanning: boolean}): ReactNode {
     };
 
     const resize = (): void => {
-      ({width, height} = frame.getBoundingClientRect());
+      const size = frame.getBoundingClientRect();
+      const scale = width === undefined ? 1 : size.width / width;
+
+      ({width, height} = size);
+      waveWidth = width * WAVE_WIDTH_RATIO;
+
+      for (const wave of waves) {
+        wave.radius *= scale;
+      }
 
       const pixelRatio = window.devicePixelRatio;
 
@@ -208,7 +225,7 @@ export function MonoidCardWaves({scanning}: {scanning: boolean}): ReactNode {
       maximumRadius =
         Math.max(...boundary.map(point => point.distance)) +
         OUTSIDE_MARGIN +
-        WAVE_WIDTH;
+        waveWidth;
       cardPath = new Path2D();
       cardPath.roundRect(0, 0, width, height, (width * 3.18) / 85.6);
       outsidePath = new Path2D();
@@ -231,7 +248,7 @@ export function MonoidCardWaves({scanning}: {scanning: boolean}): ReactNode {
           : Math.min((time - previousTime) / 1000, 0.05);
       const interval = scanningRef.current ? 0.55 : 1.8;
       const speed = width * (scanningRef.current ? 0.3 : 0.23);
-      const spacing = Math.max(WAVE_WIDTH * 1.5, speed * interval);
+      const spacing = Math.max(waveWidth * 1.5, speed * interval);
 
       previousTime = time;
 
@@ -244,7 +261,10 @@ export function MonoidCardWaves({scanning}: {scanning: boolean}): ReactNode {
 
       const lastWave = waves[waves.length - 1];
 
-      if (lastWave === undefined || lastWave.radius >= spacing) {
+      if (
+        activeRef.current &&
+        (lastWave === undefined || lastWave.radius >= spacing)
+      ) {
         waves.push({radius: 0, age: 0});
       }
 

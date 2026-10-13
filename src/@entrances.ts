@@ -13,6 +13,7 @@ import {ROUTE_SCHEMA} from './@routes.js';
 import {
   ErrorService,
   MonoidCredentialsStore,
+  MonoidScanPromptPresenter,
   MonoidStorageService,
   StorageService,
   WalletKitService,
@@ -81,6 +82,11 @@ export class Entrances {
     return createMonoidApplet(
       Uint8Array.from([0xf0, 0x6d, 0x6f, 0x6e, 0x6f, 0x69, 0x64, 0x01, 0x01]),
     );
+  }
+
+  @entrance
+  get monoidScanPromptPresenter() {
+    return new MonoidScanPromptPresenter();
   }
 
   @entrance

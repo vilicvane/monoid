@@ -28,10 +28,16 @@ const CardLogo = styled.img`
   transform: translateY(-50%) rotate(-90deg);
 `;
 
-export function MonoidScanCard({scanning}: {scanning: boolean}): ReactNode {
+export function MonoidScanCard({
+  scanning,
+  wavesActive = true,
+}: {
+  scanning: boolean;
+  wavesActive?: boolean;
+}): ReactNode {
   return (
     <CardFrame>
-      <MonoidCardWaves scanning={scanning} />
+      <MonoidCardWaves scanning={scanning} active={wavesActive} />
       <CardChip src={monoidCardChip} alt="" />
       <CardLogo src={monoidLogo} alt="" />
     </CardFrame>

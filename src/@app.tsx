@@ -36,6 +36,7 @@ import './@styles/variables.css';
 import './@styles/overrides.css';
 
 import {NavBar, Views} from './@components/index.js';
+import {MonoidScanPromptHost} from './@components/@monoid/monoid-scan-prompt-host.js';
 import {useEntrances} from './@entrances.js';
 
 setupIonicReact();
@@ -83,6 +84,7 @@ const App = observer((): ReactNode => {
       <NavBar />
       <div ref={fabAnchorRef} />
       <div ref={popupAnchorRef} />
+      <MonoidScanPromptHost />
     </IonApp>
   );
 });

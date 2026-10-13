@@ -1,6 +1,6 @@
 import {closeOutline} from 'ionicons/icons';
 import type {ReactNode} from 'react';
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useLayoutEffect, useState} from 'react';
 import {styled} from 'styled-components';
 
 import type {MonoidIdHex} from '../../@atomics.js';
@@ -12,45 +12,6 @@ import {MonoidAppletInvalidPINError} from '../../@lib/monoid/index.js';
 import {uint8ArrayToHex} from '../../@utils/index.js';
 import {useToast} from '../@ui/toast.js';
 import {useInputModal} from '../@ui/use-input-modal.js';
-
-import {MonoidScanCard} from './monoid-scan-card.js';
-
-const Backdrop = styled.div`
-  box-sizing: border-box;
-  position: fixed;
-  z-index: var(--popup-z-index);
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: calc(var(--view-inset-top) + 16px)
-    calc(var(--view-inset-right) + 16px) calc(var(--view-inset-bottom) + 16px)
-    calc(var(--view-inset-left) + 16px);
-  background-color: rgba(0, 0, 0, 0.5);
-  overflow: hidden;
-
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-`;
-
-const PromptContainer = styled.div`
-  width: 100%;
-  max-width: 420px;
-
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-`;
-
-const PromptStateContent = styled.div`
-  position: relative;
-  min-height: 50px;
-  line-height: 25px;
-  text-align: center;
-  font-size: 14px;
-  color: rgba(255, 255, 255, 0.8);
-`;
 
 export const MonoidScanStatePromptContentHighlight = styled.span`
   color: white;
@@ -81,8 +42,13 @@ export function useMonoidScanPrompt({
     ) => Promise<void>,
   ) => Promise<void>,
 ] {
-  const {router, monoidApplet, monoidCredentialsStore, errorService} =
-    useEntrances();
+  const {
+    router,
+    monoidApplet,
+    monoidCredentialsStore,
+    monoidScanPromptPresenter,
+    errorService,
+  } = useEntrances();
 
   const toast = useToast();
 
@@ -104,6 +70,30 @@ export function useMonoidScanPrompt({
   const [state, setState] = useState<'hidden' | 'ready' | 'scanning'>('hidden');
 
   const [stateContent, setStateContent] = useState<ReactNode>();
+  const [owner] = useState(() => Symbol());
+
+  useLayoutEffect(() => {
+    if (appletCallbackAndPromise && state !== 'hidden') {
+      monoidScanPromptPresenter.show(owner, {
+        scanning: state === 'scanning',
+        content: stateContent,
+        onDismiss: () => setAppletCallbackAndPromise(undefined),
+      });
+    } else {
+      monoidScanPromptPresenter.hide(owner);
+    }
+  }, [
+    monoidScanPromptPresenter,
+    owner,
+    appletCallbackAndPromise,
+    state,
+    stateContent,
+  ]);
+
+  useLayoutEffect(
+    () => () => monoidScanPromptPresenter.hide(owner),
+    [monoidScanPromptPresenter, owner],
+  );
 
   useEffect(() => {
     if (!appletCallbackAndPromise) {
@@ -318,20 +308,8 @@ export function useMonoidScanPrompt({
     toast,
   ]);
 
-  const content = appletCallbackAndPromise && state !== 'hidden' && (
-    <Backdrop onClick={() => setAppletCallbackAndPromise(undefined)}>
-      <PromptContainer>
-        <MonoidScanCard scanning={state === 'scanning'} />
-        <PromptStateContent>{stateContent}</PromptStateContent>
-      </PromptContainer>
-    </Backdrop>
-  );
-
   return [
-    <>
-      {content}
-      {pinInput}
-    </>,
+    pinInput,
     useCallback(
       (initialStateContent, appletCallback) =>
         new Promise((resolve, reject) => {
