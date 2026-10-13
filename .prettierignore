@@ -3,3 +3,8 @@ boilerplate.schema.json
 
 # TypeScript Build Artifacts
 .bld/
+
+# Vendored plugin sources
+plugins/keyboard/android/
+plugins/keyboard/ios/
+plugins/keyboard/dist/

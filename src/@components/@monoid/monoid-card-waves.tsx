@@ -3,6 +3,7 @@ import {useEffect, useRef} from 'react';
 import {styled} from 'styled-components';
 
 const WAVE_WIDTH_RATIO = 0.1;
+const WAVE_FADE_IN_SECONDS = 1;
 const OUTSIDE_MARGIN = 64;
 
 const Canvas = styled.canvas`
@@ -124,7 +125,7 @@ export function MonoidCardWaves({
     let nearestEdge: number;
     let animationFrame: number;
     let previousTime: number | undefined;
-    let waves: Wave[] = [{radius: 0, age: 0}];
+    let waves: Wave[] = [];
 
     const draw = (visibleWaves: Wave[]): void => {
       context.clearRect(
@@ -137,7 +138,11 @@ export function MonoidCardWaves({
       for (const wave of visibleWaves) {
         context.globalAlpha = Math.max(
           0,
-          Math.min(wave.age / 0.7, (maximumRadius - wave.radius) / 96, 1),
+          Math.min(
+            wave.age / WAVE_FADE_IN_SECONDS,
+            (maximumRadius - wave.radius) / 96,
+            1,
+          ),
         );
         context.save();
         context.clip(cardPath);
@@ -197,7 +202,11 @@ export function MonoidCardWaves({
     };
 
     const resize = (): void => {
-      const size = frame.getBoundingClientRect();
+      const style = getComputedStyle(frame);
+      const size = {
+        width: parseFloat(style.width),
+        height: parseFloat(style.height),
+      };
       const scale = width === undefined ? 1 : size.width / width;
 
       ({width, height} = size);

@@ -1,4 +1,5 @@
 import type {ReactNode} from 'react';
+import {useEffect, useRef} from 'react';
 import {styled} from 'styled-components';
 
 import monoidCardChip from '../../@assets/monoid-card-chip.svg';
@@ -35,8 +36,47 @@ export function MonoidScanCard({
   scanning: boolean;
   wavesActive?: boolean;
 }): ReactNode {
+  const frameRef = useRef<HTMLDivElement>(null);
+  const animationRef = useRef<Animation>(undefined);
+
+  useEffect(() => {
+    if (
+      !scanning ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      return;
+    }
+
+    animationRef.current?.cancel();
+    animationRef.current = frameRef.current!.animate(
+      [
+        {transform: 'scale(1)'},
+        {transform: 'scale(1.04)', offset: 0.35},
+        {transform: 'scale(1)'},
+      ],
+      {duration: 300, easing: 'ease-out'},
+    );
+  }, [scanning]);
+
+  useEffect(() => {
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+    const onMotionChange = (): void => {
+      if (reducedMotion.matches) {
+        animationRef.current?.cancel();
+      }
+    };
+
+    reducedMotion.addEventListener('change', onMotionChange);
+
+    return () => {
+      reducedMotion.removeEventListener('change', onMotionChange);
+      animationRef.current?.cancel();
+    };
+  }, []);
+
   return (
-    <CardFrame>
+    <CardFrame ref={frameRef}>
       <MonoidCardWaves scanning={scanning} active={wavesActive} />
       <CardChip src={monoidCardChip} alt="" />
       <CardLogo src={monoidLogo} alt="" />

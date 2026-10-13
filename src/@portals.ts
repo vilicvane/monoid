@@ -1,5 +1,7 @@
 import {makeObservable, runInAction} from 'mobx';
 
+import {PopupBackdropController} from './@popup-backdrop.js';
+
 export class Portals {
   fab = document.createElement('div');
 
@@ -7,7 +9,11 @@ export class Portals {
 
   popup = document.createElement('div');
 
+  popupBackdrop = new PopupBackdropController();
+
   constructor() {
+    this.popup.append(this.popupBackdrop.element);
+
     makeObservable(this, {
       fabActive: true,
     });

@@ -2,7 +2,7 @@ import {Keyboard} from '@capacitor/keyboard';
 import {IonApp, setupIonicReact, useIonAlert, useIonToast} from '@ionic/react';
 import classNames from 'classNames';
 import {observer} from 'mobx-react-lite';
-import type {ReactNode} from 'react';
+import type {CSSProperties, ReactNode} from 'react';
 import {useEffect, useLayoutEffect, useRef, useState} from 'react';
 
 /* Core CSS required for Ionic components to work properly */
@@ -76,8 +76,17 @@ const App = observer((): ReactNode => {
 
   return (
     <IonApp
+      style={
+        {
+          transition: keyboard.insetBottom === undefined ? undefined : 'none',
+          '--keyboard-inset-bottom':
+            keyboard.insetBottom === undefined
+              ? undefined
+              : `${keyboard.insetBottom}px`,
+        } as CSSProperties
+      }
       className={classNames({
-        'keyboard-shown': keyboard.shown,
+        'keyboard-shown': keyboard.shown || !!keyboard.insetBottom,
       })}
     >
       <Views />

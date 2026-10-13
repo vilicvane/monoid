@@ -1,6 +1,13 @@
 {
   "root": true,
-  "ignorePatterns": ["node_modules/", "/src/", "/dist/", "/android/", "/ios/"],
+  "ignorePatterns": [
+    "node_modules/",
+    "/src/",
+    "/dist/",
+    "/android/",
+    "/ios/",
+    "/plugins/keyboard/"
+  ],
   "extends": ["plugin:@mufan/javascript"],
   "overrides": [
     {

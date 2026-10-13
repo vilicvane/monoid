@@ -1,10 +1,8 @@
-import {type ReactNode} from 'react';
+import {type ReactNode, useLayoutEffect, useState} from 'react';
 import {createPortal} from 'react-dom';
 import {styled} from 'styled-components';
-import {UnmountAnimationClone} from 'unmount-animation-clone';
 
 import {useEntrances} from '../../@entrances.js';
-import {fadeInAnimationCSS, fadeOutAnimationCSS} from '../@animations.js';
 
 const Container = styled.div`
   position: absolute;
@@ -12,15 +10,7 @@ const Container = styled.div`
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-
-  z-index: var(--popup-z-index);
-
-  ${fadeInAnimationCSS};
-
-  &.unmount {
-    ${fadeOutAnimationCSS};
-  }
+  z-index: calc(var(--popup-z-index) + 1);
 `;
 
 export const PopupBackdrop = ({
@@ -29,21 +19,30 @@ export const PopupBackdrop = ({
   onDismiss?: () => void;
 }): ReactNode => {
   const {
-    portals: {popup},
+    portals: {popup, popupBackdrop},
+    errorService,
   } = useEntrances();
 
-  return createPortal(
-    <UnmountAnimationClone>
-      <Container
-        onClick={event => {
-          if (event.target !== event.currentTarget) {
-            return;
-          }
+  const [owner] = useState(() => Symbol());
 
-          onDismiss?.();
-        }}
-      />
-    </UnmountAnimationClone>,
+  useLayoutEffect(() => {
+    errorService.catch(popupBackdrop.acquire(owner));
+
+    return () => {
+      errorService.catch(popupBackdrop.release(owner));
+    };
+  }, [popupBackdrop, owner, errorService]);
+
+  return createPortal(
+    <Container
+      onClick={event => {
+        if (event.target !== event.currentTarget) {
+          return;
+        }
+
+        onDismiss?.();
+      }}
+    />,
     popup,
   );
 };

@@ -33,6 +33,7 @@ export class ErrorService {
     console.error(error);
 
     void this.presentToast?.({
+      cssClass: 'error-toast',
       icon: bug,
       header: message ?? 'An error occurred',
       message: error instanceof Error ? error.message : String(error),

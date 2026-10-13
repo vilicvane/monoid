@@ -1,0 +1,6 @@
+android/.gradle/
+android/build/
+android/bin/
+android/.settings/
+android/.classpath
+android/.project

@@ -1,10 +1,31 @@
-ion-app {
+ion-app.ion-page {
+  bottom: var(--keyboard-inset-bottom, 0px);
   transition: margin-bottom 0.3s ease;
 }
 
 ion-app.keyboard-shown {
   transition: none;
-  margin-bottom: calc(-1 * (var(--view-inset-bottom) + var(--nav-bar-height)));
+  margin-bottom: calc(
+    -1 *
+      min(
+        var(
+          --keyboard-inset-bottom,
+          calc(var(--view-inset-bottom) + var(--nav-bar-height))
+        ),
+        var(--view-inset-bottom) + var(--nav-bar-height)
+      )
+  );
+}
+
+.popup-backdrop {
+  position: fixed;
+  inset: 0;
+  height: 100vh;
+  z-index: var(--popup-z-index);
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  pointer-events: none;
 }
 
 ion-fab-button::part(native) {
@@ -18,4 +39,16 @@ ion-fab-list > ion-fab-button::part(native) {
 
 ion-toast {
   --box-shadow: none;
+}
+
+ion-toast.error-toast::part(icon) {
+  position: absolute;
+  inset-inline-start: 16px;
+  top: 14px;
+  margin: 0;
+}
+
+ion-toast.error-toast::part(header),
+ion-toast.error-toast::part(message) {
+  padding-inline-start: calc(1.4em + 8px);
 }

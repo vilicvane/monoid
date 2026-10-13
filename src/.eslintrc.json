@@ -4,6 +4,9 @@
     {
       "files": ["**/*.{ts,tsx}"],
       "extends": ["plugin:@mufan/typescript", "plugin:@mufan/react"],
+      "settings": {
+        "import/external-module-folders": ["node_modules", "plugins/keyboard"]
+      },
       "parserOptions": {
         "project": "tsconfig.json"
       }

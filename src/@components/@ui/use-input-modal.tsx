@@ -3,36 +3,66 @@ import type {ReactNode} from 'react';
 import {useCallback, useState} from 'react';
 import {createPortal} from 'react-dom';
 import {styled} from 'styled-components';
-import {UnmountAnimationClone} from 'unmount-animation-clone';
 
 import {useEntrances} from '../../@entrances.js';
 import {fadeInAnimationCSS, fadeOutAnimationCSS} from '../@animations.js';
 
 import {PopupBackdrop} from './popup-backdrop.js';
 
-const Input = styled.input`
+const InputContainer = styled.div`
+  box-sizing: border-box;
   position: absolute;
+  top: 0;
   left: 0;
   right: 0;
-  top: calc(100vh - 50px);
+  bottom: 0;
+  z-index: calc(var(--popup-z-index) + 1);
+  padding: calc(var(--view-inset-top) + 24px)
+    calc(var(--view-inset-right) + 24px) calc(var(--view-inset-bottom) + 24px)
+    calc(var(--view-inset-left) + 24px);
+  pointer-events: none;
 
-  border: none;
-  padding: 15px;
-  line-height: 20px;
-  font-size: 18px;
-
-  outline: none;
-
-  z-index: var(--popup-z-index);
-
-  &.center {
-    text-align: center;
-  }
+  display: flex;
+  align-items: center;
+  justify-content: center;
 
   ${fadeInAnimationCSS};
 
-  &.unmount {
+  &.closing {
     ${fadeOutAnimationCSS};
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    &,
+    &.closing {
+      animation-duration: 0s;
+    }
+  }
+`;
+
+const Input = styled.input`
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 420px;
+  min-width: 0;
+  padding: 12px 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: white;
+  line-height: 36px;
+  font-size: 28px;
+  outline: none;
+  pointer-events: auto;
+
+  &::placeholder {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 18px;
+    opacity: 1;
+  }
+
+  &.center {
+    text-align: center;
   }
 `;
 
@@ -51,18 +81,20 @@ export function useInputModal(): [
   } = useEntrances();
 
   const [value, setValue] = useState('');
+  const [completion, setCompletion] = useState<{
+    value: string | undefined;
+  }>();
 
   const [instance, setInstance] = useState<{
     options: InputModalOptions;
     resolve: (value: string | undefined) => void;
-    reject: (error: unknown) => void;
   }>();
 
   const show = useCallback((options: InputModalOptions) => {
-    console.log('useInputModal.show', options);
-
-    return new Promise<string | undefined>((resolve, reject) => {
-      setInstance({options, resolve, reject});
+    return new Promise<string | undefined>(resolve => {
+      setValue('');
+      setCompletion(undefined);
+      setInstance({options, resolve});
     });
   }, []);
 
@@ -72,24 +104,36 @@ export function useInputModal(): [
     const {
       options: {type = 'text', placeholder, center = false},
       resolve,
-      reject,
     } = instance;
 
-    const dismiss = (): void => {
-      setInstance(undefined);
-      resolve(undefined);
+    const complete = (value: string | undefined): void => {
+      setCompletion(current => current ?? {value});
     };
 
     content = (
       <>
-        <PopupBackdrop onDismiss={dismiss} />
+        <PopupBackdrop onDismiss={() => complete(undefined)} />
         {createPortal(
-          <UnmountAnimationClone>
+          <InputContainer
+            className={classNames({closing: completion})}
+            onAnimationEnd={event => {
+              if (event.target !== event.currentTarget || !completion) {
+                return;
+              }
+
+              setValue('');
+              setCompletion(undefined);
+              setInstance(undefined);
+              resolve(completion.value);
+            }}
+          >
             <Input
               className={classNames({center})}
               type={type}
               placeholder={placeholder}
+              aria-label={placeholder}
               value={value}
+              readOnly={!!completion}
               autoFocus
               onChange={event => setValue(event.target.value)}
               onKeyDown={event => {
@@ -97,13 +141,11 @@ export function useInputModal(): [
                   return;
                 }
 
-                setValue('');
-                setInstance(undefined);
-                resolve(value);
+                complete(value);
               }}
-              onBlur={dismiss}
+              onBlur={() => complete(undefined)}
             />
-          </UnmountAnimationClone>,
+          </InputContainer>,
           popup,
         )}
       </>

@@ -1,6 +1,6 @@
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
-import {useLayoutEffect, useRef} from 'react';
+import {useLayoutEffect, useRef, useState} from 'react';
 import {createPortal} from 'react-dom';
 import {styled} from 'styled-components';
 
@@ -9,10 +9,10 @@ import type {MonoidScanPromptPresentation} from '../../@services/index.js';
 
 import {MonoidScanCard} from './monoid-scan-card.js';
 
-const Backdrop = styled.div<{$closing: boolean}>`
+const Container = styled.div<{$closing: boolean}>`
   box-sizing: border-box;
   position: fixed;
-  z-index: var(--popup-z-index);
+  z-index: calc(var(--popup-z-index) + 1);
   top: 0;
   left: 0;
   right: 0;
@@ -20,7 +20,6 @@ const Backdrop = styled.div<{$closing: boolean}>`
   padding: calc(var(--view-inset-top) + 16px)
     calc(var(--view-inset-right) + 16px) calc(var(--view-inset-bottom) + 16px)
     calc(var(--view-inset-left) + 16px);
-  background-color: rgba(0, 0, 0, 0.5);
   overflow: hidden;
   pointer-events: ${props => (props.$closing ? 'none' : 'auto')};
 
@@ -62,20 +61,60 @@ function MonoidScanPromptLayer({
 }: {
   presentation: MonoidScanPromptPresentation;
 }): ReactNode {
-  const {monoidScanPromptPresenter, errorService} = useEntrances();
-  const backdropRef = useRef<HTMLDivElement>(null);
+  const {
+    monoidScanPromptPresenter,
+    errorService,
+    portals: {popupBackdrop},
+  } = useEntrances();
+  const containerRef = useRef<HTMLDivElement>(null);
   const promptRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
   const stateContentRef = useRef<HTMLDivElement>(null);
+  const presentationRef = useRef(presentation);
+  const initializedRef = useRef(false);
+  const [arrived, setArrived] = useState(false);
+  const [backdropOwner] = useState(() => Symbol());
+  const {closing} = presentation;
 
   useLayoutEffect(() => {
-    if (!presentation.closing) {
-      return;
-    }
+    presentationRef.current = presentation;
+  }, [presentation]);
 
+  useLayoutEffect(
+    () => () => errorService.catch(popupBackdrop.release(backdropOwner)),
+    [popupBackdrop, backdropOwner, errorService],
+  );
+
+  useLayoutEffect(() => {
+    const container = containerRef.current!;
+    const prompt = promptRef.current!;
+    const card = cardRef.current!;
+    const stateContent = stateContentRef.current!;
+    const canvas = card.querySelector('canvas')!;
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
+    if (!initializedRef.current) {
+      const rect = card.getBoundingClientRect();
+      const offset = container.clientHeight / 2 - rect.top - rect.height / 2;
+
+      card.style.transform = `translateY(${offset}px) perspective(2400px) rotateX(-90deg) scale(0.88)`;
+      canvas.style.opacity = '0';
+      stateContent.style.opacity = '0';
+      initializedRef.current = true;
+    }
+
     if (reducedMotion.matches) {
-      monoidScanPromptPresenter.remove(presentation);
+      if (closing) {
+        errorService.catch(popupBackdrop.release(backdropOwner));
+        monoidScanPromptPresenter.remove(presentationRef.current);
+      } else {
+        errorService.catch(popupBackdrop.acquire(backdropOwner));
+        card.style.transform = 'none';
+        prompt.style.transform = 'none';
+        canvas.style.opacity = '1';
+        stateContent.style.opacity = '1';
+        setArrived(true);
+      }
 
       return;
     }
@@ -85,7 +124,9 @@ function MonoidScanPromptLayer({
 
     const onMotionChange = (): void => {
       if (reducedMotion.matches) {
-        monoidScanPromptPresenter.remove(presentation);
+        for (const animation of animations) {
+          animation.finish();
+        }
       }
     };
 
@@ -94,12 +135,50 @@ function MonoidScanPromptLayer({
     errorService.catch(
       (async () => {
         try {
-          const fadeAnimations = [
-            promptRef.current!.querySelector('canvas')!,
-            stateContentRef.current!,
-          ].map(element =>
-            element.animate([{opacity: 1}, {opacity: 0}], {
-              duration: 120,
+          if (!closing) {
+            setArrived(false);
+
+            await popupBackdrop.acquire(backdropOwner);
+
+            if (cancelled) {
+              return;
+            }
+
+            const arrival = card.animate(
+              [
+                {transform: getComputedStyle(card).transform},
+                {
+                  transform:
+                    'translateY(0) perspective(2400px) rotateX(0deg) scale(1)',
+                },
+              ],
+              {
+                duration: reducedMotion.matches ? 0 : 480,
+                easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+                fill: 'forwards',
+              },
+            );
+
+            animations.push(
+              arrival,
+              prompt.animate([{}, {transform: 'translateY(0)'}], {
+                duration: reducedMotion.matches ? 0 : 480,
+                easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+                fill: 'forwards',
+              }),
+            );
+            await arrival.finished;
+
+            if (cancelled) {
+              return;
+            }
+
+            setArrived(true);
+          }
+
+          const fadeAnimations = [canvas, stateContent].map(element =>
+            element.animate([{}, {opacity: closing ? 0 : 1}], {
+              duration: reducedMotion.matches ? 0 : closing ? 120 : 160,
               easing: 'ease-out',
               fill: 'forwards',
             }),
@@ -110,18 +189,24 @@ function MonoidScanPromptLayer({
             fadeAnimations.map(animation => animation.finished),
           );
 
-          if (cancelled) {
+          if (cancelled || !closing) {
             return;
           }
 
-          const cardAnimation = promptRef.current!.animate(
-            [
-              {transform: 'translateY(0)'},
-              {
-                transform: `translateY(-${promptRef.current!.getBoundingClientRect().bottom}px)`,
-              },
-            ],
-            {duration: 180, easing: 'ease-in', fill: 'forwards'},
+          const offset = new DOMMatrixReadOnly(
+            getComputedStyle(prompt).transform,
+          ).m42;
+          const bottom = Math.max(
+            prompt.getBoundingClientRect().bottom,
+            card.getBoundingClientRect().bottom,
+          );
+          const cardAnimation = prompt.animate(
+            [{}, {transform: `translateY(${offset - bottom}px)`}],
+            {
+              duration: reducedMotion.matches ? 0 : 180,
+              easing: 'ease-in',
+              fill: 'forwards',
+            },
           );
 
           animations.push(cardAnimation);
@@ -131,23 +216,14 @@ function MonoidScanPromptLayer({
             return;
           }
 
-          const backdropAnimation = backdropRef.current!.animate(
-            [
-              {backgroundColor: 'rgba(0, 0, 0, 0.5)'},
-              {backgroundColor: 'rgba(0, 0, 0, 0)'},
-            ],
-            {duration: 180, easing: 'ease-in', fill: 'forwards'},
-          );
-
-          animations.push(backdropAnimation);
-          await backdropAnimation.finished;
+          await popupBackdrop.release(backdropOwner);
 
           if (!cancelled) {
-            monoidScanPromptPresenter.remove(presentation);
+            monoidScanPromptPresenter.remove(presentationRef.current);
           }
         } catch (error) {
           if (!cancelled) {
-            monoidScanPromptPresenter.remove(presentation);
+            monoidScanPromptPresenter.remove(presentationRef.current);
 
             throw error;
           }
@@ -160,28 +236,37 @@ function MonoidScanPromptLayer({
       reducedMotion.removeEventListener('change', onMotionChange);
 
       for (const animation of animations) {
+        animation.commitStyles();
         animation.cancel();
       }
     };
-  }, [presentation, monoidScanPromptPresenter, errorService]);
+  }, [
+    closing,
+    monoidScanPromptPresenter,
+    errorService,
+    popupBackdrop,
+    backdropOwner,
+  ]);
 
   return (
-    <Backdrop
-      ref={backdropRef}
+    <Container
+      ref={containerRef}
       $closing={presentation.closing}
       aria-hidden={presentation.closing}
       inert={presentation.closing}
       onClick={presentation.onDismiss}
     >
       <PromptContainer ref={promptRef}>
-        <MonoidScanCard
-          scanning={presentation.scanning}
-          wavesActive={!presentation.closing}
-        />
+        <div ref={cardRef}>
+          <MonoidScanCard
+            scanning={presentation.scanning}
+            wavesActive={arrived && !closing}
+          />
+        </div>
         <PromptStateContent ref={stateContentRef}>
           {presentation.content}
         </PromptStateContent>
       </PromptContainer>
-    </Backdrop>
+    </Container>
   );
 }

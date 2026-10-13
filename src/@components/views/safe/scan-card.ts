@@ -36,7 +36,9 @@ export async function scanCardKeys(
       .viewKey({
         index: item.index,
         ...options,
-        path: 'path' in options ? parseDerivationPath(options.path) : undefined,
+        ...('path' in options && {
+          path: parseDerivationPath(options.path),
+        }),
       })
       .catch(error => {
         if (

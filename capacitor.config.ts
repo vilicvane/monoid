@@ -7,7 +7,7 @@ export default {
   plugins: {
     Keyboard: {
       resize: 'body',
-      resizeOnFullScreen: true,
+      resizeOnFullScreen: false,
     },
     StatusBar: {
       style: 'LIGHT',
