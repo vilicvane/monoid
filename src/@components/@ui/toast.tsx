@@ -11,16 +11,16 @@ import {sleep} from '../../@utils/index.js';
 const DURATION_DEFAULT = 3000;
 
 export function useToast(): (
-  options: ToastOptions & HookOverlayOptions,
+  options: ToastOptions & HookOverlayOptions & {waitForKeyboard?: boolean},
 ) => void {
   const {keyboard} = useEntrances();
 
   const [present] = useIonToast();
 
   return useCallback(
-    options => {
+    ({waitForKeyboard = true, ...options}) => {
       void (async () => {
-        if (keyboard.shown) {
+        if (waitForKeyboard && keyboard.shown) {
           await when(() => !keyboard.shown);
           await sleep(ms('200ms'));
         }

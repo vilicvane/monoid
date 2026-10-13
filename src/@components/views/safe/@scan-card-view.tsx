@@ -5,21 +5,10 @@ import {type ReactNode, useCallback, useEffect, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
-import type {BIP39PathString, CurveName} from '../../../@atomics.js';
-import {SafeKnownType} from '../../../@atomics.js';
-import {
-  ETHEREUM_CURVE,
-  ETHEREUM_DERIVATION_PATH,
-  ETHEREUM_SEED,
-} from '../../../@constants.js';
 import {useEntrances} from '../../../@entrances.js';
-import {parseDerivationPath} from '../../../@lib/bip39.js';
 import {CBORAppletError} from '../../../@lib/cbor-applet.js';
 import type {Router} from '../../../@routes.js';
-import {
-  computeEthereumAddress,
-  uint8ArrayToHex,
-} from '../../../@utils/index.js';
+import {uint8ArrayToHex} from '../../../@utils/index.js';
 import {
   breathAnimationCSS,
   scaleInAnimationCSS,
@@ -28,7 +17,7 @@ import {
 import {useMonoidApplet} from '../../@monoid/use-monoid-applet.js';
 import {View} from '../../@view/index.js';
 
-import type {ScannedCardKeyData} from './common.js';
+import {scanCardKeys} from './scan-card.js';
 
 const ScanCardGuideContainer = styled.div`
   flex: 1;
@@ -80,59 +69,11 @@ export const ScanCardView = ({
     {auth: 'access'},
     useCallback(
       async (applet, hello) => {
-        const keys: ScannedCardKeyData[] = [];
-
         setScanningState(['listing', 0, 0]);
 
-        let {items} = await applet.list({});
-
-        items = items.filter(item =>
-          Object.hasOwn(SAFE_ITEM_TYPE_TO_VIEW_KEY_OPTIONS, item.type),
-        );
-
-        for (const [index, item] of items.entries()) {
-          setScanningState(['viewing', index, items.length]);
-
-          const options = SAFE_ITEM_TYPE_TO_VIEW_KEY_OPTIONS[item.type];
-
-          const metadata = await applet
-            .viewKey({
-              index: item.index,
-              ...options,
-              path:
-                'path' in options
-                  ? parseDerivationPath(options.path)
-                  : undefined,
-            })
-            .catch(error => {
-              if (
-                error instanceof CBORAppletError &&
-                error.source.code.startsWith('UNSUPPORTED_')
-              ) {
-                return undefined;
-              }
-
-              throw error;
-            });
-
-          if (!metadata) {
-            continue;
-          }
-
-          const publicKeyHex = uint8ArrayToHex(metadata.publicKey);
-          const address = computeEthereumAddress(publicKeyHex);
-
-          keys.push({
-            type: SafeKnownType.satisfies(item.type),
-            alias: item.alias,
-            index: uint8ArrayToHex(item.index),
-            ref: {
-              ...('path' in options ? options : {}),
-              publicKey: publicKeyHex,
-              address,
-            },
-          });
-        }
+        const keys = await scanCardKeys(applet, (index, total) => {
+          setScanningState(['viewing', index, total]);
+        });
 
         setScanningState(['complete', 0, 0]);
 
@@ -257,25 +198,4 @@ const SCANNING_STATE_TO_TEXT: Record<
       )}
     </ScanningStateText>
   ),
-};
-
-type ViewKeyOptions =
-  | {
-      seed?: string;
-      curve: CurveName;
-      path: BIP39PathString;
-    }
-  | {};
-
-const SAFE_ITEM_TYPE_TO_VIEW_KEY_OPTIONS: Record<string, ViewKeyOptions> = {
-  seed: {
-    seed: ETHEREUM_SEED,
-    curve: ETHEREUM_CURVE,
-    path: ETHEREUM_DERIVATION_PATH(),
-  },
-  master: {
-    curve: ETHEREUM_CURVE,
-    path: ETHEREUM_DERIVATION_PATH(),
-  },
-  secp256k1: {},
 };

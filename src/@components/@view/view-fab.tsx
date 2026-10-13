@@ -13,7 +13,7 @@ import {popInAnimationCSS, popOutAnimationCSS} from '../@animations.js';
 
 const Fab = styled(IonFab)`
   bottom: calc(var(--nav-bar-height) + var(--view-inset-bottom) - 28px);
-  z-index: 10;
+  z-index: var(--nav-bar-z-index);
 
   &.entering {
     ${popInAnimationCSS}

@@ -80,7 +80,7 @@ export function useMonoidApplet(
             const pin = enteredPIN ?? (await monoidCredentialsStore.getPIN(id));
 
             if (pin === undefined) {
-              promptPIN('Enter PIN, then scan again');
+              promptPIN('Enter Access PIN');
 
               return;
             }

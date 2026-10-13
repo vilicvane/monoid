@@ -36,83 +36,86 @@ const List = styled.div`
 
 export const CardView = observer(
   ({view}: RouteComponentProps<Router['safe']['card']>): ReactNode => {
-    const {walletStorageService, errorService} = useEntrances();
-
-    const {indexToKeyMap} = walletStorageService;
-
-    const keyItems = view.card.keys.map(
-      (key): [ScannedCardKeyData, KeyItemState] => {
-        const existingKey = indexToKeyMap.get(key.index);
-
-        if (existingKey) {
-          return [
-            key,
-            isWalletKeyUpToDate(key, existingKey) ? 'up-to-date' : 'outdated',
-          ];
-        } else {
-          return [key, 'new'];
-        }
-      },
-    );
-
-    const [selectedIndexSet] = useState(() => observable.set());
-
-    const selectedAny = keyItems.some(
-      ([key, state]) =>
-        state !== 'up-to-date' && selectedIndexSet.has(key.index),
-    );
-
-    const [imported, setImported] = useTemporaryState(
-      false,
-      BUTTON_FEEDBACK_DURATION,
-    );
-
     return (
       <View>
         <ViewHeader>
           <ViewHeaderTitle>Card</ViewHeaderTitle>
-          <ViewHeaderIdentifier identifier={{type: 'card', id: view.card.id}} />
+          {view.card && (
+            <ViewHeaderIdentifier
+              identifier={{type: 'card', id: view.card.id}}
+            />
+          )}
         </ViewHeader>
-        <ViewContent>
-          <List>
-            {keyItems.map(([key, state]) => (
-              <KeyItem
-                key={key.index}
-                data={key}
-                state={state}
-                selectedIndexSet={selectedIndexSet}
-              />
-            ))}
-          </List>
-          <Buttons>
-            <Button
-              id="import-button"
-              disabled={!selectedAny}
-              onClick={errorService.catch(async () => {
-                importSelectedKeys(
-                  walletStorageService,
-                  view.card,
-                  selectedIndexSet,
-                );
-
-                setImported(true);
-              })}
-            >
-              {imported ? (
-                <>
-                  <IonIcon icon={checkmarkDone} />
-                  Import successful
-                </>
-              ) : (
-                'Import'
-              )}
-            </Button>
-          </Buttons>
-        </ViewContent>
+        {view.card ? <CardContent card={view.card} /> : <ViewContent />}
       </View>
     );
   },
 );
+
+const CardContent = observer(({card}: {card: ScannedCardData}): ReactNode => {
+  const {walletStorageService, errorService} = useEntrances();
+
+  const {indexToKeyMap} = walletStorageService;
+
+  const keyItems = card.keys.map((key): [ScannedCardKeyData, KeyItemState] => {
+    const existingKey = indexToKeyMap.get(key.index);
+
+    if (existingKey) {
+      return [
+        key,
+        isWalletKeyUpToDate(key, existingKey) ? 'up-to-date' : 'outdated',
+      ];
+    } else {
+      return [key, 'new'];
+    }
+  });
+
+  const [selectedIndexSet] = useState(() => observable.set());
+
+  const selectedAny = keyItems.some(
+    ([key, state]) => state !== 'up-to-date' && selectedIndexSet.has(key.index),
+  );
+
+  const [imported, setImported] = useTemporaryState(
+    false,
+    BUTTON_FEEDBACK_DURATION,
+  );
+
+  return (
+    <ViewContent>
+      <List>
+        {keyItems.map(([key, state]) => (
+          <KeyItem
+            key={key.index}
+            data={key}
+            state={state}
+            selectedIndexSet={selectedIndexSet}
+          />
+        ))}
+      </List>
+      <Buttons>
+        <Button
+          id="import-button"
+          disabled={!selectedAny}
+          onClick={errorService.catch(async () => {
+            importSelectedKeys(walletStorageService, card, selectedIndexSet);
+
+            setImported(true);
+          })}
+        >
+          {imported ? (
+            <>
+              <IonIcon icon={checkmarkDone} />
+              Import successful
+            </>
+          ) : (
+            'Import'
+          )}
+        </Button>
+      </Buttons>
+    </ViewContent>
+  );
+});
 
 function importSelectedKeys(
   walletStorageService: WalletStorageService,

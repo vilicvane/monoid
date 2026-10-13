@@ -50,7 +50,7 @@ export const SetupCardView = ({
   const step2_pinReady = useMemo(() => MonoidPIN.is(pinSet), [pinSet]);
 
   const [settingSafePINScanPromptContent, settingSafePINScanPrompt] =
-    useMonoidScanPrompt(false);
+    useMonoidScanPrompt({ensureSetup: false});
 
   const onSetSafePINScanButtonClick = errorService.catch(
     async (): Promise<void> => {
