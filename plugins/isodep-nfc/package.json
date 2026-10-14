@@ -1,0 +1,37 @@
+{
+  "name": "capacitor-isodep-nfc",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Raw ISO-DEP transport for Capacitor on Android.",
+  "type": "module",
+  "main": "dist/esm/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.js"
+    }
+  },
+  "files": [
+    "android/src/main/",
+    "android/build.gradle",
+    "dist/esm/"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint --report-unused-disable-directives \"src/**/*.ts\""
+  },
+  "peerDependencies": {
+    "@capacitor/core": "^7.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  },
+  "capacitor": {
+    "android": {
+      "src": "android"
+    }
+  }
+}

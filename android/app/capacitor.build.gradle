@@ -15,8 +15,8 @@ dependencies {
     implementation project(':capacitor-haptics')
     implementation project(':capacitor-keyboard')
     implementation project(':capacitor-status-bar')
-    implementation project(':capawesome-team-capacitor-nfc')
     implementation project(':capawesome-team-capacitor-secure-preferences')
+    implementation project(':capacitor-isodep-nfc')
 
 }
 

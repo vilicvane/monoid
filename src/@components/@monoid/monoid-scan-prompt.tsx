@@ -7,6 +7,7 @@ import type {MonoidIdHex} from '../../@atomics.js';
 import {MonoidPIN} from '../../@atomics.js';
 import {useEntrances} from '../../@entrances.js';
 import {CBORAppletError} from '../../@lib/cbor-applet.js';
+import {IsoDepScanError} from '../../@lib/isodep.js';
 import type {MonoidApplet} from '../../@lib/monoid/index.js';
 import {MonoidAppletInvalidPINError} from '../../@lib/monoid/index.js';
 import {uint8ArrayToHex} from '../../@utils/index.js';
@@ -266,11 +267,11 @@ export function useMonoidScanPrompt({
           return;
         }
 
-        failed = retryOnError;
-        completed = !retryOnError;
+        failed = retryOnError && !(error instanceof IsoDepScanError);
+        completed = !failed;
         setState('hidden');
 
-        if (retryOnError) {
+        if (failed) {
           errorService.catch(Promise.reject(error));
         } else {
           reject(error);

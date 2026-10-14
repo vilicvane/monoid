@@ -5,7 +5,11 @@
       "files": ["**/*.{ts,tsx}"],
       "extends": ["plugin:@mufan/typescript", "plugin:@mufan/react"],
       "settings": {
-        "import/external-module-folders": ["node_modules", "plugins/keyboard"]
+        "import/external-module-folders": [
+          "node_modules",
+          "plugins/keyboard",
+          "plugins/isodep-nfc"
+        ]
       },
       "parserOptions": {
         "project": "tsconfig.json"

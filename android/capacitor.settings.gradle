@@ -20,8 +20,8 @@ project(':capacitor-keyboard').projectDir = new File('../plugins/keyboard/androi
 include ':capacitor-status-bar'
 project(':capacitor-status-bar').projectDir = new File('../node_modules/@capacitor/status-bar/android')
 
-include ':capawesome-team-capacitor-nfc'
-project(':capawesome-team-capacitor-nfc').projectDir = new File('../node_modules/@capawesome-team/capacitor-nfc/android')
-
 include ':capawesome-team-capacitor-secure-preferences'
 project(':capawesome-team-capacitor-secure-preferences').projectDir = new File('../node_modules/@capawesome-team/capacitor-secure-preferences/android')
+
+include ':capacitor-isodep-nfc'
+project(':capacitor-isodep-nfc').projectDir = new File('../node_modules/capacitor-isodep-nfc/android')

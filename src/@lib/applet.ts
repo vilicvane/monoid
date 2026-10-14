@@ -1,5 +1,6 @@
-import type {PluginListenerHandle} from '@capacitor/core';
-import {Nfc, NfcTagTechType} from '@capawesome-team/capacitor-nfc';
+import {IsoDepNfc} from 'capacitor-isodep-nfc';
+
+import {standbyIsoDep} from './isodep.js';
 
 export type AppletCommandDefinition = {
   request: unknown;
@@ -7,51 +8,27 @@ export type AppletCommandDefinition = {
 };
 
 export abstract class Applet<TCommandDefinitions> {
+  private sessionId?: string;
+
   constructor(readonly aid: Uint8Array) {}
 
   standby(
     callback: (applet: this) => Promise<void>,
     onError: (error: unknown) => void = console.error,
-    /** Will be called only if `callback` has been called. */
+    /** Called after a connection attempt or a failed scan has been cleaned up. */
     onCleanup?: () => void,
   ): () => void {
-    let disposed = false;
-    let listenerHandle: PluginListenerHandle | undefined;
+    return standbyIsoDep(
+      async sessionId => {
+        const applet = Object.create(this) as this;
+        applet.sessionId = sessionId;
 
-    Nfc.addListener('nfcTagScanned', async ({nfcTag}) => {
-      if (!(nfcTag.techTypes?.includes(NfcTagTechType.IsoDep) ?? false)) {
-        return;
-      }
-
-      await Nfc.connect({
-        techType: NfcTagTechType.IsoDep,
-      });
-
-      try {
-        await this.select();
-        await callback(this);
-      } catch (error) {
-        onError(error);
-      } finally {
-        await Nfc.close();
-        onCleanup?.();
-      }
-    })
-      .then(handle => {
-        if (disposed) {
-          return handle.remove();
-        }
-
-        listenerHandle = handle;
-
-        return undefined;
-      })
-      .catch(onError);
-
-    return () => {
-      disposed = true;
-      listenerHandle?.remove().catch(onError);
-    };
+        await applet.select();
+        await callback(applet);
+      },
+      onError,
+      onCleanup,
+    );
   }
 
   async sendCommand<TIns extends keyof TCommandDefinitions & number>(
@@ -107,7 +84,14 @@ export abstract class Applet<TCommandDefinitions> {
   }
 
   public async sendRawCommand(command: Uint8Array): Promise<Uint8Array> {
-    let {response} = await Nfc.transceive({
+    const {sessionId} = this;
+
+    if (sessionId === undefined) {
+      throw new Error('Applet commands require an open NFC session.');
+    }
+
+    let {data: response} = await IsoDepNfc.transceive({
+      sessionId,
       data: Array.from(command),
     });
 
@@ -126,7 +110,8 @@ export abstract class Applet<TCommandDefinitions> {
       if (sw1 === 0x61) {
         // More data is available.
 
-        const {response: nextResponse} = await Nfc.transceive({
+        const {data: nextResponse} = await IsoDepNfc.transceive({
+          sessionId,
           data: [0x00, 0xc0, 0x00, 0x00],
         });
 
