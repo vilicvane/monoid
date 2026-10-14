@@ -9,6 +9,7 @@ export const KeyTags = styled.div`
   display: flex;
   gap: 10px;
   align-items: center;
+  isolation: isolate;
 `;
 
 export const KeyTag = styled.div`
@@ -95,16 +96,24 @@ export const KeyDerivationTag = ({
   </KeyDerivationTagContainer>
 );
 
-export const KeyDerivationBadge = styled(KeyTag)`
+export const KeyDerivationBadge = styled(KeyTag)<{$primary?: boolean}>`
   margin-left: -12px;
   height: 20px;
   width: 20px;
   padding: 0;
   font-size: 11px;
 
-  background-color: var(--color-derivations-badge);
+  background-color: ${({$primary}) =>
+    $primary ? 'var(--ion-color-primary)' : 'var(--color-derivations-badge)'};
   border-color: transparent;
-  color: var(--color-derivations-badge-contrast);
+  color: ${({$primary}) =>
+    $primary
+      ? 'var(--ion-color-primary-contrast)'
+      : 'var(--color-derivations-badge-contrast)'};
 
   z-index: -1;
+
+  & + & {
+    z-index: -2;
+  }
 `;

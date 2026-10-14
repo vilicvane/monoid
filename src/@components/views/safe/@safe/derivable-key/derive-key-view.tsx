@@ -1,4 +1,3 @@
-import {runInAction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useMemo, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
@@ -10,19 +9,18 @@ import {CBORAppletError} from '../../../../../@lib/cbor-applet.js';
 import type {AddressType} from '../../../../../@lib/wallet-address.js';
 import {
   ADDRESS_TYPES,
-  computeWalletAddress,
   getDerivationPathError,
 } from '../../../../../@lib/wallet-address.js';
 import type {Router} from '../../../../../@routes.js';
-import type {WalletKeyWalletData} from '../../../../../@services/index.js';
-import {hexToUint8Array} from '../../../../../@utils/index.js';
+import type {WalletKeyPublicKeyData} from '../../../../../@services/index.js';
+import {getWalletData} from '../../../../../@services/index.js';
+import {hexToUint8Array, uint8ArrayToHex} from '../../../../../@utils/index.js';
 import {AddressTypeSelector} from '../../../../@key/address-type-selector.js';
 import {useMonoidScanPrompt} from '../../../../@monoid/monoid-scan-prompt.js';
 import {Button, Buttons} from '../../../../@ui/button.js';
 import {ResettableInput} from '../../../../@ui/input.js';
 import {InteractiveAddress} from '../../../../@ui/interactive-address.js';
 import {Step, Steps} from '../../../../@ui/step.js';
-import {useToast} from '../../../../@ui/toast.js';
 import {
   View,
   ViewContent,
@@ -38,8 +36,6 @@ export const DeriveKeyView = observer(
     Router['safe']['derivableKey']['derive']
   >): ReactNode => {
     const {router, walletStorageService, errorService} = useEntrances();
-
-    const toast = useToast();
 
     const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
       auth: 'access',
@@ -61,7 +57,7 @@ export const DeriveKeyView = observer(
       {},
     );
     const path = paths[addressType] ?? pathDefault;
-    const [wallet, setWallet] = useState<WalletKeyWalletData>();
+    const [wallet, setWallet] = useState<WalletKeyPublicKeyData>();
 
     const pathError = getDerivationPathError(addressType, path);
 
@@ -79,7 +75,7 @@ export const DeriveKeyView = observer(
         return;
       }
 
-      let derivedWallet: WalletKeyWalletData;
+      let derivedWallet: WalletKeyPublicKeyData;
 
       errorService.catch(
         scanPrompt('Scan card to derive', async (applet, setStateContent) => {
@@ -111,7 +107,7 @@ export const DeriveKeyView = observer(
             seed: key.type === 'seed' ? options.seed : undefined,
             curve: options.curve,
             path: effectivePath,
-            address: computeWalletAddress(addressType, publicKey),
+            publicKey: uint8ArrayToHex(publicKey),
           };
         }).then(() => {
           if (!view.$leaving && view.$match.$exact.$active) {
@@ -126,23 +122,7 @@ export const DeriveKeyView = observer(
         return;
       }
 
-      if (
-        key.wallets.some(
-          existingWallet =>
-            existingWallet.addressType === wallet.addressType &&
-            existingWallet.address === wallet.address,
-        )
-      ) {
-        return;
-      }
-
-      runInAction(() => {
-        key.wallets.push(wallet);
-      });
-
-      void toast({
-        message: 'Derived wallet imported',
-      });
+      walletStorageService.addWallet(key.index, wallet);
 
       router.$back();
     };
@@ -208,7 +188,7 @@ export const DeriveKeyView = observer(
               >
                 {wallet && (
                   <InteractiveAddress copyable>
-                    {wallet.address}
+                    {getWalletData(wallet).address}
                   </InteractiveAddress>
                 )}
               </Step>

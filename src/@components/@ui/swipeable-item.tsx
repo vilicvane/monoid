@@ -131,11 +131,13 @@ export const SwipeableItem = ({
   onOpenChange,
   actions,
   children,
+  className,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   actions: ReactNode;
   children: ReactNode;
+  className?: string;
 }): ReactNode => {
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -183,10 +185,13 @@ export const SwipeableItem = ({
       gestureName: 'swipeable-item',
       direction: 'x',
       threshold: 10,
-      canStart: ({event}) =>
-        !(event.target as Element).closest(
+      canStart: ({event}) => {
+        const control = (event.target as Element).closest(
           'button, a, input, textarea, select',
-        ),
+        );
+
+        return !control || control.hasAttribute('data-swipeable-content');
+      },
       onStart: () => {
         initialOffset =
           -parseFloat(
@@ -236,6 +241,7 @@ export const SwipeableItem = ({
   return (
     <Container
       ref={containerRef}
+      className={className}
       $dragging={dragOffset !== undefined}
       style={
         {
@@ -254,11 +260,19 @@ export const SwipeableItem = ({
           onOpenChange(false);
           containerRef.current?.focus();
         } else if (
-          event.target === event.currentTarget &&
+          (event.target === event.currentTarget ||
+            (event.target as Element).hasAttribute('data-swipeable-content')) &&
           (event.key === 'ArrowLeft' || event.key === 'ArrowRight')
         ) {
           event.preventDefault();
           onOpenChange(event.key === 'ArrowLeft');
+
+          if (
+            event.key === 'ArrowLeft' &&
+            event.target !== event.currentTarget
+          ) {
+            event.currentTarget.focus({preventScroll: true});
+          }
         }
       }}
     >
@@ -277,7 +291,7 @@ export const SwipeableItem = ({
           suppressClickRef.current = false;
         }}
         onClickCapture={event => {
-          if (suppressClickRef.current) {
+          if (suppressClickRef.current && event.detail !== 0) {
             event.preventDefault();
             event.stopPropagation();
             suppressClickRef.current = false;

@@ -2,9 +2,12 @@ import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 
 import {useEntrances} from '../../../../@entrances.js';
-import {ADDRESS_TYPES} from '../../../../@lib/wallet-address.js';
+import {
+  ADDRESS_TYPES,
+  ADDRESS_TYPE_LABELS,
+} from '../../../../@lib/wallet-address.js';
 import type {WalletKeyData} from '../../../../@services/index.js';
-import {getDefaultWallet} from '../../../../@services/index.js';
+import {getDefaultWallet, getKeyWallets} from '../../../../@services/index.js';
 import {
   KeyListAddress,
   KeyListItem,
@@ -23,8 +26,9 @@ import {RippleEffect} from '../../../@ui/ripple-effect.js';
 export const KeyItem = observer(({data}: {data: WalletKeyData}): ReactNode => {
   const {router} = useEntrances();
 
-  const {type, index, alias, wallets} = data;
-  const wallet = getDefaultWallet(data);
+  const {type, index, alias} = data;
+  const wallets = getKeyWallets(data);
+  const wallet = getDefaultWallet(data, wallets);
 
   return (
     <KeyListItem
@@ -45,13 +49,15 @@ export const KeyItem = observer(({data}: {data: WalletKeyData}): ReactNode => {
         <KeyTags>
           <KeyTypeTag className={type}>{type}</KeyTypeTag>
           {alias && <KeyAliasTag>{alias}</KeyAliasTag>}
-          {wallet?.path && (
+          {wallet && (
             <>
               <KeyDerivationTag chain={ADDRESS_TYPES[wallet.addressType].chain}>
-                {wallet.path}
+                {wallet.path ?? ADDRESS_TYPE_LABELS[wallet.addressType]}
               </KeyDerivationTag>
               {wallets.length > 1 && (
-                <KeyDerivationBadge>{wallets.length - 1}</KeyDerivationBadge>
+                <KeyDerivationBadge $primary>
+                  {wallets.length}
+                </KeyDerivationBadge>
               )}
             </>
           )}

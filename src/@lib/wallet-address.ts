@@ -11,6 +11,13 @@ export type AddressType =
 
 export type AddressChain = 'evm' | 'solana' | 'bitcoin';
 
+export const ADDRESS_TYPE_LABELS: Record<AddressType, string> = {
+  evm: 'EVM',
+  solana: 'Solana',
+  'bitcoin-segwit': 'Native SegWit',
+  'bitcoin-taproot': 'Taproot',
+};
+
 export const ADDRESS_TYPES: Record<
   AddressType,
   {

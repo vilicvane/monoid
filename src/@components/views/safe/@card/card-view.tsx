@@ -9,11 +9,6 @@ import type {SafeIndexHex} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import type {AddressType} from '../../../../@lib/wallet-address.js';
 import type {Router} from '../../../../@routes.js';
-import type {
-  WalletKeyData,
-  WalletStorageService,
-} from '../../../../@services/index.js';
-import {WalletKeyKnownType} from '../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {useTemporaryState} from '../../../@hooks/interactions.js';
 import {KeyList} from '../../../@key/key-list.js';
@@ -35,6 +30,11 @@ import {
   getLocalCardKeyAddress,
   readCardKeyAddress,
 } from '../card-address.js';
+import {
+  getCardKeyData,
+  importCardKey,
+  isWalletKeyUpToDate,
+} from '../card-key-import.js';
 import type {ScannedCardData, ScannedCardKeyData} from '../common.js';
 
 import {AddressTypePicker} from './@address-type-picker.js';
@@ -107,7 +107,11 @@ const CardContent = observer(
       const ref = item.refs[item.addressType];
       const existingKey = indexToKeyMap.get(item.key.index);
       const state: KeyItemState = existingKey
-        ? ref && isWalletKeyUpToDate({...item.key, ref}, existingKey)
+        ? ref &&
+          isWalletKeyUpToDate(
+            getCardKeyData({...item.key, ref}, Object.values(item.refs)),
+            existingKey,
+          )
           ? 'up-to-date'
           : 'outdated'
         : 'new';
@@ -220,14 +224,19 @@ const CardContent = observer(
                   return;
                 }
 
-                const keys = selected.flatMap(({item, ref}) =>
-                  ref ? [{...item.key, ref}] : [],
-                );
-                importSelectedKeys(
-                  walletStorageService,
-                  {...card, keys},
-                  selectedIndexSet,
-                );
+                runInAction(() => {
+                  for (const {item, ref} of selected) {
+                    if (!ref) continue;
+
+                    importCardKey(
+                      walletStorageService,
+                      getCardKeyData(
+                        {...item.key, ref},
+                        Object.values(item.refs),
+                      ),
+                    );
+                  }
+                });
 
                 setImported(true);
               })}
@@ -281,87 +290,3 @@ const CardContent = observer(
     );
   },
 );
-
-function importSelectedKeys(
-  walletStorageService: WalletStorageService,
-  {keys}: ScannedCardData,
-  selectedIndexSet: Set<SafeIndexHex>,
-): void {
-  const selectedKeys = keys.filter(key => selectedIndexSet.has(key.index));
-
-  const existingKeys = new Map(
-    walletStorageService.keys.map(key => [key.index, key]),
-  );
-
-  runInAction(() => {
-    for (const key of selectedKeys) {
-      const existingKey = existingKeys.get(key.index);
-
-      if (existingKey) {
-        existingKey.type = WalletKeyKnownType.satisfies(key.type);
-        existingKey.alias = key.alias;
-
-        const existingWallet = existingKey.wallets.find(
-          wallet =>
-            wallet.addressType === key.ref.addressType &&
-            wallet.address === key.ref.address,
-        );
-
-        if (existingWallet) {
-          existingWallet.seed = key.ref.seed;
-          existingWallet.curve = key.ref.curve;
-          existingWallet.path = key.ref.path;
-
-          continue;
-        }
-
-        existingKey.wallets.push({
-          addressType: key.ref.addressType,
-          seed: key.ref.seed,
-          curve: key.ref.curve,
-          path: key.ref.path,
-          address: key.ref.address,
-        });
-      } else {
-        walletStorageService.keys.push({
-          type: WalletKeyKnownType.satisfies(key.type),
-          index: key.index,
-          alias: key.alias,
-          wallets: [
-            {
-              addressType: key.ref.addressType,
-              seed: key.ref.seed,
-              curve: key.ref.curve,
-              path: key.ref.path,
-              address: key.ref.address,
-            },
-          ],
-        });
-
-        console.debug('added new wallet key:', key.ref.address);
-      }
-    }
-  });
-}
-
-function isWalletKeyUpToDate(
-  key: ScannedCardKeyData,
-  existingKey: WalletKeyData,
-): boolean {
-  console.assert(key.index === existingKey.index);
-
-  const existingWallet = existingKey.wallets.find(
-    wallet =>
-      wallet.addressType === key.ref.addressType &&
-      wallet.address === key.ref.address,
-  );
-
-  return (
-    existingKey.type === key.type &&
-    existingKey.alias === key.alias &&
-    existingWallet !== undefined &&
-    existingWallet.seed === key.ref.seed &&
-    existingWallet.curve === key.ref.curve &&
-    existingWallet.path === key.ref.path
-  );
-}

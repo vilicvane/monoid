@@ -10,7 +10,10 @@ import {css, styled} from 'styled-components';
 
 import type {SafeIndexHex} from '../../../../@atomics.js';
 import type {AddressType} from '../../../../@lib/wallet-address.js';
-import {ADDRESS_TYPES} from '../../../../@lib/wallet-address.js';
+import {
+  ADDRESS_TYPES,
+  ADDRESS_TYPE_LABELS,
+} from '../../../../@lib/wallet-address.js';
 import {
   KeyListAddress,
   KeyListAddressPlaceholder,
@@ -27,13 +30,6 @@ import {
 } from '../../../@key/key-tags.js';
 import {RippleEffect} from '../../../@ui/ripple-effect.js';
 import type {ScannedCardKeyData} from '../common.js';
-
-const ADDRESS_LABELS: Record<AddressType, string> = {
-  evm: 'EVM',
-  solana: 'Solana',
-  'bitcoin-segwit': 'Native SegWit',
-  'bitcoin-taproot': 'Taproot',
-};
 
 const addressTypeTriggerStyles = css`
   cursor: pointer;
@@ -176,10 +172,10 @@ export const KeyItem = observer(
               chain={ADDRESS_TYPES[addressType].chain}
               buttonProps={{
                 ...addressTypeButtonProps,
-                'aria-label': `Change address type: ${path ?? ADDRESS_LABELS[addressType]}`,
+                'aria-label': `Change address type: ${path ?? ADDRESS_TYPE_LABELS[addressType]}`,
               }}
             >
-              {path ?? ADDRESS_LABELS[addressType]}
+              {path ?? ADDRESS_TYPE_LABELS[addressType]}
             </DerivationTag>
             <AddressTypeSwitch
               as="button"

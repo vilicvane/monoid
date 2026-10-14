@@ -2,9 +2,15 @@ import type {IObservableArray} from 'mobx';
 import {computed, observable, reaction, runInAction, toJS} from 'mobx';
 import * as x from 'x-value';
 
-import type {BIP39PathString, CurveName, SafeIndexHex} from '../@atomics.js';
+import type {
+  BIP39PathString,
+  CurveName,
+  PublicKeyHex,
+  SafeIndexHex,
+} from '../@atomics.js';
 import type {AddressType} from '../@lib/wallet-address.js';
-import {ADDRESS_TYPES} from '../@lib/wallet-address.js';
+import {ADDRESS_TYPES, computeWalletAddress} from '../@lib/wallet-address.js';
+import {hexToUint8Array} from '../@utils/index.js';
 
 import type {StorageService} from './index.js';
 
@@ -40,22 +46,38 @@ export class WalletStorageService {
     return this.computedIndexToKeyMap.get();
   }
 
-  deleteWallet(
-    index: SafeIndexHex,
-    {
-      addressType,
-      address,
-    }: Pick<WalletKeyWalletData, 'addressType' | 'address'>,
-  ): void {
+  addWallet(index: SafeIndexHex, source: WalletKeyPublicKeyData): void {
     const key = this.indexToKeyMap.get(index);
 
-    if (!key) {
+    if (!key || (key.type !== 'seed' && key.type !== 'master')) {
       return;
     }
 
-    const walletIndex = key.wallets.findIndex(
-      wallet =>
-        wallet.addressType === addressType && wallet.address === address,
+    const existingIndex = key.wallets.findIndex(existing =>
+      matchesWalletReference(existing, source),
+    );
+
+    runInAction(() => {
+      if (existingIndex === -1) {
+        key.wallets.push(source);
+      } else {
+        key.wallets[existingIndex] = source;
+      }
+    });
+  }
+
+  deleteWallet(
+    index: SafeIndexHex,
+    reference: WalletKeyWalletParameters,
+  ): void {
+    const key = this.indexToKeyMap.get(index);
+
+    if (!key || (key.type !== 'seed' && key.type !== 'master')) {
+      return;
+    }
+
+    const walletIndex = key.wallets.findIndex(wallet =>
+      matchesWalletReference(wallet, reference),
     );
 
     if (walletIndex === -1) {
@@ -66,8 +88,8 @@ export class WalletStorageService {
       key.wallets.splice(walletIndex, 1);
 
       if (
-        key.defaultWallet?.addressType === addressType &&
-        key.defaultWallet.address === address
+        key.defaultWallet &&
+        matchesWalletReference(key.defaultWallet, reference)
       ) {
         delete key.defaultWallet;
       }
@@ -99,13 +121,6 @@ export class WalletStorageService {
   static async create(storage: StorageService): Promise<WalletStorageService> {
     const keys = await storage.get('walletKeys');
 
-    // Records saved before address types were introduced contain EVM addresses.
-    for (const key of keys ?? []) {
-      for (const wallet of key.wallets) {
-        wallet.addressType ??= 'evm';
-      }
-    }
-
     return new WalletStorageService(storage, keys ?? []);
   }
 }
@@ -114,29 +129,104 @@ export type WalletKeyData = {
   type: WalletKeyKnownType;
   index: SafeIndexHex;
   alias: string | undefined;
-  wallets: WalletKeyWalletData[];
-  defaultWallet?: Pick<WalletKeyWalletData, 'addressType' | 'address'>;
+  publicKey?: PublicKeyHex;
+  // The card returns an already tweaked, x-only Taproot output key.
+  taprootOutputKey?: PublicKeyHex;
+  wallets: WalletKeyPublicKeyData[];
+  defaultWallet?: WalletKeyWalletParameters;
 };
 
-export type WalletKeyWalletData = {
+type WalletKeyWalletParameters = {
   addressType: AddressType;
   seed: string | undefined;
   curve: CurveName | undefined;
   path: BIP39PathString | undefined;
+};
+
+export type WalletKeyWalletData = WalletKeyWalletParameters & {
   address: string;
 };
 
-export function getDefaultWallet({
-  wallets,
-  defaultWallet,
-}: WalletKeyData): WalletKeyWalletData | undefined {
+export type WalletKeyPublicKeyData = WalletKeyWalletParameters & {
+  publicKey: PublicKeyHex;
+};
+
+export function getWalletReference({
+  addressType,
+  seed,
+  curve,
+  path,
+}: WalletKeyWalletParameters): WalletKeyWalletParameters {
+  return {addressType, seed, curve, path};
+}
+
+function matchesWalletReference(
+  wallet: WalletKeyWalletParameters,
+  reference: WalletKeyWalletParameters,
+): boolean {
+  return (
+    wallet.addressType === reference.addressType &&
+    wallet.seed === reference.seed &&
+    wallet.curve === reference.curve &&
+    wallet.path === reference.path
+  );
+}
+
+export function getWalletData(
+  source: WalletKeyPublicKeyData,
+): WalletKeyWalletData {
+  return {
+    ...getWalletReference(source),
+    address: computeWalletAddress(
+      source.addressType,
+      hexToUint8Array(source.publicKey),
+    ),
+  };
+}
+
+export function getKeyWallets(key: WalletKeyData): WalletKeyWalletData[] {
+  if (key.type === 'seed' || key.type === 'master') {
+    return key.wallets.map(getWalletData);
+  }
+
+  const wallets: WalletKeyWalletData[] = [];
+  const add = (addressType: AddressType, publicKey: PublicKeyHex): void => {
+    wallets.push(
+      getWalletData({
+        addressType,
+        seed: undefined,
+        curve: undefined,
+        path: undefined,
+        publicKey,
+      }),
+    );
+  };
+
+  if (key.publicKey) {
+    if (key.type === 'secp256k1') {
+      add('evm', key.publicKey);
+      add('bitcoin-segwit', key.publicKey);
+    } else {
+      add('solana', key.publicKey);
+    }
+  }
+
+  if (key.type === 'secp256k1' && key.taprootOutputKey) {
+    add('bitcoin-taproot', key.taprootOutputKey);
+  }
+
+  return wallets;
+}
+
+export function getDefaultWallet(
+  key: WalletKeyData,
+  wallets: readonly WalletKeyWalletData[] = getKeyWallets(key),
+): WalletKeyWalletData | undefined {
+  const {defaultWallet} = key;
+
   return (
     (defaultWallet &&
-      wallets.find(
-        wallet =>
-          wallet.addressType === defaultWallet.addressType &&
-          wallet.address === defaultWallet.address,
-      )) ??
+      wallets.find(wallet => matchesWalletReference(wallet, defaultWallet))) ??
     wallets[0]
   );
 }

@@ -9,6 +9,7 @@ import {css, styled} from 'styled-components';
 
 import type {MonoidSafeIdHex, SafeIndexHex} from '../../@atomics.js';
 
+import {scrollBorderCSS} from './@scroll-border.js';
 import {ViewContext} from './@view-context.js';
 
 const ViewHeaderContainer = styled.div`
@@ -29,11 +30,7 @@ const ViewHeaderContainer = styled.div`
 
   border-bottom: solid 0.5px transparent;
 
-  transition: border-color 0.2s linear;
-
-  &.scrolled {
-    border-color: var(--ion-color-light-shade);
-  }
+  ${scrollBorderCSS}
 `;
 
 export const ViewHeader = observer(
