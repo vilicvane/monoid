@@ -1,4 +1,9 @@
+import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
+
+import type {AddressChain} from '../../@lib/wallet-address.js';
+
+import {AddressChainIcon} from './address-chain-icon.js';
 
 export const KeyTags = styled.div`
   display: flex;
@@ -42,6 +47,7 @@ export const KeyAliasTag = styled(KeyTag)`
   flex-shrink: 1;
   min-width: 0;
   display: block;
+  align-content: center;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -52,11 +58,29 @@ export const KeyAliasTag = styled(KeyTag)`
   color: var(--ion-color-primary-contrast);
 `;
 
-export const KeyDerivationTag = styled(KeyTag)`
+const KeyDerivationTagContainer = styled(KeyTag)`
+  gap: 2px;
+  padding-left: 3px;
+
   background-color: var(--ion-color-dark-contrast);
   border-color: var(--ion-color-light-shade);
   color: var(--ion-color-dark);
 `;
+
+export const KeyDerivationTag = ({
+  chain,
+  className,
+  children,
+}: {
+  chain: AddressChain;
+  className?: string;
+  children: ReactNode;
+}): ReactNode => (
+  <KeyDerivationTagContainer className={className}>
+    <AddressChainIcon chain={chain} />
+    {children}
+  </KeyDerivationTagContainer>
+);
 
 export const KeyExtraDerivationsTag = styled(KeyTag)`
   margin-left: -12px;

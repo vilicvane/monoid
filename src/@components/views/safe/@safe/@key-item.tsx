@@ -1,9 +1,14 @@
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
-import {styled} from 'styled-components';
 
 import {useEntrances} from '../../../../@entrances.js';
+import {ADDRESS_TYPES} from '../../../../@lib/wallet-address.js';
 import type {WalletKeyData} from '../../../../@services/index.js';
+import {
+  KeyListAddress,
+  KeyListItem,
+  KeyListItemContent,
+} from '../../../@key/key-list.js';
 import {
   KeyAliasTag,
   KeyDerivationTag,
@@ -11,34 +16,7 @@ import {
   KeyTags,
   KeyTypeTag,
 } from '../../../@key/key-tags.js';
-import {Address} from '../../../@ui/address.js';
 import {RippleEffect} from '../../../@ui/ripple-effect.js';
-
-const Item = styled.div`
-  position: relative;
-  display: flex;
-
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-
-  padding: 12px var(--view-padding);
-
-  overflow: hidden;
-`;
-
-const ItemContent = styled.div`
-  flex: 1;
-  min-width: 0;
-
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-`;
-
-const KeyRefAddress = styled(Address)`
-  color: var(--ion-color-dark);
-`;
 
 export const KeyItem = observer(
   ({data: {type, index, alias, wallets}}: {data: WalletKeyData}): ReactNode => {
@@ -47,7 +25,7 @@ export const KeyItem = observer(
     const [wallet] = wallets;
 
     return (
-      <Item
+      <KeyListItem
         className="ion-activatable"
         onClick={() => {
           switch (type) {
@@ -61,13 +39,17 @@ export const KeyItem = observer(
           }
         }}
       >
-        <ItemContent>
+        <KeyListItemContent>
           <KeyTags>
             <KeyTypeTag className={type}>{type}</KeyTypeTag>
             {alias && <KeyAliasTag>{alias}</KeyAliasTag>}
             {wallet.path && (
               <>
-                <KeyDerivationTag>{wallet.path}</KeyDerivationTag>
+                <KeyDerivationTag
+                  chain={ADDRESS_TYPES[wallet.addressType].chain}
+                >
+                  {wallet.path}
+                </KeyDerivationTag>
                 {wallets.length > 1 && (
                   <KeyExtraDerivationsTag>
                     {wallets.length - 1}
@@ -76,10 +58,10 @@ export const KeyItem = observer(
               </>
             )}
           </KeyTags>
-          <KeyRefAddress>{wallet.address}</KeyRefAddress>
-        </ItemContent>
+          <KeyListAddress>{wallet.address}</KeyListAddress>
+        </KeyListItemContent>
         <RippleEffect />
-      </Item>
+      </KeyListItem>
     );
   },
 );

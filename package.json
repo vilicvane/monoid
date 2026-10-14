@@ -28,6 +28,7 @@
     "@ionic/react-router": "^8.6.5",
     "@ionic/storage": "^4.0.0",
     "@reown/walletkit": "^1.2.8",
+    "@scure/base": "1.2.6",
     "@types/ms": "^2.1.0",
     "@types/react-router": "^5.1.20",
     "@types/react-router-dom": "^5.3.3",

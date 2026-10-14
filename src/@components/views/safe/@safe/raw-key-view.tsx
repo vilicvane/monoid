@@ -4,11 +4,11 @@ import type {RouteComponentProps} from 'routra-react';
 import {useEntrances} from '../../../../@entrances.js';
 import type {Router} from '../../../../@routes.js';
 import {
-  InfoSection,
-  InfoSectionItem,
-  InfoSectionItemContent,
-  InfoSectionItemLabel,
-} from '../../../@ui/info-section.js';
+  KeyList,
+  KeyListAddress,
+  KeyListItem,
+  KeyListItemContent,
+} from '../../../@key/key-list.js';
 import {InteractiveAddress} from '../../../@ui/interactive-address.js';
 import {View, ViewContent} from '../../../@view/index.js';
 
@@ -41,14 +41,15 @@ export const RawKeyView = ({
     <View>
       <KeyHeader data={key} />
       <ViewContent>
-        <InfoSection>
-          <InfoSectionItem>
-            <InfoSectionItemLabel>Address</InfoSectionItemLabel>
-            <InfoSectionItemContent>
-              <InteractiveAddress copyable>{wallet.address}</InteractiveAddress>
-            </InfoSectionItemContent>
-          </InfoSectionItem>
-        </InfoSection>
+        <KeyList>
+          <KeyListItem>
+            <KeyListItemContent>
+              <KeyListAddress as={InteractiveAddress} copyable>
+                {wallet.address}
+              </KeyListAddress>
+            </KeyListItemContent>
+          </KeyListItem>
+        </KeyList>
       </ViewContent>
     </View>
   );

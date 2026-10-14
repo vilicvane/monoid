@@ -23,6 +23,7 @@ const KeyOptions = x.union([
     seed: BIP39Seed.optional(),
     curve: CurveName,
     path: BIP39Path,
+    taproot: x.literal(true).optional(),
   }),
   x.object({}),
 ]);

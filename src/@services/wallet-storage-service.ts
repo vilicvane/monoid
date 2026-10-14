@@ -2,13 +2,9 @@ import type {IObservableArray} from 'mobx';
 import {computed, observable, reaction, toJS} from 'mobx';
 import * as x from 'x-value';
 
-import type {
-  BIP39PathString,
-  CurveName,
-  EthereumAddress,
-  SafeIndexHex,
-} from '../@atomics.js';
-import {ETHEREUM_DERIVATION_PATH} from '../@constants.js';
+import type {BIP39PathString, CurveName, SafeIndexHex} from '../@atomics.js';
+import type {AddressType} from '../@lib/wallet-address.js';
+import {ADDRESS_TYPES} from '../@lib/wallet-address.js';
 
 import type {StorageService} from './index.js';
 
@@ -44,14 +40,21 @@ export class WalletStorageService {
     return this.computedIndexToKeyMap.get();
   }
 
-  suggestNextDerivationPath(index: SafeIndexHex): BIP39PathString {
+  suggestNextDerivationPath(
+    index: SafeIndexHex,
+    addressType: AddressType,
+  ): BIP39PathString {
     const key = this.indexToKeyMap.get(index);
 
-    const pathSet = new Set(key?.wallets.map(wallet => wallet.path));
+    const pathSet = new Set(
+      key?.wallets
+        .filter(wallet => wallet.addressType === addressType)
+        .map(wallet => wallet.path),
+    );
 
     // eslint-disable-next-line no-constant-condition
     for (let index = 0; true; index++) {
-      const path = ETHEREUM_DERIVATION_PATH(index);
+      const path = ADDRESS_TYPES[addressType].path(index);
 
       if (!pathSet.has(path)) {
         return path;
@@ -61,6 +64,13 @@ export class WalletStorageService {
 
   static async create(storage: StorageService): Promise<WalletStorageService> {
     const keys = await storage.get('walletKeys');
+
+    // Records saved before address types were introduced contain EVM addresses.
+    for (const key of keys ?? []) {
+      for (const wallet of key.wallets) {
+        wallet.addressType ??= 'evm';
+      }
+    }
 
     return new WalletStorageService(storage, keys ?? []);
   }
@@ -74,10 +84,11 @@ export type WalletKeyData = {
 };
 
 export type WalletKeyWalletData = {
+  addressType: AddressType;
   seed: string | undefined;
   curve: CurveName | undefined;
   path: BIP39PathString | undefined;
-  address: EthereumAddress;
+  address: string;
 };
 
 export const WalletKeyKnownType = x.union([

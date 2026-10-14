@@ -4,7 +4,6 @@ import {observable, runInAction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
-import {styled} from 'styled-components';
 
 import type {SafeIndexHex} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
@@ -15,6 +14,7 @@ import type {
 } from '../../../../@services/index.js';
 import {WalletKeyKnownType} from '../../../../@services/index.js';
 import {useTemporaryState} from '../../../@hooks/interactions.js';
+import {KeyList} from '../../../@key/key-list.js';
 import {Button, Buttons} from '../../../@ui/button.js';
 import {BUTTON_FEEDBACK_DURATION} from '../../../@ui/constants.js';
 import {
@@ -28,11 +28,6 @@ import type {ScannedCardData, ScannedCardKeyData} from '../common.js';
 
 import type {KeyItemState} from './@key-item.js';
 import {KeyItem} from './@key-item.js';
-
-const List = styled.div`
-  flex: 1;
-  margin: 0 calc(-1 * var(--view-padding));
-`;
 
 export const CardView = observer(
   ({view}: RouteComponentProps<Router['safe']['card']>): ReactNode => {
@@ -83,7 +78,7 @@ const CardContent = observer(({card}: {card: ScannedCardData}): ReactNode => {
 
   return (
     <ViewContent>
-      <List>
+      <KeyList>
         {keyItems.map(([key, state]) => (
           <KeyItem
             key={key.index}
@@ -92,7 +87,7 @@ const CardContent = observer(({card}: {card: ScannedCardData}): ReactNode => {
             selectedIndexSet={selectedIndexSet}
           />
         ))}
-      </List>
+      </KeyList>
       <Buttons>
         <Button
           id="import-button"
@@ -137,7 +132,9 @@ function importSelectedKeys(
         existingKey.alias = key.alias;
 
         const existingWallet = existingKey.wallets.find(
-          wallet => wallet.address === key.ref.address,
+          wallet =>
+            wallet.addressType === key.ref.addressType &&
+            wallet.address === key.ref.address,
         );
 
         if (existingWallet) {
@@ -149,6 +146,7 @@ function importSelectedKeys(
         }
 
         existingKey.wallets.push({
+          addressType: key.ref.addressType,
           seed: key.ref.seed,
           curve: key.ref.curve,
           path: key.ref.path,
@@ -161,6 +159,7 @@ function importSelectedKeys(
           alias: key.alias,
           wallets: [
             {
+              addressType: key.ref.addressType,
               seed: key.ref.seed,
               curve: key.ref.curve,
               path: key.ref.path,
@@ -182,7 +181,9 @@ function isWalletKeyUpToDate(
   console.assert(key.index === existingKey.index);
 
   const existingWallet = existingKey.wallets.find(
-    wallet => wallet.address === key.ref.address,
+    wallet =>
+      wallet.addressType === key.ref.addressType &&
+      wallet.address === key.ref.address,
   );
 
   return (

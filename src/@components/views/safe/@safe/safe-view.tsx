@@ -3,11 +3,11 @@ import creditCard from 'lucide-static/icons/credit-card.svg';
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 import type {RouteComponentProps} from 'routra-react';
-import {styled} from 'styled-components';
 
 import {useEntrances} from '../../../../@entrances.js';
 import type {Router} from '../../../../@routes.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
+import {KeyList} from '../../../@key/key-list.js';
 import {
   MonoidScanStatePromptContentHighlight,
   useMonoidScanPrompt,
@@ -23,11 +23,6 @@ import type {ScannedCardData} from '../common.js';
 import {scanCardKeys} from '../scan-card.js';
 
 import {KeyItem} from './@key-item.js';
-
-const List = styled.div`
-  flex: 1;
-  margin: calc(-1 * var(--view-padding)) calc(-1 * var(--view-padding)) 0;
-`;
 
 export const SafeView = observer(
   ({view, transition}: RouteComponentProps<Router['safe']>): ReactNode => {
@@ -77,11 +72,11 @@ export const SafeView = observer(
             <ViewHeaderTitle>Safe</ViewHeaderTitle>
           </ViewHeader>
           <ViewContent>
-            <List>
+            <KeyList>
               {walletStorageService.keys.map(key => (
                 <KeyItem key={key.index} data={key} />
               ))}
-            </List>
+            </KeyList>
           </ViewContent>
           <ViewFab view={view} transition={transition}>
             <IonFabButton

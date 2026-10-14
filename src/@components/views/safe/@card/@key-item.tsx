@@ -8,6 +8,12 @@ import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import type {SafeIndexHex} from '../../../../@atomics.js';
+import {ADDRESS_TYPES} from '../../../../@lib/wallet-address.js';
+import {
+  KeyListAddress,
+  KeyListItem,
+  KeyListItemContent,
+} from '../../../@key/key-list.js';
 import {
   KeyAliasTag,
   KeyDerivationTag,
@@ -15,31 +21,8 @@ import {
   KeyTags,
   KeyTypeTag,
 } from '../../../@key/key-tags.js';
-import {Address} from '../../../@ui/address.js';
 import {RippleEffect} from '../../../@ui/ripple-effect.js';
 import type {ScannedCardKeyData} from '../common.js';
-
-const Item = styled.div`
-  position: relative;
-  display: flex;
-
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-
-  padding: 12px var(--view-padding);
-
-  overflow: hidden;
-`;
-
-const ItemContent = styled.div`
-  flex: 1;
-  min-width: 0;
-
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-`;
 
 const KeyCheckbox = styled(KeyTag)`
   width: 22px;
@@ -67,10 +50,6 @@ const KeyCheckbox = styled(KeyTag)`
   }
 `;
 
-const KeyRefAddress = styled(Address)`
-  color: var(--ion-color-dark);
-`;
-
 export type KeyItemState = 'new' | 'outdated' | 'up-to-date';
 
 export const KeyItem = observer(
@@ -79,7 +58,7 @@ export const KeyItem = observer(
       type,
       index,
       alias,
-      ref: {path, address},
+      ref: {path, address, addressType},
     },
     state,
     selectedIndexSet,
@@ -107,7 +86,7 @@ export const KeyItem = observer(
     }
 
     return (
-      <Item
+      <KeyListItem
         className="ion-activatable"
         onClick={
           checkable
@@ -121,7 +100,7 @@ export const KeyItem = observer(
             : undefined
         }
       >
-        <ItemContent>
+        <KeyListItemContent>
           <KeyTags>
             <KeyCheckbox
               className={classNames({
@@ -133,12 +112,16 @@ export const KeyItem = observer(
             </KeyCheckbox>
             <KeyTypeTag className={type}>{type}</KeyTypeTag>
             {alias && <KeyAliasTag>{alias}</KeyAliasTag>}
-            {path && <KeyDerivationTag>{path}</KeyDerivationTag>}
+            {path && (
+              <KeyDerivationTag chain={ADDRESS_TYPES[addressType].chain}>
+                {path}
+              </KeyDerivationTag>
+            )}
           </KeyTags>
-          <KeyRefAddress>{address}</KeyRefAddress>
-        </ItemContent>
+          <KeyListAddress>{address}</KeyListAddress>
+        </KeyListItemContent>
         {checkable && <RippleEffect />}
-      </Item>
+      </KeyListItem>
     );
   },
 );

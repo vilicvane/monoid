@@ -4,21 +4,27 @@ import {type ReactNode, useMemo, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
 import {BIP39PathString} from '../../../../../@atomics.js';
-import {ETHEREUM_CURVE, ETHEREUM_SEED} from '../../../../../@constants.js';
 import {useEntrances} from '../../../../../@entrances.js';
 import {parseDerivationPath} from '../../../../../@lib/bip39.js';
 import {CBORAppletError} from '../../../../../@lib/cbor-applet.js';
+import type {
+  AddressChain,
+  AddressType,
+} from '../../../../../@lib/wallet-address.js';
+import {
+  ADDRESS_TYPES,
+  computeWalletAddress,
+  getDerivationPathError,
+} from '../../../../../@lib/wallet-address.js';
 import type {Router} from '../../../../../@routes.js';
 import type {WalletKeyWalletData} from '../../../../../@services/index.js';
-import {
-  computeEthereumAddress,
-  hexToUint8Array,
-  uint8ArrayToHex,
-} from '../../../../../@utils/index.js';
+import {hexToUint8Array} from '../../../../../@utils/index.js';
+import {AddressChainIcon} from '../../../../@key/address-chain-icon.js';
 import {useMonoidScanPrompt} from '../../../../@monoid/monoid-scan-prompt.js';
 import {Button, Buttons} from '../../../../@ui/button.js';
-import {Input} from '../../../../@ui/input.js';
+import {ResettableInput} from '../../../../@ui/input.js';
 import {InteractiveAddress} from '../../../../@ui/interactive-address.js';
+import {SegmentedControl} from '../../../../@ui/segmented-control.js';
 import {Step, Steps} from '../../../../@ui/step.js';
 import {useToast} from '../../../../@ui/toast.js';
 import {
@@ -28,6 +34,27 @@ import {
   ViewHeaderIdentifier,
   ViewHeaderTitle,
 } from '../../../../@view/index.js';
+
+const ADDRESS_CHAIN_OPTIONS = [
+  {value: 'evm', label: 'EVM', icon: <AddressChainIcon chain="evm" />},
+  {value: 'solana', label: 'Solana', icon: <AddressChainIcon chain="solana" />},
+  {value: 'bitcoin', label: 'BTC', icon: <AddressChainIcon chain="bitcoin" />},
+] as const;
+
+const BITCOIN_TYPE_OPTIONS = [
+  {
+    value: 'bitcoin-segwit',
+    label: 'Native SegWit',
+    icon: <AddressChainIcon chain="bitcoin" />,
+  },
+  {
+    value: 'bitcoin-taproot',
+    label: 'Taproot',
+    icon: <AddressChainIcon chain="bitcoin" />,
+  },
+] as const;
+
+type BitcoinAddressType = (typeof BITCOIN_TYPE_OPTIONS)[number]['value'];
 
 export const DeriveKeyView = observer(
   ({
@@ -44,21 +71,30 @@ export const DeriveKeyView = observer(
       retryOnError: true,
     });
 
-    const pathDefault = useMemo(
-      () => walletStorageService.suggestNextDerivationPath(view.index),
-      [view.index, walletStorageService],
-    );
-
     const key = walletStorageService.indexToKeyMap.get(view.index);
 
-    const [path, setPath] = useState<string>(pathDefault);
+    const [chain, setChain] = useState<AddressChain>('evm');
+    const [bitcoinType, setBitcoinType] =
+      useState<BitcoinAddressType>('bitcoin-segwit');
+    const addressType = chain === 'bitcoin' ? bitcoinType : chain;
+    const options = ADDRESS_TYPES[addressType];
+
+    const pathDefault = useMemo(
+      () =>
+        walletStorageService.suggestNextDerivationPath(view.index, addressType),
+      [view.index, walletStorageService, addressType],
+    );
+
+    const [paths, setPaths] = useState<Partial<Record<AddressType, string>>>(
+      {},
+    );
+    const path = paths[addressType] ?? pathDefault;
     const [wallet, setWallet] = useState<WalletKeyWalletData>();
 
-    const pathWithFallback = path || pathDefault;
+    const pathError = getDerivationPathError(addressType, path);
 
-    const effectivePath = BIP39PathString.is(pathWithFallback)
-      ? pathWithFallback
-      : undefined;
+    const effectivePath =
+      pathError === undefined ? BIP39PathString.satisfies(path) : undefined;
 
     const step = wallet ? 2 : 1;
 
@@ -81,10 +117,11 @@ export const DeriveKeyView = observer(
             .viewKey({
               index: hexToUint8Array(view.index),
               ...(key.type === 'seed' && {
-                seed: ETHEREUM_SEED,
+                seed: options.seed,
               }),
-              curve: ETHEREUM_CURVE,
+              curve: options.curve,
               path: parseDerivationPath(effectivePath),
+              ...(options.taproot && {taproot: true}),
             })
             .catch(error => {
               if (
@@ -98,10 +135,11 @@ export const DeriveKeyView = observer(
             });
 
           derivedWallet = {
-            seed: key.type === 'seed' ? ETHEREUM_SEED : undefined,
-            curve: ETHEREUM_CURVE,
+            addressType,
+            seed: key.type === 'seed' ? options.seed : undefined,
+            curve: options.curve,
             path: effectivePath,
-            address: computeEthereumAddress(uint8ArrayToHex(publicKey)),
+            address: computeWalletAddress(addressType, publicKey),
           };
         }).then(() => {
           if (!view.$leaving && view.$match.$exact.$active) {
@@ -118,7 +156,9 @@ export const DeriveKeyView = observer(
 
       if (
         key.wallets.some(
-          existingWallet => existingWallet.address === wallet.address,
+          existingWallet =>
+            existingWallet.addressType === wallet.addressType &&
+            existingWallet.address === wallet.address,
         )
       ) {
         return;
@@ -152,10 +192,51 @@ export const DeriveKeyView = observer(
                 activeNumero={step}
                 summary={effectivePath}
               >
-                <Input
+                <SegmentedControl
+                  aria-label="Address chain"
+                  value={chain}
+                  options={ADDRESS_CHAIN_OPTIONS}
+                  onChange={setChain}
+                />
+                {chain === 'bitcoin' && (
+                  <SegmentedControl
+                    aria-label="Bitcoin address type"
+                    value={bitcoinType}
+                    options={BITCOIN_TYPE_OPTIONS}
+                    onChange={setBitcoinType}
+                  />
+                )}
+                <ResettableInput
+                  aria-label="Derivation path"
+                  aria-invalid={pathError !== undefined}
                   value={path}
                   placeholder={pathDefault}
-                  onChange={event => setPath(event.target.value)}
+                  onChange={event =>
+                    setPaths({...paths, [addressType]: event.target.value})
+                  }
+                  onFocus={event => {
+                    const input = event.currentTarget;
+
+                    // Wait for caret placement and any reset value update.
+                    requestAnimationFrame(() => {
+                      if (document.activeElement !== input) {
+                        return;
+                      }
+
+                      const number = /\d+(?=\D*$)/.exec(input.value);
+
+                      if (number) {
+                        input.setSelectionRange(
+                          number.index,
+                          number.index + number[0].length,
+                        );
+                      }
+                    });
+                  }}
+                  resetDisabled={path === pathDefault}
+                  onReset={() =>
+                    setPaths({...paths, [addressType]: pathDefault})
+                  }
                 />
               </Step>
               <Step

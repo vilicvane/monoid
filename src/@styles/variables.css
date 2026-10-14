@@ -28,6 +28,10 @@ http://ionicframework.com/docs/theming/ */
   --color-derivations-badge: #ffbb29;
   --color-derivations-badge-contrast: #ffffff;
 
+  --color-segmented-border: var(--ion-color-light-shade);
+  --color-segmented-selected: #f2f2f2;
+  --color-segmented-selected-contrast: var(--ion-color-dark);
+
   --ion-color-primary: #3377ff;
   --ion-color-primary-rgb: 51, 119, 255;
   --ion-color-primary-contrast: #ffffff;

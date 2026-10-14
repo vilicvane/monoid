@@ -12,13 +12,17 @@ import {useTemporaryState} from '../@hooks/interactions.js';
 
 import {Address as Address_} from './address.js';
 
-const Container = styled.div`
+const Container = styled.div<{$copyable: boolean}>`
+  position: relative;
+  padding-right: ${({$copyable}) => ($copyable ? '20px' : '0')};
+
   display: flex;
   align-items: center;
 `;
 
 const Address = styled(Address_)`
   flex: 1;
+  min-width: 0;
 
   &.clickable {
     text-decoration: underline;
@@ -26,9 +30,11 @@ const Address = styled(Address_)`
 `;
 
 const CopyButton = styled.button`
-  margin-right: -4px;
+  position: absolute;
+  top: 50%;
+  right: -4px;
+  transform: translateY(-50%);
 
-  flex-shrink: 0;
   width: 24px;
   height: 24px;
 
@@ -62,7 +68,7 @@ export const InteractiveAddress = ({
   const [toast] = useIonToast();
 
   return (
-    <Container {...props}>
+    <Container {...props} $copyable={copyable}>
       <Address
         className={classNames({
           clickable,
@@ -77,6 +83,8 @@ export const InteractiveAddress = ({
       </Address>
       {copyable && (
         <CopyButton
+          type="button"
+          aria-label="Copy address"
           onClick={errorService.catch(async () => {
             await Clipboard.write({
               string: address,

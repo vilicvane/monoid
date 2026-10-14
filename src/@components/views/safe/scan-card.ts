@@ -63,6 +63,7 @@ export async function scanCardKeys(
       alias: item.alias,
       index: uint8ArrayToHex(item.index),
       ref: {
+        addressType: 'evm',
         ...('path' in options ? options : {}),
         publicKey: publicKeyHex,
         address,
