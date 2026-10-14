@@ -67,6 +67,13 @@ const KeyDerivationTagContainer = styled(KeyTag)`
   color: var(--ion-color-dark);
 `;
 
+const DerivationPath = styled.span`
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+`;
+
 export const KeyDerivationTag = ({
   chain,
   className,
@@ -78,11 +85,11 @@ export const KeyDerivationTag = ({
 }): ReactNode => (
   <KeyDerivationTagContainer className={className}>
     <AddressChainIcon chain={chain} />
-    {children}
+    <DerivationPath>{children}</DerivationPath>
   </KeyDerivationTagContainer>
 );
 
-export const KeyExtraDerivationsTag = styled(KeyTag)`
+export const KeyDerivationBadge = styled(KeyTag)`
   margin-left: -12px;
   height: 20px;
   width: 20px;

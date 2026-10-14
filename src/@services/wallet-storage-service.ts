@@ -1,5 +1,5 @@
 import type {IObservableArray} from 'mobx';
-import {computed, observable, reaction, toJS} from 'mobx';
+import {computed, observable, reaction, runInAction, toJS} from 'mobx';
 import * as x from 'x-value';
 
 import type {BIP39PathString, CurveName, SafeIndexHex} from '../@atomics.js';
@@ -38,6 +38,40 @@ export class WalletStorageService {
 
   get indexToKeyMap(): Map<SafeIndexHex, WalletKeyData> {
     return this.computedIndexToKeyMap.get();
+  }
+
+  deleteWallet(
+    index: SafeIndexHex,
+    {
+      addressType,
+      address,
+    }: Pick<WalletKeyWalletData, 'addressType' | 'address'>,
+  ): void {
+    const key = this.indexToKeyMap.get(index);
+
+    if (!key) {
+      return;
+    }
+
+    const walletIndex = key.wallets.findIndex(
+      wallet =>
+        wallet.addressType === addressType && wallet.address === address,
+    );
+
+    if (walletIndex === -1) {
+      return;
+    }
+
+    runInAction(() => {
+      key.wallets.splice(walletIndex, 1);
+
+      if (
+        key.defaultWallet?.addressType === addressType &&
+        key.defaultWallet.address === address
+      ) {
+        delete key.defaultWallet;
+      }
+    });
   }
 
   suggestNextDerivationPath(
@@ -81,6 +115,7 @@ export type WalletKeyData = {
   index: SafeIndexHex;
   alias: string | undefined;
   wallets: WalletKeyWalletData[];
+  defaultWallet?: Pick<WalletKeyWalletData, 'addressType' | 'address'>;
 };
 
 export type WalletKeyWalletData = {
@@ -90,6 +125,21 @@ export type WalletKeyWalletData = {
   path: BIP39PathString | undefined;
   address: string;
 };
+
+export function getDefaultWallet({
+  wallets,
+  defaultWallet,
+}: WalletKeyData): WalletKeyWalletData | undefined {
+  return (
+    (defaultWallet &&
+      wallets.find(
+        wallet =>
+          wallet.addressType === defaultWallet.addressType &&
+          wallet.address === defaultWallet.address,
+      )) ??
+    wallets[0]
+  );
+}
 
 export const WalletKeyKnownType = x.union([
   x.literal('seed').nominal<'safe known type'>(),

@@ -1,5 +1,4 @@
-import {Clipboard} from '@capacitor/clipboard';
-import {IonIcon, useIonToast} from '@ionic/react';
+import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
 import checkCheck from 'lucide-static/icons/check-check.svg';
 import copy from 'lucide-static/icons/copy.svg';
@@ -9,6 +8,7 @@ import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
 import {useTemporaryState} from '../@hooks/interactions.js';
+import {useCopyAddress} from '../@hooks/use-copy-address.js';
 
 import {Address as Address_} from './address.js';
 
@@ -49,8 +49,6 @@ const CopyButton = styled.button`
 
 const COPIED_STATE_DURATION = ms('1s');
 
-const COPIED_TOAST_DURATION = ms('2s');
-
 export const InteractiveAddress = ({
   clickable = false,
   copyable = false,
@@ -62,10 +60,9 @@ export const InteractiveAddress = ({
   children: string;
 }): ReactNode => {
   const {errorService} = useEntrances();
+  const copyAddress = useCopyAddress();
 
   const [copied, setCopied] = useTemporaryState(false, COPIED_STATE_DURATION);
-
-  const [toast] = useIonToast();
 
   return (
     <Container {...props} $copyable={copyable}>
@@ -86,17 +83,7 @@ export const InteractiveAddress = ({
           type="button"
           aria-label="Copy address"
           onClick={errorService.catch(async () => {
-            await Clipboard.write({
-              string: address,
-            });
-
-            await toast({
-              icon: copy,
-              message: 'Address copied to clipboard',
-              duration: COPIED_TOAST_DURATION,
-              positionAnchor: 'nav-bar',
-            });
-
+            await copyAddress(address);
             setCopied(true);
           })}
         >

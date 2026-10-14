@@ -32,3 +32,9 @@ export const KeyListItemContent = styled.div`
 export const KeyListAddress = styled(Address)`
   color: var(--ion-color-dark);
 `;
+
+export const KeyListPlaceholder = styled.div`
+  color: var(--ion-color-medium);
+  font-size: 14px;
+  line-height: 21px;
+`;
