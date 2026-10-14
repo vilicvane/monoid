@@ -6,10 +6,13 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.nfc.NfcAdapter;
 import android.nfc.NfcManager;
+import android.nfc.Tag;
 import android.nfc.tech.IsoDep;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.util.Log;
 import androidx.core.content.ContextCompat;
 import androidx.lifecycle.Lifecycle;
 import com.getcapacitor.JSArray;
@@ -25,6 +28,7 @@ import org.json.JSONArray;
 @CapacitorPlugin(name = "IsoDepNfc")
 public final class IsoDepNfcPlugin extends Plugin {
     private static final int DEFAULT_TRANSCEIVE_TIMEOUT_MS = 10_000;
+    private static final int TAG_REMOVAL_DEBOUNCE_MS = 1_000;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor(runnable -> new Thread(runnable, "IsoDepNfc-io"));
@@ -47,23 +51,35 @@ public final class IsoDepNfcPlugin extends Plugin {
         NfcManager manager = (NfcManager) getContext().getSystemService(Context.NFC_SERVICE);
         adapter = manager == null ? null : manager.getDefaultAdapter();
         resumed = getActivity().getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED);
-        sessions = new SessionController(new SessionController.Reader() {
+        sessions = new SessionController(new ReaderModeController<>(new ReaderModeController.Platform<Tag>() {
             @Override
-            public void start(SessionController.TagCallback onTag) {
-                adapter.enableReaderMode(getActivity(), tag -> {
-                    IsoDep isoDep = IsoDep.get(tag);
-                    if (isoDep != null) {
-                        onTag.accept(new AndroidIsoDepTransport(isoDep));
-                    }
-                }, NfcAdapter.FLAG_READER_NFC_A | NfcAdapter.FLAG_READER_NFC_B
+            public void enable(ReaderModeController.TagCallback<Tag> onTag) {
+                adapter.enableReaderMode(getActivity(), onTag::accept,
+                    NfcAdapter.FLAG_READER_NFC_A | NfcAdapter.FLAG_READER_NFC_B
                     | NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK | NfcAdapter.FLAG_READER_NO_PLATFORM_SOUNDS, null);
             }
 
             @Override
-            public void stop() {
+            public SessionController.Transport transport(Tag tag) {
+                IsoDep isoDep = IsoDep.get(tag);
+                return isoDep == null ? null : new AndroidIsoDepTransport(isoDep);
+            }
+
+            @Override
+            public void ignore(Tag tag) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && adapter.isEnabled()) {
+                    boolean accepted = adapter.ignore(tag, TAG_REMOVAL_DEBOUNCE_MS, null, null);
+                    // No tag identifier or payload: false can simply mean that
+                    // the tag has already left the field.
+                    Log.d("IsoDepNfc", "Tag redispatch suppression accepted: " + accepted);
+                }
+            }
+
+            @Override
+            public void disable() {
                 adapter.disableReaderMode(getActivity());
             }
-        }, main::post, io, closer, (delayMs, action) -> {
+        }), main::post, io, closer, (delayMs, action) -> {
             main.postDelayed(action, delayMs);
             return () -> main.removeCallbacks(action);
         }, new SessionController.Listener() {

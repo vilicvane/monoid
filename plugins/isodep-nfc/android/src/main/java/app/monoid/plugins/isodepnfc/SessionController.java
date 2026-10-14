@@ -86,6 +86,7 @@ final class SessionController {
         // before posting it, so discoveries received while busy cannot queue up.
         boolean acceptingTags = true;
         boolean stopped;
+        boolean finishing;
         boolean closeFailed;
 
         Scan(String id, int timeoutMs) {
@@ -344,11 +345,6 @@ final class SessionController {
             scan.stopped = true;
         }
         retiredScanIds.add(scan.id);
-        try {
-            reader.stop();
-        } catch (RuntimeException exception) {
-            scan.closeFailed = true;
-        }
         if (active != null) {
             end(active, reason.equals("stopped") ? "scan-stopped" : reason, code);
         }
@@ -423,8 +419,17 @@ final class SessionController {
     }
 
     private void finishStopping(Scan scan) {
-        if (!scan.stopped || (active != null && active.scan == scan)) {
+        if (!scan.stopped || scan.finishing || (active != null && active.scan == scan)) {
             return;
+        }
+        scan.finishing = true;
+        // The reader retains the latest native tag after a session closes. Let
+        // all transport cleanup finish before it suppresses that tag and gives
+        // discovery back to Android. No I/O worker can reconnect it afterwards.
+        try {
+            reader.stop();
+        } catch (RuntimeException exception) {
+            scan.closeFailed = true;
         }
         if (scanning == scan) {
             scanning = null;

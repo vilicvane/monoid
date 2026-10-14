@@ -46,6 +46,23 @@ Both methods wait for native connection closure and previous work to exit.
 Disabling NFC, pausing or destroying the host activity stops the scan. Returning
 to the foreground or enabling NFC does not automatically restart it.
 
+When the activity is still in the foreground, `stopScan` completes all transport
+cleanup before returning tag discovery to Android. On Android 7 / API 24 and
+later, it first calls
+[`NfcAdapter.ignore`](<https://developer.android.com/reference/android/nfc/NfcAdapter#ignore(android.nfc.Tag,int,android.nfc.NfcAdapter.OnTagRemovedListener,android.os.Handler)>)
+for the latest discovered tag, then disables Reader Mode. The tag is retained
+after `closeSession` so this also covers closing the connection before stopping
+the scan. The 1,000 ms debounce is the minimum time out of range before normal
+system dispatch resumes; it is not a fixed delay added to `stopScan`.
+
+This requests suppression of the system NFC chooser for a card left in place.
+Android can reject the request when the tag is already gone or unavailable;
+Logcat's `IsoDepNfc` entry records whether the request was accepted without
+logging tag identifiers or payloads. API 23 has no `ignore` support. Android's
+documented RF and random-UID limitations still apply, and activity pause can
+disable Reader Mode independently of plugin cleanup. This is not a physical
+removal guarantee or an application-level rescan gate.
+
 Byte arrays must be nonempty arrays of integers from 0 to 255. Concurrent
 exchanges reject with `BUSY` and are not queued. `transceiveTimeoutMs` defaults to
 10,000 ms; `timeoutMs` overrides it for one exchange. Timeout values must be

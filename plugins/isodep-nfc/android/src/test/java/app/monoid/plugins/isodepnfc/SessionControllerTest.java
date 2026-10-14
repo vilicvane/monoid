@@ -176,6 +176,73 @@ public class SessionControllerTest {
     }
 
     @Test
+    public void stopKeepsTheReaderUntilBothTheWorkerAndConnectionCleanupFinish() {
+        Fixture fixture = new Fixture();
+        FakeTransport transport = new FakeTransport();
+        String sessionId = fixture.startAndConnect(transport);
+        RecordingResult<byte[]> exchange = fixture.exchange(sessionId, null);
+        RecordingResult<Void> stopping = fixture.stop("scan");
+
+        assertFailure(exchange, "CANCELLED", "not-sent");
+        assertEquals(1, fixture.events.ended.size());
+        assertEquals(1, fixture.events.scans.size());
+        assertEquals(0, fixture.reader.stopCalls);
+        assertEquals(0, stopping.settlements);
+        fixture.finishCleanup();
+        assertEquals(1, transport.closeCalls);
+        assertEquals(0, fixture.reader.stopCalls);
+        assertEquals(0, stopping.settlements);
+        FakeTransport dropped = new FakeTransport();
+        fixture.reader.onTag.accept(dropped);
+        fixture.finishExchange();
+
+        assertSuccess(stopping);
+        assertEquals(0, transport.transceiveCalls);
+        assertEquals(0, dropped.connectCalls);
+        assertEquals(2, transport.closeCalls);
+        assertEquals(1, fixture.reader.stopCalls);
+        assertSuccess(fixture.stop("scan"));
+        assertEquals(1, fixture.reader.stopCalls);
+    }
+
+    @Test
+    public void stoppingAfterSessionCleanupStillStopsTheReaderExactlyOnce() {
+        Fixture fixture = new Fixture();
+        FakeTransport transport = new FakeTransport();
+        String sessionId = fixture.startAndConnect(transport);
+        RecordingResult<Void> closed = fixture.close(sessionId);
+        fixture.finishCleanup();
+        assertSuccess(closed);
+        assertEquals(0, fixture.reader.stopCalls);
+
+        assertSuccess(fixture.stop("scan"));
+        assertSuccess(fixture.stop("scan"));
+        assertEquals(1, fixture.reader.stopCalls);
+        assertEquals(1, transport.closeCalls);
+        assertEquals(1, fixture.events.ended.size());
+        assertEquals(1, fixture.events.scans.size());
+    }
+
+    @Test
+    public void reentrantStopDuringReaderCleanupSharesTheFinalFailure() {
+        Fixture fixture = new Fixture();
+        assertSuccess(fixture.start("scan"));
+        RecordingResult<Void> reentrant = new RecordingResult<>();
+        fixture.reader.onStop = () -> {
+            fixture.controller.stopScan("scan", reentrant);
+            assertEquals(0, reentrant.settlements);
+            assertFailure(fixture.start("next"), "BUSY", null);
+        };
+        fixture.reader.stopFailure = true;
+        RecordingResult<Void> stopping = fixture.stop("scan");
+
+        assertFailure(stopping, "IO_ERROR", null);
+        assertFailure(reentrant, "IO_ERROR", null);
+        assertEquals(1, fixture.reader.stopCalls);
+        assertEquals(1, fixture.events.scans.size());
+    }
+
+    @Test
     public void completionQueuedAfterCloseCannotResolveAnExchangeTwice() {
         Fixture fixture = new Fixture();
         String sessionId = fixture.startAndConnect(new FakeTransport());
@@ -571,6 +638,7 @@ public class SessionControllerTest {
             await(transport.firstClose);
             fixture.onControl(() -> {});
             assertEquals(0, stopping.settlements);
+            assertEquals(0, fixture.reader.stopCalls);
             RecordingResult<Void> premature = new RecordingResult<>();
             fixture.onControl(() -> fixture.controller.startScan("next", 1000, premature));
             assertFailure(premature, "BUSY", null);
@@ -579,6 +647,7 @@ public class SessionControllerTest {
             fixture.onControl(() -> {});
 
             assertSuccess(stopping);
+            assertEquals(1, fixture.reader.stopCalls);
             assertEquals(2, transport.closeCalls);
             assertFalse(transport.connected);
             assertTrue(fixture.events.opened.isEmpty());
@@ -747,6 +816,7 @@ public class SessionControllerTest {
         int stopCalls;
         boolean startFailure;
         boolean stopFailure;
+        Runnable onStop = () -> {};
 
         @Override
         public void start(SessionController.TagCallback onTag) {
@@ -760,6 +830,7 @@ public class SessionControllerTest {
         @Override
         public void stop() {
             stopCalls++;
+            onStop.run();
             if (stopFailure) {
                 throw new IllegalStateException("Unable to stop reader mode");
             }
