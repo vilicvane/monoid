@@ -103,6 +103,15 @@ export function createMonoidApplet(aid: Uint8Array) {
       }),
     },
 
+    set: {
+      ins: 0x33,
+      request: x.object({
+        index: SafeIndex,
+        alias: x.string,
+      }),
+      response: x.object({}),
+    },
+
     viewKey: {
       ins: 0x40,
       request: Key,

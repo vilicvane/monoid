@@ -70,6 +70,8 @@ export type InputModalOptions = {
   type?: 'text' | 'password';
   center?: boolean;
   placeholder?: string;
+  defaultValue?: string;
+  maxLength?: number;
 };
 
 export function useInputModal(): [
@@ -92,7 +94,7 @@ export function useInputModal(): [
 
   const show = useCallback((options: InputModalOptions) => {
     return new Promise<string | undefined>(resolve => {
-      setValue('');
+      setValue(options.defaultValue ?? '');
       setCompletion(undefined);
       setInstance({options, resolve});
     });
@@ -102,7 +104,7 @@ export function useInputModal(): [
 
   if (instance) {
     const {
-      options: {type = 'text', placeholder, center = false},
+      options: {type = 'text', placeholder, center = false, maxLength},
       resolve,
     } = instance;
 
@@ -133,6 +135,7 @@ export function useInputModal(): [
               placeholder={placeholder}
               aria-label={placeholder}
               value={value}
+              maxLength={maxLength}
               readOnly={!!completion}
               autoFocus
               onChange={event => setValue(event.target.value)}

@@ -3,7 +3,6 @@ import type {RouteComponentProps} from 'routra-react';
 
 import {useEntrances} from '../../../../@entrances.js';
 import type {Router} from '../../../../@routes.js';
-import {KeyType} from '../../../@key/key-type.js';
 import {
   InfoSection,
   InfoSectionItem,
@@ -11,13 +10,9 @@ import {
   InfoSectionItemLabel,
 } from '../../../@ui/info-section.js';
 import {InteractiveAddress} from '../../../@ui/interactive-address.js';
-import {
-  View,
-  ViewContent,
-  ViewHeader,
-  ViewHeaderIdentifier,
-  ViewHeaderTitle,
-} from '../../../@view/index.js';
+import {View, ViewContent} from '../../../@view/index.js';
+
+import {KeyHeader} from './@key-header.js';
 
 export const RawKeyView = ({
   view,
@@ -39,19 +34,12 @@ export const RawKeyView = ({
   }
 
   const {
-    type,
-    alias,
     wallets: [wallet],
   } = key;
 
   return (
     <View>
-      <ViewHeader>
-        <ViewHeaderTitle>
-          <KeyType type={type} />
-        </ViewHeaderTitle>
-        <ViewHeaderIdentifier identifier={{type: 'safe-item', index, alias}} />
-      </ViewHeader>
+      <KeyHeader data={key} />
       <ViewContent>
         <InfoSection>
           <InfoSectionItem>

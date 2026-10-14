@@ -133,14 +133,18 @@ function importSelectedKeys(
       const existingKey = existingKeys.get(key.index);
 
       if (existingKey) {
-        if (existingKey.alias === undefined && key.alias) {
-          existingKey.alias = key.alias;
-        }
+        existingKey.type = WalletKeyKnownType.satisfies(key.type);
+        existingKey.alias = key.alias;
 
-        if (
-          existingKey.wallets.some(wallet => wallet.address === key.ref.address)
-        ) {
-          console.debug('wallet already exists:', key.ref.address);
+        const existingWallet = existingKey.wallets.find(
+          wallet => wallet.address === key.ref.address,
+        );
+
+        if (existingWallet) {
+          existingWallet.seed = key.ref.seed;
+          existingWallet.curve = key.ref.curve;
+          existingWallet.path = key.ref.path;
+
           continue;
         }
 
@@ -177,13 +181,16 @@ function isWalletKeyUpToDate(
 ): boolean {
   console.assert(key.index === existingKey.index);
 
-  if (existingKey.wallets.every(wallet => wallet.address !== key.ref.address)) {
-    return false;
-  }
+  const existingWallet = existingKey.wallets.find(
+    wallet => wallet.address === key.ref.address,
+  );
 
-  if (existingKey.alias === undefined && key.alias) {
-    return false;
-  }
-
-  return true;
+  return (
+    existingKey.type === key.type &&
+    existingKey.alias === key.alias &&
+    existingWallet !== undefined &&
+    existingWallet.seed === key.ref.seed &&
+    existingWallet.curve === key.ref.curve &&
+    existingWallet.path === key.ref.path
+  );
 }

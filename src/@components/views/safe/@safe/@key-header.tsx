@@ -1,0 +1,111 @@
+import {runInAction} from 'mobx';
+import {observer} from 'mobx-react-lite';
+import type {ReactNode} from 'react';
+import {styled} from 'styled-components';
+
+import {useEntrances} from '../../../../@entrances.js';
+import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
+import type {WalletKeyData} from '../../../../@services/index.js';
+import {hexToUint8Array} from '../../../../@utils/index.js';
+import {KeyAliasTag} from '../../../@key/key-tags.js';
+import {KeyType} from '../../../@key/key-type.js';
+import {useMonoidScanPrompt} from '../../../@monoid/monoid-scan-prompt.js';
+import {useToast} from '../../../@ui/toast.js';
+import {useInputModal} from '../../../@ui/use-input-modal.js';
+import {
+  ViewHeader,
+  ViewHeaderIdentifier,
+  ViewHeaderTitle,
+  viewHeaderTagCSS,
+} from '../../../@view/index.js';
+
+const AliasTag = styled(KeyAliasTag)`
+  ${viewHeaderTagCSS}
+`;
+
+const KEY_ALIAS_MAX_LENGTH = 64;
+
+export const KeyHeader = observer(
+  ({data}: {data: WalletKeyData}): ReactNode => {
+    const {errorService} = useEntrances();
+
+    const toast = useToast();
+    const [aliasInput, showAliasInput] = useInputModal();
+    const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
+      auth: 'access',
+      retryOnError: true,
+    });
+
+    const onClick = errorService.catch(async () => {
+      const alias = await showAliasInput({
+        placeholder: 'Enter key alias',
+        defaultValue: data.alias,
+        maxLength: KEY_ALIAS_MAX_LENGTH,
+        center: true,
+      });
+
+      if (alias === undefined || alias === (data.alias ?? '')) {
+        return;
+      }
+
+      if (alias.length > KEY_ALIAS_MAX_LENGTH) {
+        throw new Error(
+          `Alias must be ${KEY_ALIAS_MAX_LENGTH} characters or fewer.`,
+        );
+      }
+
+      await scanPrompt(
+        'Scan card to save alias',
+        async (applet, setStateContent) => {
+          setStateContent('Saving alias...');
+
+          await applet
+            .set({index: hexToUint8Array(data.index), alias})
+            .catch(error => {
+              if (
+                error instanceof CBORAppletError &&
+                error.source.code === 'NOT_FOUND'
+              ) {
+                throw new Error('Key not found, wrong card?', {cause: error});
+              }
+
+              throw error;
+            });
+
+          runInAction(() => {
+            data.alias = alias;
+          });
+        },
+      );
+
+      toast({message: 'Alias saved'});
+    });
+
+    return (
+      <>
+        <ViewHeader>
+          <ViewHeaderTitle>
+            <KeyType type={data.type} />
+          </ViewHeaderTitle>
+          {data.alias && (
+            <AliasTag
+              as="button"
+              type="button"
+              onClick={onClick}
+              aria-label="Edit key alias"
+            >
+              {data.alias}
+            </AliasTag>
+          )}
+          <ViewHeaderIdentifier
+            identifier={{type: 'safe-item', index: data.index}}
+            onClick={onClick}
+            aria-label="Edit key alias"
+          />
+        </ViewHeader>
+        {aliasInput}
+        {scanPromptContent}
+      </>
+    );
+  },
+);

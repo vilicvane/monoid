@@ -7,6 +7,7 @@ export const KeyTags = styled.div`
 `;
 
 export const KeyTag = styled.div`
+  flex-shrink: 0;
   margin: 0 -2px;
 
   height: 22px;
@@ -38,6 +39,14 @@ export const KeyTypeTag = styled(KeyTag)`
 `;
 
 export const KeyAliasTag = styled(KeyTag)`
+  flex-shrink: 1;
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 20px;
+
   background-color: var(--ion-color-primary);
   border-color: var(--ion-color-primary-shade);
   color: var(--ion-color-primary-contrast);

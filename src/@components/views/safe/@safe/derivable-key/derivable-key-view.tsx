@@ -5,7 +5,6 @@ import {styled} from 'styled-components';
 import {useEntrances} from '../../../../../@entrances.js';
 import type {Router} from '../../../../../@routes.js';
 import {KeyDerivationTag, KeyTags} from '../../../../@key/key-tags.js';
-import {KeyType} from '../../../../@key/key-type.js';
 import {Button, Buttons} from '../../../../@ui/button.js';
 import {
   InfoSection,
@@ -14,13 +13,8 @@ import {
   InfoSectionItemLabel,
 } from '../../../../@ui/info-section.js';
 import {InteractiveAddress} from '../../../../@ui/interactive-address.js';
-import {
-  View,
-  ViewContent,
-  ViewHeader,
-  ViewHeaderIdentifier,
-  ViewHeaderTitle,
-} from '../../../../@view/index.js';
+import {View, ViewContent} from '../../../../@view/index.js';
+import {KeyHeader} from '../@key-header.js';
 
 const InfoSectionItemContent = styled(InfoSectionItemContent_)`
   flex: 1;
@@ -55,16 +49,11 @@ export const DerivableKeyView = ({
     return null;
   }
 
-  const {type, alias, wallets} = key;
+  const {wallets} = key;
 
   return (
     <View>
-      <ViewHeader>
-        <ViewHeaderTitle>
-          <KeyType type={type} />
-        </ViewHeaderTitle>
-        <ViewHeaderIdentifier identifier={{type: 'safe-item', index, alias}} />
-      </ViewHeader>
+      <KeyHeader data={key} />
       <ViewContent>
         <InfoSection>
           <InfoSectionItem>

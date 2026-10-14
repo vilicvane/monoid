@@ -1,8 +1,8 @@
 import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
-import checkCheck from 'lucide-static/icons/check-check.svg';
 import check from 'lucide-static/icons/check.svg';
-import rotateCw from 'lucide-static/icons/rotate-cw.svg';
+import refreshCw from 'lucide-static/icons/refresh-cw.svg';
+import saveCheck from 'lucide-static/icons/save-check.svg';
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
@@ -34,6 +34,7 @@ const Item = styled.div`
 
 const ItemContent = styled.div`
   flex: 1;
+  min-width: 0;
 
   display: flex;
   flex-direction: column;
@@ -56,7 +57,7 @@ const KeyCheckbox = styled(KeyTag)`
   &.up-to-date {
     background-color: var(--ion-color-light);
     border-color: var(--ion-color-light-shade);
-    color: var(--ion-color-dark);
+    color: var(--ion-color-medium-tint);
   }
 
   &.checked {
@@ -98,10 +99,10 @@ export const KeyItem = observer(
         icon = checked ? <IonIcon icon={check} /> : undefined;
         break;
       case 'outdated':
-        icon = <IonIcon icon={rotateCw} />;
+        icon = <IonIcon icon={checked ? check : refreshCw} />;
         break;
       case 'up-to-date':
-        icon = <IonIcon icon={checkCheck} />;
+        icon = <IonIcon icon={saveCheck} />;
         break;
     }
 
@@ -131,8 +132,8 @@ export const KeyItem = observer(
               {icon}
             </KeyCheckbox>
             <KeyTypeTag className={type}>{type}</KeyTypeTag>
-            {path && <KeyDerivationTag>{path}</KeyDerivationTag>}
             {alias && <KeyAliasTag>{alias}</KeyAliasTag>}
+            {path && <KeyDerivationTag>{path}</KeyDerivationTag>}
           </KeyTags>
           <KeyRefAddress>{address}</KeyRefAddress>
         </ItemContent>

@@ -29,6 +29,7 @@ const Item = styled.div`
 
 const ItemContent = styled.div`
   flex: 1;
+  min-width: 0;
 
   display: flex;
   flex-direction: column;
@@ -63,6 +64,7 @@ export const KeyItem = observer(
         <ItemContent>
           <KeyTags>
             <KeyTypeTag className={type}>{type}</KeyTypeTag>
+            {alias && <KeyAliasTag>{alias}</KeyAliasTag>}
             {wallet.path && (
               <>
                 <KeyDerivationTag>{wallet.path}</KeyDerivationTag>
@@ -73,7 +75,6 @@ export const KeyItem = observer(
                 )}
               </>
             )}
-            {alias && <KeyAliasTag>{alias}</KeyAliasTag>}
           </KeyTags>
           <KeyRefAddress>{wallet.address}</KeyRefAddress>
         </ItemContent>
