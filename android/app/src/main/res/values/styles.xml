@@ -17,10 +17,17 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+        <!-- Keep the background consistent while the system launch window hands over. -->
+        <item name="android:windowBackground">@color/ic_launcher_background</item>
     </style>
 
 
-    <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+    <style name="AppTheme.NoActionBarLaunchBase" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/ic_launcher_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/monoid_launch_icon</item>
+        <item name="windowSplashScreenAnimationDuration">@integer/monoid_launch_animation_duration</item>
+        <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
     </style>
+
+    <style name="AppTheme.NoActionBarLaunch" parent="AppTheme.NoActionBarLaunchBase" />
 </resources>

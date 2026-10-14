@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<objectAnimator xmlns:android="http://schemas.android.com/apk/res/android"
+    android:propertyName="fillAlpha"
+    android:valueFrom="1" android:valueTo="0" android:valueType="floatType"
+    android:startOffset="@integer/monoid_launch_key_reveal_start"
+    android:duration="1"
+    android:interpolator="@android:interpolator/linear" />

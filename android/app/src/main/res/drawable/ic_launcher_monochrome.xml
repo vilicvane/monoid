@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from src/@assets/monoid.svg; its 320-unit canvas maps to the visible 72 dp. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <group android:scaleX="0.225" android:scaleY="0.225" android:translateX="18" android:translateY="18">
+        <path android:fillColor="#FFFFFF" android:pathData="M100 190H80V150H60V130H100V190Z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M160 190H140V170H120V150H140V130H160V150H180V170H160V190Z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M260 190H200V130H260V190ZM220 170H240V150H220V170Z" />
+    </group>
+</vector>

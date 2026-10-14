@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="monoid_launch_icon" type="drawable">@drawable/monoid_launch_animation</item>
+</resources>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="monoid_launch_icon" type="drawable">@drawable/monoid_launch_vector</item>
+    <integer name="monoid_launch_animation_duration">1160</integer>
+    <integer name="monoid_launch_rotation_duration">640</integer>
+    <integer name="monoid_launch_key_reveal_start">1159</integer>
+    <integer name="monoid_launch_complete_hold_duration">250</integer>
+</resources>

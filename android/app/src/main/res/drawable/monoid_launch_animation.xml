@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android" android:drawable="@drawable/monoid_launch_vector">
+    <target android:name="one" android:animation="@animator/monoid_launch_one" />
+    <target android:name="plus" android:animation="@animator/monoid_launch_plus" />
+    <target android:name="zero" android:animation="@animator/monoid_launch_zero" />
+    <target android:name="one_shape" android:animation="@animator/monoid_launch_glyph_hide" />
+    <target android:name="plus_shape" android:animation="@animator/monoid_launch_glyph_hide" />
+    <target android:name="zero_shape" android:animation="@animator/monoid_launch_glyph_hide" />
+    <target android:name="key" android:animation="@animator/monoid_launch_key_reveal" />
+</animated-vector>
