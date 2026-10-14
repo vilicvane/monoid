@@ -1,6 +1,6 @@
 import {runInAction} from 'mobx';
 import {observer} from 'mobx-react-lite';
-import {type ReactNode, useEffect, useMemo, useState} from 'react';
+import {type ReactNode, useMemo, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
 import {BIP39PathString} from '../../../../../@atomics.js';
@@ -15,6 +15,7 @@ import {
   hexToUint8Array,
   uint8ArrayToHex,
 } from '../../../../../@utils/index.js';
+import {useMonoidScanPrompt} from '../../../../@monoid/monoid-scan-prompt.js';
 import {Button, Buttons} from '../../../../@ui/button.js';
 import {Input} from '../../../../@ui/input.js';
 import {InteractiveAddress} from '../../../../@ui/interactive-address.js';
@@ -34,9 +35,14 @@ export const DeriveKeyView = observer(
   }: RouteComponentProps<
     Router['safe']['derivableKey']['derive']
   >): ReactNode => {
-    const {router, monoidApplet, walletStorageService} = useEntrances();
+    const {router, walletStorageService, errorService} = useEntrances();
 
     const toast = useToast();
+
+    const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
+      auth: 'access',
+      retryOnError: true,
+    });
 
     const pathDefault = useMemo(
       () => walletStorageService.suggestNextDerivationPath(view.index),
@@ -44,8 +50,6 @@ export const DeriveKeyView = observer(
     );
 
     const key = walletStorageService.indexToKeyMap.get(view.index);
-
-    let [step, setStep] = useState(1);
 
     const [path, setPath] = useState<string>(pathDefault);
     const [wallet, setWallet] = useState<WalletKeyWalletData>();
@@ -56,91 +60,56 @@ export const DeriveKeyView = observer(
       ? pathWithFallback
       : undefined;
 
-    const step1_ready = effectivePath !== undefined;
-    const step2_ready = wallet !== undefined;
-
-    step = Math.min(
-      step,
-      step1_ready ? Infinity : 1,
-      step2_ready ? Infinity : 2,
-    );
-
-    const toScanCard = step === 2 && !step2_ready;
-
-    const [scanning, setScanning] = useState(false);
-
-    useEffect(() => {
-      if (!toScanCard || !key || effectivePath === undefined) {
-        return;
-      }
-
-      return monoidApplet.standby(
-        async applet => {
-          setScanning(true);
-
-          const {publicKey} = await applet.viewKey({
-            index: hexToUint8Array(view.index),
-            ...(key.type === 'seed' && {
-              seed: ETHEREUM_SEED,
-            }),
-            curve: ETHEREUM_CURVE,
-            path: parseDerivationPath(effectivePath),
-          });
-
-          setScanning(false);
-
-          const address = computeEthereumAddress(uint8ArrayToHex(publicKey));
-
-          setWallet({
-            seed: key.type === 'seed' ? ETHEREUM_SEED : undefined,
-            curve: ETHEREUM_CURVE,
-            path: effectivePath,
-            address,
-          });
-
-          setStep(3);
-        },
-        error => {
-          setScanning(false);
-
-          let message: string;
-
-          if (error instanceof CBORAppletError) {
-            if (error.source.code === 'NOT_FOUND') {
-              message = 'Key not found, wrong card?';
-            } else {
-              message = `Error: ${error.source.code}`;
-            }
-          } else {
-            message = String(error);
-          }
-
-          void toast({
-            message,
-            color: 'danger',
-          });
-
-          console.error(error);
-        },
-      );
-    }, [effectivePath, key, monoidApplet, toScanCard, toast, view.index]);
+    const step = wallet ? 2 : 1;
 
     if (!key) {
       return null;
     }
 
-    let keyTypeDisplayText: string;
+    const onScanCardButtonClick = (): void => {
+      if (effectivePath === undefined) {
+        return;
+      }
 
-    switch (key.type) {
-      case 'seed':
-        keyTypeDisplayText = 'seed';
-        break;
-      case 'master':
-        keyTypeDisplayText = 'master key';
-        break;
-      default:
-        throw new Error(`Unknown key type: ${key.type}`);
-    }
+      let derivedWallet: WalletKeyWalletData;
+
+      errorService.catch(
+        scanPrompt('Scan card to derive', async (applet, setStateContent) => {
+          setStateContent('Deriving wallet, hold tight...');
+
+          const {publicKey} = await applet
+            .viewKey({
+              index: hexToUint8Array(view.index),
+              ...(key.type === 'seed' && {
+                seed: ETHEREUM_SEED,
+              }),
+              curve: ETHEREUM_CURVE,
+              path: parseDerivationPath(effectivePath),
+            })
+            .catch(error => {
+              if (
+                error instanceof CBORAppletError &&
+                error.source.code === 'NOT_FOUND'
+              ) {
+                throw new Error('Key not found, wrong card?', {cause: error});
+              }
+
+              throw error;
+            });
+
+          derivedWallet = {
+            seed: key.type === 'seed' ? ETHEREUM_SEED : undefined,
+            curve: ETHEREUM_CURVE,
+            path: effectivePath,
+            address: computeEthereumAddress(uint8ArrayToHex(publicKey)),
+          };
+        }).then(() => {
+          if (!view.$leaving && view.$match.$exact.$active) {
+            setWallet(derivedWallet);
+          }
+        }),
+      );
+    };
 
     const onImportButtonClick = (): void => {
       if (!key || !wallet) {
@@ -167,61 +136,57 @@ export const DeriveKeyView = observer(
     };
 
     return (
-      <View>
-        <ViewHeader>
-          <ViewHeaderTitle>Derive</ViewHeaderTitle>
-          <ViewHeaderIdentifier
-            identifier={{type: 'safe-item', index: view.index}}
-          />
-        </ViewHeader>
-        <ViewContent>
-          <Steps>
-            <Step
-              title="Enter derivation path"
-              numero={1}
-              activeNumero={step}
-              summary={effectivePath}
-            >
-              <Input
-                value={path}
-                placeholder={pathDefault}
-                onChange={event => setPath(event.target.value)}
-              />
-            </Step>
-            <Step
-              title="Scan card to derive"
-              numero={2}
-              activeNumero={step}
-              processing={scanning}
-              summary={
-                wallet && (
+      <>
+        <View>
+          <ViewHeader>
+            <ViewHeaderTitle>Derive</ViewHeaderTitle>
+            <ViewHeaderIdentifier
+              identifier={{type: 'safe-item', index: view.index}}
+            />
+          </ViewHeader>
+          <ViewContent>
+            <Steps>
+              <Step
+                title="Enter derivation path"
+                numero={1}
+                activeNumero={step}
+                summary={effectivePath}
+              >
+                <Input
+                  value={path}
+                  placeholder={pathDefault}
+                  onChange={event => setPath(event.target.value)}
+                />
+              </Step>
+              <Step
+                title="Import the derived wallet"
+                numero={2}
+                activeNumero={step}
+              >
+                {wallet && (
                   <InteractiveAddress copyable>
                     {wallet.address}
                   </InteractiveAddress>
-                )
-              }
-            >
-              Scan the monoid card that contains this {keyTypeDisplayText} to
-              derive.
-            </Step>
-            <Step
-              title="Import the derived wallet"
-              numero={3}
-              activeNumero={step}
-            />
-          </Steps>
-          <Buttons>
-            {step === 1 && (
-              <Button disabled={!step1_ready} onClick={() => setStep(2)}>
-                Next
-              </Button>
-            )}
-            {step === 3 && (
-              <Button onClick={onImportButtonClick}>Import</Button>
-            )}
-          </Buttons>
-        </ViewContent>
-      </View>
+                )}
+              </Step>
+            </Steps>
+            <Buttons>
+              {step === 1 && (
+                <Button
+                  disabled={effectivePath === undefined}
+                  onClick={onScanCardButtonClick}
+                >
+                  Scan card
+                </Button>
+              )}
+              {step === 2 && (
+                <Button onClick={onImportButtonClick}>Import</Button>
+              )}
+            </Buttons>
+          </ViewContent>
+        </View>
+        {scanPromptContent}
+      </>
     );
   },
 );
