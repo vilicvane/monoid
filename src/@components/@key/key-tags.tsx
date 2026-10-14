@@ -1,4 +1,4 @@
-import type {ReactNode} from 'react';
+import type {ButtonHTMLAttributes, ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import type {AddressChain} from '../../@lib/wallet-address.js';
@@ -78,12 +78,18 @@ export const KeyDerivationTag = ({
   chain,
   className,
   children,
+  buttonProps,
 }: {
   chain: AddressChain;
   className?: string;
   children: ReactNode;
+  buttonProps?: ButtonHTMLAttributes<HTMLButtonElement>;
 }): ReactNode => (
-  <KeyDerivationTagContainer className={className}>
+  <KeyDerivationTagContainer
+    {...buttonProps}
+    as={buttonProps ? 'button' : 'div'}
+    className={className}
+  >
     <AddressChainIcon chain={chain} />
     <DerivationPath>{children}</DerivationPath>
   </KeyDerivationTagContainer>

@@ -7,10 +7,7 @@ import {BIP39PathString} from '../../../../../@atomics.js';
 import {useEntrances} from '../../../../../@entrances.js';
 import {parseDerivationPath} from '../../../../../@lib/bip39.js';
 import {CBORAppletError} from '../../../../../@lib/cbor-applet.js';
-import type {
-  AddressChain,
-  AddressType,
-} from '../../../../../@lib/wallet-address.js';
+import type {AddressType} from '../../../../../@lib/wallet-address.js';
 import {
   ADDRESS_TYPES,
   computeWalletAddress,
@@ -19,12 +16,11 @@ import {
 import type {Router} from '../../../../../@routes.js';
 import type {WalletKeyWalletData} from '../../../../../@services/index.js';
 import {hexToUint8Array} from '../../../../../@utils/index.js';
-import {AddressChainIcon} from '../../../../@key/address-chain-icon.js';
+import {AddressTypeSelector} from '../../../../@key/address-type-selector.js';
 import {useMonoidScanPrompt} from '../../../../@monoid/monoid-scan-prompt.js';
 import {Button, Buttons} from '../../../../@ui/button.js';
 import {ResettableInput} from '../../../../@ui/input.js';
 import {InteractiveAddress} from '../../../../@ui/interactive-address.js';
-import {SegmentedControl} from '../../../../@ui/segmented-control.js';
 import {Step, Steps} from '../../../../@ui/step.js';
 import {useToast} from '../../../../@ui/toast.js';
 import {
@@ -34,27 +30,6 @@ import {
   ViewHeaderIdentifier,
   ViewHeaderTitle,
 } from '../../../../@view/index.js';
-
-const ADDRESS_CHAIN_OPTIONS = [
-  {value: 'evm', label: 'EVM', icon: <AddressChainIcon chain="evm" />},
-  {value: 'solana', label: 'Solana', icon: <AddressChainIcon chain="solana" />},
-  {value: 'bitcoin', label: 'BTC', icon: <AddressChainIcon chain="bitcoin" />},
-] as const;
-
-const BITCOIN_TYPE_OPTIONS = [
-  {
-    value: 'bitcoin-segwit',
-    label: 'Native SegWit',
-    icon: <AddressChainIcon chain="bitcoin" />,
-  },
-  {
-    value: 'bitcoin-taproot',
-    label: 'Taproot',
-    icon: <AddressChainIcon chain="bitcoin" />,
-  },
-] as const;
-
-type BitcoinAddressType = (typeof BITCOIN_TYPE_OPTIONS)[number]['value'];
 
 export const DeriveKeyView = observer(
   ({
@@ -73,10 +48,7 @@ export const DeriveKeyView = observer(
 
     const key = walletStorageService.indexToKeyMap.get(view.index);
 
-    const [chain, setChain] = useState<AddressChain>('evm');
-    const [bitcoinType, setBitcoinType] =
-      useState<BitcoinAddressType>('bitcoin-segwit');
-    const addressType = chain === 'bitcoin' ? bitcoinType : chain;
+    const [addressType, setAddressType] = useState<AddressType>('evm');
     const options = ADDRESS_TYPES[addressType];
 
     const pathDefault = useMemo(
@@ -192,20 +164,10 @@ export const DeriveKeyView = observer(
                 activeNumero={step}
                 summary={effectivePath}
               >
-                <SegmentedControl
-                  aria-label="Address chain"
-                  value={chain}
-                  options={ADDRESS_CHAIN_OPTIONS}
-                  onChange={setChain}
+                <AddressTypeSelector
+                  value={addressType}
+                  onChange={setAddressType}
                 />
-                {chain === 'bitcoin' && (
-                  <SegmentedControl
-                    aria-label="Bitcoin address type"
-                    value={bitcoinType}
-                    options={BITCOIN_TYPE_OPTIONS}
-                    onChange={setBitcoinType}
-                  />
-                )}
                 <ResettableInput
                   aria-label="Derivation path"
                   aria-invalid={pathError !== undefined}

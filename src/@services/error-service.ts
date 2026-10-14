@@ -30,6 +30,15 @@ export class ErrorService {
   }
 
   private handleError(error: unknown, message?: string): void {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 'CANCELLED'
+    ) {
+      return;
+    }
+
     console.error(error);
 
     void this.presentToast?.({

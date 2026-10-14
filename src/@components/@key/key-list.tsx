@@ -1,6 +1,19 @@
 import {styled} from 'styled-components';
 
-import {Address} from '../@ui/address.js';
+import type {AddressChain} from '../../@lib/wallet-address.js';
+import {Address, AddressPlaceholder} from '../@ui/address.js';
+
+const ADDRESS_PLACEHOLDER_BACKGROUNDS: Record<AddressChain, string> = {
+  evm: `linear-gradient(90deg,
+    color-mix(in srgb, #627eea 20%, var(--ion-background-color, white)),
+    color-mix(in srgb, #8c9bf1 20%, var(--ion-background-color, white)))`,
+  solana: `linear-gradient(90deg,
+    color-mix(in srgb, #9945ff 20%, var(--ion-background-color, white)),
+    color-mix(in srgb, #14f195 20%, var(--ion-background-color, white)))`,
+  bitcoin: `linear-gradient(90deg,
+    color-mix(in srgb, #f7931a 20%, var(--ion-background-color, white)),
+    color-mix(in srgb, #f7931a 10%, var(--ion-background-color, white)))`,
+};
 
 export const KeyList = styled.div`
   flex: 1;
@@ -37,4 +50,12 @@ export const KeyListPlaceholder = styled.div`
   color: var(--ion-color-medium);
   font-size: 14px;
   line-height: 21px;
+`;
+
+export const KeyListAddressPlaceholder = styled(AddressPlaceholder)<{
+  $chain: AddressChain;
+}>`
+  &::before {
+    background: ${({$chain}) => ADDRESS_PLACEHOLDER_BACKGROUNDS[$chain]};
+  }
 `;

@@ -108,6 +108,7 @@ export function useMonoidScanPrompt({
     let enteredPIN: {id: MonoidIdHex; pin: MonoidPIN} | undefined;
     let inputPending = false;
     let completed = false;
+    let callbackCompleted = false;
     let failed = false;
     let disposed = false;
 
@@ -258,9 +259,8 @@ export function useMonoidScanPrompt({
         }
 
         completed = true;
+        callbackCompleted = true;
         setState('hidden');
-
-        resolve();
       },
       error => {
         if (disposed) {
@@ -283,6 +283,10 @@ export function useMonoidScanPrompt({
         }
 
         if (completed) {
+          if (callbackCompleted) {
+            resolve();
+          }
+
           setAppletCallbackAndPromise(undefined);
         } else if (failed && !inputPending) {
           failed = false;
@@ -295,6 +299,11 @@ export function useMonoidScanPrompt({
     return () => {
       disposed = true;
       stop();
+      reject(
+        Object.assign(new Error('Card scanning was cancelled.'), {
+          code: 'CANCELLED',
+        }),
+      );
     };
   }, [
     monoidApplet,
