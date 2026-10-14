@@ -1,0 +1,4 @@
+rootProject.name = 'qr-scanner'
+
+include ':capacitor-android'
+project(':capacitor-android').projectDir = file('../../../node_modules/@capacitor/android/capacitor')

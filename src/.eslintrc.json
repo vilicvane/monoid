@@ -8,7 +8,8 @@
         "import/external-module-folders": [
           "node_modules",
           "plugins/keyboard",
-          "plugins/isodep-nfc"
+          "plugins/isodep-nfc",
+          "plugins/qr-scanner"
         ]
       },
       "parserOptions": {

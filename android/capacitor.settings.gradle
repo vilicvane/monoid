@@ -25,3 +25,6 @@ project(':capawesome-team-capacitor-secure-preferences').projectDir = new File('
 
 include ':capacitor-isodep-nfc'
 project(':capacitor-isodep-nfc').projectDir = new File('../node_modules/capacitor-isodep-nfc/android')
+
+include ':capacitor-qr-scanner'
+project(':capacitor-qr-scanner').projectDir = new File('../node_modules/capacitor-qr-scanner/android')

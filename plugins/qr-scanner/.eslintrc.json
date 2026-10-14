@@ -1,0 +1,8 @@
+{
+  "root": true,
+  "ignorePatterns": ["dist/", "android/", "node_modules/"],
+  "extends": ["plugin:@mufan/typescript"],
+  "parserOptions": {
+    "project": "tsconfig.json"
+  }
+}

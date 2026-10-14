@@ -1,7 +1,7 @@
 import classNames from 'classNames';
 import {observable} from 'mobx';
 import {observer} from 'mobx-react-lite';
-import type {ReactNode} from 'react';
+import type {HTMLAttributes, ReactNode} from 'react';
 import {useContext, useEffect, useState} from 'react';
 import {RouteContext} from 'routra-react';
 import {styled} from 'styled-components';
@@ -47,8 +47,10 @@ const Container = styled.div`
 export const View = observer(
   ({
     animation = true,
+    className,
     children,
-  }: {
+    ...props
+  }: HTMLAttributes<HTMLDivElement> & {
     animation?: boolean;
     children: ReactNode;
   }): ReactNode => {
@@ -71,7 +73,8 @@ export const View = observer(
 
     return (
       <Container
-        className={classNames({
+        {...props}
+        className={classNames(className, {
           animation,
           entering: view.$entering,
           leaving: view.$leaving,

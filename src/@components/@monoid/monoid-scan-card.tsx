@@ -4,6 +4,7 @@ import {styled} from 'styled-components';
 
 import monoidCardWirelessInterface from '../../@assets/monoid-card-wireless-interface.svg';
 import monoidLogo from '../../@assets/monoid.svg';
+import {animateScanFeedback} from '../@ui/scan-motion.js';
 
 import {MonoidCardWaves} from './monoid-card-waves.js';
 
@@ -48,14 +49,7 @@ export function MonoidScanCard({
     }
 
     animationRef.current?.cancel();
-    animationRef.current = frameRef.current!.animate(
-      [
-        {transform: 'scale(1)'},
-        {transform: 'scale(1.04)', offset: 0.35},
-        {transform: 'scale(1)'},
-      ],
-      {duration: 300, easing: 'ease-out'},
-    );
+    animationRef.current = animateScanFeedback(frameRef.current!);
   }, [scanning]);
 
   useEffect(() => {
