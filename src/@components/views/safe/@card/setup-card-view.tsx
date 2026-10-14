@@ -1,4 +1,4 @@
-import {closeOutline} from 'ionicons/icons';
+import x from 'lucide-static/icons/x.svg';
 import {type ReactNode, useMemo, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
@@ -64,7 +64,7 @@ export const SetupCardView = ({
         toast({
           message: 'Incorrect PIN format, expected 6 to 16 characters.',
           color: 'danger',
-          icon: closeOutline,
+          icon: x,
           position: 'top',
         });
         return;

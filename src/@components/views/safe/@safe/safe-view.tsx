@@ -1,5 +1,5 @@
 import {IonFabButton, IonIcon} from '@ionic/react';
-import {card} from 'ionicons/icons';
+import creditCard from 'lucide-static/icons/credit-card.svg';
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 import type {RouteComponentProps} from 'routra-react';
@@ -88,7 +88,7 @@ export const SafeView = observer(
               aria-label="Scan card"
               onClick={onScanCardButtonClick}
             >
-              <IonIcon icon={card} />
+              <IonIcon icon={creditCard} />
             </IonFabButton>
           </ViewFab>
         </View>

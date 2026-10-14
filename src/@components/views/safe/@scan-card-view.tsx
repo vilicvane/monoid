@@ -1,6 +1,6 @@
 import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
-import {card} from 'ionicons/icons';
+import creditCard from 'lucide-static/icons/credit-card.svg';
 import {type ReactNode, useCallback, useEffect, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
@@ -113,7 +113,7 @@ export const ScanCardView = ({
               error: state === 'error',
               working: state !== 'ready' && state !== 'error',
             })}
-            icon={card}
+            icon={creditCard}
           />
           {SCANNING_STATE_TO_TEXT[state](index, total, code)}
         </ScanCardGuideContainer>

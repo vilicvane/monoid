@@ -1,6 +1,7 @@
-import {ellipsisHorizontal, ellipsisVertical} from 'ionicons/icons';
+import ellipsisVertical from 'lucide-static/icons/ellipsis-vertical.svg';
+import ellipsis from 'lucide-static/icons/ellipsis.svg';
 
 export const ellipsisIconProps = {
-  ios: ellipsisHorizontal,
+  ios: ellipsis,
   md: ellipsisVertical,
 };

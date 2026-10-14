@@ -1,6 +1,7 @@
 import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
-import {card, key} from 'ionicons/icons';
+import creditCard from 'lucide-static/icons/credit-card.svg';
+import keyRound from 'lucide-static/icons/key-round.svg';
 import {observer} from 'mobx-react-lite';
 import type {HTMLAttributes, ReactNode} from 'react';
 import {useContext} from 'react';
@@ -95,11 +96,11 @@ export const ViewHeaderIdentifier = ({
 
   switch (identifier.type) {
     case 'card':
-      icon = card;
+      icon = creditCard;
       children = identifier.id;
       break;
     case 'safe-item':
-      icon = key;
+      icon = keyRound;
       children =
         identifier.alias ??
         identifier.index.slice(INDEX_DISPLAY_OFFSET, INDEX_DISPLAY_END);

@@ -1,6 +1,6 @@
 import {IonIcon, IonSpinner} from '@ionic/react';
 import classNames from 'classNames';
-import {checkmark} from 'ionicons/icons';
+import check from 'lucide-static/icons/check.svg';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
@@ -136,7 +136,7 @@ export const Step = ({
         indicator = numero;
         break;
       case 'done':
-        indicator = <IonIcon icon={checkmark} />;
+        indicator = <IonIcon icon={check} />;
         break;
     }
   }

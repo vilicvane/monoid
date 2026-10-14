@@ -1,4 +1,4 @@
-import {closeOutline} from 'ionicons/icons';
+import x from 'lucide-static/icons/x.svg';
 import type {ReactNode} from 'react';
 import {useCallback, useEffect, useLayoutEffect, useState} from 'react';
 import {styled} from 'styled-components';
@@ -119,7 +119,7 @@ export function useMonoidScanPrompt({
         toast({
           message: errorMessage,
           color: 'danger',
-          icon: closeOutline,
+          icon: x,
           position: 'top',
           waitForKeyboard: false,
         });

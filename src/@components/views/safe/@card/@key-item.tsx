@@ -1,6 +1,8 @@
 import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
-import {checkmark, checkmarkDone, refresh} from 'ionicons/icons';
+import checkCheck from 'lucide-static/icons/check-check.svg';
+import check from 'lucide-static/icons/check.svg';
+import rotateCw from 'lucide-static/icons/rotate-cw.svg';
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
@@ -93,13 +95,13 @@ export const KeyItem = observer(
 
     switch (state) {
       case 'new':
-        icon = checked ? <IonIcon icon={checkmark} /> : undefined;
+        icon = checked ? <IonIcon icon={check} /> : undefined;
         break;
       case 'outdated':
-        icon = <IonIcon icon={refresh} />;
+        icon = <IonIcon icon={rotateCw} />;
         break;
       case 'up-to-date':
-        icon = <IonIcon icon={checkmarkDone} />;
+        icon = <IonIcon icon={checkCheck} />;
         break;
     }
 

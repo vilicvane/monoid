@@ -1,5 +1,5 @@
 import {IonIcon} from '@ionic/react';
-import {checkmarkDone} from 'ionicons/icons';
+import checkCheck from 'lucide-static/icons/check-check.svg';
 import {observable, runInAction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useState} from 'react';
@@ -105,7 +105,7 @@ const CardContent = observer(({card}: {card: ScannedCardData}): ReactNode => {
         >
           {imported ? (
             <>
-              <IonIcon icon={checkmarkDone} />
+              <IonIcon icon={checkCheck} />
               Import successful
             </>
           ) : (

@@ -1,5 +1,5 @@
 import type {UseIonAlertResult, UseIonToastResult} from '@ionic/react';
-import {bug} from 'ionicons/icons';
+import bug from 'lucide-static/icons/bug.svg';
 
 const ERROR_TOAST_DURATION = 5000;
 

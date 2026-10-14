@@ -1,7 +1,8 @@
 import {Clipboard} from '@capacitor/clipboard';
 import {IonIcon, useIonToast} from '@ionic/react';
 import classNames from 'classNames';
-import {checkmarkDone, copyOutline} from 'ionicons/icons';
+import checkCheck from 'lucide-static/icons/check-check.svg';
+import copy from 'lucide-static/icons/copy.svg';
 import ms from 'ms';
 import type {HTMLAttributes, ReactNode} from 'react';
 import {styled} from 'styled-components';
@@ -82,7 +83,7 @@ export const InteractiveAddress = ({
             });
 
             await toast({
-              icon: copyOutline,
+              icon: copy,
               message: 'Address copied to clipboard',
               duration: COPIED_TOAST_DURATION,
               positionAnchor: 'nav-bar',
@@ -91,7 +92,7 @@ export const InteractiveAddress = ({
             setCopied(true);
           })}
         >
-          <IonIcon icon={copied ? checkmarkDone : copyOutline} />
+          <IonIcon icon={copied ? checkCheck : copy} />
         </CopyButton>
       )}
     </Container>
