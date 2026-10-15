@@ -12,6 +12,7 @@ import {
   useState,
 } from 'react';
 import {styled} from 'styled-components';
+import {UnmountAnimationClone} from 'unmount-animation-clone';
 
 import {useEntrances} from '../../@entrances.js';
 import type {AddressChain} from '../../@lib/wallet-address.js';
@@ -235,8 +236,6 @@ export const KeyWalletList = observer(
                       }
                     >
                       <KeyGroupItem
-                        as={collapsedRow ? 'button' : 'div'}
-                        type={collapsedRow ? 'button' : undefined}
                         data-swipeable-content={collapsedRow ? true : undefined}
                         aria-expanded={collapsedRow ? false : undefined}
                         aria-label={
@@ -244,7 +243,7 @@ export const KeyWalletList = observer(
                             ? `Show ${group.length} ${CHAIN_LABELS[chain]} addresses`
                             : undefined
                         }
-                        onClick={
+                        onExpand={
                           collapsedRow
                             ? () => {
                                 setOpenWallet(undefined);
@@ -285,13 +284,15 @@ export const KeyWalletList = observer(
                               </KeyDerivationBadge>
                             )}
                             {collapsedRow && (
-                              <KeyDerivationBadge
-                                $primary
-                                $revealing
-                                aria-label={`${group.length} addresses`}
-                              >
-                                {group.length}
-                              </KeyDerivationBadge>
+                              <UnmountAnimationClone>
+                                <KeyDerivationBadge
+                                  $primary
+                                  $revealing
+                                  aria-label={`${group.length} addresses`}
+                                >
+                                  {group.length}
+                                </KeyDerivationBadge>
+                              </UnmountAnimationClone>
                             )}
                           </KeyTags>
                           <KeyListAddress>{wallet.address}</KeyListAddress>

@@ -1,6 +1,10 @@
 import {observer} from 'mobx-react-lite';
 import {
+  type HTMLAttributes,
+  type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
+  type Ref,
   useCallback,
   useLayoutEffect,
   useRef,
@@ -33,8 +37,9 @@ export const keyGroupReveal = css<{$revealing?: boolean}>`
   }
 `;
 
-export const KeyGroupItem = styled(KeyListItem)<{$revealing?: boolean}>`
-  &[type='button'] {
+const KeyGroupItemContainer = styled(KeyListItem)<{$revealing?: boolean}>`
+  &[role='button'] {
+    box-sizing: border-box;
     width: 100%;
     border: 0;
     background: transparent;
@@ -43,7 +48,7 @@ export const KeyGroupItem = styled(KeyListItem)<{$revealing?: boolean}>`
     text-align: left;
     cursor: pointer;
 
-    &:disabled {
+    &[aria-disabled='true'] {
       opacity: 0.5;
       cursor: default;
     }
@@ -56,6 +61,49 @@ export const KeyGroupItem = styled(KeyListItem)<{$revealing?: boolean}>`
 
   ${keyGroupReveal}
 `;
+
+export const KeyGroupItem = ({
+  onExpand,
+  disabled,
+  onClick,
+  onKeyDown,
+  ...props
+}: HTMLAttributes<HTMLElement> & {
+  $revealing?: boolean;
+  onExpand?: () => void;
+  disabled?: boolean;
+} & (
+    | {as?: 'div'; ref?: Ref<HTMLDivElement>}
+    | {as: 'label'; ref?: Ref<HTMLLabelElement>}
+  )): ReactNode => (
+  <KeyGroupItemContainer
+    {...props}
+    role={onExpand ? 'button' : props.role}
+    tabIndex={onExpand ? (disabled ? -1 : 0) : props.tabIndex}
+    aria-disabled={onExpand && disabled ? true : undefined}
+    onClick={(event: MouseEvent<HTMLElement>) => {
+      if (!onExpand) {
+        onClick?.(event);
+        return;
+      }
+
+      event.preventDefault();
+      if (!disabled) onExpand();
+    }}
+    onKeyDown={(event: KeyboardEvent<HTMLElement>) => {
+      if (
+        onExpand &&
+        event.target === event.currentTarget &&
+        (event.key === 'Enter' || event.key === ' ')
+      ) {
+        event.preventDefault();
+        if (!disabled && !event.repeat) onExpand();
+      } else {
+        onKeyDown?.(event);
+      }
+    }}
+  />
+);
 
 export const ExpandableKeyGroup = observer(function ExpandableKeyGroup({
   children,
@@ -142,7 +190,7 @@ export const ExpandableKeyGroup = observer(function ExpandableKeyGroup({
         restoreCollapsedFocus.current = false;
         (
           target?.querySelector<HTMLElement>(
-            'button:not(:disabled):not([inert] *)',
+            ':is(button, [role="button"]):not(:disabled):not([aria-disabled="true"]):not([inert] *)',
           ) ?? target
         )?.focus({preventScroll: true});
       }

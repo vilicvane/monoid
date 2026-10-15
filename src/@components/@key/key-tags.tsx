@@ -104,6 +104,11 @@ const badgeReveal = keyframes`
   to { transform: scale(1); }
 `;
 
+const badgeHide = keyframes`
+  from { transform: scale(1); }
+  to { transform: scale(0); }
+`;
+
 export const KeyDerivationBadge = styled(KeyTag)<{
   $primary?: boolean;
   $revealing?: boolean;
@@ -133,10 +138,25 @@ export const KeyDerivationBadge = styled(KeyTag)<{
     css`
       transform-origin: left center;
       animation: ${badgeReveal} ${SCAN_REVEAL_DURATION / 2}ms
-        ${SCAN_REVEAL_EASING};
+        ${SCAN_REVEAL_EASING} forwards;
     `}
 
+  &.unmount {
+    // React can replace the preceding path with a button during the same commit.
+    order: 1;
+    transform-origin: left center;
+    animation: ${badgeHide} ${SCAN_REVEAL_DURATION / 2}ms ${SCAN_REVEAL_EASING}
+      forwards;
+    pointer-events: none;
+  }
+
   @media (prefers-reduced-motion: reduce) {
-    animation: none;
+    & {
+      animation: none;
+    }
+
+    &.unmount {
+      animation-duration: 0s;
+    }
   }
 `;

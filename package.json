@@ -55,6 +55,7 @@
     "styled-components": "^6.1.19",
     "tslang": "^0.1.27",
     "tslib": "^2.8.1",
+    "unmount-animation-clone": "file:../unmount-animation-clone/unmount-animation-clone-0.1.5.tgz",
     "x-value": "^0.2.3"
   },
   "devDependencies": {

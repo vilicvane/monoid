@@ -3,6 +3,9 @@ import classNames from 'classNames';
 import check from 'lucide-static/icons/check.svg';
 import type {InputHTMLAttributes, ReactNode} from 'react';
 import {styled} from 'styled-components';
+import {UnmountAnimationClone} from 'unmount-animation-clone';
+
+import {fadeOutAnimationCSS} from '../@animations.js';
 
 import {KeyTag} from './key-tags.js';
 
@@ -51,13 +54,43 @@ const Input = styled.input`
   opacity: 0;
 `;
 
+const Count = styled.span`
+  position: absolute;
+
+  &.unmount {
+    ${fadeOutAnimationCSS}
+    animation-duration: 120ms;
+    pointer-events: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    &.unmount {
+      animation-duration: 0s;
+    }
+  }
+`;
+
 export const KeyCheckbox = ({
   checked,
   className,
+  count,
   ...props
-}: Omit<InputHTMLAttributes<HTMLInputElement>, 'type'>): ReactNode => (
-  <KeySelection className={classNames(className, {checked})}>
-    <Input {...props} type="checkbox" checked={checked} />
-    {checked && <IonIcon icon={check} aria-hidden="true" />}
+}: Omit<InputHTMLAttributes<HTMLInputElement>, 'type'> & {
+  count?: number;
+}): ReactNode => (
+  <KeySelection
+    className={classNames(className, {checked: count === undefined && checked})}
+    aria-hidden={count === undefined ? undefined : true}
+  >
+    {count === undefined ? (
+      <>
+        <Input {...props} type="checkbox" checked={checked} />
+        {checked && <IonIcon icon={check} aria-hidden="true" />}
+      </>
+    ) : (
+      <UnmountAnimationClone>
+        <Count>{count}</Count>
+      </UnmountAnimationClone>
+    )}
   </KeySelection>
 );

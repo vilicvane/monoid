@@ -8,7 +8,7 @@ import type {
 import {getKeyWallets} from '../../@services/index.js';
 
 import {ExpandableKeyGroup, KeyGroupItem} from './expandable-key-group.js';
-import {KeyCheckbox, KeySelection} from './key-checkbox.js';
+import {KeyCheckbox} from './key-checkbox.js';
 import {
   KeyList,
   KeyListAddress,
@@ -44,8 +44,7 @@ const WalletAccountGroup = observer(function WalletAccountGroup({
         return (collapsed ? wallets.slice(0, 1) : wallets).map(
           (wallet, index) => (
             <KeyGroupItem
-              as={collapsed ? 'button' : 'label'}
-              type={collapsed ? 'button' : undefined}
+              as="label"
               key={wallet.address.toLowerCase()}
               $revealing={revealing && index > 0}
               disabled={collapsed ? disabled : undefined}
@@ -55,24 +54,19 @@ const WalletAccountGroup = observer(function WalletAccountGroup({
                   ? `Show ${wallets.length} accounts for ${key.alias || key.type}`
                   : undefined
               }
-              onClick={collapsed ? expand : undefined}
+              onExpand={collapsed ? expand : undefined}
             >
               <KeyListItemContent>
                 <KeyTags>
-                  {collapsed ? (
-                    <KeySelection aria-hidden="true">
-                      {wallets.length}
-                    </KeySelection>
-                  ) : (
-                    <KeyCheckbox
-                      aria-label={`Select ${wallet.address}`}
-                      checked={selectedAddresses.has(
-                        wallet.address.toLowerCase(),
-                      )}
-                      onChange={() => onToggle(wallet.address)}
-                      disabled={disabled}
-                    />
-                  )}
+                  <KeyCheckbox
+                    count={collapsed ? wallets.length : undefined}
+                    aria-label={`Select ${wallet.address}`}
+                    checked={selectedAddresses.has(
+                      wallet.address.toLowerCase(),
+                    )}
+                    onChange={() => onToggle(wallet.address)}
+                    disabled={disabled}
+                  />
                   <KeyTypeTag className={key.type}>{key.type}</KeyTypeTag>
                   {key.alias && <KeyAliasTag>{key.alias}</KeyAliasTag>}
                   {wallet.path && (
