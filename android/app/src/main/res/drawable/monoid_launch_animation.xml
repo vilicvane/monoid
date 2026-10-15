@@ -4,7 +4,7 @@
     <target android:name="plus" android:animation="@animator/monoid_launch_plus" />
     <target android:name="zero" android:animation="@animator/monoid_launch_zero" />
     <target android:name="one_shape" android:animation="@animator/monoid_launch_glyph_hide" />
-    <target android:name="plus_shape" android:animation="@animator/monoid_launch_glyph_hide" />
+    <target android:name="plus_shape" android:animation="@animator/monoid_launch_plus_fade" />
     <target android:name="zero_shape" android:animation="@animator/monoid_launch_glyph_hide" />
     <target android:name="key" android:animation="@animator/monoid_launch_key_reveal" />
 </animated-vector>

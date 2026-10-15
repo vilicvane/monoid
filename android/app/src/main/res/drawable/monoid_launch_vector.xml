@@ -15,6 +15,6 @@
         </group>
         <!-- Replace the touching glyphs with their exact union at the final frame. -->
         <path android:name="key" android:fillColor="#FFFFFF" android:fillAlpha="0"
-            android:pathData="M60 150H140V130H160V150H180V130H240V190H180V170H160V190H140V170H80V190H60V150Z M200 150V170H220V150Z" />
+            android:pathData="M90 150H150V130H210V190H150V170H110V190H90V150Z M170 150V170H190V150Z" />
     </group>
 </vector>
