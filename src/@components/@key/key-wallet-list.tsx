@@ -57,14 +57,25 @@ const WalletRow = styled(SwipeableItem)<{$revealing?: boolean}>`
 const WalletPath = styled(KeyDerivationTag)`
   flex-shrink: 1;
   min-width: 0;
+
+  &[type='button'] {
+    cursor: pointer;
+
+    &:focus-visible {
+      outline: 2px solid var(--ion-color-primary);
+      outline-offset: 2px;
+    }
+  }
 `;
 
 export const KeyWalletList = observer(
   ({
     data,
+    defaultExpandedChain,
     emptyFocusRef,
   }: {
     data: WalletKeyData;
+    defaultExpandedChain?: AddressChain;
     emptyFocusRef?: RefObject<HTMLDivElement | null>;
   }): ReactNode => {
     const {walletStorageService, errorService} = useEntrances();
@@ -103,14 +114,18 @@ export const KeyWalletList = observer(
             <ExpandableKeyGroup
               key={`${data.index}:${chain}`}
               focusSelector=".key-group-primary"
-              autoExpand={groups.size === 1}
+              autoExpand={groups.size === 1 || chain === defaultExpandedChain}
             >
-              {({expanded, revealing, expand}) => {
+              {({expanded, collapsing, revealing, expand, collapse}) => {
                 const collapsed = group.length > 1 && !expanded;
 
                 return (collapsed ? [representative] : group).map(wallet => {
                   const id = JSON.stringify(getWalletReference(wallet));
                   const isDefault = wallet === defaultWallet;
+                  const collapsedRow =
+                    group.length > 1 &&
+                    (collapsed || collapsing) &&
+                    wallet === representative;
 
                   return (
                     <WalletRow
@@ -139,22 +154,27 @@ export const KeyWalletList = observer(
                             <IonIcon icon={copy} aria-hidden="true" />
                             Copy
                           </SwipeAction>
-                          <SwipeAction
-                            type="button"
-                            $color="var(--color-derivations-badge)"
-                            aria-pressed={isDefault}
-                            disabled={isDefault}
-                            onClick={() => {
-                              runInAction(() => {
-                                data.defaultWallet = getWalletReference(wallet);
-                              });
+                          {!isDefault && (
+                            <SwipeAction
+                              type="button"
+                              $color="var(--color-derivations-badge)"
+                              onClick={event => {
+                                event.currentTarget
+                                  .closest<HTMLElement>('[role="group"]')
+                                  ?.focus({preventScroll: true});
 
-                              setOpenWallet(undefined);
-                            }}
-                          >
-                            <IonIcon icon={star} aria-hidden="true" />
-                            Default
-                          </SwipeAction>
+                                runInAction(() => {
+                                  data.defaultWallet =
+                                    getWalletReference(wallet);
+                                });
+
+                                setOpenWallet(undefined);
+                              }}
+                            >
+                              <IonIcon icon={star} aria-hidden="true" />
+                              Default
+                            </SwipeAction>
+                          )}
                           {derivable && (
                             <SwipeAction
                               type="button"
@@ -215,17 +235,17 @@ export const KeyWalletList = observer(
                       }
                     >
                       <KeyGroupItem
-                        as={collapsed ? 'button' : 'div'}
-                        type={collapsed ? 'button' : undefined}
-                        data-swipeable-content={collapsed ? true : undefined}
-                        aria-expanded={collapsed ? false : undefined}
+                        as={collapsedRow ? 'button' : 'div'}
+                        type={collapsedRow ? 'button' : undefined}
+                        data-swipeable-content={collapsedRow ? true : undefined}
+                        aria-expanded={collapsedRow ? false : undefined}
                         aria-label={
-                          collapsed
+                          collapsedRow
                             ? `Show ${group.length} ${CHAIN_LABELS[chain]} addresses`
                             : undefined
                         }
                         onClick={
-                          collapsed
+                          collapsedRow
                             ? () => {
                                 setOpenWallet(undefined);
                                 expand();
@@ -237,6 +257,20 @@ export const KeyWalletList = observer(
                           <KeyTags>
                             <WalletPath
                               chain={ADDRESS_TYPES[wallet.addressType].chain}
+                              buttonProps={
+                                !collapsedRow && group.length > 1
+                                  ? {
+                                      type: 'button',
+                                      'data-swipeable-content': true,
+                                      'aria-expanded': true,
+                                      'aria-label': `Collapse ${CHAIN_LABELS[chain]} addresses`,
+                                      onClick: () => {
+                                        setOpenWallet(undefined);
+                                        collapse();
+                                      },
+                                    }
+                                  : undefined
+                              }
                             >
                               {wallet.path ??
                                 ADDRESS_TYPE_LABELS[wallet.addressType]}
@@ -250,9 +284,10 @@ export const KeyWalletList = observer(
                                 <IonIcon icon={star} aria-hidden="true" />
                               </KeyDerivationBadge>
                             )}
-                            {collapsed && (
+                            {collapsedRow && (
                               <KeyDerivationBadge
                                 $primary
+                                $revealing
                                 aria-label={`${group.length} addresses`}
                               >
                                 {group.length}

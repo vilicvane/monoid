@@ -1,6 +1,6 @@
 import classNames from 'classNames';
+import bookKey from 'lucide-static/icons/book-key.svg';
 import globe from 'lucide-static/icons/globe.svg';
-import lockKeyhole from 'lucide-static/icons/lock-keyhole.svg';
 import scan from 'lucide-static/icons/scan.svg';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
@@ -32,7 +32,7 @@ export const Tabs = ({className}: {className?: string}): ReactNode => {
     <Container className={classNames(className)}>
       <Tab icon={globe} route={router.sessions} />
       <Tab icon={scan} route={router.scan} />
-      <Tab icon={lockKeyhole} route={router.safe} />
+      <Tab icon={bookKey} route={router.safe} />
     </Container>
   );
 };

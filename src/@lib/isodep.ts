@@ -17,7 +17,7 @@ export function standbyIsoDep(
   callback: (sessionId: string) => Promise<void>,
   onError: (error: unknown) => void,
   onCleanup?: () => void,
-): () => void {
+): () => Promise<void> {
   let disposed = false;
   let stop!: () => void;
   const stopped = new Promise<void>(resolve => {
@@ -31,6 +31,8 @@ export function standbyIsoDep(
     let scanId: string | undefined;
     let scanEnded: ScanEndedEvent | undefined;
     let scanFailure: unknown;
+    let cleanupFailure: {error: unknown} | undefined;
+    let reportedFailure = false;
     let finishScan: (event: ScanEndedEvent) => void;
     let notifyStateChange!: () => void;
     let stateChanged: Promise<void>;
@@ -62,6 +64,8 @@ export function standbyIsoDep(
         await IsoDepNfc.closeSession({sessionId});
       } catch (error) {
         scanFailure = error;
+        cleanupFailure ??= {error};
+        stop();
       }
 
       if (
@@ -179,10 +183,15 @@ export function standbyIsoDep(
           await IsoDepNfc.stopScan({scanId});
         } catch (error) {
           scanFailure = error;
+          cleanupFailure ??= {error};
         }
 
         await Promise.all(sessions);
         scanId = undefined;
+
+        if (cleanupFailure) {
+          throw cleanupFailure.error;
+        }
 
         if (scanFailure !== undefined) {
           throw scanFailure;
@@ -200,18 +209,40 @@ export function standbyIsoDep(
       }
     } catch (error) {
       if (!disposed) {
+        reportedFailure = true;
         onError(new IsoDepScanError(error));
         onCleanup?.();
       }
     } finally {
-      await Promise.all(listeners.map(listener => listener.remove()));
+      const removals = await Promise.allSettled(
+        listeners.map(async listener => listener.remove()),
+      );
+
+      for (const removal of removals) {
+        if (removal.status === 'rejected') {
+          cleanupFailure ??= {error: removal.reason};
+        }
+      }
+    }
+
+    if (cleanupFailure) {
+      if (!disposed && !reportedFailure) {
+        onError(new IsoDepScanError(cleanupFailure.error));
+        onCleanup?.();
+      }
+
+      throw cleanupFailure.error;
     }
   };
 
-  previousScan = previousScan.then(run).catch(console.error);
+  const finished = previousScan.then(run);
+  previousScan = finished.catch(() => {});
 
   return () => {
     disposed = true;
     stop();
+
+    // A cancelled queued scan still waits its turn before completing cleanup.
+    return finished;
   };
 }

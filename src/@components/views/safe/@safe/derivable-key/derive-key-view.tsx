@@ -1,3 +1,4 @@
+import {runInAction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useMemo, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
@@ -17,7 +18,7 @@ import {getWalletData} from '../../../../../@services/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../../@utils/index.js';
 import {AddressTypeSelector} from '../../../../@key/address-type-selector.js';
 import {useMonoidScanPrompt} from '../../../../@monoid/monoid-scan-prompt.js';
-import {Button, Buttons} from '../../../../@ui/button.js';
+import {Button} from '../../../../@ui/button.js';
 import {ResettableInput} from '../../../../@ui/input.js';
 import {InteractiveAddress} from '../../../../@ui/interactive-address.js';
 import {Step, Steps} from '../../../../@ui/step.js';
@@ -124,6 +125,10 @@ export const DeriveKeyView = observer(
 
       walletStorageService.addWallet(key.index, wallet);
 
+      runInAction(() => {
+        view.expandedChain = ADDRESS_TYPES[wallet.addressType].chain;
+      });
+
       router.$back();
     };
 
@@ -136,7 +141,23 @@ export const DeriveKeyView = observer(
               identifier={{type: 'safe-item', index: view.index}}
             />
           </ViewHeader>
-          <ViewContent>
+          <ViewContent
+            footer={
+              <>
+                {step === 1 && (
+                  <Button
+                    disabled={effectivePath === undefined}
+                    onClick={onScanCardButtonClick}
+                  >
+                    Scan card
+                  </Button>
+                )}
+                {step === 2 && (
+                  <Button onClick={onImportButtonClick}>Import</Button>
+                )}
+              </>
+            }
+          >
             <Steps>
               <Step
                 title="Enter derivation path"
@@ -193,19 +214,6 @@ export const DeriveKeyView = observer(
                 )}
               </Step>
             </Steps>
-            <Buttons>
-              {step === 1 && (
-                <Button
-                  disabled={effectivePath === undefined}
-                  onClick={onScanCardButtonClick}
-                >
-                  Scan card
-                </Button>
-              )}
-              {step === 2 && (
-                <Button onClick={onImportButtonClick}>Import</Button>
-              )}
-            </Buttons>
           </ViewContent>
         </View>
         {scanPromptContent}

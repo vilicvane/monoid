@@ -1,8 +1,6 @@
 import {decode, encode} from 'cbor2';
 import * as x from 'x-value';
 
-import {uint8ArrayToHex} from '../@utils/index.js';
-
 import type {AppletCommandDefinition} from './applet.js';
 import {Applet} from './applet.js';
 
@@ -10,23 +8,13 @@ export class CBORApplet<
   TCommandDefinitions,
 > extends Applet<TCommandDefinitions> {
   protected encode(data: unknown): Uint8Array {
-    console.debug('Encoding data:', data);
-
-    const encoded = encode(data, {
+    return encode(data, {
       rejectUndefined: true,
     });
-
-    console.debug('Encoded data:', uint8ArrayToHex(encoded));
-
-    return encoded;
   }
 
   protected decode(data: Uint8Array): unknown {
-    console.debug('Decoding data:', uint8ArrayToHex(data));
-
     const decoded = decode(data);
-
-    console.debug('Decoded data:', decoded);
 
     if (XCBORErrorResponse.is(decoded)) {
       throw new CBORAppletError(decoded.error);

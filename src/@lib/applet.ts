@@ -17,7 +17,7 @@ export abstract class Applet<TCommandDefinitions> {
     onError: (error: unknown) => void = console.error,
     /** Called after a connection attempt or a failed scan has been cleaned up. */
     onCleanup?: () => void,
-  ): () => void {
+  ): () => Promise<void> {
     return standbyIsoDep(
       async sessionId => {
         const applet = Object.create(this) as this;

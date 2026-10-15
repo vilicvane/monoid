@@ -1,34 +1,246 @@
-import type {MonoidIdHex, MonoidPIN} from '../@atomics.js';
+import type {BiometricVaultErrorCode} from 'capacitor-biometric-vault';
+import {BiometricVault} from 'capacitor-biometric-vault';
 
-import type {StorageService} from './storage-service.js';
+import type {MonoidIdHex} from '../@atomics.js';
+import {MonoidPIN} from '../@atomics.js';
 
-declare global {
-  // eslint-disable-next-line @typescript-eslint/consistent-type-definitions
-  interface StorageMapping {
-    monoidPINs: Record<MonoidIdHex, MonoidPIN>;
+const ERROR_MESSAGES: Record<BiometricVaultErrorCode, string> = {
+  UNSUPPORTED: 'Protected credential storage is not supported on this device.',
+  BIOMETRIC_NOT_ENROLLED: 'No strong biometric is enrolled on this device.',
+  BIOMETRIC_UNAVAILABLE: 'Biometric authentication is currently unavailable.',
+  BIOMETRIC_LOCKED_OUT: 'Biometric authentication is locked out.',
+  AUTHENTICATION_FAILED: 'Biometric authentication could not be completed.',
+  HARDWARE_SECURITY_UNAVAILABLE:
+    'This device cannot provide the required credential protection.',
+  ENTRY_INVALIDATED: 'The saved credential is no longer accessible.',
+  DATA_CORRUPTED: 'The saved credential could not be verified.',
+  IO_ERROR: 'Protected credential storage could not be accessed.',
+  INVALID_ARGUMENT: 'The credential request is invalid.',
+  CANCELLED: 'Credential authentication was cancelled.',
+  APP_INACTIVE: 'Credential authentication ended because the app is inactive.',
+};
+
+const MANUAL_PIN_CODES = new Set<BiometricVaultErrorCode>([
+  'UNSUPPORTED',
+  'BIOMETRIC_NOT_ENROLLED',
+  'BIOMETRIC_UNAVAILABLE',
+  'BIOMETRIC_LOCKED_OUT',
+  'HARDWARE_SECURITY_UNAVAILABLE',
+  'ENTRY_INVALIDATED',
+  'DATA_CORRUPTED',
+]);
+
+function credentialError(
+  error: unknown,
+): Error & {code: BiometricVaultErrorCode} {
+  const code =
+    error !== null && typeof error === 'object' && 'code' in error
+      ? error.code
+      : undefined;
+  const knownCode =
+    code === 'UNIMPLEMENTED'
+      ? 'UNSUPPORTED'
+      : typeof code === 'string' &&
+          Object.prototype.hasOwnProperty.call(ERROR_MESSAGES, code)
+        ? (code as BiometricVaultErrorCode)
+        : 'IO_ERROR';
+
+  // Do not forward bridge payloads, validation details, or unknown error causes to app logs.
+  return Object.assign(new Error(ERROR_MESSAGES[knownCode]), {code: knownCode});
+}
+
+export function isCredentialRequestCancelled(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === 'object' &&
+    'code' in error &&
+    (error.code === 'CANCELLED' || error.code === 'APP_INACTIVE')
+  );
+}
+
+const ENTRY_ID = 'monoid.access-pins';
+// Native calls are atomic individually; serialize the application's entire read-modify-write.
+let pending = Promise.resolve();
+
+type MutablePINs = Partial<Record<MonoidIdHex, MonoidPIN>>;
+export type MonoidPINs = Readonly<MutablePINs>;
+
+function isCardId(id: unknown): id is MonoidIdHex {
+  return typeof id === 'string' && /^(?:[0-9a-f]{2})+$/.test(id);
+}
+
+function parsePINs(value: string | null): MutablePINs {
+  if (value === null) {
+    return {};
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(value);
+
+    if (
+      parsed !== null &&
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      Object.entries(parsed).every(
+        ([id, pin]) => isCardId(id) && MonoidPIN.is(pin),
+      )
+    ) {
+      return parsed as MutablePINs;
+    }
+  } catch {
+    // JSON parser messages may contain the secret document.
+  }
+
+  throw credentialError({code: 'DATA_CORRUPTED'});
+}
+
+function requestId(): string {
+  return crypto.getRandomValues(new Uint32Array(4)).join('-');
+}
+
+function throwIfCancelled(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw credentialError({code: 'CANCELLED'});
   }
 }
 
 export class MonoidCredentialsStore {
-  constructor(private storage: StorageService) {}
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const result = pending.then(operation).catch(error => {
+      throw credentialError(error);
+    });
 
-  async getPIN(id: MonoidIdHex): Promise<MonoidPIN | undefined> {
-    const pins = await this.storage.get('monoidPINs');
+    pending = result.then(
+      () => undefined,
+      () => undefined,
+    );
 
-    return pins?.[id];
+    return result;
   }
 
-  async setPIN(id: MonoidIdHex, pin: MonoidPIN): Promise<void> {
-    const pins = await this.storage.get('monoidPINs');
+  private async readPINs(signal?: AbortSignal): Promise<MutablePINs> {
+    throwIfCancelled(signal);
 
-    await this.storage.set('monoidPINs', {...pins, [id]: pin});
+    const id = requestId();
+    const cancel = (): void => {
+      // The read still settles through its own native result and cleanup.
+      void BiometricVault.cancel({requestId: id}).catch(() => {});
+    };
+
+    signal?.addEventListener('abort', cancel, {once: true});
+
+    try {
+      const {value} = await BiometricVault.get({
+        id: ENTRY_ID,
+        requestId: id,
+        reason: 'Unlock saved Access PINs',
+      });
+
+      throwIfCancelled(signal);
+
+      return parsePINs(value);
+    } catch (error) {
+      throw credentialError(signal?.aborted ? {code: 'CANCELLED'} : error);
+    } finally {
+      signal?.removeEventListener('abort', cancel);
+    }
   }
 
-  async removePIN(id: MonoidIdHex): Promise<void> {
-    const pins = {...(await this.storage.get('monoidPINs'))};
+  private async writePINs(
+    pins: MutablePINs,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    throwIfCancelled(signal);
 
-    delete pins[id];
+    const id = requestId();
+    const cancel = (): void => {
+      // Keep the queue occupied until native commit/cancellation and cleanup settle.
+      void BiometricVault.cancel({requestId: id}).catch(() => {});
+    };
 
-    await this.storage.set('monoidPINs', pins);
+    signal?.addEventListener('abort', cancel, {once: true});
+
+    try {
+      await BiometricVault.set({
+        id: ENTRY_ID,
+        value: JSON.stringify(pins),
+        requestId: id,
+        reason: 'Save Access PINs on this device',
+      });
+      // Native success means the write committed, even if cancellation arrived later.
+    } catch (error) {
+      throw credentialError(signal?.aborted ? {code: 'CANCELLED'} : error);
+    } finally {
+      signal?.removeEventListener('abort', cancel);
+    }
+  }
+
+  getPINs(signal?: AbortSignal): Promise<MonoidPINs> {
+    return this.enqueue(async () => {
+      try {
+        return Object.freeze(await this.readPINs(signal));
+      } catch (error) {
+        const failure = credentialError(error);
+
+        if (MANUAL_PIN_CODES.has(failure.code)) {
+          return Object.freeze({});
+        }
+
+        throw failure;
+      }
+    });
+  }
+
+  setPIN(id: MonoidIdHex, pin: MonoidPIN, signal?: AbortSignal): Promise<void> {
+    return this.enqueue(async () => {
+      if (!isCardId(id) || !MonoidPIN.is(pin)) {
+        throw credentialError({code: 'INVALID_ARGUMENT'});
+      }
+
+      // Updating requires the complete previous document. Never merge with a fallback empty map.
+      const pins = await this.readPINs(signal);
+      pins[id] = pin;
+      await this.writePINs(pins, signal);
+    });
+  }
+
+  removePIN(
+    id: MonoidIdHex,
+    expectedPIN?: MonoidPIN,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    return this.enqueue(async () => {
+      if (
+        !isCardId(id) ||
+        (expectedPIN !== undefined && !MonoidPIN.is(expectedPIN))
+      ) {
+        throw credentialError({code: 'INVALID_ARGUMENT'});
+      }
+
+      const pins = await this.readPINs(signal);
+      throwIfCancelled(signal);
+
+      if (
+        !Object.hasOwn(pins, id) ||
+        (expectedPIN !== undefined && pins[id] !== expectedPIN)
+      ) {
+        return;
+      }
+
+      delete pins[id];
+
+      if (Object.keys(pins).length === 0) {
+        // Native remove has no request ID and cannot be cancelled after it starts.
+        await BiometricVault.remove({id: ENTRY_ID});
+      } else {
+        await this.writePINs(pins, signal);
+      }
+    });
+  }
+
+  clear(): Promise<void> {
+    return this.enqueue(async () => {
+      await BiometricVault.clear();
+    });
   }
 }

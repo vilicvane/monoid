@@ -16,7 +16,7 @@ import {
   MonoidScanStatePromptContentHighlight,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
-import {Button, Buttons} from '../../../@ui/button.js';
+import {Button} from '../../../@ui/button.js';
 import {BUTTON_FEEDBACK_DURATION} from '../../../@ui/constants.js';
 import {
   View,
@@ -193,7 +193,53 @@ const CardContent = observer(
 
     return (
       <>
-        <ViewContent>
+        <ViewContent
+          footer={
+            <>
+              <Button
+                disabled={deriving || missing.length === 0}
+                onClick={errorService.catch(deriveSelected)}
+              >
+                {deriving && <IonSpinner />}
+                Derive
+              </Button>
+              <Button
+                id="import-button"
+                disabled={
+                  deriving || selected.length === 0 || missing.length > 0
+                }
+                onClick={errorService.catch(async () => {
+                  if (missing.length > 0) {
+                    return;
+                  }
+
+                  runInAction(() => {
+                    for (const {item, ref} of selected) {
+                      if (!ref) continue;
+
+                      const key = {...item.key, ref};
+                      importCardKey(
+                        walletStorageService,
+                        getCardKeyData(key, Object.values(item.refs)),
+                      );
+                    }
+                  });
+
+                  setImported(true);
+                })}
+              >
+                {imported ? (
+                  <>
+                    <IonIcon icon={checkCheck} />
+                    Import successful
+                  </>
+                ) : (
+                  'Import'
+                )}
+              </Button>
+            </>
+          }
+        >
           <KeyList>
             {keyItems.map(({item, ref, state}) => (
               <KeyItem
@@ -208,49 +254,6 @@ const CardContent = observer(
               />
             ))}
           </KeyList>
-          <Buttons>
-            <Button
-              disabled={deriving || missing.length === 0}
-              onClick={errorService.catch(deriveSelected)}
-            >
-              {deriving && <IonSpinner />}
-              Derive
-            </Button>
-            <Button
-              id="import-button"
-              disabled={deriving || selected.length === 0 || missing.length > 0}
-              onClick={errorService.catch(async () => {
-                if (missing.length > 0) {
-                  return;
-                }
-
-                runInAction(() => {
-                  for (const {item, ref} of selected) {
-                    if (!ref) continue;
-
-                    importCardKey(
-                      walletStorageService,
-                      getCardKeyData(
-                        {...item.key, ref},
-                        Object.values(item.refs),
-                      ),
-                    );
-                  }
-                });
-
-                setImported(true);
-              })}
-            >
-              {imported ? (
-                <>
-                  <IonIcon icon={checkCheck} />
-                  Import successful
-                </>
-              ) : (
-                'Import'
-              )}
-            </Button>
-          </Buttons>
         </ViewContent>
         {editing && (
           <AddressTypePicker

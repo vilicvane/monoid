@@ -7,12 +7,16 @@ import {
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
-import {createGlobalStyle, keyframes, styled} from 'styled-components';
+import {createGlobalStyle, css, styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
+import {parseWalletConnectUri} from '../../@lib/wallet-connect.js';
 import type {Router} from '../../@routes.js';
-import {Button} from '../@ui/button.js';
-import {SCAN_REVEAL_DURATION, SCAN_REVEAL_EASING} from '../@ui/scan-motion.js';
+import {
+  SCAN_REVEAL_CURVE,
+  SCAN_REVEAL_DURATION,
+  SCAN_REVEAL_EASING,
+} from '../@ui/scan-motion.js';
 import {
   View,
   ViewContent,
@@ -20,11 +24,11 @@ import {
   ViewHeaderTitle,
 } from '../@view/index.js';
 
+import {QrScanInstructions} from './@scan/qr-scan-instructions.js';
 import {
   QrScanPreview,
   type QrScanPreviewPhase,
   SCAN_CIRCLE_INSET,
-  SCAN_FRAME_OFFSET,
 } from './@scan/qr-scan-preview.js';
 
 const CameraBackground = createGlobalStyle`
@@ -48,35 +52,55 @@ const Header = styled(ViewHeader)`
   background: var(--ion-color-primary-contrast);
 `;
 
+const HeaderKeyword = styled(QrScanInstructions)<{$visible: boolean}>`
+  grid-column: 2 / -1;
+  min-width: 0;
+  text-align: right;
+  opacity: ${props => (props.$visible ? 1 : 0)};
+  transition: opacity 160ms ease-out;
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+`;
+
 const Content = styled(ViewContent)`
-  --scan-preview-size: min(320px, 45vh, calc(100vw - var(--view-padding) * 2));
+  // Keep this layout above ViewContent defaults even after hot updates.
+  && {
+    --scan-preview-size: min(
+      320px,
+      45vh,
+      calc(100vw - var(--view-padding) * 2)
+    );
 
-  display: grid;
-  grid-template-rows:
-    max(0px, calc((100% - var(--scan-preview-size)) / 2 - 16px))
-    var(--scan-preview-size)
-    minmax(0, 1fr);
-  justify-items: center;
-  gap: 0;
-  overflow: hidden;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) var(--scan-preview-size) minmax(0, 1fr);
+    justify-items: center;
+    gap: 0;
+    overflow: hidden;
 
-  @media (max-height: 600px) and (orientation: landscape) {
-    --scan-preview-size: min(240px, 40vh, 40vw);
+    @media (max-height: 600px) and (orientation: landscape) {
+      --scan-preview-size: min(240px, 40vh, 40vw);
 
-    grid-template-rows: minmax(0, 1fr);
-    grid-template-columns: var(--scan-preview-size) minmax(0, 320px);
-    align-items: center;
-    justify-content: center;
-    gap: 24px;
+      grid-template-rows: minmax(0, 1fr);
+      grid-template-columns: var(--scan-preview-size) minmax(0, 320px);
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+    }
   }
 `;
 
 const Preview = styled.div<{$open: boolean}>`
   position: relative;
-  top: -${SCAN_FRAME_OFFSET}px;
   grid-row: 2;
+  grid-column: 1;
   width: var(--scan-preview-size);
   aspect-ratio: 1;
+  // Keep the mask local, with overlap for native/WebView pixel rounding.
+  overflow: clip;
+  overflow-clip-margin: 1px;
   background: ${props =>
     props.$open ? 'transparent' : 'var(--ion-color-primary-contrast)'};
   transition: background-color
@@ -91,11 +115,15 @@ const Preview = styled.div<{$open: boolean}>`
   }
 `;
 
-const Instructions = styled.div<{$visible: boolean; $compact: boolean}>`
+const Instructions = styled.div<{
+  $visible: boolean;
+  $compact: boolean;
+  $centered: boolean;
+}>`
   --instructions-offset: ${props =>
     props.$compact
       ? `calc(var(--scan-preview-size) * -${SCAN_CIRCLE_INSET / 100})`
-      : `-${SCAN_FRAME_OFFSET}px`};
+      : '0px'};
 
   position: relative;
   z-index: 1;
@@ -129,31 +157,19 @@ const Instructions = styled.div<{$visible: boolean; $compact: boolean}>`
     padding-top: 0;
   }
 
+  ${props =>
+    props.$centered &&
+    css`
+      --instructions-offset: 0px;
+
+      grid-area: 1 / 1 / -1 / -1;
+      align-self: center;
+      padding-top: 0;
+    `}
+
   p {
-    margin: 0 0 16px;
+    margin: 0;
     color: var(--color-text-secondary);
-  }
-
-  button {
-    width: 100%;
-  }
-`;
-
-const revealResult = keyframes`
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
-`;
-
-const Result = styled.p`
-  max-height: 6em;
-  overflow: auto;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-  user-select: text;
-  animation: ${revealResult} 160ms ease-out;
-
-  @media (prefers-reduced-motion: reduce) {
-    animation: none;
   }
 `;
 
@@ -167,11 +183,12 @@ type ScanStatus =
   | 'unsupported'
   | 'error';
 
-const STATUS_TEXT: Record<ScanStatus, string> = {
+const STATUS_TEXT: Record<
+  Exclude<ScanStatus, 'scanning' | 'completing'>,
+  string
+> = {
   starting: 'Opening camera…',
-  scanning: 'Place a QR code inside the frame',
-  completing: 'QR code scanned',
-  scanned: 'QR code scanned',
+  scanned: 'Waiting for site…',
   paused: 'Scanning paused',
   denied: 'Allow camera access to scan',
   unsupported: 'Camera scanning is unavailable here',
@@ -191,12 +208,12 @@ if (import.meta.hot) {
 
 export const ScanView = observer(
   ({view}: RouteComponentProps<Router['scan']>): ReactNode => {
-    const {errorService} = useEntrances();
+    const {router, walletKitService, errorService} = useEntrances();
     const previewRef = useRef<HTMLDivElement>(null);
+    const revealRef = useRef<(duration: number) => Promise<boolean>>(undefined);
     const completeRef = useRef<() => void>(undefined);
-    const [attempt, setAttempt] = useState(0);
+    const scannedUriRef = useRef<string>(undefined);
     const [status, setStatus] = useState<ScanStatus>('starting');
-    const [result, setResult] = useState<string>();
     const [settledPhase, setSettledPhase] = useState<QrScanPreviewPhase>();
     const active = !view.$leaving && view.$match.$exact.$active;
     const cameraVisible =
@@ -265,8 +282,8 @@ export const ScanView = observer(
       const observer = new ResizeObserver(resize);
 
       setStatus('starting');
-      setResult(undefined);
       setSettledPhase(undefined);
+      scannedUriRef.current = undefined;
 
       void (async () => {
         await scanLifecycle.closing;
@@ -292,11 +309,16 @@ export const ScanView = observer(
               disposed ||
               finished ||
               view.$leaving ||
-              !view.$match.$exact.$active ||
-              !event.values.length
+              !view.$match.$exact.$active
             )
               return;
 
+            const uri = event.values
+              .map(value => parseWalletConnectUri(value))
+              .find(value => value !== undefined);
+            if (!uri) return;
+
+            scannedUriRef.current = uri;
             finished = true;
             completeRef.current = () => {
               completeRef.current = undefined;
@@ -309,7 +331,6 @@ export const ScanView = observer(
                 }),
               );
             };
-            setResult(event.values[0]);
             setStatus('completing');
           }),
         );
@@ -339,6 +360,20 @@ export const ScanView = observer(
           return;
 
         started = true;
+        revealRef.current = duration =>
+          QrScanner.animatePreview({
+            scanId,
+            fromScale: 0.5,
+            toScale: 1,
+            duration,
+            easing: SCAN_REVEAL_CURVE,
+          }).then(
+            () => true,
+            error => {
+              fail(error);
+              return false;
+            },
+          );
         setStatus('scanning');
         observer.observe(previewRef.current!);
         window.addEventListener('resize', resize);
@@ -354,6 +389,7 @@ export const ScanView = observer(
 
       return () => {
         disposed = true;
+        revealRef.current = undefined;
         completeRef.current = undefined;
         observer.disconnect();
         window.removeEventListener('resize', resize);
@@ -365,19 +401,67 @@ export const ScanView = observer(
           stop().catch(error => errorService.catch(Promise.reject(error))),
         ]).then(() => undefined);
       };
-    }, [cameraVisible, attempt, errorService, view]);
+    }, [cameraVisible, errorService, view]);
+
+    useEffect(() => {
+      if (status !== 'scanned' || settledPhase !== 'scanned' || !active) return;
+
+      const uri = scannedUriRef.current;
+      if (!uri) return;
+
+      const controller = new AbortController();
+      scannedUriRef.current = undefined;
+
+      void walletKitService
+        .connect(uri, controller.signal)
+        .then(async proposal => {
+          if (!proposal) return;
+
+          if (
+            controller.signal.aborted ||
+            view.$leaving ||
+            !view.$match.$exact.$active
+          ) {
+            await walletKitService.reject(proposal.id);
+            return;
+          }
+
+          router.scan.connection({id: proposal.id}).$push();
+        })
+        .catch(error => {
+          if (!controller.signal.aborted) {
+            setStatus('error');
+            errorService.catch(Promise.reject(error));
+          }
+        });
+
+      return () => controller.abort();
+    }, [
+      status,
+      settledPhase,
+      active,
+      walletKitService,
+      router,
+      errorService,
+      view,
+    ]);
 
     const scanning =
       status === 'starting' || status === 'scanning' || status === 'completing';
     const phase = scanning || status === 'scanned' ? status : 'idle';
     const instructionsVisible =
       settledPhase === phase && phase !== 'starting' && phase !== 'completing';
+    const keywordsVisible = instructionsVisible && phase === 'scanning';
+    const statusVisible = instructionsVisible && phase !== 'scanning';
 
     return (
       <Container>
-        {scanning && <CameraBackground />}
+        {(status === 'scanning' || status === 'completing') && (
+          <CameraBackground />
+        )}
         <Header>
           <ViewHeaderTitle>Scan</ViewHeaderTitle>
+          <HeaderKeyword $visible={keywordsVisible} active={keywordsVisible} />
         </Header>
         <Content>
           <Preview
@@ -387,23 +471,23 @@ export const ScanView = observer(
           >
             <QrScanPreview
               phase={phase}
+              onReveal={duration =>
+                revealRef.current?.(duration) ?? Promise.resolve(false)
+              }
               onCovered={() => completeRef.current?.()}
               onSettled={setSettledPhase}
             />
           </Preview>
           <Instructions
-            $visible={instructionsVisible}
+            $visible={statusVisible}
             $compact={phase !== 'scanning' && phase !== 'completing'}
+            $centered={phase === 'idle'}
             aria-live="polite"
-            aria-hidden={!instructionsVisible}
-            inert={!instructionsVisible}
+            aria-hidden={!statusVisible}
+            inert={!statusVisible}
           >
-            <p>{STATUS_TEXT[status]}</p>
-            {status === 'scanned' && <Result>{result}</Result>}
-            {!scanning && status !== 'unsupported' && (
-              <Button onClick={() => setAttempt(value => value + 1)}>
-                Scan again
-              </Button>
+            {status !== 'scanning' && status !== 'completing' && (
+              <p>{STATUS_TEXT[status]}</p>
             )}
           </Instructions>
         </Content>

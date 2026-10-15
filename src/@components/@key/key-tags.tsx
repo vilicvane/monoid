@@ -1,7 +1,8 @@
 import type {ButtonHTMLAttributes, ReactNode} from 'react';
-import {styled} from 'styled-components';
+import {css, keyframes, styled} from 'styled-components';
 
 import type {AddressChain} from '../../@lib/wallet-address.js';
+import {SCAN_REVEAL_DURATION, SCAN_REVEAL_EASING} from '../@ui/scan-motion.js';
 
 import {AddressChainIcon} from './address-chain-icon.js';
 
@@ -84,7 +85,9 @@ export const KeyDerivationTag = ({
   chain: AddressChain;
   className?: string;
   children: ReactNode;
-  buttonProps?: ButtonHTMLAttributes<HTMLButtonElement>;
+  buttonProps?: ButtonHTMLAttributes<HTMLButtonElement> & {
+    'data-swipeable-content'?: boolean;
+  };
 }): ReactNode => (
   <KeyDerivationTagContainer
     {...buttonProps}
@@ -96,7 +99,15 @@ export const KeyDerivationTag = ({
   </KeyDerivationTagContainer>
 );
 
-export const KeyDerivationBadge = styled(KeyTag)<{$primary?: boolean}>`
+const badgeReveal = keyframes`
+  from { transform: scale(0); }
+  to { transform: scale(1); }
+`;
+
+export const KeyDerivationBadge = styled(KeyTag)<{
+  $primary?: boolean;
+  $revealing?: boolean;
+}>`
   margin-left: -12px;
   height: 20px;
   width: 20px;
@@ -115,5 +126,17 @@ export const KeyDerivationBadge = styled(KeyTag)<{$primary?: boolean}>`
 
   & + & {
     z-index: -2;
+  }
+
+  ${({$revealing}) =>
+    $revealing &&
+    css`
+      transform-origin: left center;
+      animation: ${badgeReveal} ${SCAN_REVEAL_DURATION / 2}ms
+        ${SCAN_REVEAL_EASING};
+    `}
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
   }
 `;

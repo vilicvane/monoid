@@ -134,9 +134,7 @@ export class Entrances {
 
   @entrance
   get monoidCredentialsStore() {
-    return this.storageService.then(
-      storageService => new MonoidCredentialsStore(storageService),
-    );
+    return this.storageService.then(() => new MonoidCredentialsStore());
   }
 
   @entrance

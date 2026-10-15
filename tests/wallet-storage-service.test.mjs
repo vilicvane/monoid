@@ -148,6 +148,29 @@ test('selecting a default persists its parameter reference without reordering pu
   assert.equal(getDefaultWallet(reloaded.keys[0]).address, SOLANA_ADDRESS);
 });
 
+test('the first derived BTC address remains the implicit default when EVM is added later', async context => {
+  context.mock.method(console, 'info', () => {});
+
+  const storage = createStorage([createKey([])]);
+  const service = await WalletStorageService.create(storage);
+
+  service.addWallet(KEY_INDEX, SEGWIT_SOURCE);
+  service.addWallet(KEY_INDEX, EVM_SOURCE);
+
+  const key = service.keys[0];
+  assert.equal(Object.hasOwn(key, 'defaultWallet'), false);
+  assert.equal(getDefaultWallet(key).addressType, 'bitcoin-segwit');
+
+  const reloaded = await WalletStorageService.create(storage);
+
+  assert.deepEqual(toJS(reloaded.keys[0].wallets), [SEGWIT_SOURCE, EVM_SOURCE]);
+  assert.equal(Object.hasOwn(reloaded.keys[0], 'defaultWallet'), false);
+  assert.equal(
+    getDefaultWallet(reloaded.keys[0]).addressType,
+    'bitcoin-segwit',
+  );
+});
+
 test('default references distinguish derivation parameters even when addresses match', () => {
   const second = {...EVM_SOURCE, path: "m/44'/60'/0'/0/1"};
   const key = {

@@ -4,6 +4,7 @@ export default {
   appId: 'app.monoid',
   appName: 'Monoid',
   webDir: 'dist',
+  loggingBehavior: 'none',
   plugins: {
     Keyboard: {
       resize: 'body',

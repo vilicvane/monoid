@@ -23,6 +23,9 @@ project(':capacitor-status-bar').projectDir = new File('../node_modules/@capacit
 include ':capawesome-team-capacitor-secure-preferences'
 project(':capawesome-team-capacitor-secure-preferences').projectDir = new File('../node_modules/@capawesome-team/capacitor-secure-preferences/android')
 
+include ':capacitor-biometric-vault'
+project(':capacitor-biometric-vault').projectDir = new File('../node_modules/capacitor-biometric-vault/android')
+
 include ':capacitor-isodep-nfc'
 project(':capacitor-isodep-nfc').projectDir = new File('../node_modules/capacitor-isodep-nfc/android')
 

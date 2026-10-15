@@ -14,6 +14,7 @@ import {
   ADDRESS_TYPES,
   ADDRESS_TYPE_LABELS,
 } from '../../../../@lib/wallet-address.js';
+import {KeySelection} from '../../../@key/key-checkbox.js';
 import {
   KeyListAddress,
   KeyListAddressPlaceholder,
@@ -54,32 +55,6 @@ const AddressTypeSwitch = styled(KeyDerivationBadge)`
   background-color: var(--ion-color-primary);
   color: var(--ion-color-primary-contrast);
   ${addressTypeTriggerStyles}
-`;
-
-const KeyCheckbox = styled(KeyTag)`
-  width: 22px;
-  padding: 0;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  background-color: var(--ion-color-dark-contrast);
-  border-color: var(--ion-color-medium-tint);
-
-  transition: all 0.2s linear;
-
-  &.up-to-date {
-    background-color: var(--ion-color-light);
-    border-color: var(--ion-color-light-shade);
-    color: var(--ion-color-medium-tint);
-  }
-
-  &.checked {
-    background-color: var(--ion-color-primary);
-    border-color: var(--ion-color-primary-shade);
-    color: var(--ion-color-primary-contrast);
-  }
 `;
 
 const KeyUpdateTag = styled(KeyTag)`
@@ -158,14 +133,14 @@ export const KeyItem = observer(
       >
         <KeyListItemContent>
           <KeyTags>
-            <KeyCheckbox
+            <KeySelection
               className={classNames({
                 checked,
                 [state]: true,
               })}
             >
               {icon}
-            </KeyCheckbox>
+            </KeySelection>
             <KeyTypeTag className={type}>{type}</KeyTypeTag>
             {alias && <KeyAliasTag>{alias}</KeyAliasTag>}
             <DerivationTag

@@ -1,0 +1,4 @@
+rootProject.name = 'biometric-vault'
+
+include ':capacitor-android'
+project(':capacitor-android').projectDir = file('../../../node_modules/@capacitor/android/capacitor')

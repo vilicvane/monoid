@@ -25,6 +25,10 @@ export class StorageService {
   static async create(): Promise<StorageService> {
     const storage = new Storage();
     await storage.create();
+
+    // Retire the development PIN cache. Credentials are re-entered and saved in BiometricVault.
+    await storage.remove('monoidPINs');
+
     return new StorageService(storage);
   }
 }

@@ -59,7 +59,6 @@ export const View = observer(
     const [context] = useState(() =>
       observable({
         scrolled: false,
-        canScrollDown: false,
       }),
     );
 

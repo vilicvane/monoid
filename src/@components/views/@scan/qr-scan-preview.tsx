@@ -10,14 +10,12 @@ import {
 } from '../../@ui/scan-motion.js';
 
 export const SCAN_CIRCLE_INSET = 40;
-export const SCAN_FRAME_OFFSET = 4;
 
 const Aperture = styled.div`
   position: absolute;
   inset: 50%;
   border-radius: 50%;
-  transform: translateY(${SCAN_FRAME_OFFSET}px);
-  box-shadow: 0 0 0 100vmax var(--ion-color-primary-contrast);
+  box-shadow: 0 0 0 var(--scan-preview-size) var(--ion-color-primary-contrast);
   overflow: hidden;
   pointer-events: none;
 `;
@@ -55,12 +53,10 @@ type MotionStyles = Partial<
 const CIRCLE = {
   inset: `${SCAN_CIRCLE_INSET}%`,
   borderRadius: '50%',
-  transform: `translateY(${SCAN_FRAME_OFFSET}px)`,
 };
 const FRAME = {
   inset: '0%',
   borderRadius: `${(20 / 430) * 100}%`,
-  transform: 'translateY(0px)',
 };
 
 const BREATH_DURATION = 2080;
@@ -75,21 +71,23 @@ const BREATH_RETURN_END_HANDLE = 0.4;
 
 export function QrScanPreview({
   phase,
+  onReveal,
   onCovered,
   onSettled,
 }: {
   phase: QrScanPreviewPhase;
+  onReveal: (duration: number) => Promise<boolean>;
   onCovered: () => void;
   onSettled: (phase: QrScanPreviewPhase | undefined) => void;
 }): ReactNode {
   const apertureRef = useRef<HTMLDivElement>(null);
   const coverRef = useRef<HTMLDivElement>(null);
   const confirmationRef = useRef<HTMLDivElement>(null);
-  const callbacksRef = useRef({onCovered, onSettled});
+  const callbacksRef = useRef({onReveal, onCovered, onSettled});
 
   useEffect(() => {
-    callbacksRef.current = {onCovered, onSettled};
-  }, [onCovered, onSettled]);
+    callbacksRef.current = {onReveal, onCovered, onSettled};
+  }, [onReveal, onCovered, onSettled]);
 
   useEffect(() => {
     const aperture = apertureRef.current!;
@@ -103,6 +101,7 @@ export function QrScanPreview({
       element: HTMLElement,
       target: MotionStyles,
       duration: number,
+      delay = 0,
     ): Promise<void> => {
       const style = getComputedStyle(element);
       const from = Object.fromEntries(
@@ -113,6 +112,7 @@ export function QrScanPreview({
       );
       const animation = element.animate([from, target], {
         duration: reducedMotion.matches ? 0 : duration,
+        delay: reducedMotion.matches ? 0 : delay,
         easing: SCAN_REVEAL_EASING,
         fill: 'forwards',
       });
@@ -154,23 +154,33 @@ export function QrScanPreview({
           {duration: BREATH_DURATION, iterations: Infinity},
         );
       } else if (phase === 'scanning') {
+        const revealed = await callbacksRef.current.onReveal(
+          reducedMotion.matches ? 0 : SCAN_REVEAL_DURATION,
+        );
+        if (!revealed || disposed) return;
+
         await Promise.all([
           move(aperture, FRAME, SCAN_REVEAL_DURATION),
           move(cover, {opacity: '0'}, SCAN_REVEAL_DURATION),
         ]);
         if (!disposed) callbacksRef.current.onSettled(phase);
       } else if (phase === 'completing') {
-        await move(cover, {opacity: '1'}, 240);
+        await Promise.all([
+          move(cover, {opacity: '1'}, SCAN_REVEAL_DURATION),
+          move(aperture, CIRCLE, SCAN_REVEAL_DURATION),
+          move(
+            confirmation,
+            {opacity: '1'},
+            SCAN_REVEAL_DURATION / 2,
+            SCAN_REVEAL_DURATION / 2,
+          ),
+        ]);
         if (!disposed) callbacksRef.current.onCovered();
       } else if (phase === 'scanned') {
-        await Promise.all([
-          move(aperture, CIRCLE, SCAN_REVEAL_DURATION),
-          move(confirmation, {opacity: '1'}, 240),
-        ]);
-        if (disposed) return;
-
-        if (!reducedMotion.matches) animateScanFeedback(confirmation);
-        callbacksRef.current.onSettled(phase);
+        if (!reducedMotion.matches) {
+          await animateScanFeedback(confirmation).finished;
+        }
+        if (!disposed) callbacksRef.current.onSettled(phase);
       } else {
         // Keep the mask opaque while the opening closes, including camera errors.
         await Promise.all([
@@ -188,6 +198,8 @@ export function QrScanPreview({
 
     const onMotionChange = (): void => {
       if (!reducedMotion.matches) return;
+
+      if (phase === 'scanning') void callbacksRef.current.onReveal(0);
 
       for (const element of elements) {
         for (const animation of element.getAnimations()) {

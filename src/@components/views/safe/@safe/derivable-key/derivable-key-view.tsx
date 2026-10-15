@@ -1,3 +1,4 @@
+import {runInAction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useRef} from 'react';
 import type {RouteComponentProps} from 'routra-react';
@@ -13,6 +14,13 @@ export const DerivableKeyView = observer(
   ({view}: RouteComponentProps<Router['safe']['derivableKey']>): ReactNode => {
     const {router, walletStorageService} = useEntrances();
     const buttonsRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+      // Consume the return hint after the list initializes its group state.
+      runInAction(() => {
+        view.expandedChain = undefined;
+      });
+    }, [view]);
 
     const {index} = view;
 
@@ -38,7 +46,11 @@ export const DerivableKeyView = observer(
           }
           footerRef={buttonsRef}
         >
-          <KeyWalletList data={key} emptyFocusRef={buttonsRef} />
+          <KeyWalletList
+            data={key}
+            defaultExpandedChain={view.expandedChain}
+            emptyFocusRef={buttonsRef}
+          />
         </ViewContent>
       </View>
     );

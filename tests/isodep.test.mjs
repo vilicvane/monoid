@@ -79,6 +79,7 @@ beforeEach(() => {
     starts: [],
     stops: [],
     closes: [],
+    listenerRemovals: [],
     exchanges: [],
     errors: [],
     cleanupCount: 0,
@@ -98,7 +99,13 @@ beforeEach(() => {
       listeners.set(name, entries);
       entries.add(listener);
 
-      return {remove: async () => entries.delete(listener)};
+      return {
+        remove: async () => {
+          this.listenerRemovals.push(name);
+          await this.onRemove?.(name);
+          entries.delete(listener);
+        },
+      };
     },
     async getStatus() {
       return {supported: true, enabled: this.enabled};
@@ -155,11 +162,9 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  device.disposers.forEach(dispose => dispose());
+  const completions = device.disposers.map(dispose => dispose());
   device.release.forEach(resolve => resolve());
-  await until(() =>
-    [...device.listeners.values()].every(entries => entries.size === 0),
-  );
+  await Promise.allSettled(completions);
   await setImmediate();
 });
 
@@ -248,7 +253,10 @@ test('a rejected exchange and its sessionEnded event report one error and permit
       throw failure;
     }
   };
-  device.standby(async () => {}, new TestApplet(new Uint8Array([1])));
+  const dispose = device.standby(
+    async () => {},
+    new TestApplet(new Uint8Array([1])),
+  );
   await until(() => device.starts.length === 1);
   device.tap('first');
   await until(() => device.cleanupCount === 1);
@@ -257,6 +265,7 @@ test('a rejected exchange and its sessionEnded event report one error and permit
 
   assert.deepEqual(device.errors, [failure]);
   assert.equal(device.starts.length, 1);
+  await dispose();
 });
 
 test('a connection failure without sessionOpened is reported after native cleanup', async () => {
@@ -284,10 +293,14 @@ test('a connection failure without sessionOpened is reported after native cleanu
   await until(() => callbacks === 1);
 });
 
-test('cancel and immediate reopening wait for stopScan and suppress cancellation errors', async () => {
+test('cancel is immediate while completion and reopening wait for native stop, close, and listener cleanup', async () => {
   const stopped = deferred();
   const exchange = deferred();
+  const closed = deferred();
+  const removed = deferred();
   device.onExchange = () => exchange.promise;
+  device.onClose = () => closed.promise;
+  device.onRemove = () => removed.promise;
   device.onStop = async () => {
     exchange.reject(Object.assign(new Error('Cancelled'), {code: 'CANCELLED'}));
     await stopped.promise;
@@ -299,17 +312,158 @@ test('cancel and immediate reopening wait for stopScan and suppress cancellation
   await until(() => device.starts.length === 1);
   device.tap('cancelled');
   await until(() => device.exchanges.length === 1);
-  dispose();
+  let completed = false;
+  const completion = dispose();
+  completion.then(() => {
+    completed = true;
+  });
+  assert.equal(dispose(), completion);
   device.standby(async () => {});
-  await until(() => device.stops.length === 1);
+  await until(() => device.stops.length === 1 && device.closes.length === 1);
   await setImmediate();
 
+  assert.equal(completed, false);
   assert.equal(device.starts.length, 1);
   stopped.resolve();
+  await setImmediate();
+  assert.equal(completed, false);
+  assert.equal(device.starts.length, 1);
+  assert.equal(device.listenerRemovals.length, 0);
+  closed.resolve();
+  await until(() => device.listenerRemovals.length === 5);
+  assert.equal(completed, false);
+  assert.equal(device.starts.length, 1);
+  removed.resolve();
+  await completion;
   await until(() => device.starts.length === 2);
+  assert.equal(completed, true);
   assert.notEqual(device.starts[0], device.starts[1]);
   assert.deepEqual(device.errors, []);
   assert.equal(device.cleanupCount, 0);
+});
+
+test('a scan cancelled before its turn never starts and finishes after the previous scan', async () => {
+  const disposeFirst = device.standby(async () => {});
+  await until(() => device.starts.length === 1);
+  const disposeQueued = device.standby(async () => {});
+  let completed = false;
+  const queuedCompletion = disposeQueued();
+  queuedCompletion.then(() => {
+    completed = true;
+  });
+  await setImmediate();
+
+  assert.equal(completed, false);
+  assert.equal(device.starts.length, 1);
+  assert.equal(device.stops.length, 0);
+  await disposeFirst();
+  await queuedCompletion;
+  assert.equal(completed, true);
+  assert.equal(device.starts.length, 1);
+  assert.equal(device.stops.length, 1);
+  assert.equal(device.listenerRemovals.length, 5);
+
+  device.standby(async () => {});
+  await until(() => device.starts.length === 2);
+  assert.deepEqual(device.errors, []);
+});
+
+test('an independent cleanup continuation can await stop without blocking session cleanup', async () => {
+  let completed = false;
+  let finalization;
+  const dispose = standbyIsoDep(
+    async () => {},
+    error => device.errors.push(error),
+    () => {
+      finalization = (async () => {
+        await dispose();
+        completed = true;
+      })();
+    },
+  );
+  device.disposers.push(dispose);
+  await until(() => device.starts.length === 1);
+  device.tap('complete');
+  await until(() => completed);
+  await finalization;
+
+  assert.deepEqual(device.closes, ['complete']);
+  assert.equal(device.stops.length, 1);
+  assert.equal(device.listenerRemovals.length, 5);
+  assert.deepEqual(device.errors, []);
+});
+
+for (const failedCleanup of ['stopScan', 'closeSession', 'listener']) {
+  test(`${failedCleanup} failure rejects stop after all cleanup settles and does not block the next scan`, async () => {
+    const failure = new Error(`${failedCleanup} cleanup failed`);
+    const exchange = deferred();
+    const removed = deferred();
+    device.onExchange = () => exchange.promise;
+    device.onStop = async () => {
+      exchange.reject(
+        Object.assign(new Error('Cancelled'), {code: 'CANCELLED'}),
+      );
+      if (failedCleanup === 'stopScan') throw failure;
+    };
+    device.onClose = async () => {
+      if (failedCleanup === 'closeSession') throw failure;
+    };
+    device.onRemove = async name => {
+      if (failedCleanup === 'listener' && name === 'sessionOpened') {
+        throw failure;
+      }
+
+      if (name === 'statusChanged') await removed.promise;
+    };
+    const dispose = device.standby(
+      async () => {},
+      new TestApplet(new Uint8Array([1])),
+    );
+    await until(() => device.starts.length === 1);
+    device.tap('active');
+    await until(() => device.exchanges.length === 1);
+    let settled = false;
+    const rejected = assert
+      .rejects(dispose(), error => error === failure)
+      .then(() => {
+        settled = true;
+      });
+    device.standby(async () => {});
+    await until(() => device.listenerRemovals.length === 5);
+
+    assert.equal(settled, false);
+    assert.deepEqual(device.closes, ['active']);
+    assert.equal(device.stops.length, 1);
+    assert.equal(device.starts.length, 1);
+    assert.deepEqual(device.errors, []);
+    device.onStop = undefined;
+    device.onClose = undefined;
+    device.onRemove = undefined;
+    removed.resolve();
+    await rejected;
+    await until(() => device.starts.length === 2);
+    assert.equal(settled, true);
+    assert.deepEqual(device.errors, []);
+  });
+}
+
+test('a close failure terminates the active scan and preserves its cleanup error for stop', async () => {
+  const failure = new Error('Session cleanup failed');
+  device.onClose = async () => {
+    throw failure;
+  };
+  const dispose = device.standby(async () => {});
+  await until(() => device.starts.length === 1);
+  device.tap('failed-close');
+  await until(() => device.errors.length === 1);
+  await assert.rejects(dispose(), error => error === failure);
+
+  assert.ok(device.errors[0] instanceof IsoDepScanError);
+  assert.equal(device.errors[0].cause, failure);
+  assert.equal(device.cleanupCount, 1);
+  assert.equal(device.stops.length, 1);
+  assert.equal(device.starts.length, 1);
+  assert.equal(device.listenerRemovals.length, 5);
 });
 
 for (const [reason, state, event] of [

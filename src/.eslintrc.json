@@ -8,6 +8,7 @@
         "import/external-module-folders": [
           "node_modules",
           "plugins/keyboard",
+          "plugins/biometric-vault",
           "plugins/isodep-nfc",
           "plugins/qr-scanner"
         ]

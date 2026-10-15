@@ -74,16 +74,26 @@ function MonoidScanPromptLayer({
   const initializedRef = useRef(false);
   const [arrived, setArrived] = useState(false);
   const [backdropOwner] = useState(() => Symbol());
-  const {closing} = presentation;
+  const {closing, token} = presentation;
 
   useLayoutEffect(() => {
     presentationRef.current = presentation;
   }, [presentation]);
 
-  useLayoutEffect(
-    () => () => errorService.catch(popupBackdrop.release(backdropOwner)),
-    [popupBackdrop, backdropOwner, errorService],
-  );
+  useLayoutEffect(() => {
+    const shown = presentationRef.current;
+
+    return () => {
+      monoidScanPromptPresenter.remove(shown, false);
+      errorService.catch(popupBackdrop.release(backdropOwner));
+    };
+  }, [
+    token,
+    monoidScanPromptPresenter,
+    popupBackdrop,
+    backdropOwner,
+    errorService,
+  ]);
 
   useLayoutEffect(() => {
     const container = containerRef.current!;
@@ -92,6 +102,7 @@ function MonoidScanPromptLayer({
     const stateContent = stateContentRef.current!;
     const canvas = card.querySelector('canvas')!;
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const shown = presentationRef.current;
 
     if (!initializedRef.current) {
       const rect = card.getBoundingClientRect();
@@ -101,22 +112,6 @@ function MonoidScanPromptLayer({
       canvas.style.opacity = '0';
       stateContent.style.opacity = '0';
       initializedRef.current = true;
-    }
-
-    if (reducedMotion.matches) {
-      if (closing) {
-        errorService.catch(popupBackdrop.release(backdropOwner));
-        monoidScanPromptPresenter.remove(presentationRef.current);
-      } else {
-        errorService.catch(popupBackdrop.acquire(backdropOwner));
-        card.style.transform = 'none';
-        prompt.style.transform = 'none';
-        canvas.style.opacity = '1';
-        stateContent.style.opacity = '1';
-        setArrived(true);
-      }
-
-      return;
     }
 
     const animations: Animation[] = [];
@@ -135,6 +130,28 @@ function MonoidScanPromptLayer({
     errorService.catch(
       (async () => {
         try {
+          if (reducedMotion.matches) {
+            if (closing) {
+              await popupBackdrop.release(backdropOwner);
+
+              if (!cancelled) {
+                monoidScanPromptPresenter.remove(shown, true);
+              }
+            } else {
+              await popupBackdrop.acquire(backdropOwner);
+
+              if (!cancelled) {
+                card.style.transform = 'none';
+                prompt.style.transform = 'none';
+                canvas.style.opacity = '1';
+                stateContent.style.opacity = '1';
+                setArrived(true);
+              }
+            }
+
+            return;
+          }
+
           if (!closing) {
             setArrived(false);
 
@@ -219,11 +236,11 @@ function MonoidScanPromptLayer({
           await popupBackdrop.release(backdropOwner);
 
           if (!cancelled) {
-            monoidScanPromptPresenter.remove(presentationRef.current);
+            monoidScanPromptPresenter.remove(shown, true);
           }
         } catch (error) {
           if (!cancelled) {
-            monoidScanPromptPresenter.remove(presentationRef.current);
+            monoidScanPromptPresenter.remove(shown, false);
 
             throw error;
           }
@@ -242,6 +259,7 @@ function MonoidScanPromptLayer({
     };
   }, [
     closing,
+    token,
     monoidScanPromptPresenter,
     errorService,
     popupBackdrop,

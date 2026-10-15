@@ -1,12 +1,27 @@
-import classNames from 'classNames';
-import {observer} from 'mobx-react-lite';
-import {type HTMLAttributes, type ReactNode, type Ref, useContext} from 'react';
+import type {HTMLAttributes, ReactNode, Ref} from 'react';
 import {css, styled} from 'styled-components';
 
 import {Buttons} from '../@ui/button.js';
 
-import {scrollBorderCSS} from './@scroll-border.js';
-import {ViewContext} from './@view-context.js';
+const BLUR_STEPS = 4;
+const MAX_BLUR_RADIUS = 2;
+
+const BlurLayer = styled.div<{$step: number}>`
+  position: absolute;
+  inset: 0 0 calc(var(--nav-bar-height) + var(--view-inset-bottom));
+  z-index: -1;
+  pointer-events: none;
+
+  /* Blur variances add; keep the combined radius within the shared maximum. */
+  backdrop-filter: blur(
+    ${({$step}) => Math.sqrt(2 * $step - 1) * (MAX_BLUR_RADIUS / BLUR_STEPS)}px
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent ${({$step}) => (($step - 1) / BLUR_STEPS) * 100}%,
+    black ${({$step}) => ($step / BLUR_STEPS) * 100}%
+  );
+`;
 
 const Container = styled(Buttons)<{$fixed: boolean}>`
   flex-shrink: 0;
@@ -14,34 +29,37 @@ const Container = styled(Buttons)<{$fixed: boolean}>`
   ${props =>
     props.$fixed &&
     css`
+      position: absolute;
+      inset: auto 0 0;
+      z-index: 1;
+
       margin: 0;
       padding: var(--view-padding) calc(var(--view-padding) - 2px)
         var(--view-padding-bottom);
-      border-top: solid 0.5px transparent;
 
-      ${scrollBorderCSS}
+      pointer-events: none;
+
+      > :not(${BlurLayer}) {
+        pointer-events: auto;
+      }
     `}
 `;
 
-export const ViewFooter = observer(
-  ({
-    placement,
-    className,
-    ...props
-  }: HTMLAttributes<HTMLDivElement> & {
-    placement: 'scroll' | 'fixed';
-    ref?: Ref<HTMLDivElement>;
-  }): ReactNode => {
-    const {canScrollDown} = useContext(ViewContext);
-
-    return (
-      <Container
-        {...props}
-        $fixed={placement === 'fixed'}
-        className={classNames(className, {
-          scrolled: placement === 'fixed' && canScrollDown,
-        })}
-      />
-    );
-  },
-);
+export const ViewFooter = ({
+  placement,
+  children,
+  ...props
+}: HTMLAttributes<HTMLDivElement> & {
+  placement: 'scroll' | 'fixed';
+  ref?: Ref<HTMLDivElement>;
+}): ReactNode => {
+  return (
+    <Container {...props} $fixed={placement === 'fixed'}>
+      {placement === 'fixed' &&
+        Array.from({length: BLUR_STEPS}, (_, index) => (
+          <BlurLayer key={index} $step={index + 1} aria-hidden="true" />
+        ))}
+      {children}
+    </Container>
+  );
+};

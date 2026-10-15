@@ -9,7 +9,7 @@ import {
   MonoidScanStatePromptContentHighlight,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
-import {Button, Buttons} from '../../../@ui/button.js';
+import {Button} from '../../../@ui/button.js';
 import {Step, Steps} from '../../../@ui/step.js';
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
@@ -112,7 +112,15 @@ export const SetupCardView = ({
             }}
           />
         </ViewHeader>
-        <ViewContent>
+        <ViewContent
+          footer={
+            step === 1 && (
+              <Button onClick={onSetSafePINScanButtonClick}>
+                {toUnlockSafe ? 'Unlock safe' : 'Set safe pin'}
+              </Button>
+            )
+          }
+        >
           <Steps>
             <Step
               title={toUnlockSafe ? 'Unlock safe' : 'Set safe pin'}
@@ -120,13 +128,6 @@ export const SetupCardView = ({
               activeNumero={step}
             />
           </Steps>
-          <Buttons id="buttons">
-            {step === 1 && (
-              <Button onClick={onSetSafePINScanButtonClick}>
-                {toUnlockSafe ? 'Unlock safe' : 'Set safe pin'}
-              </Button>
-            )}
-          </Buttons>
         </ViewContent>
       </View>
       {safePINInput}

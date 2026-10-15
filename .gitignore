@@ -5,6 +5,7 @@ node_modules/
 
 # Android
 .idea/
+.settings/
 *.orig
 
 # Package Manager

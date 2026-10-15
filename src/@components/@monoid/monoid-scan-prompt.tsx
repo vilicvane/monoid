@@ -10,6 +10,7 @@ import {CBORAppletError} from '../../@lib/cbor-applet.js';
 import {IsoDepScanError} from '../../@lib/isodep.js';
 import type {MonoidApplet} from '../../@lib/monoid/index.js';
 import {MonoidAppletInvalidPINError} from '../../@lib/monoid/index.js';
+import {isCredentialRequestCancelled} from '../../@services/index.js';
 import {uint8ArrayToHex} from '../../@utils/index.js';
 import {useToast} from '../@ui/toast.js';
 import {useInputModal} from '../@ui/use-input-modal.js';
@@ -81,7 +82,7 @@ export function useMonoidScanPrompt({
         onDismiss: () => setAppletCallbackAndPromise(undefined),
       });
     } else {
-      monoidScanPromptPresenter.hide(owner);
+      void monoidScanPromptPresenter.hide(owner);
     }
   }, [
     monoidScanPromptPresenter,
@@ -92,7 +93,9 @@ export function useMonoidScanPrompt({
   ]);
 
   useLayoutEffect(
-    () => () => monoidScanPromptPresenter.hide(owner),
+    () => () => {
+      void monoidScanPromptPresenter.hide(owner);
+    },
     [monoidScanPromptPresenter, owner],
   );
 
@@ -106,16 +109,42 @@ export function useMonoidScanPrompt({
 
     let retryStateContent = initialStateContent;
     let enteredPIN: {id: MonoidIdHex; pin: MonoidPIN} | undefined;
-    let inputPending = false;
-    let completed = false;
-    let callbackCompleted = false;
-    let failed = false;
+    let update:
+      | {type: 'set' | 'remove'; id: MonoidIdHex; pin: MonoidPIN}
+      | undefined;
+    let result:
+      | {type: 'success'}
+      | {type: 'input'; id: MonoidIdHex; message?: string}
+      | {type: 'setup'; navigate: () => void}
+      | {type: 'error'; error: unknown; retry: boolean}
+      | undefined;
+    let finishing = false;
+    let settled = false;
     let disposed = false;
+    const credentialsRequest = new AbortController();
+    let pins: Partial<Record<MonoidIdHex, MonoidPIN>> = {};
+    let stop: (() => Promise<void>) | undefined;
+
+    const cancelled = (): Error =>
+      Object.assign(new Error('Card scanning was cancelled.'), {
+        code: 'CANCELLED',
+      });
+
+    const fail = (error: unknown): void => {
+      if (disposed) {
+        return;
+      }
+
+      settled = true;
+      reject(error);
+      setState('hidden');
+      setAppletCallbackAndPromise(undefined);
+    };
 
     const promptPIN = (id: MonoidIdHex, errorMessage?: string): void => {
-      inputPending = true;
-
-      setState('hidden');
+      if (disposed) {
+        return;
+      }
 
       if (errorMessage) {
         toast({
@@ -138,176 +167,288 @@ export function useMonoidScanPrompt({
 
         if (MonoidPIN.is(value)) {
           enteredPIN = {id, pin: value};
-          inputPending = false;
           setStateContent(retryStateContent);
-          setState('ready');
+          startScan();
         } else if (value !== undefined) {
           promptPIN(id, 'Incorrect PIN format, expected 6 to 16 characters.');
         } else {
-          setAppletCallbackAndPromise(undefined);
+          fail(cancelled());
         }
       });
     };
 
-    const stop = monoidApplet.standby(
-      async applet => {
-        if (disposed || inputPending || completed) {
-          return;
-        }
+    const finish = async (): Promise<void> => {
+      if (disposed || finishing || !result) {
+        return;
+      }
 
-        setState('scanning');
+      finishing = true;
+      const completed = result;
+      result = undefined;
+      const stopped = stop?.();
+      stop = undefined;
+      setState('hidden');
 
-        setStateContent('Greeting to monoid...');
+      // Both the native scan and the actual card/backdrop exit animations must finish.
+      const [, hidden] = await Promise.all([
+        stopped,
+        monoidScanPromptPresenter.hide(owner),
+      ]);
 
-        const hello = await applet.hello({});
+      if (disposed) {
+        return;
+      }
 
-        if (disposed) {
-          return;
-        }
+      if (!hidden) {
+        fail(cancelled());
+        return;
+      }
 
-        const id = uint8ArrayToHex(hello.id);
+      const pendingUpdate = update;
+      update = undefined;
 
-        retryStateContent = (
-          <>
-            Scan card{' '}
-            <MonoidScanStatePromptContentHighlight>
-              {uint8ArrayToHex(hello.safe.id)}
-            </MonoidScanStatePromptContentHighlight>{' '}
-            again
-          </>
-        );
+      if (pendingUpdate) {
+        try {
+          const {type, id, pin} = pendingUpdate;
 
-        if (ensureSetup && hello.pin === false) {
-          completed = true;
-
-          router.safe
-            .setupCard({
+          if (type === 'set') {
+            await monoidCredentialsStore.setPIN(
               id,
-              pin: hello.pin !== false,
-              safe: {
-                id: uint8ArrayToHex(hello.safe.id),
-                pin: hello.safe.pin !== false,
-                unlocked: hello.safe.unlocked,
-              },
-            })
-            .$push();
-
-          return;
+              pin,
+              credentialsRequest.signal,
+            );
+          } else {
+            await monoidCredentialsStore.removePIN(
+              id,
+              pin,
+              credentialsRequest.signal,
+            );
+          }
+        } catch {
+          if (!disposed) {
+            toast({
+              message:
+                pendingUpdate.type === 'set'
+                  ? 'Access PIN was not saved on this device.'
+                  : 'The saved Access PIN could not be removed.',
+              color: 'warning',
+              position: 'top',
+              waitForKeyboard: false,
+            });
+          }
         }
+      }
 
-        if (auth === 'access') {
-          const entered = enteredPIN?.id === id ? enteredPIN.pin : undefined;
+      if (disposed) {
+        return;
+      }
 
-          enteredPIN = undefined;
+      finishing = false;
 
-          const pin = entered ?? (await monoidCredentialsStore.getPIN(id));
+      if (completed.type === 'input') {
+        promptPIN(completed.id, completed.message);
+      } else if (completed.type === 'success') {
+        settled = true;
+        resolve();
+        setAppletCallbackAndPromise(undefined);
+      } else if (completed.type === 'setup') {
+        fail(cancelled());
+        completed.navigate();
+      } else if (completed.retry) {
+        errorService.catch(Promise.reject(completed.error));
+        setStateContent(retryStateContent);
+        startScan();
+      } else {
+        fail(completed.error);
+      }
+    };
+
+    const startScan = (): void => {
+      if (disposed) {
+        return;
+      }
+
+      setState('ready');
+
+      stop = monoidApplet.standby(
+        async applet => {
+          if (disposed || finishing || result) {
+            return;
+          }
+
+          setState('scanning');
+
+          setStateContent('Greeting to monoid...');
+
+          const hello = await applet.hello({});
 
           if (disposed) {
             return;
           }
 
-          if (pin === undefined) {
-            promptPIN(id);
+          const id = uint8ArrayToHex(hello.id);
+
+          retryStateContent = (
+            <>
+              Scan card{' '}
+              <MonoidScanStatePromptContentHighlight>
+                {uint8ArrayToHex(hello.safe.id)}
+              </MonoidScanStatePromptContentHighlight>{' '}
+              again
+            </>
+          );
+
+          if (ensureSetup && hello.pin === false) {
+            result = {
+              type: 'setup',
+              navigate: () => {
+                router.safe
+                  .setupCard({
+                    id,
+                    pin: hello.pin !== false,
+                    safe: {
+                      id: uint8ArrayToHex(hello.safe.id),
+                      pin: hello.safe.pin !== false,
+                      unlocked: hello.safe.unlocked,
+                    },
+                  })
+                  .$push();
+              },
+            };
 
             return;
           }
 
-          setStateContent('Authenticating...');
+          if (auth === 'access') {
+            const entered = enteredPIN?.id === id ? enteredPIN.pin : undefined;
 
-          try {
-            await applet.authenticate({pin});
-          } catch (error) {
+            enteredPIN = undefined;
+
+            const pin = entered ?? pins[id];
+
             if (disposed) {
               return;
             }
 
-            if (
-              error instanceof CBORAppletError &&
-              MonoidAppletInvalidPINError.is(error.source) &&
-              error.source.tries > 0
-            ) {
-              if (entered === undefined) {
-                await monoidCredentialsStore.removePIN(id);
-              }
-
-              if (!disposed) {
-                promptPIN(
-                  id,
-                  `Incorrect PIN, tries remaining: ${error.source.tries}`,
-                );
-              }
+            if (pin === undefined) {
+              result = {type: 'input', id};
 
               return;
             }
 
-            throw error;
+            setStateContent('Authenticating...');
+
+            try {
+              await applet.authenticate({pin});
+            } catch (error) {
+              if (disposed) {
+                return;
+              }
+
+              if (
+                error instanceof CBORAppletError &&
+                MonoidAppletInvalidPINError.is(error.source) &&
+                error.source.tries > 0
+              ) {
+                if (entered === undefined) {
+                  delete pins[id];
+                  update = {type: 'remove', id, pin};
+                }
+
+                result = {
+                  type: 'input',
+                  id,
+                  message: `Incorrect PIN, tries remaining: ${error.source.tries}`,
+                };
+
+                return;
+              }
+
+              throw error;
+            }
+
+            if (disposed) {
+              return;
+            }
+
+            if (entered !== undefined) {
+              pins[id] = entered;
+              update = {type: 'set', id, pin: entered};
+            }
           }
 
-          if (entered !== undefined && !disposed) {
-            await monoidCredentialsStore.setPIN(id, entered);
-          }
-        }
-
-        if (disposed) {
-          return;
-        }
-
-        await appletCallback(applet, setStateContent, hello);
-
-        if (disposed) {
-          return;
-        }
-
-        completed = true;
-        callbackCompleted = true;
-        setState('hidden');
-      },
-      error => {
-        if (disposed) {
-          return;
-        }
-
-        failed = retryOnError && !(error instanceof IsoDepScanError);
-        completed = !failed;
-        setState('hidden');
-
-        if (failed) {
-          errorService.catch(Promise.reject(error));
-        } else {
-          reject(error);
-        }
-      },
-      () => {
-        if (disposed) {
-          return;
-        }
-
-        if (completed) {
-          if (callbackCompleted) {
-            resolve();
+          if (disposed) {
+            return;
           }
 
-          setAppletCallbackAndPromise(undefined);
-        } else if (failed && !inputPending) {
-          failed = false;
-          setStateContent(retryStateContent);
-          setState('ready');
+          await appletCallback(applet, setStateContent, hello);
+
+          if (disposed) {
+            return;
+          }
+
+          result = {type: 'success'};
+        },
+        error => {
+          if (disposed) {
+            return;
+          }
+
+          if (error instanceof IsoDepScanError) {
+            update = undefined;
+          }
+
+          result = {
+            type: 'error',
+            error,
+            retry:
+              retryOnError &&
+              !(error instanceof IsoDepScanError) &&
+              !isCredentialRequestCancelled(error),
+          };
+        },
+        () => {
+          void finish().catch(fail);
+        },
+      );
+    };
+
+    const start = async (): Promise<void> => {
+      if (auth === 'access') {
+        const saved = await monoidCredentialsStore.getPINs(
+          credentialsRequest.signal,
+        );
+
+        if (disposed) {
+          return;
         }
-      },
-    );
+
+        pins = {...saved};
+      }
+
+      startScan();
+    };
+
+    void start().catch(fail);
 
     return () => {
       disposed = true;
-      stop();
-      reject(
-        Object.assign(new Error('Card scanning was cancelled.'), {
-          code: 'CANCELLED',
-        }),
-      );
+      credentialsRequest.abort();
+      pins = {};
+      enteredPIN = undefined;
+      update = undefined;
+      result = undefined;
+      void stop?.().catch(error => errorService.catch(Promise.reject(error)));
+
+      if (!settled) {
+        reject(cancelled());
+      }
     };
   }, [
     monoidApplet,
     monoidCredentialsStore,
+    monoidScanPromptPresenter,
+    owner,
     errorService,
     ensureSetup,
     auth,
@@ -323,7 +464,7 @@ export function useMonoidScanPrompt({
     useCallback(
       (initialStateContent, appletCallback) =>
         new Promise((resolve, reject) => {
-          setState('ready');
+          setState('hidden');
           setStateContent(initialStateContent);
 
           setAppletCallbackAndPromise([

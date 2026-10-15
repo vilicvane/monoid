@@ -2,10 +2,15 @@ import type {Router as RoutraRouter, SchemaRecord} from 'routra';
 
 import type {MonoidIdHex, MonoidSafeIdHex, SafeIndexHex} from './@atomics.js';
 import type {ScannedCardData} from './@components/views/safe/index.js';
+import type {AddressChain} from './@lib/wallet-address.js';
 
 export const ROUTE_SCHEMA = {
   sessions: true,
-  scan: true,
+  scan: {
+    connection: {
+      $state: undefined! as {id: number},
+    },
+  },
   safe: {
     rawKey: {
       $state: undefined! as {
@@ -13,9 +18,10 @@ export const ROUTE_SCHEMA = {
       },
     },
     derivableKey: {
-      $state: undefined! as {
-        index: SafeIndexHex;
-      },
+      $state: ({index}: {index: SafeIndexHex}) => ({
+        index,
+        expandedChain: undefined as AddressChain | undefined,
+      }),
       derive: true,
     },
     scanCard: true,

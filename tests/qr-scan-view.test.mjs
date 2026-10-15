@@ -8,6 +8,8 @@ let rendering;
 let scanner;
 let moduleVersion = 0;
 
+const WALLET_CONNECT_URI = `wc:${'a'.repeat(64)}@2?relay-protocol=irn&symKey=${'b'.repeat(64)}`;
+
 mock.module('@capacitor/core', {
   namedExports: {
     Capacitor: {
@@ -24,6 +26,7 @@ mock.module('capacitor-qr-scanner', {
         'requestPermissions',
         'addListener',
         'startScan',
+        'animatePreview',
         'stopScan',
         'updatePreviewBounds',
       ].map(name => [name, (...args) => scanner[name](...args)]),
@@ -98,6 +101,7 @@ const assets = registerHooks({
 mock.module('styled-components', {
   namedExports: {
     createGlobalStyle: () => 'global-style',
+    css: () => '',
     keyframes: () => 'animation',
     styled: Object.assign(type => () => type, {
       div: () => 'div',
@@ -123,8 +127,10 @@ mock.module('../.bld/app/@components/views/@scan/qr-scan-preview.js', {
   namedExports: {
     QrScanPreview: 'qr-scan-preview',
     SCAN_CIRCLE_INSET: 40,
-    SCAN_FRAME_OFFSET: 4,
   },
+});
+mock.module('../.bld/app/@components/views/@scan/qr-scan-instructions.js', {
+  namedExports: {QrScanInstructions: 'qr-scan-instructions'},
 });
 
 const originalGlobals = Object.fromEntries(
@@ -181,6 +187,7 @@ function resetScanner(overrides = {}) {
   globalThis.__scanViewHot = {data: {}};
   scanner = {
     starts: [],
+    animations: [],
     stops: [],
     listeners: [],
     checkPermissions: async () => ({camera: 'granted'}),
@@ -199,6 +206,9 @@ function resetScanner(overrides = {}) {
     },
     async startScan(options) {
       scanner.starts.push(options);
+    },
+    async animatePreview(options) {
+      scanner.animations.push(options);
     },
     async stopScan({scanId}) {
       scanner.stops.push(scanId);
@@ -222,9 +232,27 @@ function mount(ScanView) {
     refs: [],
     effects: [],
     errors: [],
+    connections: [],
+    routes: [],
+    rejected: [],
     view: {$leaving: false, $match: {$exact: {$active: true}}},
   };
   state.entrances = {
+    router: {
+      scan: {
+        connection: value => ({$push: () => state.routes.push(value)}),
+      },
+    },
+    walletKitService: {
+      connect: (uri, signal) => {
+        const request = deferred();
+        state.connections.push({uri, signal, ...request});
+        return request.promise;
+      },
+      reject: async id => {
+        state.rejected.push(id);
+      },
+    },
     errorService: {
       catch: promise => promise.catch(error => state.errors.push(error)),
     },
@@ -363,7 +391,7 @@ for (const code of ['CANCELLED', 'APP_INACTIVE']) {
     });
     const state = mount(await loadView());
     await setImmediate();
-    assert.equal(state.values[1], 'paused');
+    assert.equal(state.values[0], 'paused');
     assert.deepEqual(state.errors, []);
     assert.equal(native.stops.length, 1);
 
@@ -387,19 +415,23 @@ test('the first QR result covers the camera before stopping and ignores repeated
 
   codes.callback({scanId: 'stale', values: ['ignored']});
   codes.callback({scanId, values: []});
-  assert.equal(state.values[1], 'scanning');
+  codes.callback({
+    scanId,
+    values: ['https://example.com', 'plain text', 'wc:invalid', 'FIDO:/123'],
+  });
+  assert.equal(state.values[0], 'scanning');
   assert.deepEqual(native.stops, []);
+  assert.deepEqual(state.errors, []);
 
-  codes.callback({scanId, values: ['wc:first', 'wc:second']});
-  codes.callback({scanId, values: ['wc:repeat']});
+  codes.callback({scanId, values: ['unrelated', WALLET_CONNECT_URI]});
+  codes.callback({scanId, values: [WALLET_CONNECT_URI]});
   ended.callback({scanId, reason: 'error', message: 'Late camera error'});
   await setImmediate();
-  assert.equal(state.values[1], 'completing');
+  assert.equal(state.values[0], 'completing');
   assert.deepEqual(native.stops, []);
   state.cover();
   await setImmediate();
-  assert.equal(state.values[1], 'scanned');
-  assert.equal(state.values[2], 'wc:first');
+  assert.equal(state.values[0], 'scanned');
   assert.deepEqual(native.stops, [scanId]);
   assert.deepEqual(state.errors, []);
 
@@ -421,12 +453,11 @@ test('leaving keeps the camera and scanning presentation until unmount, while ig
 
   for (const active of [true, false]) {
     state.rerender({leaving: true, active});
-    codes.callback({scanId, values: ['wc:ignored-during-transition']});
+    codes.callback({scanId, values: [WALLET_CONNECT_URI]});
     await setImmediate();
     assert.equal(state.find('qr-scan-preview').props.phase, 'scanning');
     assert.ok(state.find('global-style'));
-    assert.equal(state.values[1], 'scanning');
-    assert.equal(state.values[2], undefined);
+    assert.equal(state.values[0], 'scanning');
     assert.deepEqual(native.stops, []);
     assert.equal(native.starts.length, 1);
     assert.ok(native.listeners.every(listener => listener.removals === 0));
@@ -450,7 +481,7 @@ test('returning before the leaving transition finishes reuses the camera and acc
   );
 
   state.rerender({leaving: true, active: false});
-  codes.callback({scanId, values: ['wc:ignored']});
+  codes.callback({scanId, values: [WALLET_CONNECT_URI]});
   state.rerender({leaving: false, active: true});
   await setImmediate();
   assert.equal(state.find('qr-scan-preview').props.phase, 'scanning');
@@ -458,13 +489,12 @@ test('returning before the leaving transition finishes reuses the camera and acc
   assert.deepEqual(native.stops, []);
   assert.ok(native.listeners.every(listener => listener.removals === 0));
 
-  codes.callback({scanId, values: ['wc:returned']});
+  codes.callback({scanId, values: [WALLET_CONNECT_URI]});
   state.rerender();
   assert.equal(state.find('qr-scan-preview').props.phase, 'completing');
-  assert.equal(state.values[2], 'wc:returned');
   state.cover();
   await setImmediate();
-  assert.equal(state.values[1], 'scanned');
+  assert.equal(state.values[0], 'scanned');
   assert.deepEqual(native.stops, [scanId]);
 
   state.cleanup();
@@ -480,7 +510,7 @@ test('leaving during completion preserves the success animation until its cover 
   const {scanId} = native.starts[0];
   native.listeners
     .find(listener => listener.name === 'codesScanned')
-    .callback({scanId, values: ['wc:first']});
+    .callback({scanId, values: [WALLET_CONNECT_URI]});
   state.rerender({leaving: true, active: false});
   assert.equal(state.find('qr-scan-preview').props.phase, 'completing');
   assert.deepEqual(native.stops, []);
@@ -507,15 +537,15 @@ test('unmounting during the success animation stops immediately and ignores its 
     .find(listener => listener.name === 'codesScanned')
     .callback({
       scanId,
-      values: ['wc:first'],
+      values: [WALLET_CONNECT_URI],
     });
-  assert.equal(state.values[1], 'completing');
+  assert.equal(state.values[0], 'completing');
 
   state.cleanup();
   state.cover();
   await setImmediate();
   assert.deepEqual(native.stops, [scanId]);
-  assert.equal(state.values[1], 'completing');
+  assert.equal(state.values[0], 'completing');
   assert.deepEqual(state.errors, []);
 });
 
@@ -524,16 +554,53 @@ test('the loading state lasts until the native first frame is ready', async () =
   resetScanner({startScan: () => ready.promise});
   const state = mount(await loadView());
   await setImmediate();
-  assert.equal(state.values[1], 'starting');
+  assert.equal(state.values[0], 'starting');
 
   ready.resolve();
   await setImmediate();
-  assert.equal(state.values[1], 'scanning');
+  assert.equal(state.values[0], 'scanning');
   state.cleanup();
   await setImmediate();
 });
 
-test('instructions wait for the preview transition and hide again on error or retry', async () => {
+test('native reveal waits for the camera frame and the aperture, and cannot run after cleanup', async () => {
+  const ready = deferred();
+  const native = resetScanner({
+    async startScan(options) {
+      native.starts.push(options);
+      await ready.promise;
+    },
+  });
+  const state = mount(await loadView());
+  const reveal = duration =>
+    state.find('qr-scan-preview').props.onReveal(duration);
+  await setImmediate();
+  assert.equal(await reveal(480), false);
+  assert.deepEqual(native.animations, []);
+
+  ready.resolve();
+  await setImmediate();
+  state.rerender();
+  assert.deepEqual(native.animations, []);
+  assert.equal(await reveal(480), true);
+  assert.deepEqual(native.animations, [
+    {
+      scanId: native.starts[0].scanId,
+      fromScale: 0.5,
+      toScale: 1,
+      duration: 480,
+      easing: [0.22, 1, 0.36, 1],
+    },
+  ]);
+
+  state.cleanup();
+  assert.equal(await reveal(480), false);
+  await setImmediate();
+  assert.equal(native.animations.length, 1);
+  assert.deepEqual(state.errors, []);
+});
+
+test('header keywords wait for the preview transition, then an error is centered without a retry button', async () => {
   const ready = deferred();
   const native = resetScanner({
     async startScan(options) {
@@ -546,6 +613,7 @@ test('instructions wait for the preview transition and hide again on error or re
     state.find(node => node.props?.['aria-live'] === 'polite');
   await setImmediate();
   assert.equal(instructions().props['aria-hidden'], true);
+  assert.equal(state.find('qr-scan-instructions').props.active, false);
 
   ready.resolve();
   await setImmediate();
@@ -556,8 +624,9 @@ test('instructions wait for the preview transition and hide again on error or re
 
   state.find('qr-scan-preview').props.onSettled('scanning');
   state.rerender();
-  assert.equal(instructions().props['aria-hidden'], false);
-  assert.equal(instructions().props.inert, false);
+  assert.equal(state.find('qr-scan-instructions').props.active, true);
+  assert.equal(instructions().props['aria-hidden'], true);
+  assert.equal(instructions().props.inert, true);
 
   native.listeners
     .find(listener => listener.name === 'scanEnded')
@@ -568,6 +637,7 @@ test('instructions wait for the preview transition and hide again on error or re
     });
   state.rerender();
   assert.equal(state.find('qr-scan-preview').props.phase, 'idle');
+  assert.equal(state.find('qr-scan-instructions').props.active, false);
   assert.equal(instructions().props['aria-hidden'], true);
 
   state.find('qr-scan-preview').props.onSettled('idle');
@@ -575,22 +645,9 @@ test('instructions wait for the preview transition and hide again on error or re
   assert.equal(instructions().props['aria-hidden'], false);
   assert.match(state.find('p').props.children, /could not scan/i);
 
-  state.find('button').props.onClick();
-  state.rerender();
-  // Render the state reset requested by the new startup effect.
-  state.rerender();
-  assert.equal(state.find('qr-scan-preview').props.phase, 'starting');
-  assert.equal(instructions().props['aria-hidden'], true);
-  assert.equal(instructions().props.inert, true);
-
+  assert.equal(instructions().props.$centered, true);
+  assert.equal(state.find('button'), undefined);
   await setImmediate();
-  state.rerender();
-  assert.equal(native.starts.length, 2);
-  assert.equal(state.find('qr-scan-preview').props.phase, 'scanning');
-  assert.equal(instructions().props['aria-hidden'], true);
-  state.find('qr-scan-preview').props.onSettled('scanning');
-  state.rerender();
-  assert.equal(instructions().props['aria-hidden'], false);
   assert.equal(state.errors[0].message, 'Camera disconnected');
   assert.equal(state.errors.length, 1);
 
@@ -607,12 +664,91 @@ test('a stop failure reports the error without trapping the result in its animat
     .find(listener => listener.name === 'codesScanned')
     .callback({
       scanId: native.starts[0].scanId,
-      values: ['wc:first'],
+      values: [WALLET_CONNECT_URI],
     });
   state.cover();
   await setImmediate();
-  assert.equal(state.values[1], 'scanned');
+  assert.equal(state.values[0], 'scanned');
   assert.deepEqual(state.errors, [error]);
   state.cleanup();
+  await setImmediate();
+});
+
+async function scanAndFinishFeedback(state, native) {
+  native.listeners
+    .find(listener => listener.name === 'codesScanned')
+    .callback({
+      scanId: native.starts[0].scanId,
+      values: ['https://example.com', WALLET_CONNECT_URI],
+    });
+  state.cover();
+  await setImmediate();
+  state.rerender();
+  assert.equal(state.connections.length, 0);
+  state.find('qr-scan-preview').props.onSettled('scanned');
+  state.rerender();
+}
+
+test('pairs after success feedback and passes only the proposal id to the confirmation route', async () => {
+  const native = resetScanner();
+  const state = mount(await loadView());
+  await setImmediate();
+  await scanAndFinishFeedback(state, native);
+
+  assert.equal(state.connections.length, 1);
+  assert.equal(state.connections[0].uri, WALLET_CONNECT_URI);
+  assert.equal(state.find('p').props.children, 'Waiting for site…');
+  assert.equal(state.find('button'), undefined);
+  state.connections[0].resolve({id: 42});
+  await setImmediate();
+  assert.deepEqual(state.routes, [{id: 42}]);
+  state.cleanup();
+  await setImmediate();
+  assert.deepEqual(state.rejected, []);
+});
+
+test('leaving cancels pairing and rejects a proposal delivered at the handoff boundary', async () => {
+  const native = resetScanner();
+  const state = mount(await loadView());
+  await setImmediate();
+  await scanAndFinishFeedback(state, native);
+
+  state.rerender({leaving: true, active: false});
+  assert.equal(state.connections[0].signal.aborted, true);
+  state.connections[0].resolve({id: 42});
+  await setImmediate();
+  assert.deepEqual(state.routes, []);
+  assert.deepEqual(state.rejected, [42]);
+
+  state.rerender({leaving: false, active: true});
+  await setImmediate();
+  assert.equal(state.connections.length, 1);
+  assert.equal(state.values[0], 'scanning');
+  state.cleanup();
+  await setImmediate();
+});
+
+test('a pairing failure displays the shared error and permits a new Scan view', async () => {
+  const native = resetScanner();
+  const state = mount(await loadView());
+  const failure = new Error('Relay unavailable');
+  state.entrances.walletKitService.connect = async () => {
+    throw failure;
+  };
+  await setImmediate();
+  await scanAndFinishFeedback(state, native);
+  await setImmediate();
+  state.rerender();
+
+  assert.equal(state.values[0], 'error');
+  assert.deepEqual(state.errors, [failure]);
+  assert.deepEqual(state.routes, []);
+  assert.equal(state.find('button'), undefined);
+  state.cleanup();
+  const retry = mount(await loadView());
+  await setImmediate();
+  assert.equal(native.starts.length, 2);
+  assert.equal(retry.values[0], 'scanning');
+  retry.cleanup();
   await setImmediate();
 });
