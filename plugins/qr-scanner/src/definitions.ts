@@ -22,6 +22,16 @@ export type QrScannerPreviewOptions = QrScannerScanOptions & {
   previewBounds: QrScannerPreviewBounds;
 };
 
+export type QrScannerPreviewAnimationOptions = QrScannerScanOptions & {
+  /** Positive scale factors around the preview center; no camera zoom is applied. */
+  fromScale: number;
+  toScale: number;
+  /** Duration in milliseconds; zero applies the final scale immediately. */
+  duration: number;
+  /** CSS cubic-bezier control points. The two x coordinates must be in [0, 1]. */
+  easing: readonly [number, number, number, number];
+};
+
 export type QrScannerCodesScannedEvent = QrScannerScanOptions & {
   /** Unmodified QR text from one analyzed frame. Repeats are possible. */
   values: string[];
@@ -63,6 +73,9 @@ export type QrScannerPlugin = {
 
   /** Accept a layout update; detection pauses during rebind. An inactive ID rejects SCAN_CLOSED. */
   updatePreviewBounds(options: QrScannerPreviewOptions): Promise<void>;
+
+  /** Replace the preview scale animation; resolves on start, not completion. Requires a started scan. */
+  animatePreview(options: QrScannerPreviewAnimationOptions): Promise<void>;
 
   /** Cancel pending startup or stop this scan and await cleanup. Idempotent. */
   stopScan(options: QrScannerScanOptions): Promise<void>;

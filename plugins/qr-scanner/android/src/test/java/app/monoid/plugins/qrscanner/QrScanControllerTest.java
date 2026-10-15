@@ -8,6 +8,7 @@ import org.junit.Test;
 
 public class QrScanControllerTest {
     private static final QrPreviewSurface.Bounds BOUNDS = new QrPreviewSurface.Bounds(0, 0, 1, 1);
+    private static final QrPreviewSurface.Animation ANIMATION = new QrPreviewSurface.Animation(0.7, 1, 320, 0.2, 0, 0.4, 1);
     private final QrScanController.Listener listener = mock(QrScanController.Listener.class);
     private final Camera camera = new Camera();
     private final QrScanController scans = new QrScanController(camera, listener);
@@ -138,12 +139,60 @@ public class QrScanControllerTest {
         verify(update).reject(eq("SCAN_CLOSED"), anyString());
     }
 
+    @Test
+    public void previewAnimationRequiresTheCurrentStartedScanAndDoesNotChangeBounds() {
+        QrScanController.Result pending = mock(QrScanController.Result.class);
+        QrScanController.Result accepted = mock(QrScanController.Result.class);
+        QrScanController.Result other = mock(QrScanController.Result.class);
+        scans.start("first", BOUNDS, mock(QrScanController.Result.class));
+        scans.animate("first", ANIMATION, pending);
+        verify(pending).reject(eq("SCAN_CLOSED"), anyString());
+        assertEquals(0, camera.animations);
+
+        camera.events.onStarted();
+        scans.animate("other", ANIMATION, other);
+        verify(other).reject(eq("SCAN_CLOSED"), anyString());
+        scans.animate("first", ANIMATION, accepted);
+        verify(accepted).resolve();
+        assertEquals(ANIMATION, camera.animation);
+        assertEquals(BOUNDS, camera.bounds);
+        assertEquals(1, camera.animations);
+    }
+
+    @Test
+    public void animationCannotReachAClosingOrReplacementCamera() {
+        scans.start("first", BOUNDS, mock(QrScanController.Result.class));
+        camera.events.onStarted();
+        scans.stop("first", mock(QrScanController.Result.class));
+        QrScanController.Result closing = mock(QrScanController.Result.class);
+        scans.animate("first", ANIMATION, closing);
+        verify(closing).reject(eq("SCAN_CLOSED"), anyString());
+        camera.finishClose.run();
+
+        scans.start("second", BOUNDS, mock(QrScanController.Result.class));
+        camera.events.onStarted();
+        QrScanController.Result stale = mock(QrScanController.Result.class);
+        scans.animate("first", ANIMATION, stale);
+        verify(stale).reject(eq("SCAN_CLOSED"), anyString());
+        assertEquals(0, camera.animations);
+        scans.animate("second", ANIMATION, mock(QrScanController.Result.class));
+        assertEquals(1, camera.animations);
+
+        scans.pause();
+        QrScanController.Result paused = mock(QrScanController.Result.class);
+        scans.animate("second", ANIMATION, paused);
+        verify(paused).reject(eq("SCAN_CLOSED"), anyString());
+        assertEquals(1, camera.animations);
+    }
+
     private static final class Camera implements QrScanController.Factory, QrScanController.Session {
         QrCameraSession.Listener events;
         QrPreviewSurface.Bounds bounds;
+        QrPreviewSurface.Animation animation;
         Runnable finishClose;
         int opens;
         int closes;
+        int animations;
 
         @Override
         public QrScanController.Session open(QrPreviewSurface.Bounds bounds, QrCameraSession.Listener events) {
@@ -156,6 +205,12 @@ public class QrScanControllerTest {
         @Override
         public void update(QrPreviewSurface.Bounds bounds) {
             this.bounds = bounds;
+        }
+
+        @Override
+        public void animate(QrPreviewSurface.Animation animation) {
+            this.animation = animation;
+            animations++;
         }
 
         @Override

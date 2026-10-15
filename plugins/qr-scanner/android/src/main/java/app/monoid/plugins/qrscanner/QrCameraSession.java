@@ -80,6 +80,13 @@ final class QrCameraSession implements LifecycleOwner {
         requestRefresh();
     }
 
+    void animatePreview(QrPreviewSurface.Animation animation) {
+        if (!started || closing) {
+            throw new IllegalStateException("The camera preview is not active.");
+        }
+        surface.animate(animation);
+    }
+
     private void requestRefresh() {
         if (closing || refreshPosted) {
             return;

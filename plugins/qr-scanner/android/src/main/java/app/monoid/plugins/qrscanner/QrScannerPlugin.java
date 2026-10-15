@@ -20,6 +20,7 @@ import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.util.WebColor;
 import com.google.common.util.concurrent.ListenableFuture;
 import java.util.List;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 @CapacitorPlugin(name = "QrScanner", permissions = {
@@ -114,6 +115,20 @@ public final class QrScannerPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void animatePreview(PluginCall call) {
+        dispatch(() -> {
+            String id = scanId(call);
+            if (id == null) {
+                return;
+            }
+            QrPreviewSurface.Animation animation = animation(call);
+            if (animation != null) {
+                scans.animate(id, animation, result(call));
+            }
+        });
+    }
+
+    @PluginMethod
     public void stopScan(PluginCall call) {
         dispatch(() -> {
             String id = scanId(call);
@@ -197,6 +212,28 @@ public final class QrScannerPlugin extends Plugin {
         return null;
     }
 
+    private static QrPreviewSurface.Animation animation(PluginCall call) {
+        JSObject data = call.getData();
+        Object from = data.opt("fromScale");
+        Object to = data.opt("toScale");
+        Object duration = data.opt("duration");
+        Object easing = data.opt("easing");
+        if (from instanceof Number && to instanceof Number && duration instanceof Number
+            && easing instanceof JSONArray points && points.length() == 4
+            && points.opt(0) instanceof Number x1 && points.opt(1) instanceof Number y1
+            && points.opt(2) instanceof Number x2 && points.opt(3) instanceof Number y2) {
+            try {
+                return new QrPreviewSurface.Animation(((Number) from).doubleValue(), ((Number) to).doubleValue(),
+                    ((Number) duration).doubleValue(), x1.doubleValue(), y1.doubleValue(), x2.doubleValue(), y2.doubleValue());
+            } catch (IllegalArgumentException error) {
+                call.reject(error.getMessage(), "INVALID_ARGUMENT");
+                return null;
+            }
+        }
+        call.reject("Preview animation requires numeric fromScale, toScale, duration and four easing control points.", "INVALID_ARGUMENT");
+        return null;
+    }
+
     private static QrScanController.Result result(PluginCall call) {
         return new QrScanController.Result() {
             @Override
@@ -240,6 +277,14 @@ public final class QrScannerPlugin extends Plugin {
             if (camera != null) {
                 camera.updatePreviewBounds(bounds);
             }
+        }
+
+        @Override
+        public void animate(QrPreviewSurface.Animation animation) {
+            if (closed || camera == null) {
+                throw new IllegalStateException("The camera preview is not active.");
+            }
+            camera.animatePreview(animation);
         }
 
         @Override

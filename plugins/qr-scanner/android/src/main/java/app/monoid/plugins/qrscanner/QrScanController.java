@@ -9,6 +9,7 @@ import java.util.Set;
 final class QrScanController {
     interface Session {
         void update(QrPreviewSurface.Bounds bounds);
+        void animate(QrPreviewSurface.Animation animation);
         void close(Runnable onClosed);
     }
 
@@ -98,6 +99,21 @@ final class QrScanController {
         }
         current.stops.add(result);
         close(current, "stopped", "CANCELLED", "Scan startup was cancelled.");
+    }
+
+    void animate(String id, QrPreviewSurface.Animation animation, Result result) {
+        if (current == null || !current.id.equals(id) || !current.started || current.closing) {
+            result.reject("SCAN_CLOSED", "The camera preview is not active.");
+            return;
+        }
+        try {
+            current.session.animate(animation);
+            result.resolve();
+        } catch (IllegalStateException error) {
+            result.reject("SCAN_CLOSED", "The camera preview is not active.");
+        } catch (IllegalArgumentException error) {
+            result.reject("INVALID_ARGUMENT", message(error));
+        }
     }
 
     void pause() {

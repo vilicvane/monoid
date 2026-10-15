@@ -19,6 +19,10 @@ export class QrScannerWeb extends WebPlugin implements QrScannerPlugin {
     throw unsupported();
   }
 
+  async animatePreview(): Promise<void> {
+    throw unsupported();
+  }
+
   async stopScan(): Promise<void> {
     throw unsupported();
   }

@@ -4,6 +4,7 @@ import android.graphics.Color;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.PathInterpolator;
 import android.webkit.WebView;
 import android.widget.FrameLayout;
 import androidx.camera.view.PreviewView;
@@ -24,6 +25,7 @@ final class QrPreviewSurface {
         this.bounds = bounds;
         parent = (ViewGroup) webView.getParent();
         container = new FrameLayout(webView.getContext());
+        container.setBackgroundColor(restoreColor);
         view = new PreviewView(webView.getContext());
         view.setImplementationMode(PreviewView.ImplementationMode.COMPATIBLE);
         view.setScaleType(PreviewView.ScaleType.FILL_CENTER);
@@ -45,6 +47,21 @@ final class QrPreviewSurface {
     void update(Bounds bounds) {
         this.bounds = bounds;
         layout();
+    }
+
+    void animate(Animation animation) {
+        PathInterpolator easing = new PathInterpolator((float) animation.x1(), (float) animation.y1(),
+            (float) animation.x2(), (float) animation.y2());
+        view.animate().cancel();
+        view.setScaleX((float) animation.fromScale());
+        view.setScaleY((float) animation.fromScale());
+        if (animation.duration() == 0) {
+            view.setScaleX((float) animation.toScale());
+            view.setScaleY((float) animation.toScale());
+            return;
+        }
+        view.animate().scaleX((float) animation.toScale()).scaleY((float) animation.toScale())
+            .setDuration(Math.round(animation.duration())).setInterpolator(easing).start();
     }
 
     boolean hasEmptyBounds() {
@@ -83,6 +100,7 @@ final class QrPreviewSurface {
     }
 
     void hide() {
+        view.animate().cancel();
         container.setAlpha(0);
         webView.setBackgroundColor(restoreColor);
     }
@@ -112,4 +130,16 @@ final class QrPreviewSurface {
     record Pixels(int left, int top, int width, int height) {}
 
     record Viewport(int width, int height, int rotation, int layoutDirection) {}
+
+    record Animation(double fromScale, double toScale, double duration, double x1, double y1, double x2, double y2) {
+        Animation {
+            if (!(fromScale >= Float.MIN_VALUE && fromScale <= Float.MAX_VALUE
+                && toScale >= Float.MIN_VALUE && toScale <= Float.MAX_VALUE
+                && duration >= 0 && duration <= Long.MAX_VALUE
+                && x1 >= 0 && x1 <= 1 && x2 >= 0 && x2 <= 1
+                && Math.abs(y1) <= Float.MAX_VALUE && Math.abs(y2) <= Float.MAX_VALUE)) {
+                throw new IllegalArgumentException("Preview animation requires positive finite scales, a nonnegative duration and valid cubic-bezier control points.");
+            }
+        }
+    }
 }

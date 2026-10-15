@@ -22,6 +22,18 @@ area is invalid. `updatePreviewBounds` acknowledges the layout request; detectio
 pauses while a changed viewport is rebound. Moving an unchanged rectangle does
 not require rebinding the camera.
 
+After `startScan` resolves, `animatePreview` scales the native preview around its
+center without changing layout, the analysis crop or camera zoom. The caller
+supplies `fromScale`, `toScale`, a duration in milliseconds and four CSS
+`cubic-bezier` control points. Scales must be positive finite Android float values,
+duration must be nonnegative and fit Android's millisecond duration, and the two
+x control points must be in `[0, 1]`. Y control points may overshoot. The initial
+scale is applied immediately; the promise resolves when the animation starts,
+not when it finishes. A zero duration applies the final scale immediately.
+Each call replaces any previous preview animation. Stopping or hiding the preview
+cancels it. A pending, closed or different scan ID rejects with `SCAN_CLOSED`.
+Keep the HTML opening covered until this call resolves when revealing a preview.
+
 Bind preview and image analysis to the same CameraX viewport. Return only codes
 whose full bounds lie inside the analysis crop rectangle, accounting for image
 rotation. Sharing a viewport alone does not crop the image passed to ML Kit.
