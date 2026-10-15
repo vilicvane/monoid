@@ -3,6 +3,7 @@ import type {Router as RoutraRouter, SchemaRecord} from 'routra';
 import type {MonoidIdHex, MonoidSafeIdHex, SafeIndexHex} from './@atomics.js';
 import type {ScannedCardData} from './@components/views/safe/index.js';
 import type {AddressChain} from './@lib/wallet-address.js';
+import type {WalletConnectAuthentication} from './@lib/wallet-connect-authentication.js';
 
 export const ROUTE_SCHEMA = {
   sessions: {
@@ -13,7 +14,13 @@ export const ROUTE_SCHEMA = {
   },
   scan: {
     connection: {
-      $state: undefined! as {id: number},
+      $state: ({id}: {id: number}) => ({id, addresses: [] as string[]}),
+      authentication: {
+        $state: undefined! as {
+          addresses: string[];
+          authentication: WalletConnectAuthentication[];
+        },
+      },
     },
   },
   safe: {
@@ -50,4 +57,9 @@ export const ROUTE_SCHEMA = {
   },
 } satisfies SchemaRecord;
 
-export type Router = RoutraRouter<typeof ROUTE_SCHEMA, {}>;
+export type ViewSwitchingState = {
+  progress: number;
+  settling?: boolean;
+};
+
+export type Router = RoutraRouter<typeof ROUTE_SCHEMA, ViewSwitchingState>;

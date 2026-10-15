@@ -10,6 +10,8 @@ import {
 } from 'react';
 import {css, styled} from 'styled-components';
 
+import {popInAnimation} from '../@animations.js';
+
 import './swipeable-item.css';
 
 const ACTION_WIDTH = 54;
@@ -19,7 +21,13 @@ const Container = styled.div<{$dragging: boolean}>`
   position: relative;
   overflow: hidden;
   transition: ${({$dragging}) =>
-    $dragging ? 'none' : '--swipe-progress 180ms ease-out'};
+    $dragging
+      ? 'none'
+      : css`
+          --swipe-progress 180ms ease-out,
+          --swipe-action-progress ${popInAnimation.timing.duration}ms
+            ${popInAnimation.timing.easing}
+        `};
 
   &:focus-visible {
     outline: 2px solid var(--ion-color-primary);
@@ -49,16 +57,17 @@ const Actions = styled.div<{$count: number}>`
       (_, index) => css`
         > :nth-last-child(${index + 1}) {
           transform: scale(
-            clamp(
-              0,
-              calc(
-                (
-                    var(--swipe-progress) * var(--swipe-width) -
-                      ${ACTIONS_PADDING + index * ACTION_WIDTH}
-                  ) /
-                  ${ACTION_WIDTH}
-              ),
-              1
+            calc(
+              clamp(
+                  0,
+                  (
+                      var(--swipe-action-progress) * var(--swipe-width) -
+                        ${ACTIONS_PADDING + index * ACTION_WIDTH}
+                    ) /
+                    ${ACTION_WIDTH},
+                  1
+                ) +
+                max(0, var(--swipe-action-progress) - 1)
             )
           );
         }
@@ -183,6 +192,7 @@ export const SwipeableItem = ({
     const gesture = createGesture({
       el: contentRef.current!,
       gestureName: 'swipeable-item',
+      gesturePriority: 10,
       direction: 'x',
       threshold: 10,
       canStart: ({event}) => {
@@ -246,6 +256,7 @@ export const SwipeableItem = ({
       style={
         {
           '--swipe-progress': progress,
+          '--swipe-action-progress': progress,
           '--swipe-width': actionsWidth,
         } as CSSProperties
       }

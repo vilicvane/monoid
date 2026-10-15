@@ -109,7 +109,6 @@ export const SessionSwitchView = observer(
           <ViewHeaderTitle>Switch Account</ViewHeaderTitle>
         </ViewHeader>
         <ViewContent
-          footerPlacement="fixed"
           footer={
             <>
               <AsyncButton

@@ -13,7 +13,7 @@ import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {useTemporaryState} from '../../../@hooks/interactions.js';
 import {KeyList} from '../../../@key/key-list.js';
 import {
-  MonoidScanStatePromptContentHighlight,
+  MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
 import {Button} from '../../../@ui/button.js';
@@ -151,14 +151,12 @@ const CardContent = observer(
 
             for (const [index, {item}] of missing.entries()) {
               setStateContent(
-                <>
-                  Deriving addresses, hold tight...
-                  <br />
-                  <MonoidScanStatePromptContentHighlight>
-                    {index + 1}
-                  </MonoidScanStatePromptContentHighlight>
-                  /{missing.length}
-                </>,
+                <MonoidScanStatePromptProgress
+                  current={index + 1}
+                  total={missing.length}
+                >
+                  Deriving addresses
+                </MonoidScanStatePromptProgress>,
               );
               derivedRefs.set(
                 item.key.index,
@@ -194,6 +192,7 @@ const CardContent = observer(
     return (
       <>
         <ViewContent
+          footerReveal="end"
           footer={
             <>
               <Button

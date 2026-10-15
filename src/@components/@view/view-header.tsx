@@ -8,6 +8,7 @@ import {useContext} from 'react';
 import {css, styled} from 'styled-components';
 
 import type {MonoidSafeIdHex, SafeIndexHex} from '../../@atomics.js';
+import {IconButton} from '../@ui/icon-button.js';
 
 import {scrollBorderCSS} from './@scroll-border.js';
 import {ViewContext} from './@view-context.js';
@@ -19,7 +20,7 @@ const ViewHeaderContainer = styled.div`
   flex: 0;
 
   box-sizing: content-box;
-  padding: var(--view-padding-top) var(--view-padding) var(--view-padding);
+  padding: var(--view-padding-top) var(--view-padding) 8px;
   height: 50px;
 
   display: grid;
@@ -48,6 +49,15 @@ export const ViewHeader = observer(
 
 export const ViewHeaderTitle = styled.h1`
   margin: 0;
+`;
+
+export const ViewHeaderButton = styled(IconButton)`
+  grid-column: 3;
+  align-self: center;
+  justify-self: end;
+  margin-right: -8px;
+  font-size: 24px;
+  color: var(--ion-color-medium-shade);
 `;
 
 export const viewHeaderTagCSS = css`

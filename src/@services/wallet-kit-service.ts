@@ -5,6 +5,12 @@ import {observable, reaction, runInAction} from 'mobx';
 import ms from 'ms';
 
 import {
+  type WalletConnectAuthenticationResult,
+  buildWalletConnectAuthentication,
+  getWalletConnectRequestExpiry,
+  validateWalletConnectAuthentication,
+} from '../@lib/wallet-connect-authentication.js';
+import {
   buildWalletConnectNamespaces,
   parseWalletConnectUri,
 } from '../@lib/wallet-connect.js';
@@ -134,11 +140,16 @@ export class WalletKitService {
   approve(
     id: number,
     addresses: readonly string[],
+    authentication: WalletConnectAuthenticationResult[] = [],
   ): Promise<WalletKitSession | undefined> {
     const pending = this.approvals.get(id);
     if (pending) return pending;
 
-    const approval = this.approveProposal(id, addresses).finally(() => {
+    const approval = this.approveProposal(
+      id,
+      addresses,
+      authentication,
+    ).finally(() => {
       this.approvals.delete(id);
     });
     this.approvals.set(id, approval);
@@ -149,20 +160,31 @@ export class WalletKitService {
   private async approveProposal(
     id: number,
     addresses: readonly string[],
+    authentication: WalletConnectAuthenticationResult[],
   ): Promise<WalletKitSession | undefined> {
     const proposal = this.proposals.get(id);
     if (!proposal) return undefined;
 
-    if (proposal.params.expiryTimestamp * 1000 <= Date.now()) {
+    if (getWalletConnectRequestExpiry(proposal) <= Date.now()) {
       runInAction(() => this.proposals.delete(id));
       return undefined;
     }
 
     const namespaces = buildWalletConnectNamespaces(proposal, addresses);
+    validateWalletConnectAuthentication(
+      buildWalletConnectAuthentication(proposal, addresses),
+      authentication,
+    );
     const connectedAt = Date.now();
 
     try {
-      const session = await this.kit.approveSession({id, namespaces});
+      const session = await this.kit.approveSession({
+        id,
+        namespaces,
+        ...(authentication.length && {
+          proposalRequestsResponses: {authentication},
+        }),
+      });
 
       runInAction(() => {
         this.proposals.delete(id);
@@ -189,7 +211,7 @@ export class WalletKitService {
 
       if (
         !this.proposals.has(id) ||
-        proposal.params.expiryTimestamp * 1000 <= Date.now()
+        getWalletConnectRequestExpiry(proposal) <= Date.now()
       ) {
         runInAction(() => this.proposals.delete(id));
         return undefined;

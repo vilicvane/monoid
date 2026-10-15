@@ -9,7 +9,7 @@ import type {Router} from '../../../../@routes.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {KeyList} from '../../../@key/key-list.js';
 import {
-  MonoidScanStatePromptContentHighlight,
+  MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
 import {
@@ -44,14 +44,12 @@ export const SafeView = observer(
 
             const keys = await scanCardKeys(applet, (index, total) => {
               setStateContent(
-                <>
-                  Fetching keys, hold tight...
-                  <br />
-                  <MonoidScanStatePromptContentHighlight>
-                    {index + 1}
-                  </MonoidScanStatePromptContentHighlight>
-                  /{total}
-                </>,
+                <MonoidScanStatePromptProgress
+                  current={index + 1}
+                  total={total}
+                >
+                  Fetching keys
+                </MonoidScanStatePromptProgress>,
               );
             });
 

@@ -80,6 +80,7 @@ const Accounts = styled.div`
 
   > span {
     flex-shrink: 0;
+    color: var(--ion-color-primary);
   }
 `;
 

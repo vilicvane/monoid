@@ -113,6 +113,7 @@ export const SetupCardView = ({
           />
         </ViewHeader>
         <ViewContent
+          footerReveal="end"
           footer={
             step === 1 && (
               <Button onClick={onSetSafePINScanButtonClick}>

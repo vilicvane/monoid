@@ -128,7 +128,6 @@ export const InstallAppletView = ({
         <ViewHeaderTitle>Install Applet</ViewHeaderTitle>
       </ViewHeader>
       <ViewContent
-        footerPlacement="fixed"
         footer={
           <Button
             disabled={!hasAppletBundle}

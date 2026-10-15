@@ -14,6 +14,7 @@ import {
   SafeKnownType,
   SafeUnknownType,
 } from '../../@atomics.js';
+import {XUint8Array} from '../../@x-value/index.js';
 import {CBORApplet} from '../cbor-applet.js';
 
 const SafeItemType = x.union([SafeKnownType, SafeUnknownType]);
@@ -119,6 +120,20 @@ export function createMonoidApplet(aid: Uint8Array) {
       response: x.object({
         publicKey: PublicKey,
         chainCode: ChainCode.optional(),
+      }),
+    },
+
+    sign: {
+      ins: 0x41,
+      request: x.intersection([
+        Key,
+        x.object({
+          cipher: x.literal('ecdsa'),
+          digest: XUint8Array,
+        }),
+      ]),
+      response: x.object({
+        signature: XUint8Array,
       }),
     },
   });

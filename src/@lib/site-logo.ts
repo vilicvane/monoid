@@ -6,14 +6,18 @@ export function getSiteLogoUrls(
   const urls = new Set<string>();
 
   for (const icon of icons) {
-    if (!icon.trim()) {
+    const source = icon.trim();
+
+    if (!source) {
       continue;
     }
 
-    const url = parseHttpUrl(icon, base);
+    const url = parseHttpUrl(source, base);
 
     if (url) {
       urls.add(url.href);
+    } else if (/^data:image\/[a-z0-9.+-]+(?:;[^,]*)?,/i.test(source)) {
+      urls.add(source);
     }
 
     if (urls.size === 5) {

@@ -40,7 +40,6 @@ export const DerivableKeyView = observer(
       <View>
         <KeyHeader data={key} />
         <ViewContent
-          footerPlacement="fixed"
           footer={
             <Button onClick={() => view.$match.derive.$push()}>Derive</Button>
           }

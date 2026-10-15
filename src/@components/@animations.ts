@@ -30,7 +30,7 @@ export const fadeOutAnimationCSS = css`
 
 const slideInKeyFrames = keyframes`
   from {
-    transform: translateX(100%);
+    transform: translateX(var(--slide-offset, 100%));
   }
 
   to {
@@ -39,7 +39,8 @@ const slideInKeyFrames = keyframes`
 `;
 
 export const slideInAnimationCSS = css`
-  animation: ${slideInKeyFrames} forwards 0.2s ease-in-out;
+  animation: ${slideInKeyFrames} forwards 0.28s
+    cubic-bezier(0.22, 0.61, 0.36, 1);
 `;
 
 const slideOutKeyFrames = keyframes`
@@ -48,12 +49,13 @@ const slideOutKeyFrames = keyframes`
   }
 
   to {
-    transform: translateX(100%);
+    transform: translateX(var(--slide-offset, 100%));
   }
 `;
 
 export const slideOutAnimationCSS = css`
-  animation: ${slideOutKeyFrames} forwards 0.2s ease-in-out;
+  animation: ${slideOutKeyFrames} forwards 0.28s
+    cubic-bezier(0.22, 0.61, 0.36, 1);
 `;
 const scaleInKeyFrames = keyframes`
   from {
@@ -87,20 +89,27 @@ export const scaleOutAnimationCSS = css`
   animation: ${scaleOutKeyFrames} forwards 0.1s ease-in-out;
 `;
 
-const popInKeyFrames = keyframes`
-  from {
-    transform: scale(0);
-    opacity: 0;
-  }
+export const popInAnimation = {
+  keyframes: [
+    {transform: 'scale(0)', opacity: 0},
+    {transform: 'scale(1)', opacity: 1},
+  ],
+  timing: {
+    duration: 320,
+    easing: 'cubic-bezier(0.2, 1.25, 0.35, 1)',
+    fill: 'backwards',
+  } satisfies KeyframeAnimationOptions,
+  stagger: 60,
+};
 
-  to {
-    transform: scale(1);
-    opacity: 1;
-  }
-`;
+const popInKeyFrames = keyframes({
+  from: popInAnimation.keyframes[0],
+  to: popInAnimation.keyframes[1],
+});
 
 export const popInAnimationCSS = css`
-  animation: ${popInKeyFrames} forwards 0.2s cubic-bezier(0, 1.2, 1, 1.2);
+  animation: ${popInKeyFrames} ${popInAnimation.timing.duration}ms
+    ${popInAnimation.timing.easing} both;
 `;
 
 const popOutKeyFrames = keyframes`
@@ -117,6 +126,16 @@ const popOutKeyFrames = keyframes`
 
 export const popOutAnimationCSS = css`
   animation: ${popOutKeyFrames} forwards 0.2s cubic-bezier(1, 0.4, 1, 0.4);
+`;
+
+const collapseOutKeyFrames = keyframes`
+  from { transform: scale(1); }
+  to { transform: scale(0); }
+`;
+
+export const collapseOutAnimationCSS = css`
+  animation: ${collapseOutKeyFrames} forwards 240ms
+    cubic-bezier(0.22, 1, 0.36, 1);
 `;
 
 const breathKeyFrames = keyframes`

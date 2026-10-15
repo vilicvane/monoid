@@ -4,7 +4,6 @@ import {createPortal} from 'react-dom';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
-import {fadeInAnimationCSS} from '../@animations.js';
 
 import {PopupBackdrop} from './popup-backdrop.js';
 
@@ -21,12 +20,6 @@ const Layer = styled.div`
   display: flex;
   align-items: center;
   justify-content: center;
-
-  ${fadeInAnimationCSS};
-
-  @media (prefers-reduced-motion: reduce) {
-    animation-duration: 0s;
-  }
 `;
 
 const Dialog = styled.div`
@@ -35,7 +28,8 @@ const Dialog = styled.div`
   max-width: 320px;
   max-height: 100%;
   min-width: 0;
-  padding: 2px;
+  /* Leave room for the items to rise without clipping at the scroll edge. */
+  padding: 14px 2px;
   color: var(--ion-color-dark);
   outline: none;
   overflow-y: auto;
@@ -102,6 +96,29 @@ export const CenteredPopup = ({
   useLayoutEffect(() => {
     dismissRef.current = onDismiss;
   }, [onDismiss]);
+
+  useLayoutEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    const animations = Array.from(dialogRef.current!.children, (item, index) =>
+      item.animate(
+        [
+          {opacity: 0, transform: 'translateY(12px)'},
+          {opacity: 1, transform: 'translateY(0)'},
+        ],
+        {
+          duration: 260,
+          delay: index * 55,
+          easing: 'cubic-bezier(0.22, 0.61, 0.36, 1)',
+          fill: 'backwards',
+        },
+      ),
+    );
+
+    return () => {
+      for (const animation of animations) animation.cancel();
+    };
+  }, []);
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current!;

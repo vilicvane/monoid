@@ -6,11 +6,22 @@ export const InfoSection = styled.div`
   gap: 8px;
 
   & + & {
-    margin-top: 16px;
+    margin-top: calc(var(--view-section-gap, 24px) - 8px);
   }
 `;
 
 export const InfoSectionTitle = styled.div``;
+
+export const InfoSectionHeader = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+
+  > button:last-child {
+    margin-right: -8px;
+  }
+`;
 
 export const InfoSectionItem = styled.div`
   display: flex;

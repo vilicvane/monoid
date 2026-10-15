@@ -8,6 +8,7 @@ import {ScanView} from './views/scan-view.js';
 import {SessionSwitchView} from './views/session-switch-view.js';
 import {SessionView} from './views/session-view.js';
 import {SessionsView} from './views/sessions-view.js';
+import {WalletConnectAuthenticationView} from './views/wallet-connect-authentication-view.js';
 import {WalletConnectView} from './views/wallet-connect-view.js';
 
 export const Views = (): ReactNode => {
@@ -26,8 +27,12 @@ export const Views = (): ReactNode => {
       />
       <Route view={router.scan.$exact.$view()} component={ScanView} />
       <Route
-        view={router.scan.connection.$view({parallel: true})}
+        view={router.scan.connection.$exact.$view({parallel: true})}
         component={WalletConnectView}
+      />
+      <Route
+        view={router.scan.connection.authentication.$view({parallel: true})}
+        component={WalletConnectAuthenticationView}
       />
       <Match match={router.safe} component={SafeMatch} />
     </>

@@ -15,7 +15,7 @@ const Container = styled.section`
   grid-template-columns: 56px minmax(0, 1fr);
   align-items: center;
   gap: 8px 16px;
-  margin: 8px 0 24px;
+  margin: 8px 0 16px;
   overflow-wrap: anywhere;
 
   h2 {
@@ -55,7 +55,7 @@ const VerificationIcon = styled(IonIcon)<{
     props.$dangerous
       ? 'var(--ion-color-danger)'
       : props.$valid
-        ? 'var(--ion-color-primary)'
+        ? 'var(--ion-color-safe)'
         : 'var(--color-text-secondary)'};
 `;
 

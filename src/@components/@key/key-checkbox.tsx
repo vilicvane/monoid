@@ -23,12 +23,6 @@ export const KeySelection = styled(KeyTag)`
 
   transition: all 0.2s linear;
 
-  &.up-to-date {
-    background-color: var(--ion-color-light);
-    border-color: var(--ion-color-light-shade);
-    color: var(--ion-color-medium-tint);
-  }
-
   &.checked {
     background-color: var(--ion-color-primary);
     border-color: var(--ion-color-primary-shade);
@@ -40,8 +34,11 @@ export const KeySelection = styled(KeyTag)`
     outline-offset: 2px;
   }
 
+  &.up-to-date,
   &:has(input:disabled) {
-    opacity: 0.5;
+    background-color: var(--ion-color-light);
+    border-color: var(--ion-color-light-shade);
+    color: var(--ion-color-medium-tint);
   }
 `;
 

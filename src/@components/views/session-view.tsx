@@ -1,3 +1,6 @@
+import {IonIcon} from '@ionic/react';
+import arrowRightLeft from 'lucide-static/icons/arrow-right-left.svg';
+import ellipsis from 'lucide-static/icons/ellipsis.svg';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
@@ -5,18 +8,22 @@ import type {RouteComponentProps} from 'routra-react';
 import {useEntrances} from '../../@entrances.js';
 import type {Router} from '../../@routes.js';
 import {getWalletKitSessionAddresses} from '../../@services/index.js';
-import {AsyncButton, Button} from '../@ui/button.js';
+import {WalletAccountList} from '../@key/wallet-account-list.js';
+import {AsyncButton} from '../@ui/button.js';
+import {CenteredPopup} from '../@ui/centered-popup.js';
 import {DateTime} from '../@ui/date-time.js';
+import {IconButton} from '../@ui/icon-button.js';
 import {
   InfoSection,
+  InfoSectionHeader,
   InfoSectionItemLabel,
   InfoSectionRow,
 } from '../@ui/info-section.js';
-import {InteractiveAddress} from '../@ui/interactive-address.js';
 import {
   View,
   ViewContent,
   ViewHeader,
+  ViewHeaderButton,
   ViewHeaderTitle,
 } from '../@view/index.js';
 
@@ -25,8 +32,9 @@ import {useSession} from './@sessions/use-session.js';
 
 export const SessionView = observer(
   ({view}: RouteComponentProps<Router['sessions']['session']>): ReactNode => {
-    const {walletKitService} = useEntrances();
+    const {walletKitService, walletStorageService} = useEntrances();
     const [pending, setPending] = useState(false);
+    const [menuOpen, setMenuOpen] = useState(false);
     const active = !view.$leaving && view.$match.$exact.$active;
     const data = useSession(view.topic, active);
     if (!data) return null;
@@ -40,6 +48,7 @@ export const SessionView = observer(
 
       try {
         await walletKitService.disconnect(session.topic);
+        setMenuOpen(false);
       } finally {
         setPending(false);
       }
@@ -49,27 +58,17 @@ export const SessionView = observer(
       <View inert={!active}>
         <ViewHeader>
           <ViewHeaderTitle>Session</ViewHeaderTitle>
+          <ViewHeaderButton
+            aria-label="Session actions"
+            aria-haspopup="dialog"
+            aria-expanded={menuOpen}
+            disabled={!walletKitService.sessions.has(view.topic) || pending}
+            onClick={() => setMenuOpen(true)}
+          >
+            <IonIcon icon={ellipsis} />
+          </ViewHeaderButton>
         </ViewHeader>
-        <ViewContent
-          footerPlacement="fixed"
-          footer={
-            <>
-              <Button
-                disabled={!canSwitch || pending}
-                onClick={() => view.$match.switchAccounts.$push()}
-              >
-                Switch Account
-              </Button>
-              <AsyncButton
-                color="danger"
-                disabled={!walletKitService.sessions.has(view.topic) || pending}
-                handler={disconnect}
-              >
-                Disconnect
-              </AsyncButton>
-            </>
-          }
-        >
+        <ViewContent>
           <WalletConnectSite
             metadata={session.peer.metadata}
             verified={record.verified}
@@ -85,12 +84,21 @@ export const SessionView = observer(
             </InfoSectionRow>
           </InfoSection>
           <InfoSection>
-            <InfoSectionItemLabel>Connected accounts</InfoSectionItemLabel>
-            {addresses.map(address => (
-              <InteractiveAddress key={address} copyable>
-                {address}
-              </InteractiveAddress>
-            ))}
+            <InfoSectionHeader>
+              <InfoSectionItemLabel>Connected accounts</InfoSectionItemLabel>
+              <IconButton
+                aria-label="Switch Account"
+                disabled={!canSwitch || pending}
+                onClick={() => view.$match.switchAccounts.$push()}
+              >
+                <IonIcon icon={arrowRightLeft} />
+              </IconButton>
+            </InfoSectionHeader>
+            <WalletAccountList
+              keys={walletStorageService.keys}
+              addressType="evm"
+              addresses={addresses}
+            />
           </InfoSection>
           {!canSwitch && (
             <InfoSection>
@@ -100,6 +108,16 @@ export const SessionView = observer(
             </InfoSection>
           )}
         </ViewContent>
+        {menuOpen && active && walletKitService.sessions.has(view.topic) && (
+          <CenteredPopup
+            aria-label="Session actions"
+            onDismiss={() => setMenuOpen(false)}
+          >
+            <AsyncButton color="danger" disabled={pending} handler={disconnect}>
+              Disconnect
+            </AsyncButton>
+          </CenteredPopup>
+        )}
       </View>
     );
   },

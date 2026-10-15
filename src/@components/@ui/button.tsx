@@ -15,6 +15,7 @@ import {RippleEffect} from './ripple-effect.js';
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   color?: 'primary' | 'danger' | 'neutral';
   loading?: boolean;
+  footerReveal?: 'always' | 'end';
 };
 
 export const Buttons = styled.div`
@@ -91,6 +92,7 @@ export const Button = ({
   color = 'primary',
   disabled,
   loading,
+  footerReveal,
   children,
   ...props
 }: ButtonProps): ReactNode => {
@@ -100,6 +102,7 @@ export const Button = ({
       $color={color}
       disabled={disabled || loading}
       aria-busy={loading || undefined}
+      data-footer-reveal={footerReveal}
       {...props}
     >
       {loading === undefined ? (

@@ -35,7 +35,7 @@ class MonoidScanRedirectError extends Error {
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
     MonoidScanRedirectError,
-    MonoidScanStatePromptContentHighlight: 'span',
+    MonoidScanStatePromptProgress: 'span',
     useMonoidScanPrompt: () => [null, () => fixture.scan],
   },
 });

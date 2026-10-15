@@ -50,6 +50,13 @@ http://ionicframework.com/docs/theming/ */
   --ion-color-neutral-contrast: var(--ion-color-medium);
   --ion-color-neutral-shade: var(--ion-color-medium-tint);
 
+  --ion-color-safe: #4cbe32;
+  --ion-color-safe-rgb: 76, 190, 50;
+  --ion-color-safe-contrast: #ffffff;
+  --ion-color-safe-contrast-rgb: 255, 255, 255;
+  --ion-color-safe-shade: #43a72c;
+  --ion-color-safe-tint: #5ec547;
+
   --ion-color-danger: #ff2929;
   --ion-color-danger-rgb: 255, 41, 41;
   --ion-color-danger-contrast: #ffffff;

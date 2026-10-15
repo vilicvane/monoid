@@ -20,6 +20,31 @@ export const MonoidScanStatePromptContentHighlight = styled.span`
   color: white;
 `;
 
+export function MonoidScanStatePromptProgress({
+  children,
+  current,
+  total,
+}: {
+  children: string;
+  current: number;
+  total: number;
+}): ReactNode {
+  return (
+    <>
+      {children}, hold tight...
+      {total > 1 && (
+        <>
+          <br />
+          <MonoidScanStatePromptContentHighlight>
+            {current}
+          </MonoidScanStatePromptContentHighlight>
+          /{total}
+        </>
+      )}
+    </>
+  );
+}
+
 export type MonoidScanPromptSetStateContentCallback = (
   content: ReactNode,
 ) => void;

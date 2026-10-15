@@ -3,3 +3,9 @@
   inherits: true;
   initial-value: 0;
 }
+
+@property --swipe-action-progress {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}

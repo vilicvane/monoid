@@ -9,7 +9,7 @@ import {BrowserHistory, BrowserRouterPlugin} from 'routra/browser';
 import {Keyboard} from './@keyboard.js';
 import {createMonoidApplet} from './@lib/monoid/index.js';
 import {Portals} from './@portals.js';
-import {ROUTE_SCHEMA} from './@routes.js';
+import {ROUTE_SCHEMA, type ViewSwitchingState} from './@routes.js';
 import {
   ErrorService,
   MonoidCredentialsStore,
@@ -30,7 +30,10 @@ export class Entrances {
 
   @entrance
   get router() {
-    const router = routra(ROUTE_SCHEMA);
+    const router = routra<typeof ROUTE_SCHEMA, ViewSwitchingState>(
+      ROUTE_SCHEMA,
+      {},
+    );
 
     router.$use(
       new BrowserRouterPlugin({

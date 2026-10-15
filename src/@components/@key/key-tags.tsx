@@ -1,8 +1,8 @@
 import type {ButtonHTMLAttributes, ReactNode} from 'react';
-import {css, keyframes, styled} from 'styled-components';
+import {css, styled} from 'styled-components';
 
 import type {AddressChain} from '../../@lib/wallet-address.js';
-import {SCAN_REVEAL_DURATION, SCAN_REVEAL_EASING} from '../@ui/scan-motion.js';
+import {collapseOutAnimationCSS, popInAnimationCSS} from '../@animations.js';
 
 import {AddressChainIcon} from './address-chain-icon.js';
 
@@ -99,16 +99,6 @@ export const KeyDerivationTag = ({
   </KeyDerivationTagContainer>
 );
 
-const badgeReveal = keyframes`
-  from { transform: scale(0); }
-  to { transform: scale(1); }
-`;
-
-const badgeHide = keyframes`
-  from { transform: scale(1); }
-  to { transform: scale(0); }
-`;
-
 export const KeyDerivationBadge = styled(KeyTag)<{
   $primary?: boolean;
   $revealing?: boolean;
@@ -137,16 +127,14 @@ export const KeyDerivationBadge = styled(KeyTag)<{
     $revealing &&
     css`
       transform-origin: left center;
-      animation: ${badgeReveal} ${SCAN_REVEAL_DURATION / 2}ms
-        ${SCAN_REVEAL_EASING} forwards;
+      ${popInAnimationCSS}
     `}
 
   &.unmount {
     // React can replace the preceding path with a button during the same commit.
     order: 1;
     transform-origin: left center;
-    animation: ${badgeHide} ${SCAN_REVEAL_DURATION / 2}ms ${SCAN_REVEAL_EASING}
-      forwards;
+    ${collapseOutAnimationCSS}
     pointer-events: none;
   }
 

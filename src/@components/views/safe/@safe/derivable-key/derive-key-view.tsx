@@ -142,6 +142,7 @@ export const DeriveKeyView = observer(
             />
           </ViewHeader>
           <ViewContent
+            footerReveal="end"
             footer={
               <>
                 {step === 1 && (

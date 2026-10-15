@@ -1,66 +1,87 @@
-import type {HTMLAttributes, ReactNode, Ref} from 'react';
-import {css, styled} from 'styled-components';
+import {
+  type HTMLAttributes,
+  type ReactNode,
+  type Ref,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+} from 'react';
+import {styled} from 'styled-components';
 
+import {popInAnimation} from '../@animations.js';
 import {Buttons} from '../@ui/button.js';
 
-const BLUR_STEPS = 4;
-const MAX_BLUR_RADIUS = 2;
+const Container = styled(Buttons)<{$revealed: boolean}>`
+  --button-disabled-background: rgba(255, 255, 255, 0.9);
 
-const BlurLayer = styled.div<{$step: number}>`
+  flex-shrink: 0;
   position: absolute;
-  inset: 0 0 calc(var(--nav-bar-height) + var(--view-inset-bottom));
-  z-index: -1;
+  inset: auto 0 0;
+  z-index: 1;
+
+  margin: 0;
+  padding: var(--view-padding) calc(var(--view-padding) - 2px)
+    var(--view-padding-bottom);
+
   pointer-events: none;
 
-  /* Blur variances add; keep the combined radius within the shared maximum. */
-  backdrop-filter: blur(
-    ${({$step}) => Math.sqrt(2 * $step - 1) * (MAX_BLUR_RADIUS / BLUR_STEPS)}px
-  );
-  mask-image: linear-gradient(
-    to bottom,
-    transparent ${({$step}) => (($step - 1) / BLUR_STEPS) * 100}%,
-    black ${({$step}) => ($step / BLUR_STEPS) * 100}%
-  );
-`;
+  > * {
+    pointer-events: auto;
+  }
 
-const Container = styled(Buttons)<{$fixed: boolean}>`
-  flex-shrink: 0;
-
-  ${props =>
-    props.$fixed &&
-    css`
-      --button-disabled-background: rgba(255, 255, 255, 0.9);
-
-      position: absolute;
-      inset: auto 0 0;
-      z-index: 1;
-
-      margin: 0;
-      padding: var(--view-padding) calc(var(--view-padding) - 2px)
-        var(--view-padding-bottom);
-
-      pointer-events: none;
-
-      > :not(${BlurLayer}) {
-        pointer-events: auto;
-      }
-    `}
+  > button[data-footer-reveal='end'],
+  &[data-footer-reveal='end'] > button:not([data-footer-reveal='always']) {
+    visibility: ${props => (props.$revealed ? 'visible' : 'hidden')};
+    transform-origin: center bottom;
+  }
 `;
 
 export const ViewFooter = ({
-  placement,
+  ref,
+  reveal,
+  revealed,
   children,
   ...props
 }: HTMLAttributes<HTMLDivElement> & {
-  placement: 'scroll' | 'fixed';
+  reveal: 'always' | 'end';
+  revealed: boolean;
   ref?: Ref<HTMLDivElement>;
 }): ReactNode => {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useImperativeHandle(ref, () => containerRef.current!, []);
+
+  useLayoutEffect(() => {
+    if (
+      !revealed ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    )
+      return;
+
+    const buttons = Array.from(containerRef.current!.children).filter(
+      (child): child is HTMLButtonElement =>
+        child instanceof HTMLButtonElement &&
+        (child.dataset.footerReveal ?? reveal) === 'end',
+    );
+    const animations = buttons.map((button, index) =>
+      button.animate(popInAnimation.keyframes, {
+        ...popInAnimation.timing,
+        delay: index * popInAnimation.stagger,
+      }),
+    );
+
+    return () => {
+      for (const animation of animations) animation.cancel();
+    };
+  }, [reveal, revealed]);
+
   return (
-    <Container {...props} $fixed={placement === 'fixed'}>
-      {placement === 'fixed' &&
-        Array.from({length: BLUR_STEPS}, (_, index) => (
-          <BlurLayer key={index} $step={index + 1} aria-hidden="true" />
-        ))}
+    <Container
+      {...props}
+      ref={containerRef}
+      $revealed={revealed}
+      data-footer-reveal={reveal}
+    >
       {children}
     </Container>
   );

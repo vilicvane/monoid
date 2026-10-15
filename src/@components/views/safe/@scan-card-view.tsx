@@ -7,7 +7,7 @@ import {isCredentialRequestCancelled} from '../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../@utils/index.js';
 import {
   MonoidScanRedirectError,
-  MonoidScanStatePromptContentHighlight,
+  MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
 } from '../../@monoid/monoid-scan-prompt.js';
 import {View, ViewHeader, ViewHeaderTitle} from '../../@view/index.js';
@@ -41,14 +41,12 @@ export const ScanCardView = ({
 
               const keys = await scanCardKeys(applet, (index, total) => {
                 setStateContent(
-                  <>
-                    Fetching keys, hold tight...
-                    <br />
-                    <MonoidScanStatePromptContentHighlight>
-                      {index + 1}
-                    </MonoidScanStatePromptContentHighlight>
-                    /{total}
-                  </>,
+                  <MonoidScanStatePromptProgress
+                    current={index + 1}
+                    total={total}
+                  >
+                    Fetching keys
+                  </MonoidScanStatePromptProgress>,
                 );
               });
 

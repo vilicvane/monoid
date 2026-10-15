@@ -2,9 +2,13 @@ import assert from 'node:assert/strict';
 import {EventEmitter, getEventListeners} from 'node:events';
 import {mock, test} from 'node:test';
 
+import {buildAuthObject, formatMessage} from '@walletconnect/utils';
+import {Wallet} from 'ethers';
+
+// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Import the service without starting platform services.
 import {
-  getWalletKitSessionAddresses,
   WalletKitService,
+  getWalletKitSessionAddresses,
 } from '../.bld/app/@services/wallet-kit-service.js';
 
 const TOPIC = 'a'.repeat(64);
@@ -1053,4 +1057,120 @@ test('an empty account selection cannot update the session', async () => {
   assert.equal(kit.updateSession.mock.callCount(), 0);
   assert.equal(kit.emitSessionEvent.mock.callCount(), 0);
   assert.equal(service.sessions.get(TOPIC), original);
+});
+
+// Public test keys; never use these accounts for funds.
+const authenticationWallets = [1, 2].map(
+  value => new Wallet(`0x${value.toString(16).padStart(64, '0')}`),
+);
+const authenticationAddresses = authenticationWallets.map(
+  wallet => wallet.address,
+);
+
+function authenticationProposal() {
+  const request = proposal();
+  request.params.requiredNamespaces.eip155.chains.push('eip155:137');
+  request.params.requests = {
+    authentication: [
+      {
+        type: 'caip122',
+        version: '1',
+        domain: 'example.com',
+        aud: 'https://example.com/login',
+        nonce: 'publicnonce123',
+        iat: new Date().toISOString(),
+        chains: ['eip155:1', 'eip155:137'],
+      },
+    ],
+  };
+  return request;
+}
+
+async function signAuthentication(request) {
+  const auth = request.params.requests.authentication[0];
+  return Promise.all(
+    auth.chains.flatMap(chain =>
+      authenticationWallets.map(async wallet => {
+        const iss = `did:pkh:${chain}:${wallet.address}`;
+        const signature = await wallet.signMessage(formatMessage(auth, iss));
+        return buildAuthObject(auth, {t: 'eip191', s: signature}, iss);
+      }),
+    ),
+  );
+}
+
+test('forwards all selected account and chain authentication results with session approval', async () => {
+  const state = setup();
+  const {service, kit} = state;
+  const request = await receiveProposal(state, authenticationProposal());
+  const authentication = await signAuthentication(request);
+
+  const session = await service.approve(
+    request.id,
+    authenticationAddresses,
+    authentication,
+  );
+
+  assert.equal(kit.approveSession.mock.callCount(), 1);
+  const [approved] = kit.approveSession.mock.calls[0].arguments;
+  assert.deepEqual(approved.proposalRequestsResponses, {authentication});
+  assert.deepEqual(approved.namespaces.eip155.methods, []);
+  assert.deepEqual(
+    approved.namespaces.eip155.accounts,
+    ['eip155:1', 'eip155:137'].flatMap(chain =>
+      authenticationAddresses.map(address => `${chain}:${address}`),
+    ),
+  );
+  assert.equal(service.proposals.has(request.id), false);
+  assert.equal(service.sessions.get(session.topic), session);
+});
+
+test('missing, partial and changed authentication cannot approve a session', async () => {
+  const state = setup();
+  const {service, kit} = state;
+  const request = await receiveProposal(state, authenticationProposal());
+  const authentication = await signAuthentication(request);
+  const changed = structuredClone(authentication);
+  changed[0].p.nonce = 'anothernonce123';
+  const anotherAccount = structuredClone(authentication);
+  anotherAccount[0].p.iss = `did:pkh:eip155:1:${ADDRESS}`;
+
+  for (const results of [
+    undefined,
+    authentication.slice(1),
+    changed,
+    anotherAccount,
+  ]) {
+    await assert.rejects(
+      service.approve(request.id, authenticationAddresses, results),
+      /Sign all selected accounts before connecting/,
+    );
+  }
+  assert.equal(kit.approveSession.mock.callCount(), 0);
+  assert.equal(service.proposals.get(request.id), request);
+  assert.equal(service.sessions.size, 0);
+
+  await service.approve(request.id, authenticationAddresses, authentication);
+  assert.equal(kit.approveSession.mock.callCount(), 1);
+});
+
+test('authentication expiring during card signing prevents approval even while the proposal remains valid', async context => {
+  context.mock.timers.enable({apis: ['Date'], now: 1_000_000});
+  const state = setup();
+  const {service, kit} = state;
+  const request = authenticationProposal();
+  request.params.requests.authentication[0].exp = new Date(
+    1_010_000,
+  ).toISOString();
+  await receiveProposal(state, request);
+  const authentication = await signAuthentication(request);
+  context.mock.timers.setTime(1_010_000);
+
+  assert.equal(
+    await service.approve(request.id, authenticationAddresses, authentication),
+    undefined,
+  );
+  assert.equal(kit.approveSession.mock.callCount(), 0);
+  assert.equal(service.proposals.has(request.id), false);
+  assert.equal(service.sessions.size, 0);
 });
