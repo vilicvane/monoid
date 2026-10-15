@@ -32,12 +32,16 @@ type SelectionProps = {
 
 const WalletAccountGroup = observer(function WalletAccountGroup({
   group: {key, wallets},
+  autoExpand,
   selectedAddresses,
   onToggle,
   disabled,
-}: SelectionProps & {group: AccountGroup}): ReactNode {
+}: SelectionProps & {
+  group: AccountGroup;
+  autoExpand: boolean;
+}): ReactNode {
   return (
-    <ExpandableKeyGroup>
+    <ExpandableKeyGroup autoExpand={autoExpand}>
       {({expanded, revealing, expand}) => {
         const collapsed = wallets.length > 1 && !expanded;
 
@@ -89,12 +93,14 @@ export const WalletAccountList = observer(
   ({
     keys,
     addressType,
+    additionalAddresses = [],
     selectedAddresses,
     onToggle,
     disabled = false,
   }: {
     keys: readonly WalletKeyData[];
     addressType: 'evm';
+    additionalAddresses?: readonly string[];
   } & SelectionProps): ReactNode => {
     const groups = new Map<WalletKeyData['index'], AccountGroup>();
     const addresses = new Set<string>();
@@ -121,17 +127,40 @@ export const WalletAccountList = observer(
 
     return (
       <KeyList>
-        {groups.size ? (
-          Array.from(groups, ([index, group]) => (
-            <WalletAccountGroup
-              key={index}
-              group={group}
-              selectedAddresses={selected}
-              onToggle={onToggle}
-              disabled={disabled}
-            />
-          ))
-        ) : (
+        {Array.from(groups, ([index, group]) => (
+          <WalletAccountGroup
+            key={index}
+            group={group}
+            autoExpand={
+              groups.size === 1 ||
+              group.wallets.some(wallet =>
+                selected.has(wallet.address.toLowerCase()),
+              )
+            }
+            selectedAddresses={selected}
+            onToggle={onToggle}
+            disabled={disabled}
+          />
+        ))}
+        {additionalAddresses
+          .filter(address => !addresses.has(address.toLowerCase()))
+          .map(address => (
+            <KeyListItem as="label" key={address.toLowerCase()}>
+              <KeyListItemContent>
+                <KeyTags>
+                  <KeyCheckbox
+                    aria-label={`Select ${address}`}
+                    checked={selected.has(address.toLowerCase())}
+                    onChange={() => onToggle(address)}
+                    disabled={disabled}
+                  />
+                  <KeyListPlaceholder>Not in Safe</KeyListPlaceholder>
+                </KeyTags>
+                <KeyListAddress>{address}</KeyListAddress>
+              </KeyListItemContent>
+            </KeyListItem>
+          ))}
+        {!groups.size && !additionalAddresses.length && (
           <KeyListItem>
             <KeyListPlaceholder>No EVM accounts in Safe.</KeyListPlaceholder>
           </KeyListItem>

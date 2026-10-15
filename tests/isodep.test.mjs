@@ -31,7 +31,9 @@ mock.module('capacitor-isodep-nfc', {
 const {standbyIsoDep, IsoDepScanError} = await import(
   '../.bld/app/@lib/isodep.js'
 );
-const {Applet} = await import('../.bld/app/@lib/applet.js');
+const {Applet, AppletISOError, AppletNotFoundError} = await import(
+  '../.bld/app/@lib/applet.js'
+);
 
 async function until(condition) {
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -81,6 +83,7 @@ beforeEach(() => {
     closes: [],
     listenerRemovals: [],
     exchanges: [],
+    connections: [],
     errors: [],
     cleanupCount: 0,
     disposers: [],
@@ -152,6 +155,7 @@ beforeEach(() => {
         callback,
         error => this.errors.push(error),
         () => this.cleanupCount++,
+        connected => this.connections.push(connected),
       ];
       const dispose = applet ? applet.standby(...args) : standbyIsoDep(...args);
       this.disposers.push(dispose);
@@ -183,6 +187,122 @@ test('successive card taps close only their sessions and leave scanning active',
   assert.equal(device.starts.length, 1);
   assert.equal(device.stops.length, 0);
   assert.deepEqual(device.errors, []);
+  assert.deepEqual(device.connections, [true, false, true, false]);
+});
+
+test('connection notification precedes SELECT and remains active while SELECT is pending', async () => {
+  const selected = deferred();
+  let callbacks = 0;
+  device.onExchange = () => {
+    assert.deepEqual(device.connections, [true]);
+    return selected.promise;
+  };
+  device.standby(async () => callbacks++, new TestApplet(new Uint8Array([1])));
+  await until(() => device.starts.length === 1);
+  device.tap('selecting');
+  await until(() => device.exchanges.length === 1);
+
+  assert.deepEqual(device.connections, [true]);
+  assert.equal(callbacks, 0);
+  selected.resolve({data: [0x90, 0x00]});
+  await until(() => device.cleanupCount === 1);
+  assert.equal(callbacks, 1);
+  assert.deepEqual(device.connections, [true, false]);
+});
+
+test('sessionEnded disconnects before the operation and native close finish without duplicate notifications', async () => {
+  const operation = deferred();
+  const closed = deferred();
+  device.onClose = () => closed.promise;
+  device.standby(() => operation.promise);
+  await until(() => device.starts.length === 1);
+  device.tap('removed');
+  assert.deepEqual(device.connections, [true]);
+
+  const ended = {
+    scanId: device.scanId,
+    sessionId: 'removed',
+    reason: 'tag-lost',
+    code: 'TAG_LOST',
+  };
+  device.emit('sessionEnded', ended);
+  device.emit('sessionEnded', ended);
+  assert.deepEqual(device.connections, [true, false]);
+  assert.equal(device.closes.length, 0);
+  assert.equal(device.cleanupCount, 0);
+
+  operation.resolve();
+  await until(() => device.closes.length === 1);
+  assert.equal(device.cleanupCount, 0);
+  assert.deepEqual(device.connections, [true, false]);
+  closed.resolve();
+  await until(() => device.cleanupCount === 1);
+  assert.deepEqual(device.connections, [true, false]);
+  assert.deepEqual(device.errors, []);
+});
+
+test('late events and cleanup from an older session cannot disconnect the current connection', async () => {
+  const first = deferred();
+  const second = deferred();
+  const seen = [];
+  device.standby(sessionId => {
+    seen.push(sessionId);
+    return sessionId === 'first' ? first.promise : second.promise;
+  });
+  await until(() => device.starts.length === 1);
+  device.tap('first');
+  const endedFirst = {
+    scanId: device.scanId,
+    sessionId: 'first',
+    reason: 'tag-lost',
+    code: 'TAG_LOST',
+  };
+  device.emit('sessionEnded', endedFirst);
+  device.tap('second');
+  device.tap('second');
+  device.tap('first');
+  device.emit('sessionEnded', endedFirst);
+  device.emit('sessionOpened', {
+    scanId: 'old-scan',
+    sessionId: 'old-session',
+    tag: {},
+  });
+  device.emit('sessionEnded', {...endedFirst, scanId: 'old-scan'});
+  device.emit('scanEnded', {scanId: 'old-scan', reason: 'stopped'});
+  first.resolve();
+  await until(() => device.cleanupCount === 1);
+
+  assert.deepEqual(seen, ['first', 'second']);
+  assert.deepEqual(device.connections, [true, false, true]);
+  assert.deepEqual(device.errors, []);
+  second.resolve();
+  await until(() => device.cleanupCount === 2);
+  assert.deepEqual(device.connections, [true, false, true, false]);
+});
+
+test('scanEnded disconnects immediately and ignores late opening events while cleanup waits', async () => {
+  const operation = deferred();
+  const closed = deferred();
+  let callbacks = 0;
+  device.onClose = () => closed.promise;
+  device.standby(() => {
+    callbacks++;
+    return operation.promise;
+  });
+  await until(() => device.starts.length === 1);
+  device.tap('active');
+  device.enabled = false;
+  device.emit('scanEnded', {
+    scanId: device.scanId,
+    reason: 'nfc-disabled',
+  });
+  assert.deepEqual(device.connections, [true, false]);
+  device.tap('late');
+  assert.equal(callbacks, 1);
+  operation.resolve();
+  await until(() => device.closes.length === 1);
+  assert.deepEqual(device.connections, [true, false]);
+  closed.resolve();
 });
 
 test('SELECT and GET RESPONSE preserve APDU bytes and cannot switch to a newer session', async () => {
@@ -239,6 +359,118 @@ test('SELECT and GET RESPONSE preserve APDU bytes and cannot switch to a newer s
   await assert.rejects(applet.sendRawCommand(command), /open NFC session/);
 });
 
+test('SELECT 6a82 reports an absent applet only after native session cleanup', async () => {
+  const closed = deferred();
+  let callbacks = 0;
+  device.onExchange = () => ({data: [0x12, 0x34, 0x6a, 0x82]});
+  device.onClose = () => closed.promise;
+  device.standby(async () => callbacks++, new TestApplet(new Uint8Array([1])));
+  await until(() => device.starts.length === 1);
+  device.tap('missing-applet');
+  await until(() => device.closes.length === 1);
+
+  assert.equal(callbacks, 0);
+  assert.equal(device.errors.length, 0);
+  assert.equal(device.cleanupCount, 0);
+  closed.resolve();
+  await until(() => device.cleanupCount === 1);
+
+  assert.equal(device.errors.length, 1);
+  const [error] = device.errors;
+  assert.ok(error instanceof AppletNotFoundError);
+  assert.ok(error instanceof AppletISOError);
+  assert.equal(error.sw, 0x6a82);
+  assert.deepEqual(error.data, new Uint8Array([0x12, 0x34]));
+  assert.deepEqual(device.connections, [true, false]);
+});
+
+test('SELECT 6999 remains an ordinary selection failure', async () => {
+  let callbacks = 0;
+  device.onExchange = () => ({data: [0x69, 0x99]});
+  device.standby(async () => callbacks++, new TestApplet(new Uint8Array([1])));
+  await until(() => device.starts.length === 1);
+  device.tap('selection-refused');
+  await until(() => device.cleanupCount === 1);
+
+  assert.equal(callbacks, 0);
+  assert.equal(device.errors.length, 1);
+  assert.equal(device.errors[0].constructor, AppletISOError);
+  assert.equal(device.errors[0].sw, 0x6999);
+});
+
+test('a business command returning 6a82 does not imply an absent applet', async () => {
+  device.onExchange = ({data}) =>
+    data[1] === 0xa4 ? {data: [0x90, 0x00]} : {data: [0x42, 0x6a, 0x82]};
+  device.standby(
+    async applet => {
+      await applet.sendCommand(0x01, new Uint8Array());
+    },
+    new TestApplet(new Uint8Array([1])),
+  );
+  await until(() => device.starts.length === 1);
+  device.tap('selected');
+  await until(() => device.cleanupCount === 1);
+
+  assert.equal(device.errors.length, 1);
+  assert.equal(device.errors[0].constructor, AppletISOError);
+  assert.equal(device.errors[0].sw, 0x6a82);
+  assert.deepEqual(device.errors[0].data, new Uint8Array([0x42]));
+});
+
+for (const sw of [0x9000, 0x6a82]) {
+  test(`SELECT GET RESPONSE ${sw.toString(16)} is handled outside applet absence detection`, async () => {
+    let callbacks = 0;
+    device.onExchange = ({data}) =>
+      data[1] === 0xa4
+        ? {data: [0x11, 0x61, 0x01]}
+        : {data: [0x22, sw >> 8, sw & 0xff]};
+    device.standby(
+      async () => callbacks++,
+      new TestApplet(new Uint8Array([1])),
+    );
+    await until(() => device.starts.length === 1);
+    device.tap('select-response');
+    await until(() => device.cleanupCount === 1);
+
+    assert.deepEqual(device.exchanges, [
+      {sessionId: 'select-response', data: [0, 0xa4, 4, 0, 1, 1]},
+      {sessionId: 'select-response', data: [0, 0xc0, 0, 0]},
+    ]);
+
+    if (sw === 0x9000) {
+      assert.equal(callbacks, 1);
+      assert.deepEqual(device.errors, []);
+    } else {
+      assert.equal(callbacks, 0);
+      assert.equal(device.errors.length, 1);
+      assert.equal(device.errors[0].constructor, AppletISOError);
+      assert.equal(device.errors[0].sw, sw);
+      assert.deepEqual(device.errors[0].data, new Uint8Array([0x22]));
+    }
+  });
+}
+
+test('a SELECT 6a82 cannot hide a subsequent session cleanup failure', async () => {
+  const failure = new Error('Session cleanup failed');
+  device.onExchange = () => ({data: [0x6a, 0x82]});
+  device.onClose = async () => {
+    throw failure;
+  };
+  const dispose = device.standby(
+    async () => assert.fail('An absent applet must not reach the callback'),
+    new TestApplet(new Uint8Array([1])),
+  );
+  await until(() => device.starts.length === 1);
+  device.tap('failed-close');
+  await until(() => device.errors.length === 1);
+  await assert.rejects(dispose(), error => error === failure);
+
+  assert.equal(device.errors.length, 1);
+  assert.ok(device.errors[0] instanceof IsoDepScanError);
+  assert.equal(device.errors[0].cause, failure);
+  assert.equal(device.cleanupCount, 1);
+});
+
 test('a rejected exchange and its sessionEnded event report one error and permit another tap', async () => {
   const failure = Object.assign(new Error('Card removed'), {code: 'TAG_LOST'});
   device.onExchange = async ({sessionId}) => {
@@ -268,30 +500,36 @@ test('a rejected exchange and its sessionEnded event report one error and permit
   await dispose();
 });
 
-test('a connection failure without sessionOpened is reported after native cleanup', async () => {
-  const closed = deferred();
-  let callbacks = 0;
-  device.onClose = () => closed.promise;
-  device.standby(async () => callbacks++);
-  await until(() => device.starts.length === 1);
-  device.emit('sessionEnded', {
-    scanId: device.scanId,
-    sessionId: 'unconnected',
-    reason: 'connect-timeout',
-    code: 'TIMEOUT',
-  });
-  await until(() => device.closes.length === 1);
+for (const [reason, code] of [
+  ['connect-timeout', 'TIMEOUT'],
+  ['tag-lost', 'TAG_LOST'],
+]) {
+  test(`a ${reason} without sessionOpened preserves its code after native cleanup`, async () => {
+    const closed = deferred();
+    let callbacks = 0;
+    device.onClose = () => closed.promise;
+    device.standby(async () => callbacks++);
+    await until(() => device.starts.length === 1);
+    device.emit('sessionEnded', {
+      scanId: device.scanId,
+      sessionId: 'unconnected',
+      reason,
+      code,
+    });
+    await until(() => device.closes.length === 1);
 
-  assert.equal(device.errors.length, 0);
-  assert.equal(device.cleanupCount, 0);
-  closed.resolve();
-  await until(() => device.cleanupCount === 1);
-  assert.equal(callbacks, 0);
-  assert.equal(device.errors.length, 1);
-  assert.match(device.errors[0].message, /connect-timeout/);
-  device.tap('connected');
-  await until(() => callbacks === 1);
-});
+    assert.equal(device.errors.length, 0);
+    assert.equal(device.cleanupCount, 0);
+    closed.resolve();
+    await until(() => device.cleanupCount === 1);
+    assert.equal(callbacks, 0);
+    assert.equal(device.errors.length, 1);
+    assert.ok(device.errors[0].message.includes(reason));
+    assert.equal(device.errors[0].code, code);
+    device.tap('connected');
+    await until(() => callbacks === 1);
+  });
+}
 
 test('cancel is immediate while completion and reopening wait for native stop, close, and listener cleanup', async () => {
   const stopped = deferred();
@@ -314,10 +552,13 @@ test('cancel is immediate while completion and reopening wait for native stop, c
   await until(() => device.exchanges.length === 1);
   let completed = false;
   const completion = dispose();
+  assert.deepEqual(device.connections, [true, false]);
   completion.then(() => {
     completed = true;
   });
   assert.equal(dispose(), completion);
+  device.tap('late-after-cancel');
+  assert.deepEqual(device.connections, [true, false]);
   device.standby(async () => {});
   await until(() => device.stops.length === 1 && device.closes.length === 1);
   await setImmediate();

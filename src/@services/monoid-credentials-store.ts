@@ -1,8 +1,26 @@
-import type {BiometricVaultErrorCode} from 'capacitor-biometric-vault';
+import type {
+  BiometricVaultErrorCode,
+  BiometricVaultPlugin,
+} from 'capacitor-biometric-vault';
 import {BiometricVault} from 'capacitor-biometric-vault';
 
 import type {MonoidIdHex} from '../@atomics.js';
 import {MonoidPIN} from '../@atomics.js';
+
+import type {StorageService} from './storage-service.js';
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/consistent-type-definitions
+  interface StorageMapping {
+    monoidCredentialsBackend: 'biometric' | 'unencrypted';
+    monoidUnencryptedPINs: string;
+  }
+}
+
+type CredentialsBackend = Pick<
+  BiometricVaultPlugin,
+  'get' | 'set' | 'remove' | 'clear' | 'cancel'
+>;
 
 const ERROR_MESSAGES: Record<BiometricVaultErrorCode, string> = {
   UNSUPPORTED: 'Protected credential storage is not supported on this device.',
@@ -14,7 +32,7 @@ const ERROR_MESSAGES: Record<BiometricVaultErrorCode, string> = {
     'This device cannot provide the required credential protection.',
   ENTRY_INVALIDATED: 'The saved credential is no longer accessible.',
   DATA_CORRUPTED: 'The saved credential could not be verified.',
-  IO_ERROR: 'Protected credential storage could not be accessed.',
+  IO_ERROR: 'Credential storage could not be accessed.',
   INVALID_ARGUMENT: 'The credential request is invalid.',
   CANCELLED: 'Credential authentication was cancelled.',
   APP_INACTIVE: 'Credential authentication ended because the app is inactive.',
@@ -59,7 +77,7 @@ export function isCredentialRequestCancelled(error: unknown): boolean {
 }
 
 const ENTRY_ID = 'monoid.access-pins';
-// Native calls are atomic individually; serialize the application's entire read-modify-write.
+// Backend calls are atomic individually; serialize the application's entire read-modify-write.
 let pending = Promise.resolve();
 
 type MutablePINs = Partial<Record<MonoidIdHex, MonoidPIN>>;
@@ -105,6 +123,8 @@ function throwIfCancelled(signal?: AbortSignal): void {
 }
 
 export class MonoidCredentialsStore {
+  constructor(private backend: CredentialsBackend = BiometricVault) {}
+
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
     const result = pending.then(operation).catch(error => {
       throw credentialError(error);
@@ -123,14 +143,14 @@ export class MonoidCredentialsStore {
 
     const id = requestId();
     const cancel = (): void => {
-      // The read still settles through its own native result and cleanup.
-      void BiometricVault.cancel({requestId: id}).catch(() => {});
+      // The read still settles through its own result and cleanup.
+      void this.backend.cancel({requestId: id}).catch(() => {});
     };
 
     signal?.addEventListener('abort', cancel, {once: true});
 
     try {
-      const {value} = await BiometricVault.get({
+      const {value} = await this.backend.get({
         id: ENTRY_ID,
         requestId: id,
         reason: 'Unlock saved Access PINs',
@@ -154,20 +174,20 @@ export class MonoidCredentialsStore {
 
     const id = requestId();
     const cancel = (): void => {
-      // Keep the queue occupied until native commit/cancellation and cleanup settle.
-      void BiometricVault.cancel({requestId: id}).catch(() => {});
+      // Keep the queue occupied until commit/cancellation and cleanup settle.
+      void this.backend.cancel({requestId: id}).catch(() => {});
     };
 
     signal?.addEventListener('abort', cancel, {once: true});
 
     try {
-      await BiometricVault.set({
+      await this.backend.set({
         id: ENTRY_ID,
         value: JSON.stringify(pins),
         requestId: id,
         reason: 'Save Access PINs on this device',
       });
-      // Native success means the write committed, even if cancellation arrived later.
+      // Success means the write committed, even if cancellation arrived later.
     } catch (error) {
       throw credentialError(signal?.aborted ? {code: 'CANCELLED'} : error);
     } finally {
@@ -230,8 +250,8 @@ export class MonoidCredentialsStore {
       delete pins[id];
 
       if (Object.keys(pins).length === 0) {
-        // Native remove has no request ID and cannot be cancelled after it starts.
-        await BiometricVault.remove({id: ENTRY_ID});
+        // Removal has no request ID and cannot be cancelled after it starts.
+        await this.backend.remove({id: ENTRY_ID});
       } else {
         await this.writePINs(pins, signal);
       }
@@ -240,7 +260,32 @@ export class MonoidCredentialsStore {
 
   clear(): Promise<void> {
     return this.enqueue(async () => {
-      await BiometricVault.clear();
+      await this.backend.clear();
     });
+  }
+
+  static async create(
+    storage: StorageService,
+  ): Promise<MonoidCredentialsStore> {
+    if (
+      import.meta.env.DEV &&
+      (await storage.get('monoidCredentialsBackend')) === 'unencrypted'
+    ) {
+      const remove = (): Promise<void> =>
+        storage.remove('monoidUnencryptedPINs');
+
+      return new MonoidCredentialsStore({
+        get: async () => ({
+          value: (await storage.get('monoidUnencryptedPINs')) ?? null,
+        }),
+        set: async ({value}) => storage.set('monoidUnencryptedPINs', value),
+        remove,
+        clear: remove,
+        // Storage I/O cannot be cancelled. The store still waits for settlement.
+        cancel: async () => {},
+      });
+    }
+
+    return new MonoidCredentialsStore();
   }
 }

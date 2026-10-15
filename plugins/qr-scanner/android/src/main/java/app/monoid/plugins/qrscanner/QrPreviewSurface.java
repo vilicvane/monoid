@@ -101,7 +101,7 @@ final class QrPreviewSurface {
 
     void hide() {
         view.animate().cancel();
-        container.setAlpha(0);
+        view.setVisibility(View.INVISIBLE);
         webView.setBackgroundColor(restoreColor);
     }
 
@@ -109,7 +109,33 @@ final class QrPreviewSurface {
         hide();
         webView.removeOnLayoutChangeListener(viewportLayout);
         container.removeOnLayoutChangeListener(viewportLayout);
-        parent.removeView(container);
+        container.removeView(view);
+        if (!webView.isAttachedToWindow()) {
+            parent.removeView(container);
+            return;
+        }
+
+        View.OnAttachStateChangeListener attachment = new View.OnAttachStateChangeListener() {
+            @Override
+            public void onViewAttachedToWindow(View view) {}
+
+            @Override
+            public void onViewDetachedFromWindow(View view) {
+                view.removeOnAttachStateChangeListener(this);
+                parent.removeView(container);
+            }
+        };
+        webView.addOnAttachStateChangeListener(attachment);
+        // Background restoration is asynchronous. Keep the empty backing until
+        // the WebView can draw it, without delaying camera release or scan completion.
+        webView.postVisualStateCallback(0, new WebView.VisualStateCallback() {
+            @Override
+            public void onComplete(long requestId) {
+                webView.removeOnAttachStateChangeListener(attachment);
+                webView.invalidate();
+                parent.removeView(container);
+            }
+        });
     }
 
     record Bounds(double x, double y, double width, double height) {

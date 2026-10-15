@@ -17,8 +17,19 @@ export function standbyIsoDep(
   callback: (sessionId: string) => Promise<void>,
   onError: (error: unknown) => void,
   onCleanup?: () => void,
+  onConnectionChange?: (connected: boolean) => void,
 ): () => Promise<void> {
   let disposed = false;
+  let connectedSessionId: string | undefined;
+  const setConnectedSession = (sessionId: string | undefined): void => {
+    const wasConnected = connectedSessionId !== undefined;
+    connectedSessionId = sessionId;
+    const connected = sessionId !== undefined;
+
+    if (connected !== wasConnected) {
+      onConnectionChange?.(connected);
+    }
+  };
   let stop!: () => void;
   const stopped = new Promise<void>(resolve => {
     stop = resolve;
@@ -27,7 +38,7 @@ export function standbyIsoDep(
   const run = async (): Promise<void> => {
     const listeners: PluginListenerHandle[] = [];
     const sessions = new Set<Promise<void>>();
-    let lastSessionId: string | undefined;
+    const knownSessionIds = new Set<string>();
     let scanId: string | undefined;
     let scanEnded: ScanEndedEvent | undefined;
     let scanFailure: unknown;
@@ -66,6 +77,10 @@ export function standbyIsoDep(
         scanFailure = error;
         cleanupFailure ??= {error};
         stop();
+      } finally {
+        if (connectedSessionId === sessionId) {
+          setConnectedSession(undefined);
+        }
       }
 
       if (
@@ -85,7 +100,7 @@ export function standbyIsoDep(
       sessionId: string,
       operation: () => Promise<void>,
     ): void => {
-      lastSessionId = sessionId;
+      knownSessionIds.add(sessionId);
 
       const session = handleSession(sessionId, operation).finally(() => {
         sessions.delete(session);
@@ -107,19 +122,31 @@ export function standbyIsoDep(
       );
       listeners.push(
         await IsoDepNfc.addListener('sessionOpened', event => {
-          if (disposed || event.scanId !== scanId) {
+          if (
+            disposed ||
+            event.scanId !== scanId ||
+            scanEnded ||
+            knownSessionIds.has(event.sessionId)
+          ) {
             return;
           }
 
+          setConnectedSession(event.sessionId);
           startSession(event.sessionId, () => callback(event.sessionId));
         }),
       );
       listeners.push(
         await IsoDepNfc.addListener('sessionEnded', event => {
+          if (disposed || event.scanId !== scanId || scanEnded) {
+            return;
+          }
+
+          if (event.sessionId === connectedSessionId) {
+            setConnectedSession(undefined);
+          }
+
           if (
-            disposed ||
-            event.scanId !== scanId ||
-            event.sessionId === lastSessionId ||
+            knownSessionIds.has(event.sessionId) ||
             event.code === undefined
           ) {
             return;
@@ -127,7 +154,10 @@ export function standbyIsoDep(
 
           startSession(event.sessionId, () =>
             Promise.reject(
-              new Error(`The NFC connection ended: ${event.reason}.`),
+              Object.assign(
+                new Error(`The NFC connection ended: ${event.reason}.`),
+                {code: event.code},
+              ),
             ),
           );
         }),
@@ -136,6 +166,7 @@ export function standbyIsoDep(
         await IsoDepNfc.addListener('scanEnded', event => {
           if (event.scanId === scanId) {
             scanEnded = event;
+            setConnectedSession(undefined);
             finishScan(event);
           }
         }),
@@ -160,6 +191,7 @@ export function standbyIsoDep(
         }
 
         scanId = crypto.getRandomValues(new Uint32Array(4)).join('-');
+        knownSessionIds.clear();
         scanEnded = undefined;
         scanFailure = undefined;
         const ended = new Promise<ScanEndedEvent>(resolve => {
@@ -214,6 +246,7 @@ export function standbyIsoDep(
         onCleanup?.();
       }
     } finally {
+      setConnectedSession(undefined);
       const removals = await Promise.allSettled(
         listeners.map(async listener => listener.remove()),
       );
@@ -240,6 +273,7 @@ export function standbyIsoDep(
 
   return () => {
     disposed = true;
+    setConnectedSession(undefined);
     stop();
 
     // A cancelled queued scan still waits its turn before completing cleanup.

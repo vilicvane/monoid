@@ -5,6 +5,8 @@ import {useEntrances} from '../@entrances.js';
 
 import {SafeMatch} from './views/safe/index.js';
 import {ScanView} from './views/scan-view.js';
+import {SessionSwitchView} from './views/session-switch-view.js';
+import {SessionView} from './views/session-view.js';
 import {SessionsView} from './views/sessions-view.js';
 import {WalletConnectView} from './views/wallet-connect-view.js';
 
@@ -13,7 +15,15 @@ export const Views = (): ReactNode => {
 
   return (
     <>
-      <Route view={router.sessions.$view()} component={SessionsView} />
+      <Route view={router.sessions.$exact.$view()} component={SessionsView} />
+      <Route
+        view={router.sessions.session.$exact.$view()}
+        component={SessionView}
+      />
+      <Route
+        view={router.sessions.session.switchAccounts.$view()}
+        component={SessionSwitchView}
+      />
       <Route view={router.scan.$exact.$view()} component={ScanView} />
       <Route
         view={router.scan.connection.$view({parallel: true})}

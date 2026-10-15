@@ -22,6 +22,10 @@ export class StorageService {
     await this.storage.set(key, value);
   }
 
+  async remove(key: keyof StorageMapping): Promise<void> {
+    await this.storage.remove(key);
+  }
+
   static async create(): Promise<StorageService> {
     const storage = new Storage();
     await storage.create();

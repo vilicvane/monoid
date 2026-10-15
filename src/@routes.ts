@@ -5,7 +5,12 @@ import type {ScannedCardData} from './@components/views/safe/index.js';
 import type {AddressChain} from './@lib/wallet-address.js';
 
 export const ROUTE_SCHEMA = {
-  sessions: true,
+  sessions: {
+    session: {
+      $state: undefined! as {topic: string},
+      switchAccounts: true,
+    },
+  },
   scan: {
     connection: {
       $state: undefined! as {id: number},
@@ -25,6 +30,7 @@ export const ROUTE_SCHEMA = {
       derive: true,
     },
     scanCard: true,
+    installApplet: true,
     setupCard: {
       $state: undefined! as {
         id: MonoidIdHex;

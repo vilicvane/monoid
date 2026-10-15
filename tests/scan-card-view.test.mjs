@@ -29,8 +29,12 @@ mock.module('../.bld/app/@services/index.js', {
 mock.module('../.bld/app/@utils/index.js', {
   namedExports: {uint8ArrayToHex: bytes => Buffer.from(bytes).toString('hex')},
 });
+class MonoidScanRedirectError extends Error {
+  code = 'CANCELLED';
+}
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
+    MonoidScanRedirectError,
     MonoidScanStatePromptContentHighlight: 'span',
     useMonoidScanPrompt: () => [null, () => fixture.scan],
   },
@@ -77,6 +81,28 @@ test('background cancellation returns an active scan page to Safe without an err
   assert.deepEqual(state.errors, []);
   state.cleanup();
 });
+
+test('ordinary scan cancellation still returns to Safe', async () => {
+  const state = mount();
+  state.rejectScan(Object.assign(new Error('Cancelled'), {code: 'CANCELLED'}));
+  await state.finished;
+
+  assert.equal(state.replacements, 1);
+  assert.deepEqual(state.errors, []);
+  state.cleanup();
+});
+
+for (const active of [true, false]) {
+  test(`a scan redirect preserves the destination while scan-page active=${active}`, async () => {
+    const state = mount({active});
+    state.rejectScan(new MonoidScanRedirectError());
+    await state.finished;
+
+    assert.equal(state.replacements, 0);
+    assert.deepEqual(state.errors, []);
+    state.cleanup();
+  });
+}
 
 test('a failure during page entry still schedules the return to Safe and reports the error', async () => {
   const state = mount({active: false});

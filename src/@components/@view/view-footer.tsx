@@ -29,6 +29,8 @@ const Container = styled(Buttons)<{$fixed: boolean}>`
   ${props =>
     props.$fixed &&
     css`
+      --button-disabled-background: rgba(255, 255, 255, 0.9);
+
       position: absolute;
       inset: auto 0 0;
       z-index: 1;

@@ -6,6 +6,7 @@ import {styled} from 'styled-components';
 import type {MonoidIdHex} from '../../@atomics.js';
 import {MonoidPIN} from '../../@atomics.js';
 import {useEntrances} from '../../@entrances.js';
+import {AppletNotFoundError} from '../../@lib/applet.js';
 import {CBORAppletError} from '../../@lib/cbor-applet.js';
 import {IsoDepScanError} from '../../@lib/isodep.js';
 import type {MonoidApplet} from '../../@lib/monoid/index.js';
@@ -28,6 +29,16 @@ export type MonoidScanPromptOptions = {
   auth?: 'access' | false;
   retryOnError?: boolean;
 };
+
+/** The scan ended quietly because another page will handle the card. */
+export class MonoidScanRedirectError extends Error {
+  readonly code = 'CANCELLED';
+
+  constructor() {
+    super('Card scanning was redirected.');
+    this.name = new.target.name;
+  }
+}
 
 export function useMonoidScanPrompt({
   ensureSetup = true,
@@ -115,7 +126,7 @@ export function useMonoidScanPrompt({
     let result:
       | {type: 'success'}
       | {type: 'input'; id: MonoidIdHex; message?: string}
-      | {type: 'setup'; navigate: () => void}
+      | {type: 'redirect'; navigate: () => void}
       | {type: 'error'; error: unknown; retry: boolean}
       | undefined;
     let finishing = false;
@@ -251,8 +262,8 @@ export function useMonoidScanPrompt({
         settled = true;
         resolve();
         setAppletCallbackAndPromise(undefined);
-      } else if (completed.type === 'setup') {
-        fail(cancelled());
+      } else if (completed.type === 'redirect') {
+        fail(new MonoidScanRedirectError());
         completed.navigate();
       } else if (completed.retry) {
         errorService.catch(Promise.reject(completed.error));
@@ -276,8 +287,6 @@ export function useMonoidScanPrompt({
             return;
           }
 
-          setState('scanning');
-
           setStateContent('Greeting to monoid...');
 
           const hello = await applet.hello({});
@@ -300,7 +309,7 @@ export function useMonoidScanPrompt({
 
           if (ensureSetup && hello.pin === false) {
             result = {
-              type: 'setup',
+              type: 'redirect',
               navigate: () => {
                 router.safe
                   .setupCard({
@@ -394,21 +403,42 @@ export function useMonoidScanPrompt({
             return;
           }
 
-          if (error instanceof IsoDepScanError) {
+          if (error instanceof AppletNotFoundError) {
+            update = undefined;
+            result = {
+              type: 'redirect',
+              navigate: () => router.safe.installApplet.$replace(),
+            };
+            return;
+          }
+
+          const tagLost =
+            error !== null &&
+            typeof error === 'object' &&
+            'code' in error &&
+            error.code === 'TAG_LOST';
+
+          if (error instanceof IsoDepScanError || tagLost) {
             update = undefined;
           }
 
           result = {
             type: 'error',
-            error,
+            error: tagLost ? cancelled() : error,
             retry:
               retryOnError &&
+              !tagLost &&
               !(error instanceof IsoDepScanError) &&
               !isCredentialRequestCancelled(error),
           };
         },
         () => {
           void finish().catch(fail);
+        },
+        connected => {
+          if (!disposed && !finishing) {
+            setState(connected ? 'scanning' : 'ready');
+          }
         },
       );
     };

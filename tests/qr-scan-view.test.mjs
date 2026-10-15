@@ -70,6 +70,7 @@ mock.module('react', {
     useState: initial => {
       const state = rendering;
       const index = state.stateIndex++;
+      if (initial === 'starting') state.statusIndex = index;
       if (!(index in state.values)) state.values[index] = initial;
       return [
         state.values[index],
@@ -177,10 +178,12 @@ after(async () => {
 
 function deferred() {
   let resolve;
-  const promise = new Promise(done => {
+  let reject;
+  const promise = new Promise((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return {promise, resolve};
+  return {promise, resolve, reject};
 }
 
 function resetScanner(overrides = {}) {
@@ -229,6 +232,9 @@ async function loadView() {
 function mount(ScanView) {
   const state = {
     values: [],
+    get status() {
+      return this.values[this.statusIndex];
+    },
     refs: [],
     effects: [],
     errors: [],
@@ -391,7 +397,7 @@ for (const code of ['CANCELLED', 'APP_INACTIVE']) {
     });
     const state = mount(await loadView());
     await setImmediate();
-    assert.equal(state.values[0], 'paused');
+    assert.equal(state.status, 'paused');
     assert.deepEqual(state.errors, []);
     assert.equal(native.stops.length, 1);
 
@@ -419,7 +425,7 @@ test('the first QR result covers the camera before stopping and ignores repeated
     scanId,
     values: ['https://example.com', 'plain text', 'wc:invalid', 'FIDO:/123'],
   });
-  assert.equal(state.values[0], 'scanning');
+  assert.equal(state.status, 'scanning');
   assert.deepEqual(native.stops, []);
   assert.deepEqual(state.errors, []);
 
@@ -427,11 +433,11 @@ test('the first QR result covers the camera before stopping and ignores repeated
   codes.callback({scanId, values: [WALLET_CONNECT_URI]});
   ended.callback({scanId, reason: 'error', message: 'Late camera error'});
   await setImmediate();
-  assert.equal(state.values[0], 'completing');
+  assert.equal(state.status, 'completing');
   assert.deepEqual(native.stops, []);
   state.cover();
   await setImmediate();
-  assert.equal(state.values[0], 'scanned');
+  assert.equal(state.status, 'scanned');
   assert.deepEqual(native.stops, [scanId]);
   assert.deepEqual(state.errors, []);
 
@@ -457,7 +463,7 @@ test('leaving keeps the camera and scanning presentation until unmount, while ig
     await setImmediate();
     assert.equal(state.find('qr-scan-preview').props.phase, 'scanning');
     assert.ok(state.find('global-style'));
-    assert.equal(state.values[0], 'scanning');
+    assert.equal(state.status, 'scanning');
     assert.deepEqual(native.stops, []);
     assert.equal(native.starts.length, 1);
     assert.ok(native.listeners.every(listener => listener.removals === 0));
@@ -494,7 +500,7 @@ test('returning before the leaving transition finishes reuses the camera and acc
   assert.equal(state.find('qr-scan-preview').props.phase, 'completing');
   state.cover();
   await setImmediate();
-  assert.equal(state.values[0], 'scanned');
+  assert.equal(state.status, 'scanned');
   assert.deepEqual(native.stops, [scanId]);
 
   state.cleanup();
@@ -539,13 +545,13 @@ test('unmounting during the success animation stops immediately and ignores its 
       scanId,
       values: [WALLET_CONNECT_URI],
     });
-  assert.equal(state.values[0], 'completing');
+  assert.equal(state.status, 'completing');
 
   state.cleanup();
   state.cover();
   await setImmediate();
   assert.deepEqual(native.stops, [scanId]);
-  assert.equal(state.values[0], 'completing');
+  assert.equal(state.status, 'completing');
   assert.deepEqual(state.errors, []);
 });
 
@@ -554,11 +560,11 @@ test('the loading state lasts until the native first frame is ready', async () =
   resetScanner({startScan: () => ready.promise});
   const state = mount(await loadView());
   await setImmediate();
-  assert.equal(state.values[0], 'starting');
+  assert.equal(state.status, 'starting');
 
   ready.resolve();
   await setImmediate();
-  assert.equal(state.values[0], 'scanning');
+  assert.equal(state.status, 'scanning');
   state.cleanup();
   await setImmediate();
 });
@@ -668,50 +674,115 @@ test('a stop failure reports the error without trapping the result in its animat
     });
   state.cover();
   await setImmediate();
-  assert.equal(state.values[0], 'scanned');
+  assert.equal(state.status, 'scanned');
   assert.deepEqual(state.errors, [error]);
   state.cleanup();
   await setImmediate();
 });
 
-async function scanAndFinishFeedback(state, native) {
+async function scanAndStartPairing(state, native) {
   native.listeners
     .find(listener => listener.name === 'codesScanned')
     .callback({
       scanId: native.starts[0].scanId,
       values: ['https://example.com', WALLET_CONNECT_URI],
     });
+  state.rerender();
+  await setImmediate();
+  assert.equal(state.status, 'completing');
+  assert.equal(state.connections.length, 1);
+  assert.equal(state.connections[0].uri, WALLET_CONNECT_URI);
+  assert.deepEqual(native.stops, []);
+}
+
+async function finishPreview(state) {
   state.cover();
   await setImmediate();
   state.rerender();
-  assert.equal(state.connections.length, 0);
   state.find('qr-scan-preview').props.onSettled('scanned');
+  state.rerender();
+  await setImmediate();
   state.rerender();
 }
 
-test('pairs after success feedback and passes only the proposal id to the confirmation route', async () => {
+test('pairing starts during camera contraction and a slow proposal routes after the preview finishes without waiting text', async () => {
   const native = resetScanner();
   const state = mount(await loadView());
   await setImmediate();
-  await scanAndFinishFeedback(state, native);
+  await scanAndStartPairing(state, native);
+  await finishPreview(state);
 
   assert.equal(state.connections.length, 1);
-  assert.equal(state.connections[0].uri, WALLET_CONNECT_URI);
-  assert.equal(state.find('p').props.children, 'Waiting for site…');
+  assert.equal(state.connections[0].signal.aborted, false);
+  assert.equal(state.status, 'scanned');
+  assert.deepEqual(state.routes, []);
+  assert.equal(state.find('p'), undefined);
   assert.equal(state.find('button'), undefined);
   state.connections[0].resolve({id: 42});
   await setImmediate();
+  state.rerender();
+  assert.deepEqual(state.routes, [{id: 42}]);
+
+  state.rerender({active: false});
+  state.rerender({active: true});
+  await setImmediate();
+  state.rerender();
+  await setImmediate();
+  state.rerender();
+  assert.equal(state.status, 'scanning');
+  assert.equal(native.starts.length, 2);
   assert.deepEqual(state.routes, [{id: 42}]);
   state.cleanup();
   await setImmediate();
   assert.deepEqual(state.rejected, []);
 });
 
-test('leaving cancels pairing and rejects a proposal delivered at the handoff boundary', async () => {
+test('a fast proposal waits for camera cover, native shutdown and the final animation before routing', async () => {
+  const closing = deferred();
+  const native = resetScanner({
+    stopScan: ({scanId}) => {
+      native.stops.push(scanId);
+      return closing.promise;
+    },
+  });
+  const state = mount(await loadView());
+  await setImmediate();
+  await scanAndStartPairing(state, native);
+
+  state.connections[0].resolve({id: 42});
+  await setImmediate();
+  state.rerender();
+  assert.deepEqual(state.routes, []);
+  assert.deepEqual(native.stops, []);
+
+  state.cover();
+  await setImmediate();
+  state.rerender();
+  assert.deepEqual(native.stops, [native.starts[0].scanId]);
+  assert.equal(state.find('qr-scan-preview').props.phase, 'completing');
+  assert.deepEqual(state.routes, []);
+
+  closing.resolve();
+  await setImmediate();
+  state.rerender();
+  assert.equal(state.find('qr-scan-preview').props.phase, 'scanned');
+  assert.deepEqual(state.routes, []);
+
+  state.find('qr-scan-preview').props.onSettled('scanned');
+  state.rerender();
+  assert.deepEqual(state.routes, [{id: 42}]);
+  assert.equal(state.connections.length, 1);
+  state.cleanup();
+  await setImmediate();
+  assert.deepEqual(state.rejected, []);
+});
+
+test('leaving cancels pairing and rejects a late proposal without routing on return', async () => {
   const native = resetScanner();
   const state = mount(await loadView());
   await setImmediate();
-  await scanAndFinishFeedback(state, native);
+  await scanAndStartPairing(state, native);
+  await finishPreview(state);
 
   state.rerender({leaving: true, active: false});
   assert.equal(state.connections[0].signal.aborted, true);
@@ -723,24 +794,124 @@ test('leaving cancels pairing and rejects a proposal delivered at the handoff bo
   state.rerender({leaving: false, active: true});
   await setImmediate();
   assert.equal(state.connections.length, 1);
-  assert.equal(state.values[0], 'scanning');
+  assert.equal(state.status, 'scanning');
+  assert.deepEqual(state.routes, []);
   state.cleanup();
   await setImmediate();
 });
 
-test('a pairing failure displays the shared error and permits a new Scan view', async () => {
+for (const departure of ['leave', 'unmount']) {
+  test(`${departure} during contraction rejects a received proposal before the confirmation page can claim it`, async () => {
+    const native = resetScanner();
+    const state = mount(await loadView());
+    await setImmediate();
+    await scanAndStartPairing(state, native);
+    state.connections[0].resolve({id: 42});
+    await setImmediate();
+    state.rerender();
+    assert.deepEqual(state.routes, []);
+    assert.deepEqual(state.rejected, []);
+
+    if (departure === 'leave') {
+      state.rerender({leaving: true, active: false});
+    } else {
+      state.cleanup();
+    }
+    await setImmediate();
+    assert.equal(state.connections[0].signal.aborted, true);
+    assert.deepEqual(state.rejected, [42]);
+    assert.deepEqual(state.routes, []);
+
+    state.cover();
+    await setImmediate();
+    if (departure === 'leave') state.cleanup();
+    await setImmediate();
+    assert.deepEqual(state.rejected, [42]);
+    assert.deepEqual(state.routes, []);
+    assert.deepEqual(native.stops, [native.starts[0].scanId]);
+  });
+}
+
+test('a proposal cancelled during contraction cannot reach confirmation after a quick return', async () => {
   const native = resetScanner();
   const state = mount(await loadView());
-  const failure = new Error('Relay unavailable');
-  state.entrances.walletKitService.connect = async () => {
-    throw failure;
-  };
   await setImmediate();
-  await scanAndFinishFeedback(state, native);
+  await scanAndStartPairing(state, native);
+  state.connections[0].resolve({id: 42});
   await setImmediate();
   state.rerender();
 
-  assert.equal(state.values[0], 'error');
+  state.rerender({leaving: true, active: false});
+  state.rerender({leaving: false, active: true});
+  state.rerender();
+  await setImmediate();
+  state.rerender();
+  assert.deepEqual(state.rejected, [42]);
+  assert.deepEqual(state.routes, []);
+  assert.equal(state.status, 'scanning');
+  assert.equal(native.starts.length, 2);
+  assert.equal(state.connections.length, 1);
+
+  state.cleanup();
+  await setImmediate();
+});
+
+test('an early pairing failure waits for camera shutdown and animation before showing the shared error', async () => {
+  const closing = deferred();
+  const native = resetScanner({
+    stopScan: ({scanId}) => {
+      native.stops.push(scanId);
+      return closing.promise;
+    },
+  });
+  const state = mount(await loadView());
+  await setImmediate();
+  await scanAndStartPairing(state, native);
+  const failure = new Error('Relay unavailable');
+  state.connections[0].reject(failure);
+  await setImmediate();
+  state.rerender();
+  assert.equal(state.status, 'completing');
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(native.stops, []);
+
+  state.cover();
+  await setImmediate();
+  state.rerender();
+  assert.equal(state.status, 'completing');
+  assert.deepEqual(state.errors, []);
+  closing.resolve();
+  await setImmediate();
+  state.rerender();
+  assert.equal(state.status, 'scanned');
+  assert.deepEqual(state.errors, []);
+
+  state.find('qr-scan-preview').props.onSettled('scanned');
+  state.rerender();
+  await setImmediate();
+  state.rerender();
+  assert.equal(state.status, 'error');
+  assert.deepEqual(state.errors, [failure]);
+  assert.deepEqual(state.routes, []);
+  assert.deepEqual(native.stops, [native.starts[0].scanId]);
+  state.cleanup();
+  await setImmediate();
+});
+
+test('a late pairing failure displays the shared error and permits a new Scan view', async () => {
+  const native = resetScanner();
+  const state = mount(await loadView());
+  const failure = new Error('Relay unavailable');
+  await setImmediate();
+  await scanAndStartPairing(state, native);
+  await finishPreview(state);
+  state.connections[0].reject(failure);
+  await setImmediate();
+  state.rerender();
+  await setImmediate();
+  state.rerender();
+
+  assert.equal(state.status, 'error');
   assert.deepEqual(state.errors, [failure]);
   assert.deepEqual(state.routes, []);
   assert.equal(state.find('button'), undefined);
@@ -748,7 +919,7 @@ test('a pairing failure displays the shared error and permits a new Scan view', 
   const retry = mount(await loadView());
   await setImmediate();
   assert.equal(native.starts.length, 2);
-  assert.equal(retry.values[0], 'scanning');
+  assert.equal(retry.status, 'scanning');
   retry.cleanup();
   await setImmediate();
 });

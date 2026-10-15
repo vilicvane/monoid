@@ -1,4 +1,3 @@
-import {IonSpinner} from '@ionic/react';
 import classNames from 'classNames';
 import {
   type ButtonHTMLAttributes,
@@ -10,7 +9,13 @@ import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
 
+import {LoadingSpinner} from './loading-spinner.js';
 import {RippleEffect} from './ripple-effect.js';
+
+type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+  color?: 'primary' | 'danger' | 'neutral';
+  loading?: boolean;
+};
 
 export const Buttons = styled.div`
   margin: auto -2px 0;
@@ -20,18 +25,21 @@ export const Buttons = styled.div`
   gap: 8px;
 `;
 
-const Container = styled.button`
+const Container = styled.button<{$color: NonNullable<ButtonProps['color']>}>`
   position: relative;
 
   height: 40px;
 
-  background-color: var(--ion-color-primary);
-  border: solid 0.5px var(--ion-color-primary-shade);
-  color: var(--ion-color-primary-contrast);
+  background-color: var(--ion-color-${props => props.$color});
+  border: solid 0.5px var(--ion-color-${props => props.$color}-shade);
+  color: var(--ion-color-${props => props.$color}-contrast);
   border-radius: 20px;
   font-size: 16px;
 
-  transition: all 0.2s linear;
+  transition:
+    background-color 0.2s linear,
+    border-color 0.2s linear,
+    color 0.2s linear;
 
   display: flex;
   align-items: center;
@@ -39,26 +47,71 @@ const Container = styled.button`
   gap: 8px;
 
   &:disabled {
-    background-color: transparent;
+    background-color: var(--button-disabled-background, transparent);
     border-color: var(--ion-color-light-shade);
     color: var(--ion-color-medium-tint);
   }
 `;
 
+const LoadingContent = styled.span<{$loading: boolean}>`
+  position: relative;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+
+  /* Keep the label and its 16px spinner centered as one group. */
+  transform: translateX(${props => (props.$loading ? 12 : 0)}px);
+  transition: transform 0.16s ease;
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+`;
+
+const Spinner = styled(LoadingSpinner)`
+  position: absolute;
+  right: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+
+  width: 16px;
+  height: 16px;
+
+  transition: opacity 0.16s ease;
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+`;
+
 export const Button = ({
   className,
+  color = 'primary',
   disabled,
+  loading,
   children,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement>): ReactNode => {
+}: ButtonProps): ReactNode => {
   return (
     <Container
       className={classNames(className, 'ion-activatable')}
-      disabled={disabled}
+      $color={color}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
       {...props}
     >
-      {children}
-      {!disabled && <RippleEffect />}
+      {loading === undefined ? (
+        children
+      ) : (
+        <LoadingContent $loading={loading}>
+          {/* Ionic attaches CSS classes after mount; set initial opacity directly. */}
+          <Spinner paused={!loading} style={{opacity: loading ? 1 : 0}} />
+          {children}
+        </LoadingContent>
+      )}
+      {!disabled && !loading && <RippleEffect />}
     </Container>
   );
 };
@@ -68,7 +121,7 @@ export const AsyncButton = ({
   handler,
   children,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
+}: Omit<ButtonProps, 'loading'> & {
   handler: () => Promise<void>;
 }): ReactNode => {
   const {errorService} = useEntrances();
@@ -82,8 +135,7 @@ export const AsyncButton = ({
   }, [errorService, handler]);
 
   return (
-    <Button {...props} disabled={disabled || loading} onClick={onClick}>
-      {loading && <IonSpinner />}
+    <Button {...props} disabled={disabled} loading={loading} onClick={onClick}>
       {children}
     </Button>
   );

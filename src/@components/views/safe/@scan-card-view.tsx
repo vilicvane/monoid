@@ -6,6 +6,7 @@ import type {Router} from '../../../@routes.js';
 import {isCredentialRequestCancelled} from '../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../@utils/index.js';
 import {
+  MonoidScanRedirectError,
   MonoidScanStatePromptContentHighlight,
   useMonoidScanPrompt,
 } from '../../@monoid/monoid-scan-prompt.js';
@@ -59,7 +60,11 @@ export const ScanCardView = ({
             router.safe.card({card: scannedCard}).$push();
           }
         } catch (error) {
-          if (disposed || view.$leaving) {
+          if (
+            disposed ||
+            view.$leaving ||
+            error instanceof MonoidScanRedirectError
+          ) {
             return;
           }
 

@@ -4,6 +4,10 @@ export const InfoSection = styled.div`
   display: flex;
   flex-direction: column;
   gap: 8px;
+
+  & + & {
+    margin-top: 16px;
+  }
 `;
 
 export const InfoSectionTitle = styled.div``;
@@ -20,3 +24,17 @@ export const InfoSectionItemLabel = styled.div`
 `;
 
 export const InfoSectionItemContent = styled.div``;
+
+export const InfoSectionRow = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 16px;
+  font-size: 14px;
+
+  > :last-child {
+    margin-left: auto;
+    text-align: right;
+  }
+`;

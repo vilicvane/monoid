@@ -108,9 +108,9 @@ export class Entrances {
 
   @entrance
   get walletKitService() {
-    return this.walletKit.then(walletKit => {
-      return new WalletKitService(walletKit);
-    });
+    return Promise.all([this.walletKit, this.storageService]).then(
+      ([walletKit, storage]) => WalletKitService.create(walletKit, storage),
+    );
   }
 
   @entrance
@@ -134,7 +134,9 @@ export class Entrances {
 
   @entrance
   get monoidCredentialsStore() {
-    return this.storageService.then(() => new MonoidCredentialsStore());
+    return this.storageService.then(storageService =>
+      MonoidCredentialsStore.create(storageService),
+    );
   }
 
   @entrance

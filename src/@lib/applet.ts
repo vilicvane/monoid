@@ -7,6 +7,13 @@ export type AppletCommandDefinition = {
   response: unknown;
 };
 
+type AppletResponse = {
+  data: Uint8Array;
+  sw: number;
+  sw1: number;
+  sw2: number;
+};
+
 export abstract class Applet<TCommandDefinitions> {
   private sessionId?: string;
 
@@ -17,18 +24,28 @@ export abstract class Applet<TCommandDefinitions> {
     onError: (error: unknown) => void = console.error,
     /** Called after a connection attempt or a failed scan has been cleaned up. */
     onCleanup?: () => void,
+    /** Reports native connection changes, including the SELECT exchange. */
+    onConnectionChange?: (connected: boolean) => void,
   ): () => Promise<void> {
     return standbyIsoDep(
       async sessionId => {
-        const applet = Object.create(this) as this;
-        applet.sessionId = sessionId;
-
-        await applet.select();
+        const applet = await this.openSession(sessionId);
         await callback(applet);
       },
       onError,
       onCleanup,
+      onConnectionChange,
     );
+  }
+
+  /** Select on an existing connection; the caller retains ownership of its lifetime. */
+  async openSession(sessionId: string): Promise<this> {
+    const applet = Object.create(this) as this;
+    applet.sessionId = sessionId;
+
+    await applet.select();
+
+    return applet;
   }
 
   async sendCommand<TIns extends keyof TCommandDefinitions & number>(
@@ -78,49 +95,60 @@ export abstract class Applet<TCommandDefinitions> {
   }
 
   private async select(): Promise<void> {
-    await this.sendRawCommand(
-      new Uint8Array([0x00, 0xa4, 0x04, 0x00, this.aid.length, ...this.aid]),
-    );
+    let response: AppletResponse;
+
+    try {
+      response = await this.transceive(
+        new Uint8Array([0x00, 0xa4, 0x04, 0x00, this.aid.length, ...this.aid]),
+      );
+    } catch (error) {
+      if (error instanceof AppletISOError && error.sw === 0x6a82) {
+        throw new AppletNotFoundError(error.data);
+      }
+
+      throw error;
+    }
+
+    // A failure fetching SELECT's remaining data does not mean it is absent.
+    await this.readResponse(response);
   }
 
   public async sendRawCommand(command: Uint8Array): Promise<Uint8Array> {
+    return this.readResponse(await this.transceive(command));
+  }
+
+  private async transceive(command: Uint8Array): Promise<AppletResponse> {
     const {sessionId} = this;
 
     if (sessionId === undefined) {
       throw new Error('Applet commands require an open NFC session.');
     }
 
-    let {data: response} = await IsoDepNfc.transceive({
+    const {data: response} = await IsoDepNfc.transceive({
       sessionId,
       data: Array.from(command),
     });
+    const parsed = Applet.parseResponse(response);
 
-    let buffer = new Uint8Array(0);
+    if (parsed.sw !== 0x9000 && parsed.sw1 !== 0x61) {
+      throw new AppletISOError(
+        'Failed to request more data.',
+        parsed.sw,
+        parsed.data,
+      );
+    }
 
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const {data, sw, sw1} = Applet.parseResponse(response);
+    return parsed;
+  }
 
-      buffer = new Uint8Array([...buffer, ...data]);
+  private async readResponse(response: AppletResponse): Promise<Uint8Array> {
+    let buffer = response.data;
 
-      if (sw === 0x9000) {
-        break;
-      }
-
-      if (sw1 === 0x61) {
-        // More data is available.
-
-        const {data: nextResponse} = await IsoDepNfc.transceive({
-          sessionId,
-          data: [0x00, 0xc0, 0x00, 0x00],
-        });
-
-        response = nextResponse;
-
-        continue;
-      }
-
-      throw new AppletISOError('Failed to request more data.', sw, data);
+    while (response.sw1 === 0x61) {
+      response = await this.transceive(
+        new Uint8Array([0x00, 0xc0, 0x00, 0x00]),
+      );
+      buffer = new Uint8Array([...buffer, ...response.data]);
     }
 
     return buffer;
@@ -130,12 +158,7 @@ export abstract class Applet<TCommandDefinitions> {
 
   protected abstract decode(data: Uint8Array): unknown;
 
-  private static parseResponse(response: number[]): {
-    data: Uint8Array;
-    sw: number;
-    sw1: number;
-    sw2: number;
-  } {
+  private static parseResponse(response: number[]): AppletResponse {
     if (response.length < 2) {
       throw new Error('Invalid response length');
     }
@@ -182,5 +205,11 @@ export class AppletISOError extends Error {
       `0x${sw.toString(16).padStart(4, '0')} ${ISO7816_SW_CODE_TEXT_MAP.get(sw) ?? 'Unknown SW'} (${note}).`,
     );
     this.name = new.target.name;
+  }
+}
+
+export class AppletNotFoundError extends AppletISOError {
+  constructor(data: Uint8Array) {
+    super('Applet not found during SELECT', 0x6a82, data);
   }
 }

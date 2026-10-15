@@ -110,6 +110,21 @@ class CBORAppletError extends Error {
 mock.module('../.bld/app/@lib/cbor-applet.js', {
   namedExports: {CBORAppletError},
 });
+class AppletISOError extends Error {
+  constructor(note, sw, data) {
+    super(note);
+    this.sw = sw;
+    this.data = data;
+  }
+}
+class AppletNotFoundError extends AppletISOError {
+  constructor() {
+    super('Applet not found', 0x6a82, new Uint8Array());
+  }
+}
+mock.module('../.bld/app/@lib/applet.js', {
+  namedExports: {AppletISOError, AppletNotFoundError},
+});
 class IsoDepScanError extends Error {}
 mock.module('../.bld/app/@lib/isodep.js', {
   namedExports: {IsoDepScanError},
@@ -129,7 +144,7 @@ mock.module('../.bld/app/@services/index.js', {
 const {MonoidScanPromptPresenter} = await import(
   '../.bld/app/@services/monoid-scan-prompt-presenter.js'
 );
-const {useMonoidScanPrompt} = await import(
+const {useMonoidScanPrompt, MonoidScanRedirectError} = await import(
   '../.bld/app/@components/@monoid/monoid-scan-prompt.js'
 );
 
@@ -191,6 +206,7 @@ const cancelled = () =>
 const readFailed = () =>
   Object.assign(new Error('Storage unavailable'), {code: 'IO_ERROR'});
 const wrongPIN = () => new CBORAppletError({code: 'INVALID_PIN', tries: 4});
+const tagLost = () => Object.assign(new Error('Tag lost'), {code: 'TAG_LOST'});
 
 function mount(overrides = {}) {
   const state = {
@@ -209,6 +225,7 @@ function mount(overrides = {}) {
     removals: [],
     businessCalls: 0,
     businessCompleted: 0,
+    navigations: [],
     exitedTokens: new Set(),
     ...overrides,
   };
@@ -233,7 +250,16 @@ function mount(overrides = {}) {
     );
   };
   state.entrances = {
-    router: {safe: {setupCard: () => ({$push() {}})}},
+    router: {
+      safe: {
+        installApplet: {
+          $replace: () => state.navigations.push({route: 'installApplet'}),
+        },
+        setupCard: options => ({
+          $push: () => state.navigations.push({route: 'setupCard', options}),
+        }),
+      },
+    },
     monoidScanPromptPresenter: state.presenter,
     errorService: {
       catch: promise => promise.catch(error => state.retryErrors.push(error)),
@@ -262,7 +288,7 @@ function mount(overrides = {}) {
       },
     },
     monoidApplet: {
-      standby(callback, onError, onCleanup) {
+      standby(callback, onError, onCleanup, onConnectionChange) {
         assert.ok(
           state.scans.every(scan => scan.stopFinished),
           'A previous native scan must finish stopping before another starts',
@@ -271,6 +297,7 @@ function mount(overrides = {}) {
           callback,
           onError,
           onCleanup,
+          onConnectionChange,
           stopRequested: false,
           stopFinished: false,
           stop: deferred(),
@@ -278,6 +305,7 @@ function mount(overrides = {}) {
         state.scans.push(scan);
         return () => {
           scan.stopRequested = true;
+          scan.onConnectionChange?.(false);
           return scan.stop.promise;
         };
       },
@@ -285,9 +313,11 @@ function mount(overrides = {}) {
   };
   state.applet = {
     async hello() {
+      await state.onHello?.();
+
       return {
         id: new Uint8Array(Buffer.from(state.cardId, 'hex')),
-        pin: 5,
+        pin: state.helloPIN ?? 5,
         safe: {id: new Uint8Array([5]), pin: 5, unlocked: true},
       };
     },
@@ -325,13 +355,26 @@ function mount(overrides = {}) {
     assert.ok(scan, 'Credential preloading must finish before scanning');
     assert.equal(scan.stopRequested, false);
     scan.presentationToken = state.presenter.current.token;
+    scan.onConnectionChange?.(true);
     try {
       await scan.callback(state.applet);
     } catch (error) {
       scan.onError(error);
     }
     scan.callbackReturned = true;
+    scan.onConnectionChange?.(false);
     if (cleanup && !scan.stopRequested) scan.onCleanup?.();
+    await state.flush();
+    return scan;
+  };
+  state.missingApplet = async () => {
+    await state.flush();
+    const scan = state.scans.at(-1);
+    scan.presentationToken = state.presenter.current.token;
+    scan.onConnectionChange(true);
+    scan.onConnectionChange(false);
+    scan.onError(new AppletNotFoundError());
+    scan.onCleanup();
     await state.flush();
     return scan;
   };
@@ -371,6 +414,265 @@ function mount(overrides = {}) {
   };
   return state;
 }
+
+test('prompt: scan feedback follows the connection before greeting and before cleanup', async () => {
+  const state = mount({auth: false});
+  await state.flush();
+  const scan = state.scans.at(-1);
+  assert.equal(state.presenter.current.scanning, false);
+
+  scan.onConnectionChange(true);
+  await state.flush();
+  assert.equal(state.presenter.current.scanning, true);
+  assert.equal(state.businessCalls, 0);
+
+  scan.onConnectionChange(false);
+  await state.flush();
+  assert.equal(state.presenter.current.scanning, false);
+  assert.equal(scan.stopRequested, false);
+  assert.equal(state.presenter.current.closing, false);
+});
+
+test('prompt: late connection events cannot restart feedback during exit', async () => {
+  const state = mount({auth: false});
+  const scan = await state.tap();
+  assert.equal(state.presenter.current.closing, true);
+
+  scan.onConnectionChange(true);
+  await state.flush();
+  assert.equal(state.presenter.current.closing, true);
+  await state.finishExit();
+  assert.equal(state.outcome, 'resolved');
+});
+
+for (const order of ['stop-first', 'animation-first']) {
+  test(`prompt: missing applet waits for ${order} cleanup then redirects once without retry`, async () => {
+    const state = mount({auth: false});
+    const scan = await state.missingApplet();
+
+    assert.equal(scan.stopRequested, true);
+    assert.equal(state.presenter.current.closing, true);
+    assert.deepEqual(state.navigations, []);
+    assert.equal(state.outcome, undefined);
+    if (order === 'stop-first') await state.finishStop();
+    else await state.finishAnimation();
+    assert.deepEqual(state.navigations, []);
+    assert.equal(state.outcome, undefined);
+    if (order === 'stop-first') await state.finishAnimation();
+    else await state.finishStop();
+    scan.onCleanup();
+    await state.flush();
+
+    assert.deepEqual(state.navigations, [{route: 'installApplet'}]);
+    assert.equal(state.outcome, 'rejected');
+    assert.equal(state.errors.length, 1);
+    assert.ok(state.errors[0] instanceof MonoidScanRedirectError);
+    assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
+    assert.equal(state.presenter.current, undefined);
+    assert.equal(state.scans.length, 1);
+    assert.equal(state.businessCalls, 0);
+    assert.deepEqual(state.authenticated, []);
+    assert.deepEqual(state.writes, []);
+    assert.deepEqual(state.notifications, []);
+    assert.deepEqual(state.retryErrors, []);
+  });
+
+  test(`prompt: leaving during ${order} cleanup prevents an applet-install redirect`, async () => {
+    const state = mount({auth: false});
+    await state.missingApplet();
+    if (order === 'stop-first') await state.finishStop();
+    else await state.finishAnimation();
+    state.owner.unmount();
+    if (order === 'stop-first') await state.finishAnimation();
+    else await state.finishStop();
+
+    assert.deepEqual(state.navigations, []);
+    assert.equal(state.outcome, 'rejected');
+    assert.equal(state.errors[0].code, 'CANCELLED');
+    assert.equal(state.errors[0] instanceof MonoidScanRedirectError, false);
+    assert.equal(state.scans.length, 1);
+    assert.equal(state.businessCalls, 0);
+  });
+}
+
+test('prompt: failed native cleanup prevents an applet-install redirect', async () => {
+  const state = mount({auth: false});
+  const scan = await state.missingApplet();
+  await state.finishAnimation();
+  const failure = new Error('Native scan could not stop');
+  scan.stop.reject(failure);
+  await state.flush();
+
+  assert.deepEqual(state.navigations, []);
+  assert.deepEqual(state.errors, [failure]);
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.scans.length, 1);
+  assert.equal(state.businessCalls, 0);
+  assert.deepEqual(state.retryErrors, []);
+});
+
+test('prompt: a business command returning 6a82 does not redirect to applet installation', async () => {
+  const failure = new AppletISOError(
+    'Record not found',
+    0x6a82,
+    new Uint8Array(),
+  );
+  const state = mount({
+    auth: false,
+    onBusiness: () => {
+      throw failure;
+    },
+  });
+  await state.tap();
+  await state.finishExit();
+
+  assert.deepEqual(state.navigations, []);
+  assert.deepEqual(state.retryErrors, [failure]);
+  assert.equal(state.scans.length, 2);
+  assert.equal(state.businessCalls, 1);
+  assert.equal(state.outcome, undefined);
+});
+
+test('prompt: card setup uses the same silent redirect outcome after exit', async () => {
+  const state = mount({auth: false, helloPIN: false});
+  await state.tap();
+  assert.deepEqual(state.navigations, []);
+  await state.finishExit();
+
+  assert.equal(state.navigations.length, 1);
+  assert.equal(state.navigations[0].route, 'setupCard');
+  assert.equal(state.navigations[0].options.id, CARD_ID);
+  assert.equal(state.navigations[0].options.pin, false);
+  assert.ok(state.errors[0] instanceof MonoidScanRedirectError);
+  assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.businessCalls, 0);
+  assert.equal(state.scans.length, 1);
+  assert.deepEqual(state.notifications, []);
+  assert.deepEqual(state.retryErrors, []);
+});
+
+for (const [phase, callback] of [
+  ['hello', 'onHello'],
+  ['authentication', 'onAuthenticate'],
+  ['business', 'onBusiness'],
+]) {
+  test(`prompt: tag lost during ${phase} closes silently and cancels after cleanup`, async () => {
+    const state = mount({
+      savedPINs: {[CARD_ID]: PIN},
+      [callback]: () => {
+        throw tagLost();
+      },
+    });
+    const scan = await state.tap();
+
+    assert.equal(scan.stopRequested, true);
+    assert.equal(state.presenter.current.closing, true);
+    assert.equal(state.outcome, undefined);
+    await state.finishStop();
+    assert.equal(state.outcome, undefined, 'Cancellation must wait for exit');
+    await state.finishAnimation();
+
+    assert.equal(state.presenter.current, undefined);
+    assert.equal(state.outcome, 'rejected');
+    assert.equal(state.errors.length, 1);
+    assert.equal(state.errors[0].code, 'CANCELLED');
+    assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
+    assert.equal(state.scans.length, 1);
+    assert.equal(state.businessCompleted, 0);
+    assert.equal(state.businessCalls, phase === 'business' ? 1 : 0);
+    assert.equal(state.inputs.length, 0);
+    assert.deepEqual(state.notifications, []);
+    assert.deepEqual(state.retryErrors, []);
+    assert.deepEqual(state.writes, []);
+    assert.deepEqual(state.removals, []);
+    assert.equal(state.savedPINs[CARD_ID], PIN);
+  });
+}
+
+test('prompt: tag lost discards a PIN awaiting storage after successful authentication', async () => {
+  const state = mount();
+  await state.enterManualPIN();
+  state.onBusiness = () => {
+    throw tagLost();
+  };
+  await state.tap();
+  assert.deepEqual(state.authenticated, [PIN]);
+  await state.finishExit('animation-first');
+
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.errors[0].code, 'CANCELLED');
+  assert.equal(state.businessCompleted, 0);
+  assert.equal(state.scans.length, 2);
+  assert.equal(state.savedPINs[CARD_ID], undefined);
+  assert.deepEqual(state.writes, []);
+  assert.deepEqual(state.removals, []);
+  assert.deepEqual(state.notifications, []);
+  assert.deepEqual(state.retryErrors, []);
+});
+
+test('prompt: native stop failure takes priority over tag-lost cancellation', async () => {
+  const state = mount({
+    auth: false,
+    onBusiness: () => {
+      throw tagLost();
+    },
+  });
+  const scan = await state.tap();
+  await state.finishAnimation();
+  assert.equal(state.outcome, undefined);
+  const failure = new Error('Native stop failed');
+  scan.stop.reject(failure);
+  await state.flush();
+
+  assert.deepEqual(state.errors, [failure]);
+  assert.equal(isCredentialRequestCancelled(state.errors[0]), false);
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.scans.length, 1);
+  assert.deepEqual(state.notifications, []);
+  assert.deepEqual(state.retryErrors, []);
+  assert.deepEqual(state.writes, []);
+});
+
+for (const code of [undefined, 'IO_ERROR']) {
+  test(`prompt: tag-lost text with code ${code} remains an ordinary retryable error`, async () => {
+    const failure = Object.assign(new Error('Tag lost'), {code});
+    const state = mount({
+      auth: false,
+      onBusiness: () => {
+        throw failure;
+      },
+    });
+    await state.tap();
+    await state.finishExit();
+
+    assert.deepEqual(state.retryErrors, [failure]);
+    assert.deepEqual(state.errors, []);
+    assert.equal(state.scans.length, 2);
+    assert.equal(state.presenter.current.closing, false);
+    assert.equal(state.outcome, undefined);
+  });
+}
+
+test('prompt: a lifecycle error with tag-lost cause is not silently cancelled', async () => {
+  const failure = new IsoDepScanError('Native cleanup failed', {
+    cause: tagLost(),
+  });
+  const state = mount({auth: false});
+  await state.flush();
+  const scan = state.scans.at(-1);
+  scan.onError(failure);
+  scan.onCleanup();
+  await state.flush();
+  await state.finishExit();
+
+  assert.deepEqual(state.errors, [failure]);
+  assert.equal(isCredentialRequestCancelled(failure), false);
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.scans.length, 1);
+  assert.equal(state.businessCalls, 0);
+  assert.deepEqual(state.retryErrors, []);
+});
 
 for (const order of ['stop-first', 'animation-first']) {
   test(`prompt: ${order} waits for callback, native stop and animation before saving`, async () => {

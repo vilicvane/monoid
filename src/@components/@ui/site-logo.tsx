@@ -1,25 +1,27 @@
 import {IonIcon} from '@ionic/react';
 import globe from 'lucide-static/icons/globe.svg';
 import type {ReactNode} from 'react';
-import {useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {styled} from 'styled-components';
 
 import {getSiteLogoUrls} from '../../@lib/site-logo.js';
 
-const Container = styled.div<{$loaded: boolean}>`
+const loadedLogos = new Map<string, number>();
+
+const Container = styled.div<{$loaded: boolean; $size: number}>`
   display: grid;
-  flex: 0 0 56px;
+  flex: 0 0 ${props => props.$size}px;
   grid-template: 1fr / 1fr;
   place-items: center;
   box-sizing: border-box;
-  width: 56px;
-  height: 56px;
+  width: ${props => props.$size}px;
+  height: ${props => props.$size}px;
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: ${props => props.$size / 4}px;
   background: ${props =>
     props.$loaded ? 'transparent' : 'var(--ion-color-light)'};
   color: var(--color-text-secondary);
-  font-size: 24px;
+  font-size: ${props => (props.$size * 3) / 7}px;
   font-weight: 500;
 
   > * {
@@ -46,10 +48,12 @@ export function SiteLogo({
   name,
   url,
   icons,
+  size = 56,
 }: {
   name: string;
   url: string;
   icons: readonly string[];
+  size?: number;
 }): ReactNode {
   const urls = getSiteLogoUrls(url, icons);
 
@@ -58,6 +62,7 @@ export function SiteLogo({
       key={JSON.stringify([name, url, urls])}
       name={name}
       urls={urls}
+      size={size}
     />
   );
 }
@@ -65,31 +70,42 @@ export function SiteLogo({
 function SiteLogoImage({
   name,
   urls,
+  size,
 }: {
   name: string;
   urls: readonly string[];
+  size: number;
 }): ReactNode {
-  const [{index, loaded}, setImage] = useState({index: 0, loaded: false});
+  const cacheKey = JSON.stringify(urls);
+  const [{index, loaded}, setImage] = useState(() => {
+    const index = loadedLogos.get(cacheKey);
+    return {index: index ?? 0, loaded: index !== undefined};
+  });
+  const imageRef = useRef<HTMLImageElement>(null);
   const src = urls[index];
 
+  const nextImage = useCallback(() => {
+    if (loadedLogos.get(cacheKey) === index) loadedLogos.delete(cacheKey);
+    setImage(image =>
+      image.index === index ? {index: index + 1, loaded: false} : image,
+    );
+  }, [cacheKey, index]);
+
   useEffect(() => {
-    if (!src || loaded) {
+    const image = imageRef.current;
+    if (!src || (image?.complete && image.naturalWidth > 0)) {
       return;
     }
 
     const timer = window.setTimeout(() => {
-      setImage(image =>
-        image.index === index && !image.loaded
-          ? {index: index + 1, loaded: false}
-          : image,
-      );
+      if (!image?.complete || !image.naturalWidth) nextImage();
     }, 8000);
 
     return () => window.clearTimeout(timer);
-  }, [src, index, loaded]);
+  }, [src, loaded, nextImage]);
 
   return (
-    <Container aria-hidden="true" $loaded={loaded}>
+    <Container aria-hidden="true" $loaded={loaded} $size={size}>
       {!loaded && (
         <span>
           {Array.from(name.trim())[0]?.toUpperCase() || (
@@ -100,20 +116,18 @@ function SiteLogoImage({
       {src && (
         <Logo
           key={src}
+          ref={imageRef}
           src={src}
           alt=""
           referrerPolicy="no-referrer"
           $loaded={loaded}
-          onLoad={() =>
+          onLoad={() => {
+            loadedLogos.set(cacheKey, index);
             setImage(image =>
               image.index === index ? {...image, loaded: true} : image,
-            )
-          }
-          onError={() =>
-            setImage(image =>
-              image.index === index ? {index: index + 1, loaded: false} : image,
-            )
-          }
+            );
+          }}
+          onError={nextImage}
         />
       )}
     </Container>

@@ -4,8 +4,9 @@ import type {RouteComponentProps} from 'routra-react';
 
 import {useEntrances} from '../../@entrances.js';
 import type {Router} from '../../@routes.js';
+import {getKeyWallets} from '../../@services/index.js';
 import {WalletAccountList} from '../@key/wallet-account-list.js';
-import {Button} from '../@ui/button.js';
+import {AsyncButton, Button} from '../@ui/button.js';
 import {InfoSectionItemLabel} from '../@ui/info-section.js';
 import {
   View,
@@ -29,6 +30,7 @@ export const WalletConnectView = observer(
     const [ended, setEnded] = useState(
       () => !proposal || proposal.params.expiryTimestamp * 1000 <= Date.now(),
     );
+    const [connecting, setConnecting] = useState(false);
     const active = !view.$leaving && view.$match.$exact.$active;
     const pending = walletKitService.proposals.has(view.id);
     const available = !!proposal && !ended;
@@ -52,11 +54,40 @@ export const WalletConnectView = observer(
 
     useEffect(() => {
       // Keep the current content while leaving; request cleanup is not expiry.
-      if (active && !pending) setEnded(true);
-    }, [active, pending]);
+      if (active && !pending && !connecting) setEnded(true);
+    }, [active, pending, connecting]);
+
+    const connect = async (): Promise<void> => {
+      const currentAddresses = new Set(
+        walletStorageService.keys.flatMap(key =>
+          getKeyWallets(key)
+            .filter(wallet => wallet.addressType === 'evm')
+            .map(wallet => wallet.address.toLowerCase()),
+        ),
+      );
+      const addresses = Array.from(selectedAddresses);
+
+      if (
+        addresses.some(address => !currentAddresses.has(address.toLowerCase()))
+      ) {
+        throw new Error('Selected accounts are no longer in Safe.');
+      }
+
+      setConnecting(true);
+
+      try {
+        const session = await walletKitService.approve(view.id, addresses);
+
+        if (session && !view.$leaving && view.$match.$exact.$active) {
+          router.sessions.$reset();
+        }
+      } finally {
+        setConnecting(false);
+      }
+    };
 
     return (
-      <View>
+      <View inert={!active}>
         <ViewHeader>
           <ViewHeaderTitle>Connect</ViewHeaderTitle>
         </ViewHeader>
@@ -64,8 +95,15 @@ export const WalletConnectView = observer(
           footerPlacement="fixed"
           footer={
             <>
-              <Button disabled>Connect</Button>
+              <AsyncButton
+                disabled={!available || connecting || !selectedAddresses.size}
+                handler={connect}
+              >
+                Connect
+              </AsyncButton>
               <Button
+                color={available ? 'neutral' : 'primary'}
+                disabled={connecting}
                 onClick={() => {
                   router.scan.$reset();
                 }}
@@ -75,7 +113,12 @@ export const WalletConnectView = observer(
             </>
           }
         >
-          {proposal && <WalletConnectSite proposal={proposal} />}
+          {proposal && (
+            <WalletConnectSite
+              metadata={proposal.params.proposer.metadata}
+              verified={proposal.verifyContext.verified}
+            />
+          )}
           {available ? (
             <>
               <InfoSectionItemLabel>Choose accounts</InfoSectionItemLabel>
@@ -83,7 +126,7 @@ export const WalletConnectView = observer(
                 keys={walletStorageService.keys}
                 addressType="evm"
                 selectedAddresses={selectedAddresses}
-                disabled={!active}
+                disabled={connecting}
                 onToggle={address => {
                   setSelectedAddresses(previous => {
                     const next = new Set(previous);

@@ -6,6 +6,7 @@ import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
 import type {MonoidScanPromptPresentation} from '../../@services/index.js';
+import {playScanSound} from '../@ui/scan-sound.js';
 
 import {MonoidScanCard} from './monoid-scan-card.js';
 
@@ -74,7 +75,15 @@ function MonoidScanPromptLayer({
   const initializedRef = useRef(false);
   const [arrived, setArrived] = useState(false);
   const [backdropOwner] = useState(() => Symbol());
-  const {closing, token} = presentation;
+  const {closing, scanning, token} = presentation;
+
+  useLayoutEffect(() => {
+    if (scanning && !closing) {
+      return playScanSound();
+    }
+
+    return undefined;
+  }, [scanning, closing, token]);
 
   useLayoutEffect(() => {
     presentationRef.current = presentation;

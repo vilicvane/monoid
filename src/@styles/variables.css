@@ -46,6 +46,10 @@ http://ionicframework.com/docs/theming/ */
   --ion-color-medium-shade: #666666;
   --ion-color-medium-tint: #aaaaaa;
 
+  --ion-color-neutral: #ffffff;
+  --ion-color-neutral-contrast: var(--ion-color-medium);
+  --ion-color-neutral-shade: var(--ion-color-medium-tint);
+
   --ion-color-danger: #ff2929;
   --ion-color-danger-rgb: 255, 41, 41;
   --ion-color-danger-contrast: #ffffff;

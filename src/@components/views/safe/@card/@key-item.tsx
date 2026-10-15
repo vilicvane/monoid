@@ -30,6 +30,7 @@ import {
   KeyTypeTag,
 } from '../../../@key/key-tags.js';
 import {RippleEffect} from '../../../@ui/ripple-effect.js';
+import {getCardKeyAddressTypes} from '../card-address.js';
 import type {ScannedCardKeyData} from '../common.js';
 
 const addressTypeTriggerStyles = css`
@@ -46,7 +47,9 @@ const DerivationTag = styled(KeyDerivationTag)`
   z-index: 1;
   flex-shrink: 1;
   min-width: 0;
-  ${addressTypeTriggerStyles}
+  &[type='button'] {
+    ${addressTypeTriggerStyles}
+  }
 `;
 
 const AddressTypeSwitch = styled(KeyDerivationBadge)`
@@ -90,6 +93,7 @@ export const KeyItem = observer(
         ? ADDRESS_TYPES[addressType].path(0)
         : undefined;
     const checkable = state !== 'up-to-date';
+    const canChangeAddressType = getCardKeyAddressTypes(type).length > 1;
 
     const checked = checkable && selectedIndexSet.has(index);
 
@@ -145,20 +149,26 @@ export const KeyItem = observer(
             {alias && <KeyAliasTag>{alias}</KeyAliasTag>}
             <DerivationTag
               chain={ADDRESS_TYPES[addressType].chain}
-              buttonProps={{
-                ...addressTypeButtonProps,
-                'aria-label': `Change address type: ${path ?? ADDRESS_TYPE_LABELS[addressType]}`,
-              }}
+              buttonProps={
+                canChangeAddressType
+                  ? {
+                      ...addressTypeButtonProps,
+                      'aria-label': `Change address type: ${path ?? ADDRESS_TYPE_LABELS[addressType]}`,
+                    }
+                  : undefined
+              }
             >
               {path ?? ADDRESS_TYPE_LABELS[addressType]}
             </DerivationTag>
-            <AddressTypeSwitch
-              as="button"
-              {...addressTypeButtonProps}
-              aria-label="Change address type"
-            >
-              <IonIcon icon={arrowLeftRight} aria-hidden="true" />
-            </AddressTypeSwitch>
+            {canChangeAddressType && (
+              <AddressTypeSwitch
+                as="button"
+                {...addressTypeButtonProps}
+                aria-label="Change address type"
+              >
+                <IonIcon icon={arrowLeftRight} aria-hidden="true" />
+              </AddressTypeSwitch>
+            )}
             {state === 'outdated' && (
               <KeyUpdateTag role="img" aria-label="Update available">
                 <IonIcon icon={refreshCw} aria-hidden="true" />

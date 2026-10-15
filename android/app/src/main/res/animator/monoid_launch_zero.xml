@@ -14,7 +14,7 @@
             <keyframe android:fraction="0.551724138" android:value="0"
                 android:interpolator="@android:interpolator/fast_out_slow_in" />
             <keyframe android:fraction="0.724137931" android:value="0" />
-            <keyframe android:fraction="1" android:value="-50"
+            <keyframe android:fraction="1" android:value="-55"
                 android:interpolator="@android:interpolator/fast_out_slow_in" />
         </propertyValuesHolder>
     </objectAnimator>

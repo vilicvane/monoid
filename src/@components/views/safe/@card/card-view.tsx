@@ -1,5 +1,5 @@
-import {IonIcon, IonSpinner} from '@ionic/react';
-import checkCheck from 'lucide-static/icons/check-check.svg';
+import {IonIcon} from '@ionic/react';
+import saveCheck from 'lucide-static/icons/save-check.svg';
 import {observable, runInAction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useRef, useState} from 'react';
@@ -197,10 +197,10 @@ const CardContent = observer(
           footer={
             <>
               <Button
-                disabled={deriving || missing.length === 0}
+                disabled={missing.length === 0}
+                loading={deriving}
                 onClick={errorService.catch(deriveSelected)}
               >
-                {deriving && <IonSpinner />}
                 Derive
               </Button>
               <Button
@@ -230,7 +230,7 @@ const CardContent = observer(
               >
                 {imported ? (
                   <>
-                    <IonIcon icon={checkCheck} />
+                    <IonIcon icon={saveCheck} />
                     Import successful
                   </>
                 ) : (
