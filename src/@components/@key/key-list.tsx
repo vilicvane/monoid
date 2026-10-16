@@ -15,7 +15,9 @@ const ADDRESS_PLACEHOLDER_BACKGROUNDS: Record<AddressChain, string> = {
     color-mix(in srgb, #f7931a 10%, var(--ion-background-color, white)))`,
 };
 
-export const KeyList = styled.div`
+export const KeyList = styled.div<{$compact?: boolean}>`
+  --key-list-item-padding-block: ${props => (props.$compact ? 4 : 12)}px;
+
   flex: 1;
   margin: 0 calc(-1 * var(--view-padding));
 `;
@@ -24,11 +26,11 @@ export const KeyListItem = styled.div`
   position: relative;
   display: flex;
 
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--key-item-gap);
 
-  padding: 12px var(--view-padding);
+  padding: var(--key-list-item-padding-block, 12px) var(--view-padding);
 
   overflow: hidden;
 `;
@@ -36,6 +38,7 @@ export const KeyListItem = styled.div`
 export const KeyListItemContent = styled.div`
   flex: 1;
   min-width: 0;
+  align-self: center;
 
   display: flex;
   flex-direction: column;

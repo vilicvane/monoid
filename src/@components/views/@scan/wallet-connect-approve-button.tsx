@@ -3,9 +3,7 @@ import {buildAuthObject} from '@walletconnect/utils';
 import {type ReactNode, useEffect, useRef} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
-import {BIP39Seed} from '../../../@atomics.js';
 import {useEntrances} from '../../../@entrances.js';
-import {parseDerivationPath} from '../../../@lib/bip39.js';
 import {signEvmMessage} from '../../../@lib/monoid/index.js';
 import {
   type WalletConnectAuthentication,
@@ -14,8 +12,8 @@ import {
 } from '../../../@lib/wallet-connect-authentication.js';
 import {buildWalletConnectNamespaces} from '../../../@lib/wallet-connect.js';
 import type {Router} from '../../../@routes.js';
-import {getKeyWallets} from '../../../@services/index.js';
-import {hexToUint8Array, uint8ArrayToHex} from '../../../@utils/index.js';
+import {uint8ArrayToHex} from '../../../@utils/index.js';
+import {getWalletSigningAccount} from '../../@monoid/get-wallet-signing-account.js';
 import {
   MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
@@ -64,36 +62,23 @@ export function WalletConnectApproveButton({
         });
       }
     };
-    const wallets = walletStorageService.keys.flatMap(key =>
-      getKeyWallets(key)
-        .filter(wallet => wallet.addressType === 'evm')
-        .map(wallet => ({key, wallet})),
-    );
     const selected = addresses.map(address => {
-      const account = wallets.find(
-        ({wallet}) => wallet.address.toLowerCase() === address.toLowerCase(),
+      const account = getWalletSigningAccount(
+        walletStorageService.keys,
+        address,
       );
       if (!account) throw new Error('Selected accounts are no longer in Safe.');
       return account;
     });
     const tasks = authentication.map(auth => {
-      const {key, wallet} = selected.find(
+      const {key, reference} = selected.find(
         ({wallet}) =>
           wallet.address.toLowerCase() === auth.address.toLowerCase(),
       )!;
       return {
         auth,
         index: key.index,
-        reference: {
-          index: hexToUint8Array(key.index),
-          ...(wallet.seed !== undefined && {
-            seed: BIP39Seed.satisfies(wallet.seed),
-          }),
-          ...(wallet.path !== undefined && {
-            curve: wallet.curve!,
-            path: parseDerivationPath(wallet.path),
-          }),
-        },
+        reference,
       };
     });
 
@@ -145,6 +130,7 @@ export function WalletConnectApproveButton({
                 reference,
                 auth.message,
                 auth.address,
+                assertPending,
               );
               assertPending();
               completed.push([

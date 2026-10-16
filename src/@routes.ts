@@ -7,6 +7,9 @@ import type {WalletConnectAuthentication} from './@lib/wallet-connect-authentica
 
 export const ROUTE_SCHEMA = {
   sessions: {
+    request: {
+      $state: undefined! as {id: number},
+    },
     session: {
       $state: undefined! as {topic: string},
       switchAccounts: true,

@@ -8,7 +8,7 @@ import {AddressChainIcon} from './address-chain-icon.js';
 
 export const KeyTags = styled.div`
   display: flex;
-  gap: 10px;
+  gap: var(--key-item-gap);
   align-items: center;
   isolation: isolate;
 `;

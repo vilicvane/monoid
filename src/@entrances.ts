@@ -11,6 +11,7 @@ import {createMonoidApplet} from './@lib/monoid/index.js';
 import {Portals} from './@portals.js';
 import {ROUTE_SCHEMA, type ViewSwitchingState} from './@routes.js';
 import {
+  ChainService,
   ErrorService,
   MonoidCredentialsStore,
   MonoidScanPromptPresenter,
@@ -119,6 +120,13 @@ export class Entrances {
   @entrance
   get storageService() {
     return StorageService.create();
+  }
+
+  @entrance
+  get chainService() {
+    return this.storageService.then(storageService =>
+      ChainService.create(storageService),
+    );
   }
 
   @entrance

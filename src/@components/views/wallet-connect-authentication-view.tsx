@@ -1,3 +1,4 @@
+import {getNamespacedDidChainId} from '@walletconnect/utils';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
@@ -5,8 +6,6 @@ import type {RouteComponentProps} from 'routra-react';
 import {useEntrances} from '../../@entrances.js';
 import type {Router} from '../../@routes.js';
 import {Button} from '../@ui/button.js';
-import {InfoSection, InfoSectionItemLabel} from '../@ui/info-section.js';
-import {MessageContent} from '../@ui/message-content.js';
 import {
   View,
   ViewContent,
@@ -17,6 +16,7 @@ import {
 
 import {useWalletConnectProposal} from './@scan/use-wallet-connect-proposal.js';
 import {WalletConnectApproveButton} from './@scan/wallet-connect-approve-button.js';
+import {WalletConnectMessage} from './@scan/wallet-connect-message.js';
 import {WalletConnectSite} from './@scan/wallet-connect-site.js';
 
 export const WalletConnectAuthenticationView = observer(
@@ -77,15 +77,18 @@ export const WalletConnectAuthenticationView = observer(
             />
           )}
           {available ? (
-            view.authentication.map(({message, iss}, index) => (
-              <InfoSection key={`${iss}:${index}`}>
-                <InfoSectionItemLabel>
-                  Message
-                  {view.authentication.length > 1 &&
-                    ` ${index + 1} / ${view.authentication.length}`}
-                </InfoSectionItemLabel>
-                <MessageContent>{message}</MessageContent>
-              </InfoSection>
+            view.authentication.map(({address, message, iss}, index) => (
+              <WalletConnectMessage
+                key={`${iss}:${index}`}
+                address={address}
+                chainId={getNamespacedDidChainId(iss)!}
+                message={message}
+                label={
+                  view.authentication.length > 1
+                    ? `Message ${index + 1} / ${view.authentication.length}`
+                    : 'Message'
+                }
+              />
             ))
           ) : (
             <ViewPlaceholder role="status">

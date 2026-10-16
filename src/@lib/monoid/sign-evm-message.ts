@@ -13,11 +13,16 @@ import type {MonoidApplet, MonoidAppletKey} from './monoid-applet.js';
 export async function signEvmMessage(
   applet: MonoidApplet,
   key: MonoidAppletKey,
-  message: string,
+  message: string | Uint8Array,
   expectedAddress: string,
+  assertActive?: () => void,
 ): Promise<string> {
+  assertActive?.();
+
   const address = getAddress(expectedAddress);
   const {publicKey} = await applet.viewKey(key);
+
+  assertActive?.();
 
   if (computeAddress(hexlify(publicKey)) !== address) {
     throw new Error('This card does not contain the selected account.');
@@ -29,6 +34,8 @@ export async function signEvmMessage(
     cipher: 'ecdsa',
     digest: getBytes(digest),
   });
+
+  assertActive?.();
 
   // The card returns low-S, plain r || s; Ethereum also needs the recovery bit.
   if (signature.length !== 64) {

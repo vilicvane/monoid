@@ -1,3 +1,4 @@
+export * from './chain-service.js';
 export * from './error-service.js';
 export * from './monoid-credentials-store.js';
 export * from './monoid-scan-prompt-presenter.js';

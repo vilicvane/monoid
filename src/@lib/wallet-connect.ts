@@ -41,7 +41,7 @@ export function buildWalletConnectNamespaces(
       supportedNamespaces: {
         eip155: {
           chains,
-          methods: [],
+          methods: ['personal_sign'],
           events: ['accountsChanged', 'chainChanged'],
           accounts: chains.flatMap(chain =>
             accounts.map(address => `${chain}:${address}`),

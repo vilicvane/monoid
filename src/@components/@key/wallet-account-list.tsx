@@ -1,7 +1,7 @@
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 
-import {ADDRESS_TYPES, ADDRESS_TYPE_LABELS} from '../../@lib/wallet-address.js';
+import {ADDRESS_TYPES} from '../../@lib/wallet-address.js';
 import type {
   WalletKeyData,
   WalletKeyWalletData,
@@ -57,26 +57,28 @@ const WalletAccountGroup = observer(function WalletAccountGroup({
               }
               onExpand={collapsed ? expand : undefined}
             >
+              {onToggle && (
+                <KeyCheckbox
+                  count={collapsed ? wallets.length : undefined}
+                  aria-label={`Select ${wallet.address}`}
+                  checked={selectedAddresses.has(wallet.address.toLowerCase())}
+                  onChange={() => onToggle(wallet.address)}
+                  disabled={disabled}
+                />
+              )}
               <KeyListItemContent>
-                <KeyTags>
-                  {onToggle && (
-                    <KeyCheckbox
-                      count={collapsed ? wallets.length : undefined}
-                      aria-label={`Select ${wallet.address}`}
-                      checked={selectedAddresses.has(
-                        wallet.address.toLowerCase(),
-                      )}
-                      onChange={() => onToggle(wallet.address)}
-                      disabled={disabled}
-                    />
-                  )}
-                  {key.alias && <KeyAliasTag>{key.alias}</KeyAliasTag>}
-                  <KeyDerivationTag
-                    chain={ADDRESS_TYPES[wallet.addressType].chain}
-                  >
-                    {wallet.path ?? ADDRESS_TYPE_LABELS[wallet.addressType]}
-                  </KeyDerivationTag>
-                </KeyTags>
+                {(key.alias || wallet.path) && (
+                  <KeyTags>
+                    {key.alias && <KeyAliasTag>{key.alias}</KeyAliasTag>}
+                    {wallet.path && (
+                      <KeyDerivationTag
+                        chain={ADDRESS_TYPES[wallet.addressType].chain}
+                      >
+                        {wallet.path}
+                      </KeyDerivationTag>
+                    )}
+                  </KeyTags>
+                )}
                 {onToggle ? (
                   <KeyListAddress>{wallet.address}</KeyListAddress>
                 ) : (
@@ -102,11 +104,13 @@ export const WalletAccountList = observer(
     selectedAddresses = new Set(),
     onToggle,
     disabled = false,
+    compact = false,
   }: {
     keys: readonly WalletKeyData[];
     addressType: 'evm';
     addresses?: readonly string[];
     additionalAddresses?: readonly string[];
+    compact?: boolean;
   } & Partial<SelectionProps>): ReactNode => {
     const groups = new Map<WalletKeyData['index'], AccountGroup>();
     const included =
@@ -134,7 +138,7 @@ export const WalletAccountList = observer(
     }
 
     return (
-      <KeyList>
+      <KeyList $compact={compact}>
         {Array.from(groups, ([index, group]) => (
           <WalletAccountGroup
             key={index}
@@ -158,16 +162,16 @@ export const WalletAccountList = observer(
               as={onToggle ? 'label' : 'div'}
               key={address.toLowerCase()}
             >
+              {onToggle && (
+                <KeyCheckbox
+                  aria-label={`Select ${address}`}
+                  checked={selected.has(address.toLowerCase())}
+                  onChange={() => onToggle(address)}
+                  disabled={disabled}
+                />
+              )}
               <KeyListItemContent>
                 <KeyTags>
-                  {onToggle && (
-                    <KeyCheckbox
-                      aria-label={`Select ${address}`}
-                      checked={selected.has(address.toLowerCase())}
-                      onChange={() => onToggle(address)}
-                      disabled={disabled}
-                    />
-                  )}
                   <KeyListPlaceholder>Not in Safe</KeyListPlaceholder>
                 </KeyTags>
                 {onToggle ? (

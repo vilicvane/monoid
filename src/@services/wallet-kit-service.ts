@@ -1,6 +1,7 @@
 import type {IWalletKit, WalletKitTypes} from '@reown/walletkit';
 import {PAIRING_EVENTS} from '@walletconnect/core';
 import {getSdkError, parseUri} from '@walletconnect/utils';
+import {verifyMessage} from 'ethers';
 import {observable, reaction, runInAction} from 'mobx';
 import ms from 'ms';
 
@@ -10,6 +11,7 @@ import {
   getWalletConnectRequestExpiry,
   validateWalletConnectAuthentication,
 } from '../@lib/wallet-connect-authentication.js';
+import {parseWalletConnectPersonalSign} from '../@lib/wallet-connect-request.js';
 import {
   buildWalletConnectNamespaces,
   parseWalletConnectUri,
@@ -62,12 +64,20 @@ export class WalletKitService {
     {deep: false},
   );
 
+  readonly requests = observable.map<number, WalletKitTypes.SessionRequest>(
+    [],
+    {deep: false},
+  );
+
   readonly sessionRecords = observable.map<string, WalletKitSessionRecord>([], {
     deep: false,
   });
 
   private connecting = false;
   private approvals = new Map<number, Promise<WalletKitSession | undefined>>();
+  private responses = observable.map<number, Promise<boolean>>([], {
+    deep: false,
+  });
 
   constructor(
     private kit: IWalletKit,
@@ -99,6 +109,11 @@ export class WalletKitService {
 
     kit.on('session_request', ({topic, verifyContext}) => {
       this.recordActivity(topic, verifyContext.verified);
+      this.refreshRequests();
+    });
+
+    kit.on('session_request_expire', ({id}) => {
+      runInAction(() => this.requests.delete(id));
     });
 
     kit.on('proposal_expire', ({id}) => {
@@ -134,6 +149,87 @@ export class WalletKitService {
 
     if (proposal.params.expiryTimestamp * 1000 > Date.now()) {
       await this.kit.rejectSession({id, reason: getSdkError('USER_REJECTED')});
+    }
+  }
+
+  approveRequest(id: number, signature: string): Promise<boolean> {
+    return this.respondRequest(id, signature);
+  }
+
+  async rejectRequest(id: number): Promise<void> {
+    await this.respondRequest(id);
+  }
+
+  isRespondingToRequest(id: number): boolean {
+    return this.responses.has(id);
+  }
+
+  private respondRequest(id: number, signature?: string): Promise<boolean> {
+    const pending = this.responses.get(id);
+    if (pending) return pending;
+
+    // Register before refreshing observable state, so leaving the page cannot
+    // send a rejection while its signed response is being published.
+    const response = Promise.resolve()
+      .then(() => this.sendRequestResponse(id, signature))
+      .finally(() => {
+        runInAction(() => this.responses.delete(id));
+      });
+    runInAction(() => this.responses.set(id, response));
+
+    return response;
+  }
+
+  private async sendRequestResponse(
+    id: number,
+    signature?: string,
+  ): Promise<boolean> {
+    this.refreshSessions();
+    const request = this.requests.get(id);
+    if (!request) return false;
+
+    if (signature !== undefined) {
+      const {message, address} = parseWalletConnectPersonalSign(
+        request,
+        this.sessions.get(request.topic)!,
+      );
+      if (
+        verifyMessage(message, signature).toLowerCase() !==
+        address.toLowerCase()
+      ) {
+        throw new Error('The signature does not match the requested account.');
+      }
+    }
+
+    try {
+      await this.kit.respondSessionRequest({
+        topic: request.topic,
+        response:
+          signature === undefined
+            ? {id, jsonrpc: '2.0', error: getSdkError('USER_REJECTED')}
+            : {id, jsonrpc: '2.0', result: signature},
+      });
+      this.refreshSessions();
+      this.recordActivity(request.topic);
+      return true;
+    } catch (error) {
+      this.refreshSessions();
+      const session = this.sessions.get(request.topic);
+
+      if (
+        !session ||
+        session.expiry * 1000 <= Date.now() ||
+        (request.params.request.expiryTimestamp ?? Infinity) * 1000 <=
+          Date.now()
+      ) {
+        return false;
+      }
+
+      // The SDK only consumes a request after publishing its response. Do not
+      // offer a retry if a later cleanup step failed after that point.
+      if (!this.requests.has(id)) return true;
+
+      throw error;
     }
   }
 
@@ -315,6 +411,29 @@ export class WalletKitService {
       for (const topic of this.sessionRecords.keys()) {
         if (!this.sessions.has(topic)) this.sessionRecords.delete(topic);
       }
+
+      this.refreshRequests();
+    });
+  }
+
+  private refreshRequests(): void {
+    const now = Date.now();
+
+    runInAction(() => {
+      this.requests.replace(
+        this.kit
+          .getPendingSessionRequests()
+          .filter(({topic, params}) => {
+            const session = this.sessions.get(topic);
+            const expiry = params.request.expiryTimestamp;
+            return (
+              session !== undefined &&
+              !(session.expiry * 1000 <= now) &&
+              (expiry === undefined || expiry * 1000 > now)
+            );
+          })
+          .map(request => [request.id, request]),
+      );
     });
   }
 
@@ -337,6 +456,10 @@ export class WalletKitService {
     runInAction(() => {
       this.sessions.delete(topic);
       this.sessionRecords.delete(topic);
+
+      for (const [id, request] of this.requests) {
+        if (request.topic === topic) this.requests.delete(id);
+      }
     });
   }
 

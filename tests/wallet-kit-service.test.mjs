@@ -4,6 +4,7 @@ import {mock, test} from 'node:test';
 
 import {buildAuthObject, formatMessage} from '@walletconnect/utils';
 import {Wallet} from 'ethers';
+import {reaction} from 'mobx';
 
 // eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Import the service without starting platform services.
 import {
@@ -39,15 +40,20 @@ const proposal = (topic = TOPIC, id = 1) => ({
   },
 });
 
-function createKit(sessions = {}) {
+function createKit(sessions = {}, requests = []) {
   const events = new EventEmitter();
   const kit = Object.assign(new EventEmitter(), {
     core: {pairing: {events: new EventEmitter()}},
     engine: {signClient: {events}},
     getActiveSessions: mock.fn(() => ({...sessions})),
     getPendingSessionProposals: mock.fn(() => []),
+    getPendingSessionRequests: mock.fn(() => [...requests]),
     pair: mock.fn(async () => {}),
     rejectSession: mock.fn(async () => {}),
+    respondSessionRequest: mock.fn(async ({response}) => {
+      const index = requests.findIndex(request => request.id === response.id);
+      if (index !== -1) requests.splice(index, 1);
+    }),
     approveSession: mock.fn(async ({namespaces}) => {
       const session = {topic: TOPIC, namespaces};
       sessions[session.topic] = session;
@@ -62,7 +68,7 @@ function createKit(sessions = {}) {
     }),
     emitSessionEvent: mock.fn(async () => {}),
   });
-  return {kit, events, sessions};
+  return {kit, events, sessions, requests};
 }
 
 function createStorage(records = null) {
@@ -76,8 +82,8 @@ function createStorage(records = null) {
   };
 }
 
-function setup(sessions = {}, records = {}) {
-  const context = createKit(sessions);
+function setup(sessions = {}, records = {}, requests = []) {
+  const context = createKit(sessions, requests);
   const storage = createStorage(records);
   const service = new WalletKitService(context.kit, storage, records);
   // WalletKit returns the SDK store's array despite its Record return type.
@@ -109,9 +115,11 @@ function assertClean(kit, signal) {
   assert.deepEqual(kit.eventNames().sort(), [
     'proposal_expire',
     'session_request',
+    'session_request_expire',
   ]);
   assert.equal(kit.listenerCount('proposal_expire'), 1);
   assert.equal(kit.listenerCount('session_request'), 1);
+  assert.equal(kit.listenerCount('session_request_expire'), 1);
   assert.deepEqual(kit.core.pairing.events.eventNames().sort(), [
     'pairing_delete',
     'pairing_expire',
@@ -740,7 +748,7 @@ test('unsupported required methods never reach SDK approval', async () => {
   const context = setup();
   const {service, kit} = context;
   const request = proposal();
-  request.params.requiredNamespaces.eip155.methods.push('personal_sign');
+  request.params.requiredNamespaces.eip155.methods.push('eth_signTypedData_v4');
   await receiveProposal(context, request);
 
   await assert.rejects(service.approve(request.id, [ADDRESS]), {
@@ -1173,4 +1181,304 @@ test('authentication expiring during card signing prevents approval even while t
   assert.equal(kit.approveSession.mock.callCount(), 0);
   assert.equal(service.proposals.has(request.id), false);
   assert.equal(service.sessions.size, 0);
+});
+
+function sessionRequest(id, topic = TOPIC, expiryTimestamp) {
+  return {
+    id,
+    topic,
+    params: {
+      chainId: 'eip155:1',
+      request: {
+        method: 'personal_sign',
+        params: ['0x48656c6c6f', ADDRESS],
+        expiryTimestamp,
+      },
+    },
+    verifyContext: proposal().verifyContext,
+  };
+}
+
+test('restores pending requests in SDK order without expired or disconnected requests', context => {
+  context.mock.timers.enable({apis: ['Date'], now: 1_000_000});
+  const first = sessionRequest(3, TOPIC, 1100);
+  const second = sessionRequest(1);
+  const requests = [
+    first,
+    second,
+    sessionRequest(2, TOPIC, 1000),
+    sessionRequest(4, OTHER_TOPIC, 1100),
+  ];
+  const {service} = setup({[TOPIC]: {topic: TOPIC}}, {}, requests);
+
+  assert.deepEqual(Array.from(service.requests.values()), [first, second]);
+  assert.equal(service.requests.get(first.id), first);
+  assert.equal(requests.length, 4);
+});
+
+test('incoming requests preserve the SDK queue and expiry removes only its own request', () => {
+  const {kit, service, requests} = setup({[TOPIC]: {topic: TOPIC}});
+  const first = sessionRequest(2);
+  const second = sessionRequest(1);
+  requests.push(first);
+  kit.emit('session_request', first);
+  requests.push(second);
+  kit.emit('session_request', second);
+  kit.emit('session_request', first);
+
+  assert.deepEqual(Array.from(service.requests.values()), [first, second]);
+
+  requests.splice(0, 1);
+  kit.emit('session_request_expire', {id: first.id});
+  assert.deepEqual(Array.from(service.requests.values()), [second]);
+  assert.equal(service.sessions.has(TOPIC), true);
+});
+
+test('local disconnect, remote deletion and session expiry clear only their pending requests', async () => {
+  for (const event of ['disconnect', 'session_delete', 'session_expire']) {
+    const other = sessionRequest(2, OTHER_TOPIC);
+    const {kit, events, service, sessions} = setup(
+      {[TOPIC]: {topic: TOPIC}, [OTHER_TOPIC]: {topic: OTHER_TOPIC}},
+      {},
+      [sessionRequest(1), other, sessionRequest(3)],
+    );
+
+    if (event === 'disconnect') {
+      await service.disconnect(TOPIC);
+    } else {
+      delete sessions[TOPIC];
+      events.emit(event, {topic: TOPIC});
+    }
+
+    assert.deepEqual(Array.from(service.requests.values()), [other]);
+    // A later refresh must not restore requests from the disconnected session.
+    kit.emit('session_request', other);
+    assert.deepEqual(Array.from(service.requests.values()), [other]);
+  }
+});
+
+function setupPersonalSign() {
+  const wallet = authenticationWallets[0];
+  const message = new TextEncoder().encode('Hello');
+  const request = sessionRequest(1, TOPIC, Math.floor(Date.now() / 1000) + 300);
+  request.params.request.params[1] = wallet.address;
+  const session = {
+    topic: TOPIC,
+    expiry: Math.floor(Date.now() / 1000) + 3600,
+    namespaces: {
+      eip155: {
+        chains: ['eip155:1'],
+        methods: ['personal_sign'],
+        events: [],
+        accounts: [`eip155:1:${wallet.address}`],
+      },
+    },
+  };
+  return {
+    ...setup({[TOPIC]: session}, {}, [request]),
+    request,
+    wallet,
+    message,
+  };
+}
+
+test('personal signing returns a verified signature and advances only its request', async () => {
+  const {service, kit, requests, wallet, message} = setupPersonalSign();
+  const second = {...requests[0], id: 2};
+  requests.push(second);
+  kit.emit('session_request', second);
+  const signature = await wallet.signMessage(message);
+
+  assert.equal(await service.approveRequest(1, signature), true);
+  assert.deepEqual(kit.respondSessionRequest.mock.calls[0].arguments, [
+    {topic: TOPIC, response: {id: 1, jsonrpc: '2.0', result: signature}},
+  ]);
+  assert.deepEqual(Array.from(service.requests.values()), [second]);
+  assert.equal(await service.approveRequest(1, signature), false);
+  assert.equal(kit.respondSessionRequest.mock.callCount(), 1);
+});
+
+test('rejecting a request sends a user rejection and removes it from the queue', async () => {
+  const {service, kit} = setupPersonalSign();
+
+  await service.rejectRequest(1);
+  await service.rejectRequest(1);
+
+  assert.deepEqual(kit.respondSessionRequest.mock.calls[0].arguments, [
+    {
+      topic: TOPIC,
+      response: {
+        id: 1,
+        jsonrpc: '2.0',
+        error: {code: 5000, message: 'User rejected.'},
+      },
+    },
+  ]);
+  assert.equal(kit.respondSessionRequest.mock.callCount(), 1);
+  assert.equal(service.requests.size, 0);
+});
+
+test('concurrent approvals and leaving during publication share one response', async () => {
+  const {service, kit, requests, wallet, message} = setupPersonalSign();
+  const publication = Promise.withResolvers();
+  kit.respondSessionRequest.mock.mockImplementationOnce(async () => {
+    await publication.promise;
+    requests.splice(0, 1);
+  });
+  const signature = await wallet.signMessage(message);
+  const first = service.approveRequest(1, signature);
+  const duplicate = service.approveRequest(1, signature);
+  const leaving = service.rejectRequest(1);
+
+  assert.equal(first, duplicate);
+  await Promise.resolve();
+  assert.equal(kit.respondSessionRequest.mock.callCount(), 1);
+  assert.equal(service.requests.has(1), true);
+
+  publication.resolve();
+  assert.deepEqual(await Promise.all([first, duplicate, leaving]), [
+    true,
+    true,
+    undefined,
+  ]);
+  assert.equal(kit.respondSessionRequest.mock.callCount(), 1);
+  assert.equal(service.requests.size, 0);
+});
+
+test('an approval arriving during rejection cannot publish a signed response', async () => {
+  const {service, kit, wallet, message} = setupPersonalSign();
+  const signature = await wallet.signMessage(message);
+  const rejection = service.rejectRequest(1);
+  const approval = service.approveRequest(1, signature);
+  await Promise.all([rejection, approval]);
+
+  assert.equal(kit.respondSessionRequest.mock.callCount(), 1);
+  assert.equal(
+    kit.respondSessionRequest.mock.calls[0].arguments[0].response.error.code,
+    5000,
+  );
+});
+
+test('response state updates observers and a failed signed response is not replaced by a leaving rejection', async () => {
+  const {service, kit, wallet, message} = setupPersonalSign();
+  const publication = Promise.withResolvers();
+  const failure = new Error('Response publication failed');
+  kit.respondSessionRequest.mock.mockImplementationOnce(
+    () => publication.promise,
+  );
+  const states = [];
+  const dispose = reaction(
+    () => service.isRespondingToRequest(1),
+    value => states.push(value),
+    {fireImmediately: true},
+  );
+  const signature = await wallet.signMessage(message);
+  const approval = service.approveRequest(1, signature);
+  const leaving = service.rejectRequest(1);
+  const settled = Promise.allSettled([approval, leaving]);
+  assert.deepEqual(states, [false, true]);
+
+  publication.reject(failure);
+  const results = await settled;
+  assert.ok(
+    results.every(
+      result => result.status === 'rejected' && result.reason === failure,
+    ),
+  );
+  assert.equal(kit.respondSessionRequest.mock.callCount(), 1);
+  assert.equal(service.requests.has(1), true);
+  assert.deepEqual(states, [false, true, false]);
+
+  assert.equal(await service.approveRequest(1, signature), true);
+  assert.equal(kit.respondSessionRequest.mock.callCount(), 2);
+  assert.deepEqual(states, [false, true, false, true, false]);
+  dispose();
+});
+
+test('response failure remains retryable only while the SDK retains the request', async () => {
+  for (const consumed of [false, true]) {
+    const {service, kit, requests, wallet, message} = setupPersonalSign();
+    const failure = new Error('Response publication failed');
+    kit.respondSessionRequest.mock.mockImplementationOnce(async () => {
+      if (consumed) requests.splice(0, 1);
+      throw failure;
+    });
+    const signature = await wallet.signMessage(message);
+
+    if (consumed) {
+      assert.equal(await service.approveRequest(1, signature), true);
+      assert.equal(await service.approveRequest(1, signature), false);
+      assert.equal(kit.respondSessionRequest.mock.callCount(), 1);
+    } else {
+      await assert.rejects(service.approveRequest(1, signature), failure);
+      assert.equal(service.requests.has(1), true);
+      assert.equal(await service.approveRequest(1, signature), true);
+      assert.equal(kit.respondSessionRequest.mock.callCount(), 2);
+    }
+    assert.equal(service.requests.size, 0);
+  }
+});
+
+test('expired requests, expired sessions and disconnected sessions cannot send a response', async () => {
+  for (const change of ['request', 'session', 'disconnect']) {
+    const {service, kit, sessions, request, wallet, message} =
+      setupPersonalSign();
+    const signature = await wallet.signMessage(message);
+    if (change === 'request') request.params.request.expiryTimestamp = 1;
+    else if (change === 'session') sessions[TOPIC].expiry = 1;
+    else delete sessions[TOPIC];
+
+    assert.equal(await service.approveRequest(1, signature), false);
+    await service.rejectRequest(1);
+    assert.equal(kit.respondSessionRequest.mock.callCount(), 0);
+    assert.equal(service.requests.size, 0);
+  }
+});
+
+test('expiry and disconnect during response publication finish quietly', async () => {
+  for (const change of ['request', 'session', 'disconnect']) {
+    const {service, kit, sessions, request, wallet, message} =
+      setupPersonalSign();
+    const signature = await wallet.signMessage(message);
+    kit.respondSessionRequest.mock.mockImplementationOnce(async () => {
+      if (change === 'request') request.params.request.expiryTimestamp = 1;
+      else if (change === 'session') sessions[TOPIC].expiry = 1;
+      else delete sessions[TOPIC];
+      throw new Error('Request no longer available');
+    });
+
+    assert.equal(await service.approveRequest(1, signature), false);
+    assert.equal(service.requests.size, 0);
+  }
+});
+
+test('responding rechecks current method, chain and account authorization', async () => {
+  for (const change of ['method', 'chain', 'account']) {
+    const {service, kit, sessions, wallet, message} = setupPersonalSign();
+    const signature = await wallet.signMessage(message);
+    const namespace = structuredClone(sessions[TOPIC].namespaces.eip155);
+    if (change === 'method') namespace.methods = [];
+    else if (change === 'chain') namespace.chains = ['eip155:137'];
+    else namespace.accounts = [`eip155:1:${ADDRESS}`];
+    sessions[TOPIC] = {...sessions[TOPIC], namespaces: {eip155: namespace}};
+
+    await assert.rejects(service.approveRequest(1, signature), {code: 4100});
+    assert.equal(kit.respondSessionRequest.mock.callCount(), 0);
+    assert.equal(service.requests.has(1), true);
+  }
+});
+
+test('a signature for another account or different bytes never reaches the SDK', async () => {
+  const {service, kit, wallet, message} = setupPersonalSign();
+  for (const signature of [
+    await authenticationWallets[1].signMessage(message),
+    await wallet.signMessage('0x48656c6c6f'),
+  ]) {
+    await assert.rejects(
+      service.approveRequest(1, signature),
+      /signature does not match/,
+    );
+  }
+  assert.equal(kit.respondSessionRequest.mock.callCount(), 0);
+  assert.equal(service.requests.has(1), true);
 });

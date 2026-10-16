@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
+// eslint-disable-next-line @mufan/scoped-modules -- Exercise the built internal module directly.
 import {
   buildWalletConnectNamespaces,
   parseWalletConnectUri,
@@ -17,7 +18,7 @@ function namespace(chains, methods = [], events = []) {
   return {chains, methods, events};
 }
 
-test('approves requested EVM accounts while filtering optional signing methods and events', () => {
+test('approves personal signing while filtering unsupported methods and events', () => {
   const request = proposal(
     {},
     {
@@ -33,21 +34,37 @@ test('approves requested EVM accounts while filtering optional signing methods a
   assert.deepEqual(buildWalletConnectNamespaces(request, [ADDRESS]), {
     eip155: {
       chains: ['eip155:1', 'eip155:137'],
-      methods: [],
+      methods: ['personal_sign'],
       events: ['accountsChanged', 'chainChanged'],
       accounts: [`eip155:1:${ADDRESS}`, `eip155:137:${ADDRESS}`],
     },
   });
 });
 
-test('rejects required signing methods without advertising them as supported', () => {
+test('rejects unsupported required signing methods without advertising them as supported', () => {
   assert.throws(
     () =>
       buildWalletConnectNamespaces(
-        proposal({eip155: namespace(['eip155:1'], ['personal_sign'])}),
+        proposal({eip155: namespace(['eip155:1'], ['eth_signTypedData_v4'])}),
         [ADDRESS],
       ),
     {message: 'This site requires unsupported wallet features.'},
+  );
+});
+
+test('approves required personal signing without granting unrequested methods', () => {
+  const request = proposal({
+    eip155: namespace(['eip155:1'], ['personal_sign']),
+  });
+  assert.deepEqual(
+    buildWalletConnectNamespaces(request, [ADDRESS]).eip155.methods,
+    ['personal_sign'],
+  );
+  assert.deepEqual(
+    buildWalletConnectNamespaces(proposal({eip155: namespace(['eip155:1'])}), [
+      ADDRESS,
+    ]).eip155.methods,
+    [],
   );
 });
 

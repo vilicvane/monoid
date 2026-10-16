@@ -9,14 +9,21 @@ import {SessionSwitchView} from './views/session-switch-view.js';
 import {SessionView} from './views/session-view.js';
 import {SessionsView} from './views/sessions-view.js';
 import {WalletConnectAuthenticationView} from './views/wallet-connect-authentication-view.js';
+import {WalletConnectRequestView} from './views/wallet-connect-request-view.js';
 import {WalletConnectView} from './views/wallet-connect-view.js';
+import {WalletConnectRequests} from './wallet-connect-requests.js';
 
 export const Views = (): ReactNode => {
   const {router} = useEntrances();
 
   return (
     <>
+      <WalletConnectRequests />
       <Route view={router.sessions.$exact.$view()} component={SessionsView} />
+      <Route
+        view={router.sessions.request.$view({parallel: true})}
+        component={WalletConnectRequestView}
+      />
       <Route
         view={router.sessions.session.$exact.$view()}
         component={SessionView}

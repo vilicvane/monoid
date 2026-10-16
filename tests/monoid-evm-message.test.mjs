@@ -141,6 +141,67 @@ test('preserves raw, seed and master references for both card operations', async
   }
 });
 
+test('signs personal_sign bytes without hashing their hex representation as text', async () => {
+  for (const hex of [
+    '0x',
+    '0x48656c6c6f',
+    '0xff00fe',
+    '0xe799bbe5bd9520f09f918b',
+  ]) {
+    const bytes = getBytes(hex);
+    const digest = hashMessage(bytes);
+    const applet = createApplet();
+    applet.sign = async request => {
+      assert.deepEqual(request.digest, getBytes(digest));
+      assert.notEqual(digest, hashMessage(hex));
+      return {signature: plainSignature(signingKey.sign(request.digest))};
+    };
+
+    const signature = await signEvmMessage(applet, rawKey, bytes, address);
+
+    assert.equal(verifyMessage(bytes, signature), address);
+    assert.notEqual(verifyMessage(hex, signature), address);
+  }
+});
+
+test('does not sign after the request becomes inactive while reading the card key', async () => {
+  const applet = createApplet();
+  let active = true;
+  let signed = false;
+  applet.viewKey = async () => {
+    active = false;
+    return {publicKey: getBytes(signingKey.publicKey)};
+  };
+  applet.sign = async () => {
+    signed = true;
+    throw new Error('Unexpected sign call');
+  };
+
+  await assert.rejects(
+    signEvmMessage(applet, rawKey, message(), address, () => {
+      if (!active) throw new Error('Request expired');
+    }),
+    /Request expired/,
+  );
+  assert.equal(signed, false);
+});
+
+test('does not return a signature after the request becomes inactive while signing', async () => {
+  const applet = createApplet();
+  let active = true;
+  applet.sign = async ({digest}) => {
+    active = false;
+    return {signature: plainSignature(signingKey.sign(digest))};
+  };
+
+  await assert.rejects(
+    signEvmMessage(applet, rawKey, message(), address, () => {
+      if (!active) throw new Error('Request expired');
+    }),
+    /Request expired/,
+  );
+});
+
 test('does not sign if the card public key belongs to another account', async () => {
   const applet = createApplet();
   let signed = false;

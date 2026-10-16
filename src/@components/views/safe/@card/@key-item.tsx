@@ -135,16 +135,16 @@ export const KeyItem = observer(
             : undefined
         }
       >
+        <KeySelection
+          className={classNames({
+            checked,
+            [state]: true,
+          })}
+        >
+          {icon}
+        </KeySelection>
         <KeyListItemContent>
           <KeyTags>
-            <KeySelection
-              className={classNames({
-                checked,
-                [state]: true,
-              })}
-            >
-              {icon}
-            </KeySelection>
             <KeyTypeTag className={type}>{type}</KeyTypeTag>
             {alias && <KeyAliasTag>{alias}</KeyAliasTag>}
             <DerivationTag
