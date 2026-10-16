@@ -6,6 +6,7 @@ import type {RouteComponentProps} from 'routra-react';
 import {useEntrances} from '../../@entrances.js';
 import type {Router} from '../../@routes.js';
 import {Button} from '../@ui/button.js';
+import {MessageContent} from '../@ui/message-content.js';
 import {
   View,
   ViewContent,
@@ -44,7 +45,6 @@ export const WalletConnectAuthenticationView = observer(
         </ViewHeader>
         <ViewContent
           footerReveal="end"
-          sectionGap={16}
           footer={
             <>
               {available && active && proposal ? (
@@ -82,13 +82,17 @@ export const WalletConnectAuthenticationView = observer(
                 key={`${iss}:${index}`}
                 address={address}
                 chainId={getNamespacedDidChainId(iss)!}
-                message={message}
-                label={
-                  view.authentication.length > 1
-                    ? `Message ${index + 1} / ${view.authentication.length}`
-                    : 'Message'
-                }
-              />
+              >
+                <MessageContent
+                  aria-label={
+                    view.authentication.length > 1
+                      ? `Message ${index + 1} / ${view.authentication.length}`
+                      : 'Message'
+                  }
+                >
+                  {message}
+                </MessageContent>
+              </WalletConnectMessage>
             ))
           ) : (
             <ViewPlaceholder role="status">

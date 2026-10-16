@@ -6,6 +6,7 @@ const Container = styled.div`
   display: flex;
   justify-content: space-between;
   overflow: hidden;
+  white-space: nowrap;
 `;
 
 const Text = styled.span``;

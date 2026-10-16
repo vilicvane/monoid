@@ -6,7 +6,7 @@ export const InfoSection = styled.div`
   gap: 8px;
 
   & + & {
-    margin-top: calc(var(--view-section-gap, 24px) - 8px);
+    margin-top: calc(var(--view-section-gap, 16px) - 8px);
   }
 `;
 
@@ -31,7 +31,7 @@ export const InfoSectionItem = styled.div`
 
 export const InfoSectionItemLabel = styled.div`
   font-size: 14px;
-  color: var(--ion-color-medium);
+  color: var(--color-text-label, var(--ion-color-medium));
 `;
 
 export const InfoSectionItemContent = styled.div``;

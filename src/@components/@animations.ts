@@ -125,7 +125,7 @@ const popOutKeyFrames = keyframes`
 `;
 
 export const popOutAnimationCSS = css`
-  animation: ${popOutKeyFrames} forwards 0.2s cubic-bezier(1, 0.4, 1, 0.4);
+  animation: ${popOutKeyFrames} forwards 200ms ease-out;
 `;
 
 const collapseOutKeyFrames = keyframes`
@@ -137,6 +137,11 @@ export const collapseOutAnimationCSS = css`
   animation: ${collapseOutKeyFrames} forwards 240ms
     cubic-bezier(0.22, 1, 0.36, 1);
 `;
+
+export const selectionTransition = {
+  duration: 220,
+  easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+};
 
 const breathKeyFrames = keyframes`
   0% {

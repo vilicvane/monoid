@@ -18,13 +18,13 @@ function namespace(chains, methods = [], events = []) {
   return {chains, methods, events};
 }
 
-test('approves personal signing while filtering unsupported methods and events', () => {
+test('approves personal and v4 signing while filtering unsupported methods and events', () => {
   const request = proposal(
     {},
     {
       eip155: namespace(
         ['eip155:1', 'eip155:137'],
-        ['personal_sign', 'eth_sendTransaction'],
+        ['personal_sign', 'eth_signTypedData_v4', 'eth_sendTransaction'],
         ['accountsChanged', 'chainChanged', 'unsupportedEvent'],
       ),
       solana: namespace(['solana:mainnet'], ['solana_signMessage']),
@@ -34,7 +34,7 @@ test('approves personal signing while filtering unsupported methods and events',
   assert.deepEqual(buildWalletConnectNamespaces(request, [ADDRESS]), {
     eip155: {
       chains: ['eip155:1', 'eip155:137'],
-      methods: ['personal_sign'],
+      methods: ['personal_sign', 'eth_signTypedData_v4'],
       events: ['accountsChanged', 'chainChanged'],
       accounts: [`eip155:1:${ADDRESS}`, `eip155:137:${ADDRESS}`],
     },
@@ -45,21 +45,23 @@ test('rejects unsupported required signing methods without advertising them as s
   assert.throws(
     () =>
       buildWalletConnectNamespaces(
-        proposal({eip155: namespace(['eip155:1'], ['eth_signTypedData_v4'])}),
+        proposal({eip155: namespace(['eip155:1'], ['eth_signTypedData_v3'])}),
         [ADDRESS],
       ),
     {message: 'This site requires unsupported wallet features.'},
   );
 });
 
-test('approves required personal signing without granting unrequested methods', () => {
-  const request = proposal({
-    eip155: namespace(['eip155:1'], ['personal_sign']),
-  });
-  assert.deepEqual(
-    buildWalletConnectNamespaces(request, [ADDRESS]).eip155.methods,
-    ['personal_sign'],
-  );
+test('approves required signing without granting unrequested methods', () => {
+  for (const method of ['personal_sign', 'eth_signTypedData_v4']) {
+    const request = proposal({
+      eip155: namespace(['eip155:1'], [method]),
+    });
+    assert.deepEqual(
+      buildWalletConnectNamespaces(request, [ADDRESS]).eip155.methods,
+      [method],
+    );
+  }
   assert.deepEqual(
     buildWalletConnectNamespaces(proposal({eip155: namespace(['eip155:1'])}), [
       ADDRESS,

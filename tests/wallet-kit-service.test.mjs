@@ -82,10 +82,20 @@ function createStorage(records = null) {
   };
 }
 
+function createAddressBook() {
+  return {rememberSigned: mock.fn(async () => {})};
+}
+
 function setup(sessions = {}, records = {}, requests = []) {
   const context = createKit(sessions, requests);
   const storage = createStorage(records);
-  const service = new WalletKitService(context.kit, storage, records);
+  const addressBook = createAddressBook();
+  const service = new WalletKitService(
+    context.kit,
+    storage,
+    addressBook,
+    records,
+  );
   // WalletKit returns the SDK store's array despite its Record return type.
   context.kit.getPendingSessionProposals.mock.mockImplementation(() =>
     Array.from(service.proposals, ([id, request]) => ({
@@ -95,7 +105,7 @@ function setup(sessions = {}, records = {}, requests = []) {
   );
   const controller = new AbortController();
 
-  return {...context, service, storage, controller};
+  return {...context, service, storage, addressBook, controller};
 }
 
 async function receiveProposal(
@@ -424,7 +434,11 @@ test('creates an empty service on first installation', async () => {
   const {kit} = createKit();
   const storage = createStorage();
 
-  const service = await WalletKitService.create(kit, storage);
+  const service = await WalletKitService.create(
+    kit,
+    storage,
+    createAddressBook(),
+  );
 
   assert.deepEqual(storage.get.mock.calls[0].arguments, [
     'walletKitSessionRecords',
@@ -452,7 +466,11 @@ test('restores persisted records without changing activity and prunes disconnect
     },
   });
 
-  const service = await WalletKitService.create(kit, storage);
+  const service = await WalletKitService.create(
+    kit,
+    storage,
+    createAddressBook(),
+  );
 
   assert.equal(service.sessions.get(TOPIC), session);
   assert.deepEqual(service.sessionRecords.get(TOPIC), record);
@@ -748,7 +766,7 @@ test('unsupported required methods never reach SDK approval', async () => {
   const context = setup();
   const {service, kit} = context;
   const request = proposal();
-  request.params.requiredNamespaces.eip155.methods.push('eth_signTypedData_v4');
+  request.params.requiredNamespaces.eip155.methods.push('eth_signTypedData_v3');
   await receiveProposal(context, request);
 
   await assert.rejects(service.approve(request.id, [ADDRESS]), {
@@ -1257,18 +1275,69 @@ test('local disconnect, remote deletion and session expiry clear only their pend
   }
 });
 
-function setupPersonalSign() {
+function signingData() {
+  return {
+    domain: {name: 'Monoid test', chainId: 1},
+    types: {
+      EIP712Domain: [
+        {name: 'name', type: 'string'},
+        {name: 'chainId', type: 'uint256'},
+      ],
+      Confirmation: [{name: 'nonce', type: 'uint256'}],
+    },
+    primaryType: 'Confirmation',
+    message: {nonce: '9007199254740993'},
+  };
+}
+
+function signingAddressData() {
+  const data = signingData();
+  data.domain.verifyingContract = ADDRESS;
+  data.types.EIP712Domain.push({name: 'verifyingContract', type: 'address'});
+  data.types.Confirmation.push(
+    {name: 'sender', type: 'address'},
+    {name: 'people', type: 'Person[]'},
+    {name: 'recipients', type: 'address[2][]'},
+    {name: 'memo', type: 'string'},
+  );
+  data.types.Person = [{name: 'wallet', type: 'address'}];
+  Object.assign(data.message, {
+    sender: authenticationWallets[0].address,
+    people: [{wallet: authenticationWallets[1].address}],
+    recipients: [[ADDRESS, authenticationWallets[1].address.toLowerCase()]],
+    memo: `An address written as text: 0x${'cd'.repeat(20)}`,
+  });
+  return data;
+}
+
+function signTypedData(wallet, data) {
+  return wallet.signTypedData(
+    data.domain,
+    Object.fromEntries(
+      Object.entries(data.types).filter(([type]) => type !== 'EIP712Domain'),
+    ),
+    data.message,
+  );
+}
+
+function setupSigning(
+  method = 'personal_sign',
+  data = method === 'eth_signTypedData_v4' ? signingData() : undefined,
+) {
   const wallet = authenticationWallets[0];
   const message = new TextEncoder().encode('Hello');
   const request = sessionRequest(1, TOPIC, Math.floor(Date.now() / 1000) + 300);
-  request.params.request.params[1] = wallet.address;
+  request.params.request.method = method;
+  request.params.request.params = data
+    ? [wallet.address, JSON.stringify(data)]
+    : ['0x48656c6c6f', wallet.address];
   const session = {
     topic: TOPIC,
     expiry: Math.floor(Date.now() / 1000) + 3600,
     namespaces: {
       eip155: {
         chains: ['eip155:1'],
-        methods: ['personal_sign'],
+        methods: [method],
         events: [],
         accounts: [`eip155:1:${wallet.address}`],
       },
@@ -1279,27 +1348,123 @@ function setupPersonalSign() {
     request,
     wallet,
     message,
+    data,
+    sign: () =>
+      data ? signTypedData(wallet, data) : wallet.signMessage(message),
   };
 }
 
-test('personal signing returns a verified signature and advances only its request', async () => {
-  const {service, kit, requests, wallet, message} = setupPersonalSign();
-  const second = {...requests[0], id: 2};
+test('receiving or rejecting typed data does not record its addresses as signed', async () => {
+  const {service, kit, request, addressBook} = setupSigning(
+    'eth_signTypedData_v4',
+    signingAddressData(),
+  );
+  assert.equal(service.requests.get(request.id), request);
+  kit.emit('session_request', request);
+  assert.equal(addressBook.rememberSigned.mock.callCount(), 0);
+
+  await service.rejectRequest(request.id);
+
+  assert.equal(addressBook.rememberSigned.mock.callCount(), 0);
+  assert.equal(service.requests.size, 0);
+});
+
+test('verified typed signatures share EVM history across networks and record only typed address fields before publication', async () => {
+  for (const chainId of [1, 137]) {
+    const data = signingAddressData();
+    data.domain.chainId = chainId;
+    const {service, kit, sessions, request, requests, sign, addressBook} =
+      setupSigning('eth_signTypedData_v4', data);
+    const requestChain = `eip155:${chainId}`;
+    request.params.chainId = requestChain;
+    sessions[TOPIC].namespaces.eip155.chains = [requestChain];
+    sessions[TOPIC].namespaces.eip155.accounts = [
+      `${requestChain}:${authenticationWallets[0].address}`,
+    ];
+    kit.respondSessionRequest.mock.mockImplementationOnce(async () => {
+      assert.equal(addressBook.rememberSigned.mock.callCount(), 1);
+      requests.splice(0, 1);
+    });
+
+    assert.equal(await service.approveRequest(1, await sign()), true);
+
+    const [chain, addresses] =
+      addressBook.rememberSigned.mock.calls[0].arguments;
+    assert.equal(chain, 'evm');
+    assert.deepEqual(addresses, [
+      ADDRESS,
+      authenticationWallets[0].address.toLowerCase(),
+      authenticationWallets[1].address.toLowerCase(),
+    ]);
+  }
+});
+
+test('a relay failure does not undo the fact that typed addresses were signed', async () => {
+  const {service, kit, sign, addressBook} = setupSigning(
+    'eth_signTypedData_v4',
+    signingAddressData(),
+  );
+  const failure = new Error('Relay unavailable');
+  kit.respondSessionRequest.mock.mockImplementationOnce(async () => {
+    throw failure;
+  });
+
+  await assert.rejects(service.approveRequest(1, await sign()), failure);
+
+  assert.equal(addressBook.rememberSigned.mock.callCount(), 1);
+  assert.equal(service.requests.has(1), true);
+});
+
+test('a history storage failure is reported without preventing a valid signature response', async context => {
+  const {service, kit, sign, addressBook} = setupSigning(
+    'eth_signTypedData_v4',
+    signingAddressData(),
+  );
+  const failure = new Error('Storage unavailable');
+  const error = context.mock.method(console, 'error', () => {});
+  addressBook.rememberSigned.mock.mockImplementationOnce(async () => {
+    throw failure;
+  });
+
+  assert.equal(await service.approveRequest(1, await sign()), true);
+
+  assert.deepEqual(error.mock.calls[0].arguments, [failure]);
+  assert.equal(kit.respondSessionRequest.mock.callCount(), 1);
+  assert.equal(service.requests.size, 0);
+});
+
+test('personal and typed signing return verified signatures and advance a mixed queue in order', async () => {
+  const {service, kit, sessions, requests, wallet, sign, addressBook} =
+    setupSigning();
+  sessions[TOPIC].namespaces.eip155.methods.push('eth_signTypedData_v4');
+  const data = signingData();
+  const second = structuredClone(requests[0]);
+  second.id = 2;
+  second.params.request.method = 'eth_signTypedData_v4';
+  second.params.request.params = [wallet.address, JSON.stringify(data)];
   requests.push(second);
   kit.emit('session_request', second);
-  const signature = await wallet.signMessage(message);
+  const signature = await sign();
 
   assert.equal(await service.approveRequest(1, signature), true);
+  assert.equal(addressBook.rememberSigned.mock.callCount(), 0);
   assert.deepEqual(kit.respondSessionRequest.mock.calls[0].arguments, [
     {topic: TOPIC, response: {id: 1, jsonrpc: '2.0', result: signature}},
   ]);
   assert.deepEqual(Array.from(service.requests.values()), [second]);
   assert.equal(await service.approveRequest(1, signature), false);
   assert.equal(kit.respondSessionRequest.mock.callCount(), 1);
+
+  const typedSignature = await signTypedData(wallet, data);
+  assert.equal(await service.approveRequest(2, typedSignature), true);
+  assert.deepEqual(kit.respondSessionRequest.mock.calls[1].arguments, [
+    {topic: TOPIC, response: {id: 2, jsonrpc: '2.0', result: typedSignature}},
+  ]);
+  assert.equal(service.requests.size, 0);
 });
 
 test('rejecting a request sends a user rejection and removes it from the queue', async () => {
-  const {service, kit} = setupPersonalSign();
+  const {service, kit} = setupSigning();
 
   await service.rejectRequest(1);
   await service.rejectRequest(1);
@@ -1319,7 +1484,7 @@ test('rejecting a request sends a user rejection and removes it from the queue',
 });
 
 test('concurrent approvals and leaving during publication share one response', async () => {
-  const {service, kit, requests, wallet, message} = setupPersonalSign();
+  const {service, kit, requests, wallet, message} = setupSigning();
   const publication = Promise.withResolvers();
   kit.respondSessionRequest.mock.mockImplementationOnce(async () => {
     await publication.promise;
@@ -1346,7 +1511,7 @@ test('concurrent approvals and leaving during publication share one response', a
 });
 
 test('an approval arriving during rejection cannot publish a signed response', async () => {
-  const {service, kit, wallet, message} = setupPersonalSign();
+  const {service, kit, wallet, message} = setupSigning();
   const signature = await wallet.signMessage(message);
   const rejection = service.rejectRequest(1);
   const approval = service.approveRequest(1, signature);
@@ -1360,7 +1525,7 @@ test('an approval arriving during rejection cannot publish a signed response', a
 });
 
 test('response state updates observers and a failed signed response is not replaced by a leaving rejection', async () => {
-  const {service, kit, wallet, message} = setupPersonalSign();
+  const {service, kit, wallet, message} = setupSigning();
   const publication = Promise.withResolvers();
   const failure = new Error('Response publication failed');
   kit.respondSessionRequest.mock.mockImplementationOnce(
@@ -1395,50 +1560,54 @@ test('response state updates observers and a failed signed response is not repla
   dispose();
 });
 
-test('response failure remains retryable only while the SDK retains the request', async () => {
-  for (const consumed of [false, true]) {
-    const {service, kit, requests, wallet, message} = setupPersonalSign();
-    const failure = new Error('Response publication failed');
-    kit.respondSessionRequest.mock.mockImplementationOnce(async () => {
-      if (consumed) requests.splice(0, 1);
-      throw failure;
-    });
-    const signature = await wallet.signMessage(message);
+for (const method of ['personal_sign', 'eth_signTypedData_v4']) {
+  test(`${method} response failure remains retryable only while the SDK retains the request`, async () => {
+    for (const consumed of [false, true]) {
+      const {service, kit, requests, sign} = setupSigning(method);
+      const failure = new Error('Response publication failed');
+      kit.respondSessionRequest.mock.mockImplementationOnce(async () => {
+        if (consumed) requests.splice(0, 1);
+        throw failure;
+      });
+      const signature = await sign();
 
-    if (consumed) {
-      assert.equal(await service.approveRequest(1, signature), true);
-      assert.equal(await service.approveRequest(1, signature), false);
-      assert.equal(kit.respondSessionRequest.mock.callCount(), 1);
-    } else {
-      await assert.rejects(service.approveRequest(1, signature), failure);
-      assert.equal(service.requests.has(1), true);
-      assert.equal(await service.approveRequest(1, signature), true);
-      assert.equal(kit.respondSessionRequest.mock.callCount(), 2);
+      if (consumed) {
+        assert.equal(await service.approveRequest(1, signature), true);
+        assert.equal(await service.approveRequest(1, signature), false);
+        assert.equal(kit.respondSessionRequest.mock.callCount(), 1);
+      } else {
+        await assert.rejects(service.approveRequest(1, signature), failure);
+        assert.equal(service.requests.has(1), true);
+        assert.equal(await service.approveRequest(1, signature), true);
+        assert.equal(kit.respondSessionRequest.mock.callCount(), 2);
+      }
+      assert.equal(service.requests.size, 0);
     }
-    assert.equal(service.requests.size, 0);
-  }
-});
+  });
+}
 
 test('expired requests, expired sessions and disconnected sessions cannot send a response', async () => {
-  for (const change of ['request', 'session', 'disconnect']) {
-    const {service, kit, sessions, request, wallet, message} =
-      setupPersonalSign();
-    const signature = await wallet.signMessage(message);
-    if (change === 'request') request.params.request.expiryTimestamp = 1;
-    else if (change === 'session') sessions[TOPIC].expiry = 1;
-    else delete sessions[TOPIC];
+  for (const method of ['personal_sign', 'eth_signTypedData_v4']) {
+    for (const change of ['request', 'session', 'disconnect']) {
+      const {service, kit, sessions, request, sign, addressBook} =
+        setupSigning(method);
+      const signature = await sign();
+      if (change === 'request') request.params.request.expiryTimestamp = 1;
+      else if (change === 'session') sessions[TOPIC].expiry = 1;
+      else delete sessions[TOPIC];
 
-    assert.equal(await service.approveRequest(1, signature), false);
-    await service.rejectRequest(1);
-    assert.equal(kit.respondSessionRequest.mock.callCount(), 0);
-    assert.equal(service.requests.size, 0);
+      assert.equal(await service.approveRequest(1, signature), false);
+      await service.rejectRequest(1);
+      assert.equal(kit.respondSessionRequest.mock.callCount(), 0);
+      assert.equal(addressBook.rememberSigned.mock.callCount(), 0);
+      assert.equal(service.requests.size, 0);
+    }
   }
 });
 
 test('expiry and disconnect during response publication finish quietly', async () => {
   for (const change of ['request', 'session', 'disconnect']) {
-    const {service, kit, sessions, request, wallet, message} =
-      setupPersonalSign();
+    const {service, kit, sessions, request, wallet, message} = setupSigning();
     const signature = await wallet.signMessage(message);
     kit.respondSessionRequest.mock.mockImplementationOnce(async () => {
       if (change === 'request') request.params.request.expiryTimestamp = 1;
@@ -1453,23 +1622,26 @@ test('expiry and disconnect during response publication finish quietly', async (
 });
 
 test('responding rechecks current method, chain and account authorization', async () => {
-  for (const change of ['method', 'chain', 'account']) {
-    const {service, kit, sessions, wallet, message} = setupPersonalSign();
-    const signature = await wallet.signMessage(message);
-    const namespace = structuredClone(sessions[TOPIC].namespaces.eip155);
-    if (change === 'method') namespace.methods = [];
-    else if (change === 'chain') namespace.chains = ['eip155:137'];
-    else namespace.accounts = [`eip155:1:${ADDRESS}`];
-    sessions[TOPIC] = {...sessions[TOPIC], namespaces: {eip155: namespace}};
+  for (const method of ['personal_sign', 'eth_signTypedData_v4']) {
+    for (const change of ['method', 'chain', 'account']) {
+      const {service, kit, sessions, sign, addressBook} = setupSigning(method);
+      const signature = await sign();
+      const namespace = structuredClone(sessions[TOPIC].namespaces.eip155);
+      if (change === 'method') namespace.methods = [];
+      else if (change === 'chain') namespace.chains = ['eip155:137'];
+      else namespace.accounts = [`eip155:1:${ADDRESS}`];
+      sessions[TOPIC] = {...sessions[TOPIC], namespaces: {eip155: namespace}};
 
-    await assert.rejects(service.approveRequest(1, signature), {code: 4100});
-    assert.equal(kit.respondSessionRequest.mock.callCount(), 0);
-    assert.equal(service.requests.has(1), true);
+      await assert.rejects(service.approveRequest(1, signature), {code: 4100});
+      assert.equal(kit.respondSessionRequest.mock.callCount(), 0);
+      assert.equal(addressBook.rememberSigned.mock.callCount(), 0);
+      assert.equal(service.requests.has(1), true);
+    }
   }
 });
 
 test('a signature for another account or different bytes never reaches the SDK', async () => {
-  const {service, kit, wallet, message} = setupPersonalSign();
+  const {service, kit, wallet, message} = setupSigning();
   for (const signature of [
     await authenticationWallets[1].signMessage(message),
     await wallet.signMessage('0x48656c6c6f'),
@@ -1480,5 +1652,52 @@ test('a signature for another account or different bytes never reaches the SDK',
     );
   }
   assert.equal(kit.respondSessionRequest.mock.callCount(), 0);
+  assert.equal(service.requests.has(1), true);
+});
+
+test('typed signatures for another account, domain or message never reach the SDK', async () => {
+  const {service, kit, wallet, data, addressBook} = setupSigning(
+    'eth_signTypedData_v4',
+  );
+  for (const signature of [
+    await signTypedData(authenticationWallets[1], data),
+    await signTypedData(wallet, {
+      ...data,
+      domain: {...data.domain, name: 'Other'},
+    }),
+    await signTypedData(wallet, {
+      ...data,
+      message: {nonce: '9007199254740994'},
+    }),
+    await wallet.signMessage(JSON.stringify(data)),
+  ]) {
+    await assert.rejects(
+      service.approveRequest(1, signature),
+      /signature does not match/,
+    );
+  }
+  assert.equal(kit.respondSessionRequest.mock.callCount(), 0);
+  assert.equal(addressBook.rememberSigned.mock.callCount(), 0);
+  assert.equal(service.requests.has(1), true);
+});
+
+test('a retained typed signature cannot answer a request that changes before retry', async () => {
+  const {service, kit, request, data, sign} = setupSigning(
+    'eth_signTypedData_v4',
+  );
+  const failure = new Error('Response publication failed');
+  kit.respondSessionRequest.mock.mockImplementationOnce(async () => {
+    throw failure;
+  });
+  const signature = await sign();
+  await assert.rejects(service.approveRequest(1, signature), failure);
+
+  data.message.nonce = '9007199254740994';
+  request.params.request.params[1] = JSON.stringify(data);
+  await assert.rejects(
+    service.approveRequest(1, signature),
+    /signature does not match/,
+  );
+  assert.equal(kit.respondSessionRequest.mock.callCount(), 1);
   assert.equal(service.requests.has(1), true);
 });

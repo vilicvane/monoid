@@ -1,22 +1,24 @@
 import type {IWalletKit, WalletKitTypes} from '@reown/walletkit';
 import {PAIRING_EVENTS} from '@walletconnect/core';
 import {getSdkError, parseUri} from '@walletconnect/utils';
-import {verifyMessage} from 'ethers';
+import {recoverAddress} from 'ethers';
 import {observable, reaction, runInAction} from 'mobx';
 import ms from 'ms';
 
+import {getTypedDataAddresses} from '../@lib/typed-data-fields.js';
 import {
   type WalletConnectAuthenticationResult,
   buildWalletConnectAuthentication,
   getWalletConnectRequestExpiry,
   validateWalletConnectAuthentication,
 } from '../@lib/wallet-connect-authentication.js';
-import {parseWalletConnectPersonalSign} from '../@lib/wallet-connect-request.js';
+import {parseWalletConnectSignRequest} from '../@lib/wallet-connect-request.js';
 import {
   buildWalletConnectNamespaces,
   parseWalletConnectUri,
 } from '../@lib/wallet-connect.js';
 
+import type {AddressBookService} from './address-book-service.js';
 import type {StorageService} from './storage-service.js';
 
 const CONNECTION_REQUEST_TIMEOUT = ms('1m');
@@ -82,6 +84,7 @@ export class WalletKitService {
   constructor(
     private kit: IWalletKit,
     storage: StorageService,
+    private addressBook: AddressBookService,
     records: Record<string, WalletKitSessionRecord> = {},
   ) {
     runInAction(() => this.sessionRecords.replace(records));
@@ -189,15 +192,22 @@ export class WalletKitService {
     if (!request) return false;
 
     if (signature !== undefined) {
-      const {message, address} = parseWalletConnectPersonalSign(
+      const payload = parseWalletConnectSignRequest(
         request,
         this.sessions.get(request.topic)!,
       );
       if (
-        verifyMessage(message, signature).toLowerCase() !==
-        address.toLowerCase()
+        recoverAddress(payload.digest, signature).toLowerCase() !==
+        payload.address.toLowerCase()
       ) {
         throw new Error('The signature does not match the requested account.');
+      }
+
+      // The signature is complete even if publishing its response needs a retry.
+      if (payload.method === 'eth_signTypedData_v4') {
+        void this.addressBook
+          .rememberSigned('evm', getTypedDataAddresses(payload.typedData))
+          .catch(console.error);
       }
     }
 
@@ -483,9 +493,10 @@ export class WalletKitService {
   static async create(
     kit: IWalletKit,
     storage: StorageService,
+    addressBook: AddressBookService,
   ): Promise<WalletKitService> {
     const records = await storage.get('walletKitSessionRecords');
-    return new WalletKitService(kit, storage, records ?? {});
+    return new WalletKitService(kit, storage, addressBook, records ?? {});
   }
 
   async connect(

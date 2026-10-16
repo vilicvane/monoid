@@ -8,8 +8,6 @@ import {CenteredPopup} from '../../../@ui/centered-popup.js';
 
 const Picker = styled(CenteredPopup)`
   --address-selector-gap: 16px;
-  --color-text-secondary: white;
-  --color-segmented-border: rgba(255, 255, 255, 0.45);
 `;
 
 export const AddressTypePicker = ({

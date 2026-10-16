@@ -23,6 +23,13 @@ const Layer = styled.div`
 `;
 
 const Dialog = styled.div`
+  --color-text-label: rgba(255, 255, 255, 0.7);
+  --color-text-secondary: white;
+  --color-segmented-border: rgba(255, 255, 255, 0.45);
+  --color-address-tag-background: rgba(255, 255, 255, 0.08);
+  --color-address-tag-border: rgba(255, 255, 255, 0.55);
+  --color-address-tag-text: white;
+
   box-sizing: border-box;
   width: 100%;
   max-width: 320px;
@@ -30,7 +37,7 @@ const Dialog = styled.div`
   min-width: 0;
   /* Leave room for the items to rise without clipping at the scroll edge. */
   padding: 14px 2px;
-  color: var(--ion-color-dark);
+  color: white;
   outline: none;
   overflow-y: auto;
   pointer-events: auto;

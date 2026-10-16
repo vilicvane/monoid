@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-import {getBytes, hexlify, toUtf8Bytes} from 'ethers';
+import {getBigInt, getBytes, hashMessage, hexlify, toUtf8Bytes} from 'ethers';
 
-const {parseWalletConnectPersonalSign, WalletConnectRequestError} =
-  await import('../.bld/app/@lib/wallet-connect-request.js');
+const {parseWalletConnectSignRequest, WalletConnectRequestError} = await import(
+  '../.bld/app/@lib/wallet-connect-request.js'
+);
 
 const address = '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf';
 const otherAddress = '0x0000000000000000000000000000000000000001';
@@ -36,23 +37,130 @@ function assertRequestError(action, code) {
 }
 
 test('parses hex bytes rather than the literal hex string and normalizes the account', () => {
-  const result = parseWalletConnectPersonalSign(
+  const result = parseWalletConnectSignRequest(
     request('0x48656C6C6f', address.toLowerCase()),
     session(),
   );
 
   assert.deepEqual(result, {
+    method: 'personal_sign',
     address,
     chainId: 'eip155:1',
+    digest: hashMessage(getBytes('0x48656c6c6f')),
     message: getBytes('0x48656c6c6f'),
     text: 'Hello',
   });
 });
 
+function typedDataRequest(chainId = 1) {
+  return {
+    topic: 'session',
+    params: {
+      chainId: 'eip155:1',
+      request: {
+        method: 'eth_signTypedData_v4',
+        params: [
+          address,
+          {
+            domain: {chainId},
+            primaryType: 'Confirmation',
+            types: {
+              EIP712Domain: [{name: 'chainId', type: 'uint256'}],
+              Confirmation: [{name: 'nonce', type: 'uint256'}],
+            },
+            message: {nonce: '9007199254740993'},
+          },
+        ],
+      },
+    },
+  };
+}
+
+function typedDataSession() {
+  const authorized = session();
+  authorized.namespaces.eip155.methods.push('eth_signTypedData_v4');
+  return authorized;
+}
+
+test('parses v4 account-first parameters as JSON or objects without losing large values', () => {
+  for (const encodeJSON of [false, true]) {
+    const incoming = typedDataRequest('0x01');
+    incoming.params.request.params[0] = address.toLowerCase();
+    if (encodeJSON) {
+      incoming.params.request.params[1] = JSON.stringify(
+        incoming.params.request.params[1],
+      );
+    }
+    const parsed = parseWalletConnectSignRequest(incoming, typedDataSession());
+
+    assert.equal(parsed.method, 'eth_signTypedData_v4');
+    assert.equal(parsed.address, address);
+    assert.equal(parsed.chainId, 'eip155:1');
+    assert.equal(getBigInt(parsed.typedData.domain.chainId), 1n);
+    assert.equal(parsed.typedData.message.nonce, '9007199254740993');
+    assert.match(parsed.digest, /^0x[\da-f]{64}$/);
+  }
+});
+
+test('requires v4 permission even when personal signing was already authorized', () => {
+  const incoming = typedDataRequest();
+  assertRequestError(
+    () => parseWalletConnectSignRequest(incoming, session()),
+    4100,
+  );
+
+  for (const change of ['chain', 'account']) {
+    const authorized = typedDataSession();
+    if (change === 'chain') {
+      authorized.namespaces.eip155.chains = ['eip155:137'];
+    } else {
+      authorized.namespaces.eip155.accounts = [`eip155:1:${otherAddress}`];
+    }
+    assertRequestError(
+      () => parseWalletConnectSignRequest(incoming, authorized),
+      4100,
+    );
+  }
+});
+
+test('rejects a typed-data domain on a different network but allows omitted chain binding', () => {
+  assertRequestError(
+    () =>
+      parseWalletConnectSignRequest(typedDataRequest(137), typedDataSession()),
+    -32602,
+  );
+
+  const incoming = typedDataRequest();
+  const data = incoming.params.request.params[1];
+  data.domain = {};
+  data.types.EIP712Domain = [];
+  const parsed = parseWalletConnectSignRequest(incoming, typedDataSession());
+  assert.deepEqual(parsed.typedData.domain, {});
+  assert.equal(parsed.chainId, 'eip155:1');
+});
+
+test('returns invalid-params errors for malformed v4 payloads and reversed arguments', () => {
+  const data = typedDataRequest().params.request.params[1];
+  for (const params of [
+    [data, address],
+    [address, '{'],
+    [address, null],
+    [address, {...data, primaryType: 'AnotherType'}],
+    [address, {...data, message: {}}],
+  ]) {
+    const incoming = typedDataRequest();
+    incoming.params.request.params = params;
+    assertRequestError(
+      () => parseWalletConnectSignRequest(incoming, typedDataSession()),
+      -32602,
+    );
+  }
+});
+
 test('preserves Unicode, whitespace and empty messages for display and signing', () => {
   for (const text of ['', '登录 Monoid 👋\nMessage', 'First\r\n\tSecond ']) {
     const message = toUtf8Bytes(text);
-    const parsed = parseWalletConnectPersonalSign(
+    const parsed = parseWalletConnectSignRequest(
       request(hexlify(message)),
       session(),
     );
@@ -71,7 +179,7 @@ test('displays invisible controls and formatting characters as exact hex bytes',
     'Direction\u202E',
   ]) {
     const message = toUtf8Bytes(text);
-    const parsed = parseWalletConnectPersonalSign(
+    const parsed = parseWalletConnectSignRequest(
       request(hexlify(message)),
       session(),
     );
@@ -83,7 +191,7 @@ test('displays invisible controls and formatting characters as exact hex bytes',
 
 test('keeps non-UTF8 binary messages exact and requires hex display', () => {
   for (const value of ['0xff00fe', '0xc328', '0xe282', '0xedb080']) {
-    const parsed = parseWalletConnectPersonalSign(request(value), session());
+    const parsed = parseWalletConnectSignRequest(request(value), session());
 
     assert.deepEqual(parsed.message, getBytes(value));
     assert.equal(parsed.text, undefined);
@@ -106,7 +214,7 @@ test('supports namespace-wide and chain-scoped session permissions', () => {
     },
   ]) {
     assert.equal(
-      parseWalletConnectPersonalSign(request(), session(namespaces)).address,
+      parseWalletConnectSignRequest(request(), session(namespaces)).address,
       address,
     );
   }
@@ -116,19 +224,19 @@ test('rejects requests for another session or unsupported signing methods and ne
   const wrongTopic = request();
   wrongTopic.topic = 'another-session';
   assertRequestError(
-    () => parseWalletConnectPersonalSign(wrongTopic, session()),
+    () => parseWalletConnectSignRequest(wrongTopic, session()),
     4100,
   );
 
   for (const method of [
     'eth_sign',
-    'eth_signTypedData_v4',
+    'eth_signTypedData_v3',
     'personal_signTypedData',
   ]) {
     const unsupported = request();
     unsupported.params.request.method = method;
     assertRequestError(
-      () => parseWalletConnectPersonalSign(unsupported, session()),
+      () => parseWalletConnectSignRequest(unsupported, session()),
       4200,
     );
   }
@@ -142,7 +250,7 @@ test('rejects requests for another session or unsupported signing methods and ne
     const unsupported = request();
     unsupported.params.chainId = chain;
     assertRequestError(
-      () => parseWalletConnectPersonalSign(unsupported, session()),
+      () => parseWalletConnectSignRequest(unsupported, session()),
       4200,
     );
   }
@@ -181,7 +289,7 @@ test('requires the chain, method and account to be authorized together', () => {
     },
   ]) {
     assertRequestError(
-      () => parseWalletConnectPersonalSign(request(), session(namespaces)),
+      () => parseWalletConnectSignRequest(request(), session(namespaces)),
       4100,
     );
   }
@@ -210,7 +318,7 @@ test('rejects malformed parameters without guessing their order or encoding', ()
     const invalid = request();
     invalid.params.request.params = params;
     assertRequestError(
-      () => parseWalletConnectPersonalSign(invalid, session()),
+      () => parseWalletConnectSignRequest(invalid, session()),
       -32602,
     );
   }

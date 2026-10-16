@@ -1,10 +1,12 @@
-import {hexlify} from 'ethers';
 import {type ReactNode, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
 import {useEntrances} from '../../../@entrances.js';
-import {signEvmMessage} from '../../../@lib/monoid/index.js';
-import {parseWalletConnectPersonalSign} from '../../../@lib/wallet-connect-request.js';
+import {signEvmDigest} from '../../../@lib/monoid/index.js';
+import {
+  type WalletConnectSignRequest,
+  parseWalletConnectSignRequest,
+} from '../../../@lib/wallet-connect-request.js';
 import type {Router} from '../../../@routes.js';
 import {getWalletSigningAccount} from '../../@monoid/get-wallet-signing-account.js';
 import {
@@ -17,11 +19,13 @@ export function WalletConnectSignButton({
   view,
   payload,
   disabled,
+  color,
   onStateChange,
   onComplete,
 }: Pick<RouteComponentProps<Router['sessions']['request']>, 'view'> & {
-  payload: ReturnType<typeof parseWalletConnectPersonalSign>;
+  payload: WalletConnectSignRequest;
   disabled: boolean;
+  color: 'primary' | 'warning' | 'danger';
   onStateChange: (state: 'signing' | 'responding' | undefined) => void;
   onComplete: () => Promise<void>;
 }): ReactNode {
@@ -60,11 +64,12 @@ export function WalletConnectSignButton({
         });
       }
 
-      const current = parseWalletConnectPersonalSign(request, session);
+      const current = parseWalletConnectSignRequest(request, session);
       if (
         current.address !== payload.address ||
         current.chainId !== payload.chainId ||
-        hexlify(current.message) !== hexlify(payload.message)
+        current.method !== payload.method ||
+        current.digest !== payload.digest
       ) {
         throw new Error('The signing request has changed.');
       }
@@ -89,10 +94,10 @@ export function WalletConnectSignButton({
               Signing
             </MonoidScanStatePromptProgress>,
           );
-          result = await signEvmMessage(
+          result = await signEvmDigest(
             applet,
             account.reference,
-            payload.message,
+            payload.digest,
             payload.address,
             assertPending,
           );
@@ -119,7 +124,7 @@ export function WalletConnectSignButton({
 
   return (
     <>
-      <AsyncButton disabled={disabled} handler={sign}>
+      <AsyncButton disabled={disabled} color={color} handler={sign}>
         {retry ? 'Retry' : 'Sign'}
       </AsyncButton>
       {scanPromptContent}

@@ -1,4 +1,4 @@
-import {IonIcon} from '@ionic/react';
+import {IonFabButton, IonIcon} from '@ionic/react';
 import arrowRightLeft from 'lucide-static/icons/arrow-right-left.svg';
 import ellipsis from 'lucide-static/icons/ellipsis.svg';
 import {observer} from 'mobx-react-lite';
@@ -12,16 +12,15 @@ import {WalletAccountList} from '../@key/wallet-account-list.js';
 import {AsyncButton} from '../@ui/button.js';
 import {CenteredPopup} from '../@ui/centered-popup.js';
 import {DateTime} from '../@ui/date-time.js';
-import {IconButton} from '../@ui/icon-button.js';
 import {
   InfoSection,
-  InfoSectionHeader,
   InfoSectionItemLabel,
   InfoSectionRow,
 } from '../@ui/info-section.js';
 import {
   View,
   ViewContent,
+  ViewFab,
   ViewHeader,
   ViewHeaderButton,
   ViewHeaderTitle,
@@ -31,7 +30,10 @@ import {WalletConnectSite} from './@scan/wallet-connect-site.js';
 import {useSession} from './@sessions/use-session.js';
 
 export const SessionView = observer(
-  ({view}: RouteComponentProps<Router['sessions']['session']>): ReactNode => {
+  ({
+    view,
+    transition,
+  }: RouteComponentProps<Router['sessions']['session']>): ReactNode => {
     const {walletKitService, walletStorageService} = useEntrances();
     const [pending, setPending] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
@@ -84,16 +86,6 @@ export const SessionView = observer(
             </InfoSectionRow>
           </InfoSection>
           <InfoSection>
-            <InfoSectionHeader>
-              <InfoSectionItemLabel>Connected accounts</InfoSectionItemLabel>
-              <IconButton
-                aria-label="Switch Account"
-                disabled={!canSwitch || pending}
-                onClick={() => view.$match.switchAccounts.$push()}
-              >
-                <IonIcon icon={arrowRightLeft} />
-              </IconButton>
-            </InfoSectionHeader>
             <WalletAccountList
               keys={walletStorageService.keys}
               addressType="evm"
@@ -108,6 +100,15 @@ export const SessionView = observer(
             </InfoSection>
           )}
         </ViewContent>
+        <ViewFab view={view} transition={transition} inert={!active}>
+          <IonFabButton
+            aria-label="Switch Account"
+            disabled={!canSwitch || pending}
+            onClick={() => view.$match.switchAccounts.$push()}
+          >
+            <IonIcon icon={arrowRightLeft} />
+          </IonFabButton>
+        </ViewFab>
         {menuOpen && active && walletKitService.sessions.has(view.topic) && (
           <CenteredPopup
             aria-label="Session actions"

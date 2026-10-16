@@ -13,7 +13,7 @@ import {LoadingSpinner} from './loading-spinner.js';
 import {RippleEffect} from './ripple-effect.js';
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  color?: 'primary' | 'danger' | 'neutral';
+  color?: 'primary' | 'danger' | 'warning' | 'neutral';
   loading?: boolean;
   footerReveal?: 'always' | 'end';
 };

@@ -11,6 +11,7 @@ import {createMonoidApplet} from './@lib/monoid/index.js';
 import {Portals} from './@portals.js';
 import {ROUTE_SCHEMA, type ViewSwitchingState} from './@routes.js';
 import {
+  AddressBookService,
   ChainService,
   ErrorService,
   MonoidCredentialsStore,
@@ -112,8 +113,19 @@ export class Entrances {
 
   @entrance
   get walletKitService() {
-    return Promise.all([this.walletKit, this.storageService]).then(
-      ([walletKit, storage]) => WalletKitService.create(walletKit, storage),
+    return Promise.all([
+      this.walletKit,
+      this.storageService,
+      this.addressBookService,
+    ]).then(([walletKit, storage, addresses]) =>
+      WalletKitService.create(walletKit, storage, addresses),
+    );
+  }
+
+  @entrance
+  get addressBookService() {
+    return this.storageService.then(storage =>
+      AddressBookService.create(storage),
     );
   }
 

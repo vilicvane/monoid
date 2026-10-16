@@ -1,7 +1,18 @@
 import type {WalletKitTypes} from '@reown/walletkit';
-import {getAddress, getBytes} from 'ethers';
+import {getAddress, getBytes, hashMessage} from 'ethers';
 
 import type {WalletKitSession} from '../@services/index.js';
+
+import {type EvmTypedData, parseEvmTypedData} from './evm-typed-data.js';
+
+export type WalletConnectSignRequest = {
+  address: string;
+  chainId: string;
+  digest: string;
+} & (
+  | {method: 'personal_sign'; message: Uint8Array; text: string | undefined}
+  | {method: 'eth_signTypedData_v4'; typedData: EvmTypedData}
+);
 
 export class WalletConnectRequestError extends Error {
   constructor(
@@ -12,15 +23,10 @@ export class WalletConnectRequestError extends Error {
   }
 }
 
-export function parseWalletConnectPersonalSign(
+export function parseWalletConnectSignRequest(
   request: WalletKitTypes.SessionRequest,
   session: WalletKitSession,
-): {
-  address: string;
-  chainId: string;
-  message: Uint8Array;
-  text: string | undefined;
-} {
+): WalletConnectSignRequest {
   if (request.topic !== session.topic) {
     throw new WalletConnectRequestError(
       'This session is not authorized.',
@@ -30,7 +36,10 @@ export function parseWalletConnectPersonalSign(
 
   const {chainId, request: payload} = request.params;
 
-  if (payload.method !== 'personal_sign') {
+  if (
+    payload.method !== 'personal_sign' &&
+    payload.method !== 'eth_signTypedData_v4'
+  ) {
     throw new WalletConnectRequestError(
       'This signing method is not supported.',
       4200,
@@ -43,14 +52,7 @@ export function parseWalletConnectPersonalSign(
 
   const {params} = payload;
 
-  if (
-    !Array.isArray(params) ||
-    params.length !== 2 ||
-    typeof params[0] !== 'string' ||
-    !/^0x(?:[\da-fA-F]{2})*$/.test(params[0]) ||
-    typeof params[1] !== 'string' ||
-    !/^0x[\da-fA-F]{40}$/.test(params[1])
-  ) {
+  if (!Array.isArray(params) || params.length !== 2) {
     throw new WalletConnectRequestError(
       'Invalid message signing request.',
       -32602,
@@ -60,7 +62,11 @@ export function parseWalletConnectPersonalSign(
   let address: string;
 
   try {
-    address = getAddress(params[1]);
+    const value: unknown = params[payload.method === 'personal_sign' ? 1 : 0];
+    if (typeof value !== 'string' || !/^0x[\da-fA-F]{40}$/.test(value)) {
+      throw new Error('Invalid account.');
+    }
+    address = getAddress(value);
   } catch {
     throw new WalletConnectRequestError('Invalid signing account.', -32602);
   }
@@ -78,6 +84,41 @@ export function parseWalletConnectPersonalSign(
     throw new WalletConnectRequestError(
       'This account or network is not authorized.',
       4100,
+    );
+  }
+
+  if (payload.method === 'eth_signTypedData_v4') {
+    let parsed: ReturnType<typeof parseEvmTypedData>;
+    try {
+      parsed = parseEvmTypedData(params[1]);
+    } catch {
+      throw new WalletConnectRequestError(
+        'Invalid typed data signing request.',
+        -32602,
+      );
+    }
+
+    const {data, digest} = parsed;
+    if (
+      data.domain.chainId !== undefined &&
+      BigInt(data.domain.chainId) !== BigInt(chainId.split(':')[1]!)
+    ) {
+      throw new WalletConnectRequestError(
+        'The signing domain uses a different network.',
+        -32602,
+      );
+    }
+
+    return {method: payload.method, address, chainId, digest, typedData: data};
+  }
+
+  if (
+    typeof params[0] !== 'string' ||
+    !/^0x(?:[\da-fA-F]{2})*$/.test(params[0])
+  ) {
+    throw new WalletConnectRequestError(
+      'Invalid message signing request.',
+      -32602,
     );
   }
 
@@ -99,5 +140,12 @@ export function parseWalletConnectPersonalSign(
     text = undefined;
   }
 
-  return {address, chainId, message, text};
+  return {
+    method: payload.method,
+    address,
+    chainId,
+    digest: hashMessage(message),
+    message,
+    text,
+  };
 }

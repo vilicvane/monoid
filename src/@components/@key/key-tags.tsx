@@ -3,6 +3,7 @@ import {css, styled} from 'styled-components';
 
 import type {AddressChain} from '../../@lib/wallet-address.js';
 import {collapseOutAnimationCSS, popInAnimationCSS} from '../@animations.js';
+import {Tag} from '../@ui/tag.js';
 
 import {AddressChainIcon} from './address-chain-icon.js';
 
@@ -13,23 +14,7 @@ export const KeyTags = styled.div`
   isolation: isolate;
 `;
 
-export const KeyTag = styled.div`
-  flex-shrink: 0;
-  margin: 0 -2px;
-
-  height: 22px;
-  padding: 0 6px;
-  font-size: 13px;
-  border-radius: 12px;
-
-  background-color: var(--ion-color-light);
-  border: solid 0.5px var(--ion-color-light-shade);
-  color: var(--ion-color-medium-shade);
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-`;
+export const KeyTag = Tag;
 
 export const KeyTypeTag = styled(KeyTag)`
   &.seed {
@@ -64,9 +49,12 @@ const KeyDerivationTagContainer = styled(KeyTag)`
   gap: 2px;
   padding-left: 3px;
 
-  background-color: var(--ion-color-dark-contrast);
-  border-color: var(--ion-color-light-shade);
-  color: var(--ion-color-dark);
+  background-color: var(
+    --color-address-tag-background,
+    var(--ion-color-dark-contrast)
+  );
+  border-color: var(--color-address-tag-border, var(--ion-color-light-shade));
+  color: var(--color-address-tag-text, var(--ion-color-dark));
 `;
 
 const DerivationPath = styled.span`

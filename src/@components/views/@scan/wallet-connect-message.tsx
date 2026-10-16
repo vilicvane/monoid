@@ -5,32 +5,28 @@ import {useEntrances} from '../../../@entrances.js';
 import {WalletAccountList} from '../../@key/wallet-account-list.js';
 import {ChainName} from '../../@ui/chain-name.js';
 import {InfoSection} from '../../@ui/info-section.js';
-import {MessageContent} from '../../@ui/message-content.js';
 
 export const WalletConnectMessage = observer(
   ({
     address,
     chainId,
-    message,
-    label = 'Message',
+    children,
   }: {
     address: string;
-    chainId: string;
-    message: string;
-    label?: string;
+    chainId?: string;
+    children: ReactNode;
   }): ReactNode => {
     const {walletStorageService} = useEntrances();
 
     return (
       <InfoSection>
-        <ChainName chainId={chainId} />
+        {chainId && <ChainName chainId={chainId} />}
         <WalletAccountList
           keys={walletStorageService.keys}
           addressType="evm"
           addresses={[address]}
-          compact
         />
-        <MessageContent aria-label={label}>{message}</MessageContent>
+        {children}
       </InfoSection>
     );
   },

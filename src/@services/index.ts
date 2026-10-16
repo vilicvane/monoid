@@ -1,3 +1,4 @@
+export * from './address-book-service.js';
 export * from './chain-service.js';
 export * from './error-service.js';
 export * from './monoid-credentials-store.js';

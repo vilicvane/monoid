@@ -39,7 +39,7 @@ export const ViewContent = ({
   footer,
   footerReveal = 'always',
   footerRef,
-  sectionGap = 24,
+  sectionGap = 16,
   children,
   ...props
 }: HTMLAttributes<HTMLDivElement> & {
