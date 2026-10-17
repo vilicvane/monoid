@@ -6,7 +6,7 @@ import {Tag} from './tag.js';
 const messageBlockCSS = css`
   margin: 0 -2px;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--info-border-radius);
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

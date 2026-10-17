@@ -1,6 +1,6 @@
 import {IonIcon} from '@ionic/react';
 import {formatUnits} from 'ethers';
-import info from 'lucide-static/icons/info.svg';
+import list from 'lucide-static/icons/list.svg';
 import {type ReactNode, useEffect, useState} from 'react';
 import {css, styled} from 'styled-components';
 
@@ -28,22 +28,27 @@ import {EvmGasEditor} from './evm-gas-editor.js';
 import {FormattedNumber} from './formatted-number.js';
 import {IconButton} from './icon-button.js';
 import {
-  InfoSection,
   InfoSectionHeader,
   InfoSectionItemLabel,
   InfoSectionRow,
   InfoTable,
+  InfoTableSection,
   InfoTableSummary,
 } from './info-section.js';
+import {inlineIconCSS} from './inline-icon.js';
 import {MessageSectionTitle} from './message-content.js';
 import {NativeAmount} from './native-amount.js';
 import {Tag} from './tag.js';
 
-const Section = styled(InfoSection)`
-  gap: 9px;
-`;
+const Heading = styled.button`
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 
-const Heading = styled.div`
   display: flex;
   align-items: center;
   min-width: 0;
@@ -83,8 +88,7 @@ const RateTag = styled(Tag)<{$level?: EvmGasComparison['level']}>`
 `;
 
 const DetailsButton = styled(IconButton)`
-  color: var(--ion-color-medium-tint);
-  font-size: 16px;
+  ${inlineIconCSS}
 `;
 
 const DetailValue = styled.span`
@@ -168,10 +172,15 @@ export const EvmGasDetails = ({
   }, [gasHistoryService, chainId, supportsHistory]);
 
   return (
-    <Section>
+    <InfoTableSection>
       <InfoSectionHeader>
-        <Heading>
-          <Title>Gas</Title>
+        <Heading
+          type="button"
+          aria-label={onChange ? 'Edit gas' : 'View gas details'}
+          aria-haspopup="dialog"
+          onClick={() => setShowDetails(true)}
+        >
+          <Title as="span">Gas</Title>
           <RateTag
             as="span"
             $level={comparison?.level}
@@ -184,6 +193,7 @@ export const EvmGasDetails = ({
           >
             {gas?.networkFeePerGas !== undefined ? (
               <FormattedNumber
+                interactive={false}
                 value={formatUnits(gas.networkFeePerGas, 'gwei')}
                 unit="gwei"
               />
@@ -197,7 +207,7 @@ export const EvmGasDetails = ({
           aria-haspopup="dialog"
           onClick={() => setShowDetails(true)}
         >
-          <IonIcon icon={info} aria-hidden="true" />
+          <IonIcon icon={list} aria-hidden="true" />
         </DetailsButton>
       </InfoSectionHeader>
       {showFees && (
@@ -301,6 +311,6 @@ export const EvmGasDetails = ({
           <Note>Additional network fees are not included.</Note>
         </DetailsPopup>
       )}
-    </Section>
+    </InfoTableSection>
   );
 };

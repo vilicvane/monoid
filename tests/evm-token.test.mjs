@@ -5,6 +5,8 @@ import {test} from 'node:test';
 
 import {Interface} from 'ethers';
 
+// eslint-disable-next-line @mufan/scoped-modules -- Test the shared risk classification.
+import {getAddressSeverity} from '../.bld/app/@lib/address-status.js';
 // eslint-disable-next-line @mufan/scoped-modules -- Test token metadata without platform services.
 import {
   formatTokenAmount,
@@ -14,9 +16,6 @@ import {
   parseEvmTokenList,
   readEvmToken,
 } from '../.bld/app/@lib/evm-token.js';
-
-// eslint-disable-next-line @mufan/scoped-modules -- Test the shared risk classification.
-import {getAddressSeverity} from '../.bld/app/@lib/address-status.js';
 
 const TOKEN = {
   chainId: 1,
@@ -160,6 +159,14 @@ test('formats base units without rounding or floating-point loss', () => {
   const maximum = (1n << 256n) - 1n;
   const full = formatTokenAmount(maximum, 18);
   assert.equal(BigInt(full.replace('.', '')), maximum);
+});
+
+test('formats signed token changes, including amounts smaller than one token', () => {
+  assert.equal(formatTokenAmount(-42n, 0), '-42');
+  assert.equal(formatTokenAmount(-1000000n, 6), '-1');
+  assert.equal(formatTokenAmount(-5n, 6), '-0.000005');
+  assert.equal(formatTokenAmount(-123456789n, 6), '-123.456789');
+  assert.equal(formatTokenAmount(-1n, 255), `-0.${'0'.repeat(254)}1`);
 });
 
 test('excludes the Solana entries in the Uniswap list from EVM identity', () => {

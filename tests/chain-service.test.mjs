@@ -11,12 +11,14 @@ import {ChainService} from '../.bld/app/@services/chain-service.js';
 const NOW = 1_000_000_000;
 const DAY = 24 * 60 * 60 * 1000;
 const RETRY_DELAY = 5 * 60 * 1000;
+const HASH = `0x${'12'.repeat(32)}`;
 const DIRECTORY = [
   {
     chainId: 1,
     name: 'Ethereum Mainnet',
     chainSlug: 'ethereum',
     nativeCurrency: {symbol: 'ETH', decimals: 18},
+    explorers: [{standard: 'EIP3091', url: 'https://etherscan.io/'}],
     rpc: ['https://unused.example'],
   },
   {
@@ -24,6 +26,7 @@ const DIRECTORY = [
     name: 'Example Network',
     chainSlug: 'example',
     nativeCurrency: {symbol: 'COIN', decimals: 6},
+    explorers: [{standard: 'EIP3091', url: 'https://explorer.example/coin/'}],
   },
 ];
 
@@ -56,6 +59,7 @@ test('fresh cached names and built-in fallbacks are available without a network 
     updatedAt: NOW - DAY + 1,
     names: {'eip155:987654321': 'Cached Network'},
     icons: {'eip155:987654321': 'https://icons.example/cached.jpg'},
+    explorers: {'eip155:987654321': 'https://cached.example/network'},
   };
   const storage = createStorage(context, cache);
   const service = await ChainService.create(storage);
@@ -74,6 +78,19 @@ test('fresh cached names and built-in fallbacks are available without a network 
     decimals: 18,
   });
   assert.equal(service.getNativeCurrency('eip155:987654321'), undefined);
+  assert.equal(
+    service.getTransactionExplorerURL('eip155:987654321', HASH),
+    `https://cached.example/network/tx/${HASH}`,
+  );
+  assert.equal(
+    service.getTransactionExplorerURL('eip155:1', HASH),
+    `https://etherscan.io/tx/${HASH}`,
+  );
+  assert.equal(
+    service.getTransactionExplorerURL('eip155:999999999', HASH),
+    undefined,
+  );
+  assert.equal(service.getTransactionExplorerURL('solana:1', HASH), undefined);
   await service.refresh();
   assert.equal(fetch.mock.callCount(), 0);
   assert.equal(storage.set.mock.callCount(), 0);
@@ -112,6 +129,7 @@ test('stale cache is returned immediately while one shared background request re
     updatedAt: NOW - DAY,
     names: {'eip155:987654321': 'Cached Network'},
     icons: {'eip155:987654321': 'https://icons.example/cached.jpg'},
+    explorers: {'eip155:987654321': 'https://cached.example/network'},
   });
   const service = await ChainService.create(storage);
   assert.equal(service.getChainName('eip155:987654321'), 'Cached Network');
@@ -129,6 +147,7 @@ test('stale cache is returned immediately while one shared background request re
       service.getChainName('eip155:987654321'),
       service.getChainIcon('eip155:987654321'),
       service.getNativeCurrency('eip155:987654321'),
+      service.getTransactionExplorerURL('eip155:987654321', HASH),
     ],
     metadata => observed.push(metadata),
   );
@@ -141,6 +160,7 @@ test('stale cache is returned immediately while one shared background request re
       'Example Network',
       'https://icons.llamao.fi/icons/chains/rsz_example.jpg',
       {symbol: 'COIN', decimals: 6},
+      `https://explorer.example/coin/tx/${HASH}`,
     ],
   ]);
   assert.deepEqual(storage.set.mock.calls[0].arguments, [
@@ -159,6 +179,10 @@ test('stale cache is returned immediately while one shared background request re
       currencies: {
         'eip155:1': {symbol: 'ETH', decimals: 18},
         'eip155:987654321': {symbol: 'COIN', decimals: 6},
+      },
+      explorers: {
+        'eip155:1': 'https://etherscan.io',
+        'eip155:987654321': 'https://explorer.example/coin',
       },
     },
   ]);
@@ -180,6 +204,10 @@ test('first-run offline startup keeps built-in names and warns without blocking 
 
   assert.ok(service.getChainName('eip155:1'));
   assert.ok(service.getChainIcon('eip155:1'));
+  assert.equal(
+    service.getTransactionExplorerURL('eip155:999', HASH),
+    `https://hyperevmscan.io/tx/${HASH}`,
+  );
   assert.equal(storage.set.mock.callCount(), 0);
   assert.deepEqual(warn.mock.calls[0].arguments, [failure]);
   await service.refresh();

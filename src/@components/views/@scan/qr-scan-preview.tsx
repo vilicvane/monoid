@@ -83,7 +83,7 @@ export function QrScanPreview({
 }): ReactNode {
   const apertureRef = useRef<HTMLDivElement>(null);
   const coverRef = useRef<HTMLDivElement>(null);
-  const spinnerRef = useRef<HTMLIonSpinnerElement>(null);
+  const spinnerRef = useRef<HTMLSpanElement>(null);
   const callbacksRef = useRef({onReveal, onCovered, onSettled});
 
   useEffect(() => {

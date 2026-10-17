@@ -1,4 +1,5 @@
 import {Transaction, type TransactionLike, hexlify} from 'ethers';
+import {reaction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
@@ -296,6 +297,30 @@ export const WalletConnectRequestView = observer(
     const changeGas = (settings: EvmGasSettings): void => {
       setTransactionInput({...transaction!, ...settings});
     };
+
+    useEffect(
+      () =>
+        reaction(
+          () => walletKitService.getTransactionSubmission(view.id),
+          submission => {
+            if (
+              submission?.broadcast &&
+              !view.$leaving &&
+              view.$match.$exact.$active
+            ) {
+              router.sessions
+                .transaction({
+                  id: view.id,
+                  topic: submission.topic,
+                  signedTransaction: submission.signedTransaction,
+                })
+                .$replace();
+            }
+          },
+          {fireImmediately: true},
+        ),
+      [router, walletKitService, view],
+    );
 
     const complete = async (): Promise<void> => {
       if (view.$leaving || !view.$match.$exact.$active) return;

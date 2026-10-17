@@ -23,9 +23,10 @@ http://ionicframework.com/docs/theming/ */
   --color-text-dim: #999999;
   --color-text-warning: #b58a08;
   --color-text-caution: #c8751a;
+  --color-text-danger: #ef4b32;
 
   --color-address-warning: var(--color-text-warning);
-  --color-address-danger: var(--ion-color-danger-shade);
+  --color-address-danger: var(--color-text-danger);
 
   --color-seed-light: #dcead4;
   --color-seed-light-shade: #b9e0a6;

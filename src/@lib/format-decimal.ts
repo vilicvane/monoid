@@ -1,3 +1,17 @@
+export function formatScientificDecimal(
+  value: string,
+): {coefficient: string; exponent: number} | undefined {
+  const match = /^(-?)([1-9]\d{6,})(?:\.(\d+))?$/.exec(value);
+  if (!match) return undefined;
+
+  const [, sign, integer, fraction = ''] = match;
+  const digits = `${integer.slice(1)}${fraction}`.replace(/0+$/, '');
+  return {
+    coefficient: `${sign}${integer[0]}${digits ? `.${digits}` : ''}`,
+    exponent: integer.length - 1,
+  };
+}
+
 export function formatDecimal(
   value: string,
   significantDigits = 4,

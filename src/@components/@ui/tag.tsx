@@ -27,7 +27,9 @@ export const PrimaryTag = styled(Tag)`
 `;
 
 export const WhiteTag = styled(Tag)`
-  background-color: white;
+  background-color: var(--color-address-tag-background, white);
+  border-color: var(--color-address-tag-border, var(--ion-color-light-shade));
+  color: var(--color-address-tag-text, var(--ion-color-medium-shade));
 `;
 
 export const BlackTag = styled(Tag)`

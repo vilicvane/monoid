@@ -27,8 +27,8 @@ import {
   InfoLegend,
   InfoSection,
   InfoSectionHeader,
+  InfoSectionLoadingSpinner,
 } from '../../@ui/info-section.js';
-import {LoadingSpinner} from '../../@ui/loading-spinner.js';
 import {ErrorMessage, MessageSectionTitle} from '../../@ui/message-content.js';
 import {NativeAmount} from '../../@ui/native-amount.js';
 import {TypedDataFields} from '../../@ui/typed-data-fields.js';
@@ -191,7 +191,7 @@ export const WalletConnectTransaction = observer(
           <InfoSection>
             <InfoSectionHeader>
               <MessageSectionTitle>Gas</MessageSectionTitle>
-              <LoadingSpinner aria-label="Estimating gas" />
+              <InfoSectionLoadingSpinner aria-label="Estimating gas" />
             </InfoSectionHeader>
           </InfoSection>
         ) : null}

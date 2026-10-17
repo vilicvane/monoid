@@ -3,6 +3,7 @@ import {test} from 'node:test';
 
 const {
   BUILTIN_CHAIN_CURRENCIES,
+  BUILTIN_CHAIN_EXPLORERS,
   BUILTIN_CHAIN_ICONS,
   BUILTIN_CHAIN_NAMES,
   parseChainDirectory,
@@ -15,6 +16,7 @@ test('projects directory names and icons into EIP-155 keys without retaining RPC
       name: 'Ethereum Mainnet',
       chainSlug: 'ethereum',
       nativeCurrency: {name: 'Ether', symbol: ' ETH ', decimals: 18},
+      explorers: [{standard: 'EIP3091', url: 'https://etherscan.io/'}],
       rpc: ['https://example.test'],
     },
     {chainId: 59144, name: 'Linea', title: 'Linea Mainnet'},
@@ -32,6 +34,7 @@ test('projects directory names and icons into EIP-155 keys without retaining RPC
       'eip155:1': 'https://icons.llamao.fi/icons/chains/rsz_ethereum.jpg',
     },
     currencies: {'eip155:1': {symbol: 'ETH', decimals: 18}},
+    explorers: {'eip155:1': 'https://etherscan.io'},
   });
   assert.deepEqual(directory, original);
 });
@@ -61,7 +64,12 @@ test('does not confuse chain IDs from other namespaces or coercible values with 
 
   assert.deepEqual(
     parseChainDirectory([{chainId: Number.MAX_SAFE_INTEGER, name: 'Large ID'}]),
-    {names: {'eip155:9007199254740991': 'Large ID'}, icons: {}, currencies: {}},
+    {
+      names: {'eip155:9007199254740991': 'Large ID'},
+      icons: {},
+      currencies: {},
+      explorers: {},
+    },
   );
 });
 
@@ -108,7 +116,12 @@ test('optional icon slugs do not block names and are encoded within the official
   for (const chainSlug of [undefined, null, 1, {}, '', ' \t ']) {
     assert.deepEqual(
       parseChainDirectory([{chainId: 10, name: 'OP Mainnet', chainSlug}]),
-      {names: {'eip155:10': 'OP Mainnet'}, icons: {}, currencies: {}},
+      {
+        names: {'eip155:10': 'OP Mainnet'},
+        icons: {},
+        currencies: {},
+        explorers: {},
+      },
     );
   }
 
@@ -183,4 +196,73 @@ test('offline names identify HyperEVM correctly and stay scoped to EIP-155', () 
     decimals: 18,
   });
   assert.equal(BUILTIN_CHAIN_CURRENCIES['eip155:123456789'], undefined);
+  assert.equal(BUILTIN_CHAIN_EXPLORERS['eip155:1'], 'https://etherscan.io');
+  assert.equal(
+    BUILTIN_CHAIN_EXPLORERS['eip155:999'],
+    'https://hyperevmscan.io',
+  );
+  assert.equal(BUILTIN_CHAIN_EXPLORERS['eip155:123456789'], undefined);
+});
+
+test('selects the first valid EIP-3091 explorer and preserves its network path', () => {
+  const directory = parseChainDirectory([
+    {
+      chainId: 137,
+      name: 'Polygon',
+      explorers: [
+        {standard: 'none', url: 'https://unsupported.example'},
+        {standard: 'EIP3091', url: 'javascript:alert(1)'},
+        {standard: 'EIP3091', url: ' https://www.oklink.com/polygon/// '},
+        {standard: 'EIP3091', url: 'https://polygonscan.com'},
+      ],
+    },
+  ]);
+
+  assert.deepEqual(directory.explorers, {
+    'eip155:137': 'https://www.oklink.com/polygon',
+  });
+});
+
+test('malformed or unsupported optional explorers do not block chain metadata', () => {
+  for (const explorer of [
+    undefined,
+    null,
+    'https://explorer.example',
+    {},
+    {url: 'https://explorer.example'},
+    {standard: 'none', url: 'https://explorer.example'},
+    {standard: 'EIP-1559', url: 'https://explorer.example'},
+    ...[
+      undefined,
+      null,
+      1,
+      '',
+      'not a URL',
+      '/relative',
+      '//explorer.example',
+      'http://explorer.example',
+      'javascript:alert(1)',
+      'data:text/html,test',
+      'https://user@explorer.example',
+      'https://user:password@explorer.example',
+      'https://explorer.example/?',
+      'https://explorer.example?chain=1',
+      'https://explorer.example/#',
+      'https://explorer.example/#/transactions',
+    ].map(url => ({standard: 'EIP3091', url})),
+  ]) {
+    const directory = parseChainDirectory([
+      {chainId: 987654321, name: 'Example', explorers: [explorer]},
+    ]);
+    assert.deepEqual(directory.explorers, {});
+    assert.equal(directory.names['eip155:987654321'], 'Example');
+  }
+
+  for (const explorers of [undefined, null, {}, 'https://explorer.example']) {
+    assert.deepEqual(
+      parseChainDirectory([{chainId: 1, name: 'Ethereum', explorers}])
+        .explorers,
+      {},
+    );
+  }
 });

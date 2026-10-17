@@ -9,6 +9,7 @@ import ms from 'ms';
 
 import {
   BUILTIN_CHAIN_CURRENCIES,
+  BUILTIN_CHAIN_EXPLORERS,
   BUILTIN_CHAIN_ICONS,
   BUILTIN_CHAIN_NAMES,
   type ChainDirectory,
@@ -33,6 +34,7 @@ declare global {
 export class ChainService {
   private names = observable.map<string, string>([], {deep: false});
   private icons = observable.map<string, string>([], {deep: false});
+  private explorers = observable.map<string, string>([], {deep: false});
   private currencies = observable.map<string, NativeCurrency>([], {
     deep: false,
   });
@@ -47,6 +49,7 @@ export class ChainService {
     runInAction(() => {
       this.names.replace({...BUILTIN_CHAIN_NAMES, ...cache?.names});
       this.icons.replace({...BUILTIN_CHAIN_ICONS, ...cache?.icons});
+      this.explorers.replace({...BUILTIN_CHAIN_EXPLORERS, ...cache?.explorers});
       this.currencies.replace({
         ...BUILTIN_CHAIN_CURRENCIES,
         ...cache?.currencies,
@@ -65,6 +68,11 @@ export class ChainService {
 
   getNativeCurrency(chainId: string): NativeCurrency | undefined {
     return this.currencies.get(chainId);
+  }
+
+  getTransactionExplorerURL(chainId: string, hash: string): string | undefined {
+    const explorer = this.explorers.get(chainId);
+    return explorer ? `${explorer}/tx/${hash}` : undefined;
   }
 
   getRPC(chainId: string): Promise<JsonRpcProvider> {
@@ -141,6 +149,10 @@ export class ChainService {
       runInAction(() => {
         this.names.replace({...BUILTIN_CHAIN_NAMES, ...directory.names});
         this.icons.replace({...BUILTIN_CHAIN_ICONS, ...directory.icons});
+        this.explorers.replace({
+          ...BUILTIN_CHAIN_EXPLORERS,
+          ...directory.explorers,
+        });
         this.currencies.replace({
           ...BUILTIN_CHAIN_CURRENCIES,
           ...directory.currencies,

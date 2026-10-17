@@ -145,9 +145,12 @@ export function parseEvmTokenList(value: unknown): EvmToken[] {
 // Work with decimal strings, including ERC-20 precisions beyond formatUnits' limit.
 export function formatTokenAmount(value: bigint, decimals: number): string {
   if (!decimals) return value.toString();
-  const digits = value.toString().padStart(decimals + 1, '0');
+  const sign = value < 0 ? '-' : '';
+  const digits = (value < 0 ? -value : value)
+    .toString()
+    .padStart(decimals + 1, '0');
   const fraction = digits.slice(-decimals).replace(/0+$/, '');
-  return digits.slice(0, -decimals) + (fraction ? `.${fraction}` : '');
+  return sign + digits.slice(0, -decimals) + (fraction ? `.${fraction}` : '');
 }
 
 export function getErc20AmountIndex(signature: string): number | undefined {

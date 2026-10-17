@@ -1,5 +1,19 @@
 import {css, keyframes} from 'styled-components';
 
+const spinKeyFrames = keyframes`
+  to {
+    transform: rotate(360deg);
+  }
+`;
+
+export const spinAnimationCSS = css`
+  animation: ${spinKeyFrames} 1s linear infinite;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+`;
+
 const fadeInKeyFrames = keyframes`
   from {
     opacity: 0;
@@ -141,6 +155,20 @@ export const collapseOutAnimationCSS = css`
 export const selectionTransition = {
   duration: 220,
   easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+};
+
+export const popupContentAnimation = {
+  enter: {
+    offset: 12,
+    duration: 260,
+    stagger: 55,
+    easing: 'cubic-bezier(0.22, 0.61, 0.36, 1)',
+  },
+  exit: {
+    offset: -6,
+    duration: 120,
+    easing: 'ease-in',
+  },
 };
 
 const breathKeyFrames = keyframes`

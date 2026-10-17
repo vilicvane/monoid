@@ -7,7 +7,7 @@ import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import {parseHttpUrl} from '../../../@lib/site-logo.js';
-import {IconTag, IconTagName, IconTagRow} from '../../@ui/icon-tag.js';
+import {IconTag, IconTagName, IconTagSection} from '../../@ui/icon-tag.js';
 import {SiteLogo} from '../../@ui/site-logo.js';
 import {TAG_HEIGHT} from '../../@ui/tag.js';
 
@@ -24,11 +24,6 @@ const Container = styled.section`
     margin: 0 0 4px;
     font-size: 20px;
   }
-`;
-
-const CompactContainer = styled(IconTagRow).attrs({as: 'section'})`
-  flex-shrink: 0;
-  margin: 8px 0 12px;
 `;
 
 const Identity = styled.div`
@@ -61,7 +56,7 @@ const VerificationIcon = styled(IonIcon)<{
   font-size: 18px;
   color: ${props =>
     props.$dangerous
-      ? 'var(--ion-color-danger)'
+      ? 'var(--color-text-danger)'
       : props.$valid
         ? 'var(--ion-color-safe)'
         : 'var(--color-text-secondary)'};
@@ -76,7 +71,7 @@ const Verification = styled(SiteText)<{$dangerous: boolean}>`
     margin-top: 4px;
     color: ${props =>
       props.$dangerous
-        ? 'var(--ion-color-danger)'
+        ? 'var(--color-text-danger)'
         : 'var(--color-text-secondary)'};
   }
 
@@ -163,7 +158,7 @@ export function WalletConnectSite({
 
   if (compact) {
     return (
-      <CompactContainer aria-label="Site">
+      <IconTagSection aria-label="Site">
         <IconTag title={name}>
           <SiteLogo
             name={name}
@@ -176,7 +171,7 @@ export function WalletConnectSite({
           </IconTagName>
         </IconTag>
         {children}
-      </CompactContainer>
+      </IconTagSection>
     );
   }
 

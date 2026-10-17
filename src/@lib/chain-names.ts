@@ -29,6 +29,27 @@ export const BUILTIN_CHAIN_ICONS: Readonly<Record<string, string>> = {
   'eip155:8453': getChainIconURL('base'),
 };
 
+// EIP-3091 explorers from ChainList; HyperEVMScan uses the same transaction path.
+export const BUILTIN_CHAIN_EXPLORERS: Readonly<Record<string, string>> = {
+  'eip155:1': 'https://etherscan.io',
+  'eip155:10': 'https://optimistic.etherscan.io',
+  'eip155:56': 'https://bscscan.com',
+  'eip155:100': 'https://gnosisscan.io',
+  'eip155:137': 'https://polygonscan.com',
+  'eip155:250': 'https://ftmscan.com',
+  'eip155:324': 'https://explorer.zksync.io',
+  'eip155:999': 'https://hyperevmscan.io',
+  'eip155:8453': 'https://basescan.org',
+  'eip155:42161': 'https://arbiscan.io',
+  'eip155:43114': 'https://snowscan.xyz',
+  'eip155:59144': 'https://lineascan.build',
+  'eip155:84532': 'https://sepolia.basescan.org',
+  'eip155:421614': 'https://sepolia.arbiscan.io',
+  'eip155:534352': 'https://scrollscan.com',
+  'eip155:11155111': 'https://sepolia.etherscan.io',
+  'eip155:11155420': 'https://sepolia-optimism.etherscan.io',
+};
+
 export type NativeCurrency = {
   symbol: string;
   decimals: number;
@@ -60,6 +81,7 @@ export type ChainDirectory = {
   names: Record<string, string>;
   icons: Record<string, string>;
   currencies: Record<string, NativeCurrency>;
+  explorers: Record<string, string>;
 };
 
 export function parseChainDirectory(value: unknown): ChainDirectory {
@@ -70,6 +92,7 @@ export function parseChainDirectory(value: unknown): ChainDirectory {
   const names: Record<string, string> = {};
   const icons: Record<string, string> = {};
   const currencies: Record<string, NativeCurrency> = {};
+  const explorers: Record<string, string> = {};
 
   for (const chain of value) {
     if (
@@ -93,6 +116,16 @@ export function parseChainDirectory(value: unknown): ChainDirectory {
     }
 
     names[id] = chain.name.trim();
+
+    if ('explorers' in chain && Array.isArray(chain.explorers)) {
+      for (const explorer of chain.explorers) {
+        const url = getExplorerURL(explorer);
+        if (url) {
+          explorers[id] = url;
+          break;
+        }
+      }
+    }
 
     if (
       'chainSlug' in chain &&
@@ -125,7 +158,37 @@ export function parseChainDirectory(value: unknown): ChainDirectory {
     }
   }
 
-  return {names, icons, currencies};
+  return {names, icons, currencies, explorers};
+}
+
+function getExplorerURL(explorer: unknown): string | undefined {
+  if (
+    typeof explorer !== 'object' ||
+    explorer === null ||
+    !('standard' in explorer) ||
+    explorer.standard !== 'EIP3091' ||
+    !('url' in explorer) ||
+    typeof explorer.url !== 'string'
+  ) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(explorer.url);
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      url.href.includes('?') ||
+      url.href.includes('#')
+    ) {
+      return undefined;
+    }
+
+    return url.href.replace(/\/+$/, '');
+  } catch {
+    return undefined;
+  }
 }
 
 function getChainIconURL(slug: string): string {

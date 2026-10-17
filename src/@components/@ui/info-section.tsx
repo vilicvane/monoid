@@ -1,8 +1,10 @@
-import {styled} from 'styled-components';
+import {css, styled} from 'styled-components';
 
+import {inlineIconCSS} from './inline-icon.js';
+import {LoadingSpinner} from './loading-spinner.js';
 import {TAG_HEIGHT, Tag} from './tag.js';
 
-export const InfoSection = styled.div`
+export const InfoSection = styled.div<{$alignBottom?: boolean}>`
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -10,9 +12,22 @@ export const InfoSection = styled.div`
   & + & {
     margin-top: calc(var(--view-section-gap, 16px) - 8px);
   }
+
+  ${({$alignBottom}) =>
+    $alignBottom &&
+    css`
+      && {
+        margin-top: auto;
+        padding-top: calc(var(--view-section-gap, 16px) - 8px);
+      }
+    `}
 `;
 
 export const InfoSectionTitle = styled.div``;
+
+export const InfoTableSection = styled(InfoSection)`
+  gap: 9px;
+`;
 
 export const InfoSectionDivider = styled.hr`
   align-self: stretch;
@@ -84,6 +99,11 @@ export const InfoSectionHeader = styled.div`
   }
 `;
 
+export const InfoSectionLoadingSpinner = styled(LoadingSpinner)`
+  ${inlineIconCSS}
+  color: var(--ion-color-primary);
+`;
+
 export const InfoSectionItem = styled.div`
   display: flex;
   flex-direction: column;
@@ -119,18 +139,31 @@ export const InfoSectionRow = styled.div`
   }
 `;
 
-export const InfoTable = styled.table`
+const infoPanelCSS = css`
   width: calc(100% + 4px);
   margin: 0 -2px;
-  table-layout: fixed;
-  border-collapse: separate;
-  border-spacing: 0;
   border: solid 0.5px var(--ion-color-light-shade);
   border-radius: var(--info-border-radius);
   overflow: hidden;
   background: white;
   font-size: 14px;
   line-height: 1.5;
+`;
+
+export const InfoPanel = styled.div`
+  ${infoPanelCSS}
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  font-variant-numeric: tabular-nums;
+`;
+
+export const InfoTable = styled.table`
+  ${infoPanelCSS}
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
 
   th,
   td {

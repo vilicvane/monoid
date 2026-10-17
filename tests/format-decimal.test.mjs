@@ -1,7 +1,32 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-const {formatDecimal} = await import('../.bld/app/@lib/format-decimal.js');
+const {formatDecimal, formatScientificDecimal} = await import(
+  '../.bld/app/@lib/format-decimal.js'
+);
+
+test('uses scientific notation from one million without losing decimal precision', () => {
+  for (const value of ['0', '999999', '-999999', '0.00000123']) {
+    assert.equal(formatScientificDecimal(value), undefined);
+  }
+  for (const [value, coefficient, exponent] of [
+    ['1000000', '1', 6],
+    ['123400000', '1.234', 8],
+    ['-123400000', '-1.234', 8],
+    ['1000000.000001', '1.000000000001', 6],
+    ['1000000000000000000000000000000000000', '1', 36],
+  ]) {
+    assert.deepEqual(formatScientificDecimal(value), {coefficient, exponent});
+  }
+  assert.deepEqual(formatScientificDecimal(formatDecimal('123456789').value), {
+    coefficient: '1.235',
+    exponent: 8,
+  });
+  assert.deepEqual(formatScientificDecimal(formatDecimal('999999').value), {
+    coefficient: '1',
+    exponent: 6,
+  });
+});
 
 test('preserves exact values and removes insignificant fractional zeros', () => {
   for (const [input, value] of [

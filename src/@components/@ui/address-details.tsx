@@ -15,9 +15,9 @@ import {
   DetailsPopupSection,
 } from './details-popup.js';
 import {InfoSectionItemLabel, InfoSectionRow} from './info-section.js';
-import {PopupAddress} from './popup-address.js';
+import {CenteredPopupAddress} from './popup-address.js';
 
-export const AddressDetails = observer(function AddressDetails({
+export function AddressDetails({
   address,
   kind,
   onDismiss,
@@ -26,14 +26,28 @@ export const AddressDetails = observer(function AddressDetails({
   kind: AddressKind;
   onDismiss: () => void;
 }): ReactNode {
+  return (
+    <DetailsPopup aria-label="Address details" onDismiss={onDismiss}>
+      <AddressDetailsContent address={address} kind={kind} />
+    </DetailsPopup>
+  );
+}
+
+export const AddressDetailsContent = observer(function AddressDetailsContent({
+  address,
+  kind,
+}: {
+  address: string;
+  kind: AddressKind;
+}): ReactNode {
   const {addressBookService} = useEntrances();
 
   return (
-    <DetailsPopup aria-label="Address details" onDismiss={onDismiss}>
+    <>
       <DetailsPopupHeader>
         <KeyDerivationTag chain="evm">EVM</KeyDerivationTag>
       </DetailsPopupHeader>
-      <PopupAddress>{getAddress(address)}</PopupAddress>
+      <CenteredPopupAddress>{getAddress(address)}</CenteredPopupAddress>
       <DetailsPopupDivider />
       <DetailsPopupSection>
         <InfoSectionRow>
@@ -48,6 +62,6 @@ export const AddressDetails = observer(function AddressDetails({
         </InfoSectionRow>
       </DetailsPopupSection>
       <AddressMarkControl address={address} />
-    </DetailsPopup>
+    </>
   );
 });

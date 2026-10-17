@@ -1,8 +1,10 @@
-import {IonIcon, IonSpinner} from '@ionic/react';
+import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
 import check from 'lucide-static/icons/check.svg';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
+
+import {LoadingSpinner} from './loading-spinner.js';
 
 export const Steps = styled.div`
   --gap: 16px;
@@ -98,7 +100,7 @@ const Indicator = styled.div`
   }
 `;
 
-const Spinner = styled(IonSpinner)`
+const Spinner = styled(LoadingSpinner)`
   width: 12px;
   height: 12px;
 `;

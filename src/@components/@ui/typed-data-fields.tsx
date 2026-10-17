@@ -100,6 +100,8 @@ export function TypedDataFieldList({
   path?: string;
   label?: string;
 }): ReactNode {
+  if (!fields.length) return null;
+
   return (
     <Fields aria-label={label}>
       {fields.map((field, index) => {

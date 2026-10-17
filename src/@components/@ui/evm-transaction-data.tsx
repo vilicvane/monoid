@@ -9,7 +9,12 @@ import {getErc20AmountIndex, getErc20CallTarget} from '../../@lib/evm-token.js';
 import {CopyButton} from './copy-button.js';
 import {EvmCalldataVerification} from './evm-calldata-verification.js';
 import {EvmTokenAmount, EvmTokenTag} from './evm-token.js';
-import {InfoSection, InfoSectionHeader} from './info-section.js';
+import {ExpandableText} from './expandable-text.js';
+import {
+  InfoSection,
+  InfoSectionHeader,
+  InfoSectionLoadingSpinner,
+} from './info-section.js';
 import {MessageContent, MessageSectionTitle} from './message-content.js';
 import {TypedDataFieldList, type TypedDataFields} from './typed-data-fields.js';
 
@@ -24,10 +29,6 @@ const Call = styled.div<{$withToken?: boolean}>`
   gap: 8px;
   min-width: 0;
   padding-top: ${({$withToken}) => ($withToken ? '4px' : '0')};
-
-  & + & {
-    margin-top: 12px;
-  }
 `;
 
 const CallToken = styled(EvmTokenTag)`
@@ -42,12 +43,6 @@ const Header = styled(InfoSectionHeader)`
 
 const DataSize = styled(CopyButton)`
   font-size: 13px;
-`;
-
-const Note = styled.div`
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  line-height: 1.5;
 `;
 
 export function EvmTransactionData({
@@ -71,20 +66,19 @@ export function EvmTransactionData({
     <InfoSection aria-label="Transaction data">
       <Header>
         <MessageSectionTitle>Data</MessageSectionTitle>
-        <DataSize value={data} label="Copy transaction data">
-          {(data.length - 2) / 2} bytes
-        </DataSize>
-      </Header>
-      <MessageContent as="div">
         {decoded ? (
-          <DecodedCall chainId={chainId} decoded={decoded} {...addressProps} />
+          <DataSize value={data} label="Copy transaction data">
+            {(data.length - 2) / 2} bytes
+          </DataSize>
         ) : (
-          <Call>
-            <Note role="status">Decoding…</Note>
-            <span>{data}</span>
-          </Call>
+          <InfoSectionLoadingSpinner aria-label="Decoding transaction data" />
         )}
-      </MessageContent>
+      </Header>
+      {decoded && (
+        <MessageContent as="div">
+          <DecodedCall chainId={chainId} decoded={decoded} {...addressProps} />
+        </MessageContent>
+      )}
     </InfoSection>
   );
 }
@@ -153,6 +147,9 @@ const DecodedCall = observer(function DecodedCall({
                   return {
                     content: (
                       <EvmTokenAmount
+                        maximumAsUnlimited={
+                          candidate.signature === 'approve(address,uint256)'
+                        }
                         token={token}
                         value={BigInt(field.value)}
                       />
@@ -178,7 +175,9 @@ const DecodedCall = observer(function DecodedCall({
           </Call>
         );
       })}
-      {!decoded.candidates.length && <span>{decoded.data}</span>}
+      {!decoded.candidates.length && (
+        <ExpandableText key={decoded.data}>{decoded.data}</ExpandableText>
+      )}
     </Call>
   );
 });

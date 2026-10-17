@@ -119,7 +119,6 @@ export const Button = ({
         children
       ) : (
         <LoadingContent $loading={loading}>
-          {/* Ionic attaches CSS classes after mount; set initial opacity directly. */}
           <Spinner paused={!loading} style={{opacity: loading ? 1 : 0}} />
           {children}
         </LoadingContent>

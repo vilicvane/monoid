@@ -10,7 +10,7 @@ import type {WalletKeyWalletData} from '../../@services/index.js';
 import {useTemporaryState} from '../@hooks/interactions.js';
 import {Button} from '../@ui/button.js';
 import {CenteredPopup} from '../@ui/centered-popup.js';
-import {PopupAddress} from '../@ui/popup-address.js';
+import {CenteredPopupAddress} from '../@ui/popup-address.js';
 
 import {KeyDerivationTag, KeyTags} from './key-tags.js';
 
@@ -26,11 +26,8 @@ const QRCode = styled(QRCodeSVG)`
   border-radius: 12px;
 `;
 
-const Address = styled(PopupAddress)`
-  --ellipsis-alignment: center;
-
+const Address = styled(CenteredPopupAddress)`
   margin-bottom: 8px;
-  text-align: center;
 `;
 
 const COPIED_STATE_DURATION = ms('2s');

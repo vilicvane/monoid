@@ -164,6 +164,8 @@ export function WalletConnectSignButton({
         }
       }
     } catch (error) {
+      // Response recovery for a broadcast transaction belongs to its result page.
+      if (walletKitService.getTransactionSubmission(view.id)?.broadcast) return;
       if (result) setRetry(true);
       throw error;
     } finally {

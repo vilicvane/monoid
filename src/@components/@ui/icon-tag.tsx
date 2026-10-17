@@ -48,22 +48,25 @@ const NameTag = styled(WhiteTag).attrs({as: 'span'})<{$hasSuffix: boolean}>`
   }
 `;
 
-const Name = styled.span`
+const Name = styled.span<{$color?: string}>`
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: ${({$color}) => $color ?? 'inherit'};
 `;
 
 export const IconTagName = ({
   children,
   suffix,
+  color,
 }: {
   children: ReactNode;
   suffix?: ReactNode;
+  color?: string;
 }): ReactNode => (
   <NameTag $hasSuffix={!!suffix}>
-    <Name>{children}</Name>
+    <Name $color={color}>{children}</Name>
     {suffix}
   </NameTag>
 );
@@ -73,4 +76,9 @@ export const IconTagRow = styled.div`
   align-items: center;
   gap: var(--key-item-gap);
   min-width: 0;
+`;
+
+export const IconTagSection = styled(IconTagRow).attrs({as: 'section'})`
+  flex-shrink: 0;
+  margin: 8px 0 12px;
 `;

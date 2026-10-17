@@ -10,6 +10,13 @@ export const ROUTE_SCHEMA = {
     request: {
       $state: undefined! as {id: number},
     },
+    transaction: {
+      $state: undefined! as {
+        id: number;
+        topic: string;
+        signedTransaction: string;
+      },
+    },
     session: {
       $state: undefined! as {topic: string},
       switchAccounts: true,

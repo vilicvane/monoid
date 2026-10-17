@@ -17,7 +17,10 @@ export function WalletConnectRequests(): null {
       );
 
       // Requests received while reviewing one stay in the manual queue on exit.
-      if (router.sessions.request.$matched) {
+      if (
+        router.sessions.request.$matched ||
+        router.sessions.transaction.$matched
+      ) {
         requests.forEach(({id}) => presented.add(id));
         return;
       }

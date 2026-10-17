@@ -29,24 +29,25 @@ const markers: Record<
 > = {
   signer: {
     icon: userPen,
-    color: 'var(--ion-color-primary)',
+    color: 'var(--color-address-primary, var(--ion-color-primary))',
     label: 'Signer',
     description: 'The account signing this message.',
   },
   own: {
     icon: user,
-    color: 'var(--ion-color-primary)',
+    color: 'var(--color-address-primary, var(--ion-color-primary))',
     label: 'Yours',
     description: 'Another account in your Safe.',
   },
   seen: {
     icon: history,
+    color: 'var(--color-address-seen, var(--ion-color-medium-tint))',
     label: 'Seen before',
     description: 'Included in a message you previously signed.',
   },
   listed: {
     icon: badgeCheck,
-    color: 'var(--ion-color-safe)',
+    color: 'var(--color-address-safe, var(--ion-color-safe))',
     label: 'Listed token',
     description: 'Included in the Uniswap token list for this network.',
   },
@@ -59,7 +60,7 @@ const markers: Record<
   },
   trusted: {
     icon: shieldCheck,
-    color: 'var(--ion-color-safe-shade)',
+    color: 'var(--color-address-safe, var(--ion-color-safe-shade))',
     label: 'Trusted',
     description: 'You marked this address as trusted.',
   },

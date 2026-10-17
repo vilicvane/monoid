@@ -1,9 +1,12 @@
 import {type ReactNode, useState} from 'react';
 import {styled} from 'styled-components';
 
-import {formatDecimal} from '../../@lib/format-decimal.js';
+import {
+  formatDecimal,
+  formatScientificDecimal,
+} from '../../@lib/format-decimal.js';
 
-import {DetailsPopup, DetailsPopupDivider} from './details-popup.js';
+import {DetailsPopup} from './details-popup.js';
 import {MessageContent} from './message-content.js';
 
 const Value = styled.button`
@@ -15,7 +18,10 @@ const Value = styled.button`
   font: inherit;
   text-align: inherit;
   overflow-wrap: anywhere;
-  cursor: pointer;
+
+  &:is(button) {
+    cursor: pointer;
+  }
 `;
 
 const ZeroCount = styled.sub`
@@ -26,7 +32,7 @@ const ZeroCount = styled.sub`
   vertical-align: baseline;
 `;
 
-const FullValue = styled(MessageContent)`
+export const FormattedNumberDetailsContent = styled(MessageContent)`
   margin: 0;
   padding: 0;
   background: transparent;
@@ -35,52 +41,83 @@ const FullValue = styled(MessageContent)`
   text-align: center;
 `;
 
+const Exponent = styled.sup`
+  position: relative;
+  top: -0.4em;
+  font-size: 0.75em;
+  line-height: 0;
+  vertical-align: baseline;
+`;
+
 export const FormattedNumber = ({
   value,
   unit,
   significantDigits = 4,
-  details,
+  displayValue,
+  displayValueColor,
+  fullValue,
+  interactive = true,
+  onClick,
 }: {
   value: string;
   unit?: string;
   significantDigits?: number;
-  details?: ReactNode;
+  displayValue?: string;
+  displayValueColor?: string;
+  fullValue?: string;
+  interactive?: boolean;
+  onClick?: () => void;
 }): ReactNode => {
   const [showDetails, setShowDetails] = useState(false);
   const formatted = formatDecimal(value, significantDigits);
+  const scientific = formatScientificDecimal(formatted.value);
   const compact = /^(-?0\.)(0{4,})([1-9]\d*)$/.exec(formatted.value);
   const suffix = unit ? ` ${unit}` : '';
 
   return (
     <>
       <Value
-        type="button"
-        aria-label={`${formatted.approximate ? 'Approximately ' : ''}${formatted.value}${suffix}`}
-        aria-haspopup="dialog"
-        onClick={() => setShowDetails(true)}
+        style={{
+          color: displayValue !== undefined ? displayValueColor : undefined,
+          fontSize: displayValue !== undefined ? '0.875em' : undefined,
+        }}
+        as={interactive ? 'button' : 'span'}
+        type={interactive ? 'button' : undefined}
+        aria-label={
+          interactive
+            ? `${displayValue ?? `${formatted.approximate ? 'Approximately ' : ''}${formatted.value}`}${suffix}`
+            : undefined
+        }
+        aria-haspopup={interactive ? 'dialog' : undefined}
+        onClick={
+          interactive ? (onClick ?? (() => setShowDetails(true))) : undefined
+        }
       >
-        {formatted.approximate && '~'}
-        {compact ? (
-          <>
-            {compact[1]}0<ZeroCount>{compact[2]!.length}</ZeroCount>
-            {compact[3]}
-          </>
-        ) : (
-          formatted.value
-        )}
+        {!displayValue && formatted.approximate && '~'}
+        {displayValue ??
+          (scientific ? (
+            <>
+              {scientific.coefficient} × 10
+              <Exponent>{scientific.exponent}</Exponent>
+            </>
+          ) : compact ? (
+            <>
+              {compact[1]}0<ZeroCount>{compact[2]!.length}</ZeroCount>
+              {compact[3]}
+            </>
+          ) : (
+            formatted.value
+          ))}
         {suffix}
       </Value>
-      {showDetails && (
+      {interactive && !onClick && showDetails && (
         <DetailsPopup
           aria-label="Full value"
           onDismiss={() => setShowDetails(false)}
         >
-          <FullValue>
-            {value}
-            {suffix}
-          </FullValue>
-          {details != null && <DetailsPopupDivider />}
-          {details}
+          <FormattedNumberDetailsContent>
+            {fullValue ?? `${value}${suffix}`}
+          </FormattedNumberDetailsContent>
         </DetailsPopup>
       )}
     </>

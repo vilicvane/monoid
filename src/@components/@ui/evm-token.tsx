@@ -1,4 +1,5 @@
 import {IonIcon} from '@ionic/react';
+import {MaxUint256} from 'ethers';
 import coins from 'lucide-static/icons/coins.svg';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useState} from 'react';
@@ -27,7 +28,7 @@ import {
 import {FormattedNumber} from './formatted-number.js';
 import {IconTag, IconTagName} from './icon-tag.js';
 import {InfoSectionItemLabel, InfoSectionRow} from './info-section.js';
-import {PopupAddress} from './popup-address.js';
+import {CenteredPopupAddress} from './popup-address.js';
 
 const Logo = styled.img`
   width: 20px;
@@ -42,28 +43,61 @@ const DetailsHeader = styled(DetailsPopupHeader)`
   }
 `;
 
-const RawAmount = styled.span`
+const Title = styled(DetailsPopupTitle)<{$color?: string}>`
+  color: ${({$color}) => $color ?? 'inherit'};
+`;
+
+const Label = styled.span`
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   max-width: 100%;
-  overflow-wrap: anywhere;
-  font-family:
-    ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 16px;
+  text-align: left;
+
+  > ${Logo} {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+  }
 `;
 
-const Name = styled.span<{$severity?: 'warning' | 'danger'}>`
-  color: ${({$severity}) =>
-    $severity ? `var(--color-address-${$severity})` : 'inherit'};
+const LabelName = styled(Title).attrs({as: 'span'})`
+  font: inherit;
+  text-align: inherit;
 `;
 
-export const EvmTokenTag = observer(function EvmTokenTag({
+function TokenLogo({token}: {token: EvmToken}): ReactNode {
+  const [failedLogo, setFailedLogo] = useState<string>();
+
+  return token.logoURI && token.logoURI !== failedLogo ? (
+    <Logo
+      src={token.logoURI}
+      alt=""
+      referrerPolicy="no-referrer"
+      onError={() => setFailedLogo(token.logoURI)}
+    />
+  ) : (
+    <Logo as={IonIcon} icon={coins} aria-hidden="true" />
+  );
+}
+
+const TokenIdentity = observer(function TokenIdentity({
   token,
   kind,
-  className,
+  variant = 'tag',
 }: {
   token: EvmToken;
   kind: AddressKind;
-  className?: string;
+  variant?: 'tag' | 'label' | 'details';
 }): ReactNode {
-  const {chainService, evmTokenService, addressBookService} = useEntrances();
+  const {evmTokenService, addressBookService} = useEntrances();
   const mark = addressBookService.getMark('evm', token.address);
   const listed = evmTokenService.isListed(
     `eip155:${token.chainId}`,
@@ -74,88 +108,157 @@ export const EvmTokenTag = observer(function EvmTokenTag({
     tokenKind === 'listed' && !mark ? undefined : (
       <AddressMarker kind={tokenKind} mark={mark} />
     );
-  const name = (
-    <IconTagName suffix={marker}>
-      <Name $severity={getAddressSeverity(tokenKind, mark)}>{token.name}</Name>
-    </IconTagName>
+  const severity = getAddressSeverity(tokenKind, mark);
+  const color = severity ? `var(--color-address-${severity})` : undefined;
+
+  return variant === 'label' ? (
+    <>
+      <TokenLogo token={token} />
+      <LabelName $color={color}>{token.name}</LabelName>
+      {marker}
+    </>
+  ) : variant === 'details' ? (
+    <DetailsHeader>
+      <TokenLogo token={token} />
+      <Title $color={color}>{token.name}</Title>
+      {marker}
+    </DetailsHeader>
+  ) : (
+    <>
+      <TokenLogo token={token} />
+      <IconTagName suffix={marker} color={color}>
+        {token.name}
+      </IconTagName>
+    </>
   );
+});
+
+export function EvmTokenLabel({
+  token,
+  kind,
+  className,
+  interactive = true,
+}: {
+  token: EvmToken;
+  kind: AddressKind;
+  className?: string;
+  interactive?: boolean;
+}): ReactNode {
   const [showDetails, setShowDetails] = useState(false);
-  const [failedLogo, setFailedLogo] = useState<string>();
-  const logo =
-    token.logoURI && token.logoURI !== failedLogo ? (
-      <Logo
-        src={token.logoURI}
-        alt=""
-        referrerPolicy="no-referrer"
-        onError={() => setFailedLogo(token.logoURI)}
-      />
-    ) : (
-      <Logo as={IonIcon} icon={coins} aria-hidden="true" />
-    );
 
   return (
     <>
-      <IconTag
-        as="button"
-        type="button"
+      <Label
+        as={interactive ? 'button' : 'span'}
+        type={interactive ? 'button' : undefined}
         className={className}
-        aria-label={`${token.symbol} token details`}
-        aria-haspopup="dialog"
-        onClick={() => setShowDetails(true)}
+        aria-label={interactive ? `${token.symbol} token details` : undefined}
+        aria-haspopup={interactive ? 'dialog' : undefined}
+        onClick={interactive ? () => setShowDetails(true) : undefined}
       >
-        {logo}
-        {name}
-      </IconTag>
-      {showDetails && (
+        <TokenIdentity token={token} kind={kind} variant="label" />
+      </Label>
+      {interactive && showDetails && (
         <DetailsPopup
           aria-label="Token details"
           onDismiss={() => setShowDetails(false)}
         >
-          <DetailsHeader>
-            {logo}
-            <DetailsPopupTitle>
-              <Name $severity={getAddressSeverity(tokenKind, mark)}>
-                {token.name}
-              </Name>
-            </DetailsPopupTitle>
-            {marker}
-          </DetailsHeader>
-          <PopupAddress>{token.address}</PopupAddress>
-          <DetailsPopupDivider />
-          <InfoSectionRow>
-            <InfoSectionItemLabel>Symbol</InfoSectionItemLabel>
-            <span>{token.symbol}</span>
-          </InfoSectionRow>
-          <InfoSectionRow>
-            <InfoSectionItemLabel>Network</InfoSectionItemLabel>
-            <span>
-              {chainService.getChainName(`eip155:${token.chainId}`) ??
-                'Unknown network'}
-            </span>
-          </InfoSectionRow>
-          <InfoSectionRow>
-            <InfoSectionItemLabel>Chain ID</InfoSectionItemLabel>
-            <span>{token.chainId}</span>
-          </InfoSectionRow>
-          <InfoSectionRow>
-            <InfoSectionItemLabel>Decimals</InfoSectionItemLabel>
-            <span>{token.decimals ?? 'Unknown'}</span>
-          </InfoSectionRow>
-          <InfoSectionRow>
-            <InfoSectionItemLabel>Metadata source</InfoSectionItemLabel>
-            <span>{listed ? 'Uniswap token list' : 'Contract'}</span>
-          </InfoSectionRow>
-          <InfoSectionRow>
-            <InfoSectionItemLabel>Seen in signed messages</InfoSectionItemLabel>
-            <span>
-              {addressBookService.hasSigned('evm', token.address)
-                ? 'Yes'
-                : 'No'}
-            </span>
-          </InfoSectionRow>
-          <AddressMarkControl address={token.address} />
+          <EvmTokenDetailsContent token={token} kind={kind} />
         </DetailsPopup>
       )}
+    </>
+  );
+}
+
+export function EvmTokenTag({
+  token,
+  kind,
+  className,
+  interactive = true,
+  onClick,
+}: {
+  token: EvmToken;
+  kind: AddressKind;
+  className?: string;
+  interactive?: boolean;
+  onClick?: () => void;
+}): ReactNode {
+  const [showDetails, setShowDetails] = useState(false);
+
+  return (
+    <>
+      <IconTag
+        as={interactive ? 'button' : 'span'}
+        type={interactive ? 'button' : undefined}
+        className={className}
+        aria-label={interactive ? `${token.symbol} token details` : undefined}
+        aria-haspopup={interactive ? 'dialog' : undefined}
+        onClick={
+          interactive ? (onClick ?? (() => setShowDetails(true))) : undefined
+        }
+      >
+        <TokenIdentity token={token} kind={kind} />
+      </IconTag>
+      {interactive && !onClick && showDetails && (
+        <DetailsPopup
+          aria-label="Token details"
+          onDismiss={() => setShowDetails(false)}
+        >
+          <EvmTokenDetailsContent token={token} kind={kind} />
+        </DetailsPopup>
+      )}
+    </>
+  );
+}
+
+export const EvmTokenDetailsContent = observer(function EvmTokenDetailsContent({
+  token,
+  kind,
+}: {
+  token: EvmToken;
+  kind: AddressKind;
+}): ReactNode {
+  const {chainService, evmTokenService, addressBookService} = useEntrances();
+  const listed = evmTokenService.isListed(
+    `eip155:${token.chainId}`,
+    token.address,
+  );
+
+  return (
+    <>
+      <TokenIdentity token={token} kind={kind} variant="details" />
+      <CenteredPopupAddress>{token.address}</CenteredPopupAddress>
+      <DetailsPopupDivider />
+      <InfoSectionRow>
+        <InfoSectionItemLabel>Symbol</InfoSectionItemLabel>
+        <span>{token.symbol}</span>
+      </InfoSectionRow>
+      <InfoSectionRow>
+        <InfoSectionItemLabel>Network</InfoSectionItemLabel>
+        <span>
+          {chainService.getChainName(`eip155:${token.chainId}`) ??
+            'Unknown network'}
+        </span>
+      </InfoSectionRow>
+      <InfoSectionRow>
+        <InfoSectionItemLabel>Chain ID</InfoSectionItemLabel>
+        <span>{token.chainId}</span>
+      </InfoSectionRow>
+      <InfoSectionRow>
+        <InfoSectionItemLabel>Decimals</InfoSectionItemLabel>
+        <span>{token.decimals ?? 'Unknown'}</span>
+      </InfoSectionRow>
+      <InfoSectionRow>
+        <InfoSectionItemLabel>Metadata source</InfoSectionItemLabel>
+        <span>{listed ? 'Uniswap token list' : 'Contract'}</span>
+      </InfoSectionRow>
+      <InfoSectionRow>
+        <InfoSectionItemLabel>Seen in signed messages</InfoSectionItemLabel>
+        <span>
+          {addressBookService.hasSigned('evm', token.address) ? 'Yes' : 'No'}
+        </span>
+      </InfoSectionRow>
+      <AddressMarkControl address={token.address} />
     </>
   );
 });
@@ -163,21 +266,46 @@ export const EvmTokenTag = observer(function EvmTokenTag({
 export function EvmTokenAmount({
   token,
   value,
+  showSymbol = true,
+  interactive = true,
+  maximumAsUnlimited = false,
+  zeroAsRevoked = false,
+  onClick,
 }: {
   token: EvmToken;
   value: bigint;
+  showSymbol?: boolean;
+  interactive?: boolean;
+  maximumAsUnlimited?: boolean;
+  zeroAsRevoked?: boolean;
+  onClick?: () => void;
 }): ReactNode {
-  if (token.decimals === undefined) return value.toString();
+  const revoked = zeroAsRevoked && value === BigInt(0);
+  const displayValue = revoked
+    ? 'Revoked'
+    : maximumAsUnlimited && value === MaxUint256
+      ? 'Unlimited'
+      : undefined;
+
   return (
     <FormattedNumber
-      value={formatTokenAmount(value, token.decimals)}
-      unit={token.symbol}
-      details={
-        <InfoSectionRow>
-          <InfoSectionItemLabel>Raw amount</InfoSectionItemLabel>
-          <RawAmount>{value.toString()}</RawAmount>
-        </InfoSectionRow>
+      displayValue={displayValue}
+      displayValueColor={revoked ? undefined : 'var(--color-address-warning)'}
+      interactive={interactive}
+      value={
+        token.decimals === undefined
+          ? value.toString()
+          : formatTokenAmount(value, token.decimals)
       }
+      unit={
+        token.decimals === undefined && !displayValue
+          ? 'base units'
+          : showSymbol
+            ? token.symbol
+            : undefined
+      }
+      fullValue={value.toString()}
+      onClick={onClick}
     />
   );
 }
