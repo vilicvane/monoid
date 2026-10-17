@@ -10,12 +10,12 @@ import type {
   EvmContractVerification,
 } from '../../@lib/evm-calldata.js';
 
-import {CenteredPopup} from './centered-popup.js';
 import {
-  InfoSectionItemLabel,
-  InfoSectionRow,
-  InfoSectionTitle,
-} from './info-section.js';
+  DetailsPopup,
+  DetailsPopupDivider,
+  DetailsPopupTitle,
+} from './details-popup.js';
+import {InfoSectionItemLabel, InfoSectionRow} from './info-section.js';
 import {inlineIconCSS, inlineIconRowCSS} from './inline-icon.js';
 import {PopupAddress} from './popup-address.js';
 
@@ -103,11 +103,12 @@ export function EvmCalldataVerification({
         />
       </Trigger>
       {showDetails && (
-        <CenteredPopup
+        <DetailsPopup
           aria-label="Source verification"
           onDismiss={() => setShowDetails(false)}
         >
-          <InfoSectionTitle>Source verification</InfoSectionTitle>
+          <DetailsPopupTitle>Source verification</DetailsPopupTitle>
+          <DetailsPopupDivider />
           <InfoSectionRow>
             <InfoSectionItemLabel>Status</InfoSectionItemLabel>
             <Status $verified={verified}>{label}</Status>
@@ -149,7 +150,7 @@ export function EvmCalldataVerification({
               )}
             </>
           )}
-        </CenteredPopup>
+        </DetailsPopup>
       )}
     </>
   );

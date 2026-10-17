@@ -15,6 +15,7 @@ import {
   getEvmCalldataAddresses,
 } from '../../@lib/evm-calldata.js';
 import type {EvmGasSettings} from '../../@lib/evm-gas-settings.js';
+import {getEvmTokenAddressKind} from '../../@lib/evm-token.js';
 import {formatEvmTransactionError} from '../../@lib/evm-transaction-error.js';
 import {prepareEvmTransaction} from '../../@lib/prepare-evm-transaction.js';
 import {getTypedDataAddresses} from '../../@lib/typed-data-fields.js';
@@ -70,6 +71,7 @@ export const WalletConnectRequestView = observer(
       addressBookService,
       chainService,
       evmCalldataService,
+      evmTokenService,
     } = useEntrances();
 
     // Keep the reviewed request and site stable through replies and transitions.
@@ -159,7 +161,16 @@ export const WalletConnectRequestView = observer(
       addresses.filter(address => addressBookService.hasSigned('evm', address)),
     );
     const addressKind = (address: string): AddressKind =>
-      getAddressKind(address, payload!.address, ownAddresses, signedAddresses);
+      getEvmTokenAddressKind(
+        getAddressKind(
+          address,
+          payload!.address,
+          ownAddresses,
+          signedAddresses,
+        ),
+        !!transactionChainId &&
+          evmTokenService.isListed(transactionChainId, address),
+      );
     const addressMark = (address: string): AddressMark | undefined =>
       addressBookService.getMark('evm', address);
     const severities = addresses.map(address =>

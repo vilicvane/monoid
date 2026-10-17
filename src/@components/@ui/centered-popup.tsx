@@ -113,7 +113,10 @@ export const CenteredPopup = ({
       item.animate(
         [
           {opacity: 0, transform: 'translateY(12px)'},
-          {opacity: 1, transform: 'translateY(0)'},
+          {
+            opacity: getComputedStyle(item).opacity,
+            transform: 'translateY(0)',
+          },
         ],
         {
           duration: 260,

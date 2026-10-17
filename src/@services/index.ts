@@ -3,6 +3,7 @@ export * from './chain-service.js';
 export * from './error-service.js';
 export * from './evm-call-history-service.js';
 export * from './evm-calldata-service.js';
+export * from './evm-token-service.js';
 export * from './gas-history-service.js';
 export * from './monoid-credentials-store.js';
 export * from './monoid-scan-prompt-presenter.js';

@@ -12,6 +12,11 @@ import {ExpandableAddress} from './expandable-address.js';
 import {InfoSectionRow} from './info-section.js';
 import {MessageContent} from './message-content.js';
 
+type FieldValueRenderer = (
+  field: TypedDataFieldValue,
+  path: string,
+) => {content: ReactNode; block?: boolean} | undefined;
+
 const Fields = styled.dl`
   margin: 0;
   display: flex;
@@ -59,7 +64,7 @@ export function TypedDataFields({
   getAddressKind?: (address: string) => AddressKind;
   getAddressMark?: (address: string) => AddressMark | undefined;
   onAddressClick?: (address: string) => void;
-  renderValue?: (field: TypedDataFieldValue, path: string) => ReactNode;
+  renderValue?: FieldValueRenderer;
 }): ReactNode {
   return (
     <MessageContent as="div" aria-label={label}>
@@ -91,7 +96,7 @@ export function TypedDataFieldList({
   getAddressKind?: (address: string) => AddressKind;
   getAddressMark?: (address: string) => AddressMark | undefined;
   onAddressClick?: (address: string) => void;
-  renderValue?: (field: TypedDataFieldValue, path: string) => ReactNode;
+  renderValue?: FieldValueRenderer;
   path?: string;
   label?: string;
 }): ReactNode {
@@ -117,12 +122,12 @@ export function TypedDataFieldList({
               $block={
                 field.kind !== 'value' ||
                 field.type === 'address' ||
-                renderedValue !== undefined
+                !!renderedValue?.block
               }
               $nested={field.kind !== 'value'}
             >
               {renderedValue !== undefined ? (
-                renderedValue
+                renderedValue.content
               ) : field.kind === 'value' ? (
                 field.type === 'address' ? (
                   <ExpandableAddress

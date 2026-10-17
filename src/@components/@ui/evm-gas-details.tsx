@@ -12,14 +12,18 @@ import {
   type EvmGasEstimate,
   type EvmGasTransaction,
   compareEvmGas,
-  estimateEvmGas,
 } from '../../@lib/evm-gas.js';
 import {
   GAS_HISTORY_MAX_AGE_SECONDS,
   type GasHistory,
 } from '../../@services/index.js';
 
-import {CenteredPopup} from './centered-popup.js';
+import {
+  DetailsPopup,
+  DetailsPopupDivider,
+  DetailsPopupSection,
+  DetailsPopupTitle,
+} from './details-popup.js';
 import {EvmGasEditor} from './evm-gas-editor.js';
 import {FormattedNumber} from './formatted-number.js';
 import {IconButton} from './icon-button.js';
@@ -28,11 +32,9 @@ import {
   InfoSectionHeader,
   InfoSectionItemLabel,
   InfoSectionRow,
-  InfoSectionTitle,
   InfoTable,
   InfoTableSummary,
 } from './info-section.js';
-import {LoadingSpinner} from './loading-spinner.js';
 import {MessageSectionTitle} from './message-content.js';
 import {NativeAmount} from './native-amount.js';
 import {Tag} from './tag.js';
@@ -103,32 +105,25 @@ const Note = styled.div`
 export const EvmGasDetails = ({
   chainId,
   transaction,
+  estimate,
   currency,
   showFees = true,
   onChange,
 }: {
   chainId: string;
   transaction: EvmGasTransaction;
+  estimate: EvmGasEstimate;
   currency?: NativeCurrency;
   showFees?: boolean;
   onChange?: (settings: EvmGasSettings) => void;
 }): ReactNode => {
-  const {chainService, gasHistoryService} = useEntrances();
+  const {gasHistoryService} = useEntrances();
   const [showDetails, setShowDetails] = useState(false);
-  const [estimate, setEstimate] = useState<{
-    chainId: string;
-    transaction: EvmGasTransaction;
-    value: EvmGasEstimate;
-  }>();
   const [history, setHistory] = useState<{
     chainId: string;
     value: GasHistory | undefined;
   }>();
-  const current =
-    estimate?.chainId === chainId && estimate.transaction === transaction
-      ? estimate
-      : undefined;
-  const gas = current?.value;
+  const gas = estimate;
   const eip1559 = transaction.type === 2;
   const supportsHistory = eip1559 && gasHistoryService.supports(chainId);
   const currentHistory = history?.chainId === chainId ? history : undefined;
@@ -142,25 +137,6 @@ export const EvmGasDetails = ({
   const feePerGas = eip1559 ? transaction.maxFeePerGas! : transaction.gasPrice!;
   const maximumFee = transaction.gasLimit * feePerGas;
   const expectedFee = eip1559 ? gas?.expectedFee : maximumFee;
-
-  useEffect(() => {
-    let cancelled = false;
-
-    void chainService
-      .getRPC(chainId)
-      .then(async provider => {
-        const value = await estimateEvmGas(transaction, provider);
-        if (cancelled) return;
-        setEstimate({chainId, transaction, value});
-      })
-      .catch(() => {
-        if (!cancelled) setEstimate({chainId, transaction, value: {}});
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [chainService, chainId, transaction]);
 
   useEffect(() => {
     if (!supportsHistory) return;
@@ -211,10 +187,8 @@ export const EvmGasDetails = ({
                 value={formatUnits(gas.networkFeePerGas, 'gwei')}
                 unit="gwei"
               />
-            ) : gas ? (
-              'Unavailable'
             ) : (
-              <LoadingSpinner />
+              'Unavailable'
             )}
           </RateTag>
         </Heading>
@@ -234,10 +208,8 @@ export const EvmGasDetails = ({
               <td>
                 {expectedFee !== undefined ? (
                   <NativeAmount value={expectedFee} currency={currency} />
-                ) : gas ? (
-                  'Unavailable'
                 ) : (
-                  <LoadingSpinner />
+                  'Unavailable'
                 )}
               </td>
             </InfoTableSummary>
@@ -251,13 +223,14 @@ export const EvmGasDetails = ({
         </InfoTable>
       )}
       {showDetails && (
-        <CenteredPopup
+        <DetailsPopup
           aria-label="Gas details"
           initialFocus="dialog"
           onDismiss={() => setShowDetails(false)}
         >
-          <InfoSectionTitle>Gas details</InfoSectionTitle>
-          <InfoSection>
+          <DetailsPopupTitle>Gas details</DetailsPopupTitle>
+          <DetailsPopupDivider />
+          <DetailsPopupSection>
             <InfoSectionRow>
               <InfoSectionItemLabel>
                 {eip1559 ? 'Current base fee' : 'Current gas price'}
@@ -265,9 +238,7 @@ export const EvmGasDetails = ({
               <DetailValue>
                 {gas?.networkFeePerGas !== undefined
                   ? `${formatUnits(gas.networkFeePerGas, 'gwei')} gwei`
-                  : gas
-                    ? 'Unavailable'
-                    : 'Loading…'}
+                  : 'Unavailable'}
               </DetailValue>
             </InfoSectionRow>
             {supportsHistory && (
@@ -279,7 +250,7 @@ export const EvmGasDetails = ({
                       ? GAS_LEVEL_LABELS[comparison.level]
                       : window?.status === 'collecting'
                         ? 'Collecting history'
-                        : !currentHistory || (window && !gas)
+                        : !currentHistory
                           ? 'Loading…'
                           : 'Unavailable'}
                   </Level>
@@ -290,7 +261,7 @@ export const EvmGasDetails = ({
                 </InfoSectionRow>
               </>
             )}
-          </InfoSection>
+          </DetailsPopupSection>
           {onChange ? (
             <EvmGasEditor
               chainId={chainId}
@@ -303,7 +274,7 @@ export const EvmGasDetails = ({
               }}
             />
           ) : (
-            <InfoSection>
+            <DetailsPopupSection>
               <InfoSectionRow>
                 <InfoSectionItemLabel>Gas limit</InfoSectionItemLabel>
                 <DetailValue>
@@ -325,10 +296,10 @@ export const EvmGasDetails = ({
                   </DetailValue>
                 </InfoSectionRow>
               )}
-            </InfoSection>
+            </DetailsPopupSection>
           )}
           <Note>Additional network fees are not included.</Note>
-        </CenteredPopup>
+        </DetailsPopup>
       )}
     </Section>
   );

@@ -1,12 +1,14 @@
 import {observer} from 'mobx-react-lite';
-import {type ComponentProps, type ReactNode} from 'react';
+import {type ComponentProps, type ReactNode, useEffect} from 'react';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
 import type {EvmCalldata} from '../../@lib/evm-calldata.js';
+import {getErc20AmountIndex, getErc20CallTarget} from '../../@lib/evm-token.js';
 
 import {CopyButton} from './copy-button.js';
 import {EvmCalldataVerification} from './evm-calldata-verification.js';
+import {EvmTokenAmount, EvmTokenTag} from './evm-token.js';
 import {InfoSection, InfoSectionHeader} from './info-section.js';
 import {MessageContent, MessageSectionTitle} from './message-content.js';
 import {TypedDataFieldList, type TypedDataFields} from './typed-data-fields.js';
@@ -16,15 +18,20 @@ type AddressProps = Pick<
   'getAddressKind' | 'getAddressMark' | 'onAddressClick'
 >;
 
-const Call = styled.div`
+const Call = styled.div<{$withToken?: boolean}>`
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+  padding-top: ${({$withToken}) => ($withToken ? '4px' : '0')};
 
   & + & {
     margin-top: 12px;
   }
+`;
+
+const CallToken = styled(EvmTokenTag)`
+  margin-bottom: -2px;
 `;
 
 const Header = styled(InfoSectionHeader)`
@@ -53,6 +60,11 @@ export function EvmTransactionData({
   data: string;
   decoded?: EvmCalldata;
 } & AddressProps): ReactNode {
+  const {evmTokenService} = useEntrances();
+  useEffect(() => {
+    void evmTokenService.refresh().catch(console.warn);
+  }, [evmTokenService]);
+
   if (data === '0x') return null;
 
   return (
@@ -87,15 +99,25 @@ const DecodedCall = observer(function DecodedCall({
   decoded: EvmCalldata;
   unambiguous?: boolean;
 } & AddressProps): ReactNode {
-  const {evmCallHistoryService} = useEntrances();
-  const canUseHistory =
+  const {evmCallHistoryService, evmTokenService} = useEntrances();
+  const unambiguousCall =
     unambiguous && decoded.candidates.length === 1 && decoded.issue !== 'limit';
+  const tokenTarget = unambiguous ? getErc20CallTarget(decoded) : undefined;
+  const token = tokenTarget
+    ? evmTokenService.getToken(chainId, tokenTarget)
+    : undefined;
+
+  useEffect(() => {
+    if (tokenTarget) void evmTokenService.resolve(chainId, tokenTarget);
+  }, [evmTokenService, chainId, tokenTarget]);
 
   return (
     <Call>
       {decoded.candidates.map(candidate => {
+        // Use the called token (the proxy address when applicable), not its implementation.
+        const amountIndex = getErc20AmountIndex(candidate.signature);
         const seen =
-          canUseHistory && decoded.contractAddress
+          unambiguousCall && decoded.contractAddress
             ? evmCallHistoryService.hasSigned(
                 chainId,
                 decoded.contractAddress,
@@ -104,7 +126,13 @@ const DecodedCall = observer(function DecodedCall({
             : undefined;
 
         return (
-          <Call key={candidate.signature}>
+          <Call key={candidate.signature} $withToken={!!token}>
+            {token && (
+              <CallToken
+                token={token}
+                kind={addressProps.getAddressKind?.(token.address) ?? 'unknown'}
+              />
+            )}
             <EvmCalldataVerification
               candidate={candidate}
               target={decoded.target}
@@ -114,16 +142,37 @@ const DecodedCall = observer(function DecodedCall({
               {...addressProps}
               label={`${candidate.signature} arguments`}
               fields={candidate.fields}
-              renderValue={(_field, path) => {
+              renderValue={(field, path) => {
+                if (
+                  token &&
+                  token.decimals !== undefined &&
+                  path === String(amountIndex) &&
+                  field.kind === 'value' &&
+                  field.type === 'uint256'
+                ) {
+                  return {
+                    content: (
+                      <EvmTokenAmount
+                        token={token}
+                        value={BigInt(field.value)}
+                      />
+                    ),
+                  };
+                }
                 const call = candidate.calls[path];
-                return call ? (
-                  <DecodedCall
-                    chainId={chainId}
-                    decoded={call}
-                    unambiguous={canUseHistory}
-                    {...addressProps}
-                  />
-                ) : undefined;
+                return call
+                  ? {
+                      block: true,
+                      content: (
+                        <DecodedCall
+                          chainId={chainId}
+                          decoded={call}
+                          unambiguous={unambiguousCall}
+                          {...addressProps}
+                        />
+                      ),
+                    }
+                  : undefined;
               }}
             />
           </Call>

@@ -16,6 +16,7 @@ import {
   ErrorService,
   EvmCallHistoryService,
   EvmCalldataService,
+  EvmTokenService,
   GasHistoryService,
   MonoidCredentialsStore,
   MonoidScanPromptPresenter,
@@ -161,6 +162,13 @@ export class Entrances {
   @entrance
   get gasHistoryService() {
     return new GasHistoryService(import.meta.env.VITE_GAS_HISTORY_URL);
+  }
+
+  @entrance
+  get evmTokenService() {
+    return Promise.all([this.storageService, this.chainService]).then(
+      ([storage, chain]) => EvmTokenService.create(storage, chain),
+    );
   }
 
   @entrance

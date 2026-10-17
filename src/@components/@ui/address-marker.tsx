@@ -1,4 +1,5 @@
 import {IonIcon} from '@ionic/react';
+import badgeCheck from 'lucide-static/icons/badge-check.svg';
 import circleHelp from 'lucide-static/icons/circle-help.svg';
 import history from 'lucide-static/icons/history.svg';
 import shieldCheck from 'lucide-static/icons/shield-check.svg';
@@ -42,6 +43,12 @@ const markers: Record<
     icon: history,
     label: 'Seen before',
     description: 'Included in a message you previously signed.',
+  },
+  listed: {
+    icon: badgeCheck,
+    color: 'var(--ion-color-safe)',
+    label: 'Listed token',
+    description: 'Included in the Uniswap token list for this network.',
   },
   unknown: {
     icon: circleHelp,

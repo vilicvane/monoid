@@ -3,7 +3,7 @@ import {styled} from 'styled-components';
 
 import {formatDecimal} from '../../@lib/format-decimal.js';
 
-import {CenteredPopup} from './centered-popup.js';
+import {DetailsPopup, DetailsPopupDivider} from './details-popup.js';
 import {MessageContent} from './message-content.js';
 
 const Value = styled.button`
@@ -39,10 +39,12 @@ export const FormattedNumber = ({
   value,
   unit,
   significantDigits = 4,
+  details,
 }: {
   value: string;
   unit?: string;
   significantDigits?: number;
+  details?: ReactNode;
 }): ReactNode => {
   const [showDetails, setShowDetails] = useState(false);
   const formatted = formatDecimal(value, significantDigits);
@@ -69,7 +71,7 @@ export const FormattedNumber = ({
         {suffix}
       </Value>
       {showDetails && (
-        <CenteredPopup
+        <DetailsPopup
           aria-label="Full value"
           onDismiss={() => setShowDetails(false)}
         >
@@ -77,7 +79,9 @@ export const FormattedNumber = ({
             {value}
             {suffix}
           </FullValue>
-        </CenteredPopup>
+          {details != null && <DetailsPopupDivider />}
+          {details}
+        </DetailsPopup>
       )}
     </>
   );

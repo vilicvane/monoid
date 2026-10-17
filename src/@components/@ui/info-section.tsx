@@ -14,6 +14,16 @@ export const InfoSection = styled.div`
 
 export const InfoSectionTitle = styled.div``;
 
+export const InfoSectionDivider = styled.hr`
+  align-self: stretch;
+  height: 0;
+  margin: 0;
+  border: 0;
+  border-top: solid 0.5px currentColor;
+  color: inherit;
+  opacity: 0.3;
+`;
+
 export const InfoFieldset = styled(InfoSection).attrs({as: 'fieldset'})<{
   $equalPadding?: boolean;
 }>`

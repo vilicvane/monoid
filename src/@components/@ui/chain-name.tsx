@@ -6,15 +6,16 @@ import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
 
-import {CenteredPopup} from './centered-popup.js';
 import {ChainIcon} from './chain-icon.js';
-import {IconTagName, iconTagCSS} from './icon-tag.js';
 import {
-  InfoSectionHeader,
-  InfoSectionItemLabel,
-  InfoSectionRow,
-  InfoSectionTitle,
-} from './info-section.js';
+  DetailsPopup,
+  DetailsPopupDivider,
+  DetailsPopupHeader,
+  DetailsPopupTitle,
+  detailsPopupLogoCSS,
+} from './details-popup.js';
+import {IconTagName, iconTagCSS} from './icon-tag.js';
+import {InfoSectionItemLabel, InfoSectionRow} from './info-section.js';
 import {inlineIconCSS} from './inline-icon.js';
 
 const Value = styled.button<{$tag?: boolean}>`
@@ -44,9 +45,8 @@ const DetailsIcon = styled(IonIcon)`
   align-self: center;
 `;
 
-const Header = styled(InfoSectionHeader)`
-  justify-content: flex-start;
-  gap: 6px;
+const HeaderIcon = styled(ChainIcon)`
+  ${detailsPopupLogoCSS}
 `;
 
 const Identifier = styled.span`
@@ -98,19 +98,20 @@ export const ChainValue = observer(
           )}
         </Value>
         {showDetails && (
-          <CenteredPopup
+          <DetailsPopup
             aria-label="Chain details"
             onDismiss={() => setShowDetails(false)}
           >
-            <Header>
-              <InfoSectionTitle>{name ?? 'Unknown network'}</InfoSectionTitle>
-              <ChainIcon chainId={chainId} />
-            </Header>
+            <DetailsPopupHeader>
+              <HeaderIcon chainId={chainId} />
+              <DetailsPopupTitle>{name ?? 'Unknown network'}</DetailsPopupTitle>
+            </DetailsPopupHeader>
+            <DetailsPopupDivider />
             <InfoSectionRow>
               <InfoSectionItemLabel>Chain ID</InfoSectionItemLabel>
               <Identifier>{identifier}</Identifier>
             </InfoSectionRow>
-          </CenteredPopup>
+          </DetailsPopup>
         )}
       </>
     );

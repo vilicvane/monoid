@@ -1,6 +1,6 @@
 import type {AddressMark} from '../@services/index.js';
 
-export type AddressKind = 'signer' | 'own' | 'seen' | 'unknown';
+export type AddressKind = 'signer' | 'own' | 'listed' | 'seen' | 'unknown';
 
 export function getAddressKind(
   address: string,
