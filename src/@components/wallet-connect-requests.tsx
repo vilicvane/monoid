@@ -19,7 +19,8 @@ export function WalletConnectRequests(): null {
       // Requests received while reviewing one stay in the manual queue on exit.
       if (
         router.sessions.request.$matched ||
-        router.sessions.transaction.$matched
+        router.sessions.transaction.$matched ||
+        router.transactions.$matched
       ) {
         requests.forEach(({id}) => presented.add(id));
         return;
@@ -36,9 +37,13 @@ export function WalletConnectRequests(): null {
         router.scan.connection.$matched ||
         monoidScanPromptPresenter.current ||
         keyboard.shown ||
-        [router.sessions, router.scan, router.safe].some(
-          route => route.$transition || route.$switching,
-        )
+        [
+          router.features,
+          router.sessions,
+          router.transactions,
+          router.scan,
+          router.safe,
+        ].some(route => route.$transition || route.$switching)
       ) {
         return;
       }

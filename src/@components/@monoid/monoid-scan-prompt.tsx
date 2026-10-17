@@ -9,8 +9,13 @@ import {useEntrances} from '../../@entrances.js';
 import {AppletNotFoundError} from '../../@lib/applet.js';
 import {CBORAppletError} from '../../@lib/cbor-applet.js';
 import {IsoDepScanError} from '../../@lib/isodep.js';
-import type {MonoidApplet} from '../../@lib/monoid/index.js';
-import {MonoidAppletInvalidPINError} from '../../@lib/monoid/index.js';
+import {
+  type MonoidApplet,
+  type MonoidAppletHello,
+  MonoidAppletHelloWithSafe,
+  MonoidAppletInvalidPINError,
+  MonoidCardError,
+} from '../../@lib/monoid/index.js';
 import {isCredentialRequestCancelled} from '../../@services/index.js';
 import {uint8ArrayToHex} from '../../@utils/index.js';
 import {useToast} from '../@ui/toast.js';
@@ -49,11 +54,22 @@ export type MonoidScanPromptSetStateContentCallback = (
   content: ReactNode,
 ) => void;
 
-export type MonoidScanPromptOptions = {
+export type MonoidScanPromptOptions<TSafe extends boolean = boolean> = {
+  safe?: TSafe;
   ensureSetup?: boolean;
   auth?: 'access' | false;
   retryOnError?: boolean;
 };
+
+type MonoidScanPromptHello<TSafe extends boolean> = TSafe extends true
+  ? MonoidAppletHelloWithSafe
+  : MonoidAppletHello;
+
+type MonoidScanPromptCallback<TSafe extends boolean> = (
+  applet: MonoidApplet,
+  setStateContent: MonoidScanPromptSetStateContentCallback,
+  hello: MonoidScanPromptHello<TSafe>,
+) => Promise<void>;
 
 /** The scan ended quietly because another page will handle the card. */
 export class MonoidScanRedirectError extends Error {
@@ -65,19 +81,16 @@ export class MonoidScanRedirectError extends Error {
   }
 }
 
-export function useMonoidScanPrompt({
+export function useMonoidScanPrompt<TSafe extends boolean = false>({
+  safe: includeSafe,
   ensureSetup = true,
   auth = false,
   retryOnError = false,
-}: MonoidScanPromptOptions = {}): [
+}: MonoidScanPromptOptions<TSafe> = {}): [
   ReactNode,
   (
     initialStateContent: ReactNode,
-    appletCallback: (
-      applet: MonoidApplet,
-      setStateContent: MonoidScanPromptSetStateContentCallback,
-      hello: Awaited<ReturnType<MonoidApplet['hello']>>,
-    ) => Promise<void>,
+    appletCallback: MonoidScanPromptCallback<TSafe>,
   ) => Promise<void>,
 ] {
   const {
@@ -96,16 +109,14 @@ export function useMonoidScanPrompt({
     useState<
       [
         ReactNode,
-        (
-          applet: MonoidApplet,
-          setStateContent: MonoidScanPromptSetStateContentCallback,
-          hello: Awaited<ReturnType<MonoidApplet['hello']>>,
-        ) => Promise<void>,
+        MonoidScanPromptCallback<TSafe>,
         {resolve: () => void; reject: (error: unknown) => void},
       ]
     >();
 
-  const [state, setState] = useState<'hidden' | 'ready' | 'scanning'>('hidden');
+  const [state, setState] = useState<
+    'hidden' | 'ready' | 'scanning' | 'waiting' | 'error'
+  >('hidden');
 
   const [stateContent, setStateContent] = useState<ReactNode>();
   const [owner] = useState(() => Symbol());
@@ -114,6 +125,7 @@ export function useMonoidScanPrompt({
     if (appletCallbackAndPromise && state !== 'hidden') {
       monoidScanPromptPresenter.show(owner, {
         scanning: state === 'scanning',
+        error: state === 'error',
         content: stateContent,
         onDismiss: () => setAppletCallbackAndPromise(undefined),
       });
@@ -152,6 +164,7 @@ export function useMonoidScanPrompt({
       | {type: 'success'}
       | {type: 'input'; id: MonoidIdHex; message?: string}
       | {type: 'redirect'; navigate: () => void}
+      | {type: 'uninitialized'}
       | {type: 'error'; error: unknown; retry: boolean}
       | undefined;
     let finishing = false;
@@ -290,8 +303,18 @@ export function useMonoidScanPrompt({
       } else if (completed.type === 'redirect') {
         fail(new MonoidScanRedirectError());
         completed.navigate();
+      } else if (completed.type === 'uninitialized') {
+        fail(cancelled());
+        toast({
+          message: 'Initialize this card from Safe first.',
+          color: 'warning',
+          position: 'top',
+          waitForKeyboard: false,
+        });
       } else if (completed.retry) {
-        errorService.catch(Promise.reject(completed.error));
+        if (!(completed.error instanceof MonoidCardError)) {
+          errorService.catch(Promise.reject(completed.error));
+        }
         setStateContent(retryStateContent);
         startScan();
       } else {
@@ -314,25 +337,39 @@ export function useMonoidScanPrompt({
 
           setStateContent('Greeting to monoid...');
 
-          const hello = await applet.hello({});
+          const hello = (
+            includeSafe
+              ? MonoidAppletHelloWithSafe.satisfies(
+                  await applet.hello({safe: true}),
+                )
+              : await applet.hello({})
+          ) as MonoidScanPromptHello<TSafe>;
 
           if (disposed) {
             return;
           }
 
           const id = uint8ArrayToHex(hello.id);
+          const safe = includeSafe ? hello.safe : undefined;
 
-          retryStateContent = (
+          retryStateContent = safe ? (
             <>
               Scan card{' '}
               <MonoidScanStatePromptContentHighlight>
-                {uint8ArrayToHex(hello.safe.id)}
+                {uint8ArrayToHex(safe.id)}
               </MonoidScanStatePromptContentHighlight>{' '}
               again
             </>
+          ) : (
+            'Scan card again'
           );
 
           if (ensureSetup && hello.pin === false) {
+            if (!safe) {
+              result = {type: 'uninitialized'};
+              return;
+            }
+
             result = {
               type: 'redirect',
               navigate: () => {
@@ -341,9 +378,9 @@ export function useMonoidScanPrompt({
                     id,
                     pin: hello.pin !== false,
                     safe: {
-                      id: uint8ArrayToHex(hello.safe.id),
-                      pin: hello.safe.pin !== false,
-                      unlocked: hello.safe.unlocked,
+                      id: uint8ArrayToHex(safe.id),
+                      pin: safe.pin !== false,
+                      unlocked: safe.unlocked,
                     },
                   })
                   .$push();
@@ -381,9 +418,14 @@ export function useMonoidScanPrompt({
 
               if (
                 error instanceof CBORAppletError &&
-                MonoidAppletInvalidPINError.is(error.source) &&
-                error.source.tries > 0
+                MonoidAppletInvalidPINError.is(error.source)
               ) {
+                if (error.source.tries === 0) {
+                  throw new MonoidCardError('Access PIN is blocked.', {
+                    cause: error,
+                  });
+                }
+
                 if (entered === undefined) {
                   delete pins[id];
                   update = {type: 'remove', id, pin};
@@ -430,10 +472,12 @@ export function useMonoidScanPrompt({
 
           if (error instanceof AppletNotFoundError) {
             update = undefined;
-            result = {
-              type: 'redirect',
-              navigate: () => router.safe.installApplet.$replace(),
-            };
+            result = includeSafe
+              ? {
+                  type: 'redirect',
+                  navigate: () => router.safe.installApplet.$replace(),
+                }
+              : {type: 'uninitialized'};
             return;
           }
 
@@ -461,9 +505,54 @@ export function useMonoidScanPrompt({
           void finish().catch(fail);
         },
         connected => {
-          if (!disposed && !finishing) {
+          if (!disposed && !finishing && !result) {
             setState(connected ? 'scanning' : 'ready');
           }
+        },
+        () => {
+          if (
+            disposed ||
+            !result ||
+            result.type === 'success' ||
+            (result.type === 'error' &&
+              (result.error instanceof IsoDepScanError ||
+                isCredentialRequestCancelled(result.error)))
+          ) {
+            return false;
+          }
+
+          const failed =
+            result.type === 'error' ||
+            result.type === 'uninitialized' ||
+            (result.type === 'input' && result.message !== undefined);
+
+          setState(failed ? 'error' : 'waiting');
+
+          if (result.type === 'input') {
+            setStateContent(
+              <>
+                {result.message && (
+                  <>
+                    {result.message}
+                    <br />
+                  </>
+                )}
+                Remove card to enter Access PIN
+              </>,
+            );
+          } else if (result.type === 'redirect') {
+            setStateContent('Remove card to continue setup');
+          } else if (result.type === 'uninitialized') {
+            setStateContent('Initialize this card from Safe first.');
+          } else {
+            setStateContent(
+              result.error instanceof Error
+                ? result.error.message
+                : String(result.error),
+            );
+          }
+
+          return true;
         },
       );
     };
@@ -505,6 +594,7 @@ export function useMonoidScanPrompt({
     monoidScanPromptPresenter,
     owner,
     errorService,
+    includeSafe,
     ensureSetup,
     auth,
     retryOnError,

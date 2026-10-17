@@ -2,10 +2,12 @@ import type {Router as RoutraRouter, SchemaRecord} from 'routra';
 
 import type {MonoidIdHex, MonoidSafeIdHex, SafeIndexHex} from './@atomics.js';
 import type {ScannedCardData} from './@components/views/safe/index.js';
+import type {EvmTransactionReplacementKind} from './@lib/evm-transaction-replacement.js';
 import type {AddressChain} from './@lib/wallet-address.js';
 import type {WalletConnectAuthentication} from './@lib/wallet-connect-authentication.js';
 
 export const ROUTE_SCHEMA = {
+  features: true,
   sessions: {
     request: {
       $state: undefined! as {id: number},
@@ -20,6 +22,17 @@ export const ROUTE_SCHEMA = {
     session: {
       $state: undefined! as {topic: string},
       switchAccounts: true,
+    },
+  },
+  transactions: {
+    wallet: {
+      $state: undefined! as {address: string},
+      transaction: {
+        $state: undefined! as {chainId: string; hash: string},
+        replace: {
+          $state: undefined! as {kind: EvmTransactionReplacementKind},
+        },
+      },
     },
   },
   scan: {

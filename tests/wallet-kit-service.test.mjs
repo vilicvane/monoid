@@ -90,6 +90,10 @@ function createCallHistory() {
   return {rememberSigned: mock.fn(async () => {})};
 }
 
+function createTransactionHistory() {
+  return {rememberSubmitted: mock.fn(async () => {})};
+}
+
 function setup(sessions = {}, records = {}, requests = []) {
   const context = createKit(sessions, requests);
   const storage = createStorage(records);
@@ -100,6 +104,7 @@ function setup(sessions = {}, records = {}, requests = []) {
     storage,
     addressBook,
     callHistory,
+    createTransactionHistory(),
     records,
   );
   // WalletKit returns the SDK store's array despite its Record return type.
@@ -445,6 +450,7 @@ test('creates an empty service on first installation', async () => {
     storage,
     createAddressBook(),
     createCallHistory(),
+    createTransactionHistory(),
   );
 
   assert.deepEqual(storage.get.mock.calls[0].arguments, [
@@ -478,6 +484,7 @@ test('restores persisted records without changing activity and prunes disconnect
     storage,
     createAddressBook(),
     createCallHistory(),
+    createTransactionHistory(),
   );
 
   assert.equal(service.sessions.get(TOPIC), session);

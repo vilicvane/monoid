@@ -11,6 +11,63 @@ import org.junit.Test;
 
 public class ReaderModeControllerTest {
     @Test
+    public void removalUsesTheLatestDiscoveredTagAndWaitsForThePlatformCallback() {
+        FakePlatform platform = new FakePlatform();
+        ReaderModeController<String> reader = new ReaderModeController<>(platform);
+        reader.start(transport -> {});
+        platform.onTag.accept("original");
+        platform.onTag.accept("latest");
+        SuccessResult result = new SuccessResult();
+        reader.waitForRemoval(result);
+
+        assertEquals(0, result.resolutions);
+        assertTrue(platform.calls.contains("wait:latest"));
+        platform.removed.run();
+        assertEquals(1, result.resolutions);
+    }
+
+    @Test
+    public void oldRemovalCallbacksAreIgnoredAfterReaderRestart() {
+        FakePlatform platform = new FakePlatform();
+        ReaderModeController<String> reader = new ReaderModeController<>(platform);
+        reader.start(transport -> {});
+        platform.onTag.accept("old");
+        SuccessResult result = new SuccessResult();
+        reader.waitForRemoval(result);
+        Runnable removed = platform.removed;
+        reader.stop();
+        reader.start(transport -> {});
+        removed.run();
+        assertEquals(0, result.resolutions);
+    }
+
+    @Test
+    public void unsupportedOrUnavailableRemovalIsReportedInsteadOfCompleted() {
+        for (String code : Arrays.asList("UNSUPPORTED", "IO_ERROR")) {
+            FakePlatform platform = new FakePlatform();
+            platform.removalFailure = code;
+            ReaderModeController<String> reader = new ReaderModeController<>(platform);
+            reader.start(transport -> {});
+            platform.onTag.accept("tag");
+            List<SessionController.Failure> failures = new ArrayList<>();
+            reader.waitForRemoval(new SessionController.Result<Void>() {
+                @Override
+                public void resolve(Void value) {
+                    fail("Removal was not detected.");
+                }
+
+                @Override
+                public void reject(SessionController.Failure failure) {
+                    failures.add(failure);
+                }
+            });
+            assertEquals(1, failures.size());
+            assertEquals(code, failures.get(0).code);
+            assertFalse(failures.get(0).message.isEmpty());
+        }
+    }
+
+    @Test
     public void stopIgnoresTheLatestTagEvenWhenTransportFilteringRejectsIt() {
         FakePlatform platform = new FakePlatform();
         FakeTransport supported = platform.addTag("supported");
@@ -127,6 +184,8 @@ public class ReaderModeControllerTest {
         final Map<String, FakeTransport> transports = new HashMap<>();
         ReaderModeController.TagCallback<String> onTag;
         RuntimeException ignoreFailure;
+        String removalFailure;
+        Runnable removed;
 
         FakeTransport addTag(String tag) {
             FakeTransport transport = new FakeTransport(tag, calls);
@@ -144,6 +203,15 @@ public class ReaderModeControllerTest {
         public SessionController.Transport transport(String tag) {
             calls.add("transport:" + tag);
             return transports.get(tag);
+        }
+
+        @Override
+        public void waitForRemoval(String tag, Runnable removed) throws SessionController.TransportException {
+            calls.add("wait:" + tag);
+            if (removalFailure != null) {
+                throw new SessionController.TransportException(removalFailure);
+            }
+            this.removed = removed;
         }
 
         @Override

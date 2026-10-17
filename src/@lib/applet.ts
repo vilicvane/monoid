@@ -26,6 +26,8 @@ export abstract class Applet<TCommandDefinitions> {
     onCleanup?: () => void,
     /** Reports native connection changes, including the SELECT exchange. */
     onConnectionChange?: (connected: boolean) => void,
+    /** Evaluated after the operation or onError, before connection cleanup. */
+    waitForRemoval?: () => boolean,
   ): () => Promise<void> {
     return standbyIsoDep(
       async sessionId => {
@@ -35,6 +37,7 @@ export abstract class Applet<TCommandDefinitions> {
       onError,
       onCleanup,
       onConnectionChange,
+      waitForRemoval,
     );
   }
 

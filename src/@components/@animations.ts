@@ -157,6 +157,11 @@ export const selectionTransition = {
   easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
 };
 
+export const navigationTransition = {
+  duration: 200,
+  easing: 'ease-out',
+};
+
 export const popupContentAnimation = {
   enter: {
     offset: 12,

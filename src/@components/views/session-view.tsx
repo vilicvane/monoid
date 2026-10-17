@@ -6,12 +6,13 @@ import {type ReactNode, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
 import {useEntrances} from '../../@entrances.js';
+import {getPendingActions} from '../../@lib/pending-action.js';
 import type {Router} from '../../@routes.js';
 import {getWalletKitSessionAddresses} from '../../@services/index.js';
 import {WalletAccountList} from '../@key/wallet-account-list.js';
 import {AsyncButton} from '../@ui/button.js';
 import {CenteredPopup} from '../@ui/centered-popup.js';
-import {DateTime} from '../@ui/date-time.js';
+import {PopupDateTime} from '../@ui/date-time.js';
 import {
   InfoSection,
   InfoSectionItemLabel,
@@ -27,6 +28,7 @@ import {
 } from '../@view/index.js';
 
 import {WalletConnectSite} from './@scan/wallet-connect-site.js';
+import {PendingRequests} from './@sessions/pending-requests.js';
 import {useSession} from './@sessions/use-session.js';
 
 export const SessionView = observer(
@@ -34,7 +36,7 @@ export const SessionView = observer(
     view,
     transition,
   }: RouteComponentProps<Router['sessions']['session']>): ReactNode => {
-    const {walletKitService, walletStorageService} = useEntrances();
+    const {router, walletKitService, walletStorageService} = useEntrances();
     const [pending, setPending] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
     const active = !view.$leaving && view.$match.$exact.$active;
@@ -44,6 +46,10 @@ export const SessionView = observer(
     const {session, record} = data;
     const addresses = getWalletKitSessionAddresses(session);
     const canSwitch = walletKitService.canSwitchAccount(view.topic);
+    const actions = getPendingActions(walletKitService).filter(
+      action => action.request.topic === view.topic,
+    );
+    const nextRequest = actions[0]?.request;
 
     const disconnect = async (): Promise<void> => {
       setPending(true);
@@ -78,11 +84,11 @@ export const SessionView = observer(
           <InfoSection>
             <InfoSectionRow>
               <InfoSectionItemLabel>Connected</InfoSectionItemLabel>
-              <DateTime value={record.connectedAt} />
+              <PopupDateTime value={record.connectedAt} />
             </InfoSectionRow>
             <InfoSectionRow>
               <InfoSectionItemLabel>Last active</InfoSectionItemLabel>
-              <DateTime value={record.lastActivityAt} />
+              <PopupDateTime value={record.lastActivityAt} />
             </InfoSectionRow>
           </InfoSection>
           <InfoSection>
@@ -99,16 +105,24 @@ export const SessionView = observer(
               </InfoSectionItemLabel>
             </InfoSection>
           )}
+          <PendingRequests
+            actions={actions}
+            onSelect={action =>
+              router.sessions.request({id: action.request.id}).$push()
+            }
+          />
         </ViewContent>
-        <ViewFab view={view} transition={transition} inert={!active}>
-          <IonFabButton
-            aria-label="Switch Account"
-            disabled={!canSwitch || pending}
-            onClick={() => view.$match.switchAccounts.$push()}
-          >
-            <IonIcon icon={arrowRightLeft} />
-          </IonFabButton>
-        </ViewFab>
+        {!nextRequest && (
+          <ViewFab view={view} transition={transition} inert={!active}>
+            <IonFabButton
+              aria-label="Switch Account"
+              disabled={pending || !canSwitch}
+              onClick={() => view.$match.switchAccounts.$push()}
+            >
+              <IonIcon icon={arrowRightLeft} />
+            </IonFabButton>
+          </ViewFab>
+        )}
         {menuOpen && active && walletKitService.sessions.has(view.topic) && (
           <CenteredPopup
             aria-label="Session actions"

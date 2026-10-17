@@ -19,6 +19,7 @@ const index = new Uint8Array(10);
 const path = new Uint8Array([0x80, 0, 0, 0x2c]);
 const digest = new Uint8Array(32);
 const context = new TextEncoder().encode('example.com');
+const identityPublicKey = new Uint8Array([4, ...new Uint8Array(64)]);
 const taprootValues = [undefined, false, true, {}, {merkleRoot: digest}];
 
 const keyFamilies = [
@@ -36,14 +37,40 @@ const keyFamilies = [
 ];
 
 const fixtures = {
-  hello: [{}],
+  hello: [{}, {safe: false}, {safe: true}],
   authenticate: [{pin: '123456'}, {safe: true, pin: '123456'}],
   setPIN: [{pin: '123456'}, {pin: '123456', safe: true}],
+  systemInformation: [{}],
   list: [{}, {type: 'seed', keyPrefix: context}, {type: 0x1001}],
+  view: [{index}],
+  get: [{index}],
   set: [
     {index, alias: 'Main'},
     {index, data: context},
-    {index, alias: 'Main', data: context},
+    {index, secret: true},
+    {index, alias: 'Main', data: context, secret: false},
+  ],
+  create: [
+    {data: context, type: 'seed'},
+    {data: context, type: 0x1001},
+    {data: context, key: context, alias: 'Main', secret: true, type: 'seed'},
+    {data: context, key: new Uint8Array(), alias: '', secret: false, index},
+  ],
+  remove: [{index}],
+  exportItem: [{index, recipientPublicKey: identityPublicKey}],
+  importItem: [
+    {index, senderPublicKey: identityPublicKey, data: context},
+    {
+      index,
+      senderPublicKey: identityPublicKey,
+      key: context,
+      alias: 'Main',
+      data: context,
+    },
+  ],
+  createRandomKey: [
+    ...['entropy', 'seed', 'master'].map(type => ({type, length: 32})),
+    ...['secp256k1', 'secp256r1', 'ed25519'].map(type => ({type})),
   ],
   viewKey: [],
   sign: [],

@@ -9,6 +9,7 @@ final class ReaderModeController<T> implements SessionController.Reader {
     interface Platform<T> {
         void enable(TagCallback<T> onTag);
         SessionController.Transport transport(T tag);
+        void waitForRemoval(T tag, Runnable removed) throws SessionController.TransportException;
         void ignore(T tag);
         void disable();
     }
@@ -44,6 +45,39 @@ final class ReaderModeController<T> implements SessionController.Reader {
                 onTag.accept(transport);
             }
         });
+    }
+
+    @Override
+    public void waitForRemoval(SessionController.Result<Void> result) {
+        Discovery<T> current;
+        T tag;
+        synchronized (this) {
+            current = discovery;
+            tag = current == null ? null : current.lastTag;
+        }
+        if (tag == null) {
+            result.reject(new SessionController.Failure("SESSION_CLOSED",
+                "The NFC tag is no longer available for removal detection.", null, null));
+            return;
+        }
+        try {
+            platform.waitForRemoval(tag, () -> {
+                synchronized (this) {
+                    if (discovery != current) {
+                        return;
+                    }
+                }
+                result.resolve(null);
+            });
+        } catch (SessionController.TransportException exception) {
+            String message = exception.code.equals("UNSUPPORTED")
+                ? "Waiting for card removal requires Android 7 or later."
+                : "Android could not confirm card removal. Remove the card before scanning again.";
+            result.reject(new SessionController.Failure(exception.code, message, null, null));
+        } catch (RuntimeException exception) {
+            result.reject(new SessionController.Failure("IO_ERROR",
+                "Unable to monitor NFC card removal.", null, null));
+        }
     }
 
     @Override

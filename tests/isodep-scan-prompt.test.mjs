@@ -6,6 +6,14 @@ let fixture;
 let rendering;
 const owners = [];
 
+mock.module('react/jsx-runtime', {
+  namedExports: {
+    jsx: (type, props) => ({type, props}),
+    jsxs: (type, props) => ({type, props}),
+    Fragment: 'fragment',
+  },
+});
+
 mock.module('react', {
   namedExports: {
     useRef(initial) {
@@ -23,12 +31,20 @@ mock.module('../.bld/app/@entrances.js', {
 });
 mock.module('../.bld/app/@lib/isodep.js', {
   namedExports: {
-    standbyIsoDep(callback, onError, onCleanup, onConnectionChange) {
+    IsoDepScanError: class extends Error {},
+    standbyIsoDep(
+      callback,
+      onError,
+      onCleanup,
+      onConnectionChange,
+      waitForRemoval,
+    ) {
       const scan = {
         callback,
         onError,
         onCleanup,
         onConnectionChange,
+        waitForRemoval,
         stopped: deferred(),
         stopCalls: 0,
       };
@@ -38,6 +54,11 @@ mock.module('../.bld/app/@lib/isodep.js', {
         return scan.stopped.promise;
       };
     },
+  },
+});
+mock.module('../.bld/app/@services/index.js', {
+  namedExports: {
+    isCredentialRequestCancelled: error => error?.code === 'CANCELLED',
   },
 });
 
@@ -105,6 +126,7 @@ async function connect(scan) {
   } catch (error) {
     scan.onError(error);
   }
+  scan.waitingForRemoval = scan.waitForRemoval();
   scan.onConnectionChange(false);
   scan.onCleanup();
   await setImmediate();
@@ -116,6 +138,33 @@ function hide(presenter, completed = true) {
 
 afterEach(() => {
   owners.splice(0).forEach(owner => owner.unmount());
+});
+
+test('failure is displayed while waiting for removal and can be cancelled', async () => {
+  const {presenter, start} = setup();
+  const failure = new Error('Could not install applet');
+  const run = start(async () => {
+    throw failure;
+  });
+  run.scan.onConnectionChange(true);
+  await assert.rejects(
+    run.scan.callback('native-session'),
+    error => error === failure,
+  );
+  run.scan.onError(failure);
+  assert.equal(run.scan.waitForRemoval(), true);
+  run.scan.onConnectionChange(false);
+
+  assert.equal(presenter.current.error, true);
+  assert.equal(presenter.current.scanning, false);
+  assert.equal(presenter.current.closing, false);
+  assert.equal(run.scan.stopCalls, 0);
+  assert.equal(run.settled, false);
+
+  presenter.current.onDismiss();
+  run.scan.stopped.resolve();
+  hide(presenter);
+  assert.equal((await run.promise).error.code, 'CANCELLED');
 });
 
 test('success waits for native stop and shared presentation exit', async () => {

@@ -72,37 +72,39 @@ export const WalletConnectView = observer(
         </ViewHeader>
         <ViewContent
           footer={
-            <>
-              {signIn ? (
-                <Button
-                  disabled={disabled}
-                  onClick={() =>
-                    router.scan.connection
-                      .authentication({
-                        addresses: [...addresses],
-                        authentication: authentication.messages,
-                      })
-                      .$push()
-                  }
+            available && (
+              <>
+                {signIn ? (
+                  <Button
+                    disabled={disabled}
+                    onClick={() =>
+                      router.scan.connection
+                        .authentication({
+                          addresses: [...addresses],
+                          authentication: authentication.messages,
+                        })
+                        .$push()
+                    }
+                  >
+                    Sign in
+                  </Button>
+                ) : (
+                  <AsyncButton disabled={disabled} handler={connect}>
+                    Connect
+                  </AsyncButton>
+                )}
+                <AsyncButton
+                  color="neutral"
+                  disabled={connecting}
+                  handler={async () => {
+                    await walletKitService.reject(view.id);
+                    router.scan.$reset();
+                  }}
                 >
-                  Sign in
-                </Button>
-              ) : (
-                <AsyncButton disabled={disabled} handler={connect}>
-                  Connect
+                  Reject
                 </AsyncButton>
-              )}
-              <AsyncButton
-                color={available ? 'neutral' : 'primary'}
-                disabled={connecting}
-                handler={async () => {
-                  if (available) await walletKitService.reject(view.id);
-                  router.scan.$reset();
-                }}
-              >
-                {available ? 'Reject' : 'Scan again'}
-              </AsyncButton>
-            </>
+              </>
+            )
           }
         >
           {proposal && (

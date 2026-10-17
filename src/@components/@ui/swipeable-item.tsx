@@ -49,6 +49,7 @@ const Actions = styled.div<{$count: number}>`
   > * {
     transform: scale(0);
     transform-origin: center calc(50% + 4px);
+    will-change: var(--swipe-will-change, auto);
   }
 
   ${({$count}) =>
@@ -133,6 +134,7 @@ const Content = styled.div`
   border-radius: calc(var(--swipe-progress) * 8px);
   touch-action: pan-y;
   user-select: none;
+  will-change: var(--swipe-will-change, auto);
 `;
 
 export const SwipeableItem = ({
@@ -157,8 +159,34 @@ export const SwipeableItem = ({
   const [actionsWidth, setActionsWidth] = useState(0);
   const [actionCount, setActionCount] = useState(0);
   const [dragOffset, setDragOffset] = useState<number>();
+  const dragging = dragOffset !== undefined;
+  const previousMotion = useRef({dragging: false, open});
   const offset = dragOffset ?? (open ? -actionsWidth : 0);
   const progress = actionsWidth ? Math.min(1, -offset / actionsWidth) : 0;
+
+  useLayoutEffect(() => {
+    const previous = previousMotion.current;
+    previousMotion.current = {dragging, open};
+    if (!dragging && !previous.dragging && open === previous.open) return;
+
+    const container = containerRef.current!;
+    let cancelled = false;
+    container.style.setProperty('--swipe-will-change', 'transform');
+
+    if (!dragging) {
+      // Keep the hint until both progress transitions finish, including cancellation.
+      void Promise.allSettled(
+        container.getAnimations().map(animation => animation.finished),
+      ).then(() => {
+        if (!cancelled) container.style.removeProperty('--swipe-will-change');
+      });
+    }
+
+    return () => {
+      cancelled = true;
+      container.style.removeProperty('--swipe-will-change');
+    };
+  }, [dragging, open]);
 
   useLayoutEffect(() => {
     onOpenChangeRef.current = onOpenChange;
@@ -252,7 +280,7 @@ export const SwipeableItem = ({
     <Container
       ref={containerRef}
       className={className}
-      $dragging={dragOffset !== undefined}
+      $dragging={dragging}
       style={
         {
           '--swipe-progress': progress,

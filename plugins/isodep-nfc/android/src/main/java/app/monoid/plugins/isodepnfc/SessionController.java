@@ -22,6 +22,7 @@ final class SessionController {
 
     interface Reader {
         void start(TagCallback onTag);
+        void waitForRemoval(Result<Void> result);
         void stop();
     }
 
@@ -88,6 +89,8 @@ final class SessionController {
         boolean stopped;
         boolean finishing;
         boolean closeFailed;
+        String endCode;
+        String removedSessionId;
 
         Scan(String id, int timeoutMs) {
             this.id = id;
@@ -111,6 +114,7 @@ final class SessionController {
         final Scan scan;
         final Transport transport;
         final List<Result<Void>> closing = new ArrayList<>();
+        final List<Result<Void>> removing = new ArrayList<>();
         TagInfo tag;
         Exchange exchange;
         Runnable cancelConnectTimeout;
@@ -119,6 +123,11 @@ final class SessionController {
         boolean working;
         boolean closingTransport;
         boolean closeFailed;
+        boolean closeRequested;
+        boolean waitingForRemoval;
+        boolean removalStarted;
+        boolean removed;
+        Failure removalFailure;
 
         Session(Scan scan, Transport transport) {
             this.scan = scan;
@@ -302,12 +311,26 @@ final class SessionController {
     }
 
     void close(String id, Result<Void> result) {
+        close(id, false, result);
+    }
+
+    void close(String id, boolean waitForRemoval, Result<Void> result) {
         Session session = active;
         if (session == null || !session.id.equals(id)) {
-            result.resolve(null);
+            if (waitForRemoval && (scanning == null || !id.equals(scanning.removedSessionId))) {
+                result.reject(failure("SESSION_CLOSED", "This session is no longer available for removal detection.", null, null));
+            } else {
+                result.resolve(null);
+            }
             return;
         }
-        session.closing.add(result);
+        session.closeRequested = true;
+        if (waitForRemoval) {
+            session.waitingForRemoval = true;
+            session.removing.add(result);
+        } else {
+            session.closing.add(result);
+        }
         if (session.ended) {
             finishClosing(session);
         } else {
@@ -344,11 +367,15 @@ final class SessionController {
             scan.acceptingTags = false;
             scan.stopped = true;
         }
+        scan.endCode = code;
         retiredScanIds.add(scan.id);
         if (active != null) {
             end(active, reason.equals("stopped") ? "scan-stopped" : reason, code);
         }
         listener.scanEnded(scan.id, reason, code.equals("CANCELLED") ? null : code);
+        if (active != null) {
+            finishClosing(active);
+        }
         finishStopping(scan);
     }
 
@@ -359,6 +386,7 @@ final class SessionController {
         String outcome;
         synchronized (session) {
             session.ended = true;
+            session.removed = code.equals("TAG_LOST");
             outcome = session.exchange != null && session.exchange.sent ? "unknown" : "not-sent";
         }
         session.closingTransport = true;
@@ -397,25 +425,77 @@ final class SessionController {
         if (!session.ended || session.working || session.closingTransport) {
             return;
         }
-        if (active == session) {
-            active = null;
-        }
         Scan scan = session.scan;
         scan.closeFailed |= session.closeFailed;
         if (session.closeFailed && !scan.stopped) {
             // Do not accept another tag if the old connection failed to close.
             endScan(scan, "io-error", "IO_ERROR");
-        } else if (!scan.stopped) {
-            synchronized (scan) {
-                scan.acceptingTags = true;
-            }
+            return;
         }
         List<Result<Void>> closing = new ArrayList<>(session.closing);
         session.closing.clear();
         for (Result<Void> result : closing) {
             settleCleanup(result, session.closeFailed);
         }
+
+        if (session.waitingForRemoval && !session.removed && !scan.stopped) {
+            if (!session.removalStarted) {
+                session.removalStarted = true;
+                reader.waitForRemoval(new Result<Void>() {
+                    @Override
+                    public void resolve(Void value) {
+                        control.execute(() -> removalFinished(session, null));
+                    }
+
+                    @Override
+                    public void reject(Failure failure) {
+                        control.execute(() -> removalFinished(session, failure));
+                    }
+                });
+            }
+            return;
+        }
+        // Failed sessions remain reserved until their caller chooses whether
+        // cleanup alone or detected removal should release discovery.
+        if (!scan.stopped && !session.closeRequested) {
+            return;
+        }
+        if (active == session) {
+            active = null;
+        }
+        if (!scan.stopped) {
+            if (session.removed) {
+                scan.removedSessionId = session.id;
+            }
+            synchronized (scan) {
+                scan.acceptingTags = true;
+            }
+        }
+        List<Result<Void>> removing = new ArrayList<>(session.removing);
+        session.removing.clear();
+        for (Result<Void> result : removing) {
+            if (session.removalFailure != null) {
+                result.reject(session.removalFailure);
+            } else if (scan.stopped) {
+                result.reject(failure(scan.endCode, "The NFC scan ended while waiting for card removal.", null, null));
+            } else {
+                result.resolve(null);
+            }
+        }
         finishStopping(scan);
+    }
+
+    private void removalFinished(Session session, Failure failure) {
+        if (active != session || session.scan.stopped || session.removed) {
+            return;
+        }
+        if (failure != null) {
+            session.removalFailure = failure;
+            endScan(session.scan, "io-error", failure.code);
+        } else {
+            session.removed = true;
+            finishClosing(session);
+        }
     }
 
     private void finishStopping(Scan scan) {

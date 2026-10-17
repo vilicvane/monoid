@@ -1,4 +1,6 @@
-import {type TransactionReceipt, getAddress, id} from 'ethers';
+import {getAddress, id} from 'ethers';
+
+import type {EvmTransactionReceipt} from './evm-transaction.js';
 
 export type EvmTokenTransfer = {
   tokenAddress: string;
@@ -16,7 +18,7 @@ export type EvmTokenChange = {
 const TRANSFER_TOPIC = id('Transfer(address,address,uint256)');
 
 export function parseEvmTokenTransfers(
-  receipt: Pick<TransactionReceipt, 'status' | 'logs'>,
+  receipt: Pick<EvmTransactionReceipt, 'status' | 'logs'>,
 ): EvmTokenTransfer[] {
   if (receipt.status !== 1) return [];
 

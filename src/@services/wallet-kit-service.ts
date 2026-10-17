@@ -34,6 +34,7 @@ import {
 import type {AddressBookService} from './address-book-service.js';
 import type {EvmCallHistoryService} from './evm-call-history-service.js';
 import type {StorageService} from './storage-service.js';
+import type {TransactionHistoryService} from './transaction-history-service.js';
 
 const CONNECTION_REQUEST_TIMEOUT = ms('1m');
 
@@ -117,6 +118,7 @@ export class WalletKitService {
     private storage: StorageService,
     private addressBook: AddressBookService,
     private callHistory: EvmCallHistoryService,
+    private transactionHistory: TransactionHistoryService,
     records: Record<string, WalletKitSessionRecord> = {},
     submissions: StorageMapping['walletKitTransactionSubmissions'] = {},
   ) {
@@ -377,6 +379,8 @@ export class WalletKitService {
       runInAction(() => this.transactionSubmissions.set(id, submission!));
       await this.saveTransactionSubmissions();
     }
+
+    await this.transactionHistory.rememberSubmitted(signedTransaction);
 
     const responded = await this.publishRequestResponse(request, hash);
     if (responded || !this.requests.has(id)) {
@@ -733,6 +737,7 @@ export class WalletKitService {
     storage: StorageService,
     addressBook: AddressBookService,
     callHistory: EvmCallHistoryService,
+    transactionHistory: TransactionHistoryService,
   ): Promise<WalletKitService> {
     const [records, submissions] = await Promise.all([
       storage.get('walletKitSessionRecords'),
@@ -743,6 +748,7 @@ export class WalletKitService {
       storage,
       addressBook,
       callHistory,
+      transactionHistory,
       records ?? {},
       submissions ?? {},
     );

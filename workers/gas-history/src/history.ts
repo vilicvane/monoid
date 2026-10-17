@@ -27,22 +27,6 @@ export type GasHistory = {
   windows: Record<'24h' | '7d', GasHistoryWindow>;
 };
 
-export function addSample(
-  samples: GasSample[],
-  sample: GasSample,
-): GasSample[] {
-  const bucket = Math.floor(sample.timestamp / SAMPLE_INTERVAL_SECONDS);
-
-  return [
-    ...samples.filter(
-      value =>
-        value.timestamp > sample.timestamp - WEEK_SECONDS &&
-        Math.floor(value.timestamp / SAMPLE_INTERVAL_SECONDS) !== bucket,
-    ),
-    sample,
-  ].sort((a, b) => a.timestamp - b.timestamp);
-}
-
 export function summarizeWindow(
   samples: GasSample[],
   duration: number,

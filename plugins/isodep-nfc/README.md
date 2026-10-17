@@ -14,14 +14,14 @@ NFC-V/NDEF operations.
 Import `IsoDepNfc` and the exported types from `capacitor-isodep-nfc` after adding
 this local package to an application.
 
-| Method                                      | Result                                                       |
-| ------------------------------------------- | ------------------------------------------------------------ |
-| `getStatus()`                               | `{supported, enabled}`                                       |
-| `openSettings()`                            | Opens Android NFC settings                                   |
-| `startScan({scanId, transceiveTimeoutMs?})` | Enables continuous scanning without waiting for a tag        |
-| `stopScan({scanId})`                        | Stops the scan, cancels its pending work and awaits cleanup  |
-| `transceive({sessionId, data, timeoutMs?})` | `{data}` with the unmodified response bytes                  |
-| `closeSession({sessionId})`                 | Closes one connection and awaits cleanup; scanning continues |
+| Method                                       | Result                                                       |
+| -------------------------------------------- | ------------------------------------------------------------ |
+| `getStatus()`                                | `{supported, enabled}`                                       |
+| `openSettings()`                             | Opens Android NFC settings                                   |
+| `startScan({scanId, transceiveTimeoutMs?})`  | Enables continuous scanning without waiting for a tag        |
+| `stopScan({scanId})`                         | Stops the scan, cancels its pending work and awaits cleanup  |
+| `transceive({sessionId, data, timeoutMs?})`  | `{data}` with the unmodified response bytes                  |
+| `closeSession({sessionId, waitForRemoval?})` | Closes one connection; optionally waits for detected removal |
 
 `scanId` is a nonblank caller-generated string. Use a fresh ID for each scan. Only
 one scan and one connecting or connected session can exist at a time. Each newly
@@ -30,14 +30,40 @@ connection deadline. Scanning itself has no idle timeout. A successful connectio
 emits `sessionOpened` with a native-generated `sessionId`. Tags discovered while
 a session or its cleanup is in progress are discarded, not queued for later.
 
-Closing a session leaves scanning active. Another session requires a new tag
-discovery; there is no UID filtering or deduplication, so the same card can be
-removed and presented again. Discovery is not proof of physical movement, RF
-power loss or a card state reset. Removing an idle card does not produce an
-immediate notification; a later exchange can detect the loss.
+Closing a session leaves scanning active. Without `waitForRemoval`, another
+session requires only a new tag discovery; there is no UID filtering or
+deduplication. Discovery is not proof of physical movement, RF power loss or a
+card state reset. A failed connection or exchange closes its transport but keeps
+discovery reserved until the caller explicitly calls `closeSession`, choosing
+cleanup alone or waiting for removal. This also applies to connection failures
+that emitted `sessionEnded` without `sessionOpened`.
 
-`closeSession` succeeds for unknown or ended IDs and never closes a different
-session. `stopScan` is also idempotent and never stops a different scan: even an
+`closeSession({sessionId, waitForRemoval: true})` first closes the connection and
+finishes pending transport work, then waits for Android's
+`NfcAdapter.OnTagRemovedListener` before accepting another session. Repeated
+discoveries during this wait are discarded. The returned Promise resolves only
+after the removal callback or an already detected `TAG_LOST`, and cleanup has
+completed. A normal `sessionEnded` event means the transport ended, not that the
+card left the field. Removing an idle, open card is not monitored until the caller
+requests this close mode.
+
+Reader Mode allows Android's discovery-time NDEF probe. In AOSP,
+`FLAG_READER_SKIP_NDEF_CHECK` also bypasses the rediscovery debounce used by
+`ignore`, so that flag cannot be combined with this removal wait. The probe
+finishes before `sessionOpened`; the caller still selects its applet explicitly.
+
+Stopping the scan cancels pending removal waits with `CANCELLED`. NFC disable,
+activity pause and destruction reject them with the corresponding lifecycle
+error instead of reporting removal. There is no idle timeout or automatic retry.
+API 23 rejects this mode with `UNSUPPORTED`. If Android cannot register removal
+detection (`ignore` returns false), it rejects with `IO_ERROR` and stops the scan;
+this can also happen if the card has already left, but is not assumed to prove
+removal. Waiting on an unknown session or one released by a normal close rejects
+with `SESSION_CLOSED`. Repeating the wait for the last confirmed removed session
+in the same active scan succeeds.
+
+Ordinary `closeSession` succeeds for unknown or ended IDs and never closes a
+different session. `stopScan` is also idempotent and never stops a different scan: even an
 unknown ID is retired until the plugin reloads, preventing a late `startScan` for
 that ID. Reusing an ended scan ID rejects with `SCAN_CLOSED`. Await `stopScan`
 before starting a new scan. Starting while another scan or its cleanup is active
@@ -60,8 +86,13 @@ Android can reject the request when the tag is already gone or unavailable;
 Logcat's `IsoDepNfc` entry records whether the request was accepted without
 logging tag identifiers or payloads. API 23 has no `ignore` support. Android's
 documented RF and random-UID limitations still apply, and activity pause can
-disable Reader Mode independently of plugin cleanup. This is not a physical
-removal guarantee or an application-level rescan gate.
+disable Reader Mode independently of plugin cleanup.
+
+The explicit removal wait uses the same 1,000 ms debounce with a callback while
+Reader Mode remains enabled. Android may also report removal when a different
+tag enters the field. This supplies an application-level rescan gate, subject to
+Android's documented RF and random-UID limitations; it is not an absolute
+physical-movement guarantee.
 
 Byte arrays must be nonempty arrays of integers from 0 to 255. Concurrent
 exchanges reject with `BUSY` and are not queued. `transceiveTimeoutMs` defaults to
@@ -120,7 +151,12 @@ async function scan(
       await IsoDepNfc.addListener('sessionEnded', event => {
         if (event.scanId !== scanId) return;
         const wasOpened = openedSessions.delete(event.sessionId);
-        if (!wasOpened && event.code) onError(event);
+        if (!wasOpened) {
+          if (event.code) onError(event);
+          void IsoDepNfc.closeSession({sessionId: event.sessionId}).catch(
+            onError,
+          );
+        }
       }),
     );
     listeners.push(

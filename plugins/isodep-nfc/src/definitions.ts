@@ -47,6 +47,8 @@ export type TransceiveResult = {
 
 export type CloseSessionOptions = {
   sessionId: string;
+  /** Keep discovery blocked until Android detects removal. Requires API 24+. */
+  waitForRemoval?: boolean;
 };
 
 export type SessionEndedReason =
@@ -125,7 +127,11 @@ export type IsoDepNfcPlugin = {
   /** Exchange raw bytes. Concurrent exchanges reject BUSY without queuing. */
   transceive(options: TransceiveOptions): Promise<TransceiveResult>;
 
-  /** Close one connection and await cleanup. Scanning continues. Idempotent. */
+  /**
+   * Close one connection and await cleanup. Scanning continues.
+   * With waitForRemoval, also await detected removal before accepting another
+   * session. Stopping the scan cancels this wait instead of resolving it.
+   */
   closeSession(options: CloseSessionOptions): Promise<void>;
 
   addListener(

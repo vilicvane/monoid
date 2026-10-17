@@ -1,4 +1,5 @@
 export * from './address-book-service.js';
+export * from './app-preferences-service.js';
 export * from './chain-service.js';
 export * from './error-service.js';
 export * from './evm-call-history-service.js';
@@ -10,5 +11,6 @@ export * from './monoid-scan-prompt-presenter.js';
 export * from './monoid-storage-service.js';
 export * from './site-logo-service.js';
 export * from './storage-service.js';
+export * from './transaction-history-service.js';
 export * from './wallet-kit-service.js';
 export * from './wallet-storage-service.js';

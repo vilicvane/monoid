@@ -3,7 +3,7 @@ import type {RouteComponentProps} from 'routra-react';
 
 import {useEntrances} from '../../../../@entrances.js';
 import {
-  type MonoidApplet,
+  type MonoidAppletHelloWithSafe,
   hasAppletBundle,
   installMonoidApplets,
 } from '../../../../@lib/monoid/index.js';
@@ -50,7 +50,7 @@ export const InstallAppletView = ({
     setStep(1);
     setProgress(undefined);
 
-    let hello: Awaited<ReturnType<MonoidApplet['hello']>> | undefined;
+    let hello: MonoidAppletHelloWithSafe | undefined;
 
     try {
       await scanPrompt(
@@ -175,7 +175,8 @@ export const InstallAppletView = ({
 
 const INSTALL_STAGES = {
   checking: {number: 1, label: 'Checking card'},
-  safe: {number: 2, label: 'Installing Safe'},
-  monoid: {number: 3, label: 'Installing Monoid'},
-  verifying: {number: 4, label: 'Verifying installation'},
+  identity: {number: 2, label: 'Installing Safe Identity'},
+  safe: {number: 3, label: 'Installing Safe'},
+  monoid: {number: 4, label: 'Installing Monoid'},
+  verifying: {number: 5, label: 'Verifying installation'},
 };

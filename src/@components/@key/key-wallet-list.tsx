@@ -19,6 +19,7 @@ import {styled} from 'styled-components';
 import {UnmountAnimationClone} from 'unmount-animation-clone';
 
 import {useEntrances} from '../../@entrances.js';
+import {UI_LOCALE} from '../../@lib/locale.js';
 import type {AddressChain} from '../../@lib/wallet-address.js';
 import {ADDRESS_TYPES, ADDRESS_TYPE_LABELS} from '../../@lib/wallet-address.js';
 import type {
@@ -47,7 +48,7 @@ import {
 import {KeyDerivationBadge, KeyDerivationTag, KeyTags} from './key-tags.js';
 import {ReceiveAddressPopup} from './receive-address-popup.js';
 
-const pathCollator = new Intl.Collator('en', {numeric: true});
+const pathCollator = new Intl.Collator(UI_LOCALE, {numeric: true});
 
 const CHAIN_LABELS: Record<AddressChain, string> = {
   evm: 'EVM',

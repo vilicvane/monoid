@@ -5,10 +5,13 @@ import {exchange} from '../global-platform/commands.js';
 import {GlobalPlatformInstaller} from '../global-platform/install.js';
 
 import {appletBundle} from './@applet-bundle.js';
-import {type MonoidApplet, createMonoidApplet} from './monoid-applet.js';
+import {
+  MonoidAppletHelloWithSafe,
+  createMonoidApplet,
+} from './monoid-applet.js';
 
 export type BundledApplet = {
-  stage: 'safe' | 'monoid';
+  stage: 'identity' | 'safe' | 'monoid';
   packageAid: string;
   appletAid: string;
   codeURL: URL;
@@ -16,25 +19,26 @@ export type BundledApplet = {
 };
 
 export type AppletInstallProgress = {
-  stage: 'checking' | 'safe' | 'monoid' | 'verifying';
+  stage: 'checking' | BundledApplet['stage'] | 'verifying';
   progress?: number;
 };
 
 export const hasAppletBundle = appletBundle !== undefined;
 
-/** The bundled pair is loaded and checked before the first card-management command. */
+/** The bundle is loaded and checked before the first card-management command. */
 export async function installMonoidApplets(
   sessionId: string,
   onProgress: (update: AppletInstallProgress) => void,
-): Promise<Awaited<ReturnType<MonoidApplet['hello']>>> {
+): Promise<MonoidAppletHelloWithSafe> {
   if (!appletBundle) {
     throw new Error('The applet installation package is not available yet.');
   }
 
   if (
-    appletBundle.length !== 2 ||
-    appletBundle[0].stage !== 'safe' ||
-    appletBundle[1].stage !== 'monoid'
+    appletBundle.length !== 3 ||
+    appletBundle[0].stage !== 'identity' ||
+    appletBundle[1].stage !== 'safe' ||
+    appletBundle[2].stage !== 'monoid'
   ) {
     throw new Error('The applet installation package is incomplete.');
   }
@@ -90,9 +94,9 @@ export async function installMonoidApplets(
   onProgress({stage: 'verifying'});
 
   // SELECT ends the GP secure channel. Verify the installed applet using its real schema.
-  const monoid = await createMonoidApplet(packages[1].appletAid).openSession(
+  const monoid = await createMonoidApplet(packages[2].appletAid).openSession(
     sessionId,
   );
 
-  return monoid.hello({});
+  return MonoidAppletHelloWithSafe.satisfies(await monoid.hello({safe: true}));
 }

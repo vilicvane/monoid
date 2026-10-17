@@ -7,7 +7,7 @@
         android:interpolator="@android:interpolator/fast_out_slow_in" />
     <!-- Spread in 640 ms; rotation ends at 640 ms. Hold 200 ms, then approach at 840 ms. -->
     <objectAnimator
-        android:duration="@integer/monoid_launch_animation_duration"
+        android:duration="@integer/monoid_launch_glyph_motion_duration"
         android:interpolator="@android:interpolator/linear">
         <propertyValuesHolder android:propertyName="translateX" android:valueType="floatType">
             <keyframe android:fraction="0" android:value="0" />
@@ -15,7 +15,7 @@
                 android:interpolator="@android:interpolator/fast_out_slow_in" />
             <keyframe android:fraction="0.724137931" android:value="-20" />
             <keyframe android:fraction="1" android:value="35"
-                android:interpolator="@android:interpolator/fast_out_slow_in" />
+                android:interpolator="@interpolator/monoid_launch_approach" />
         </propertyValuesHolder>
     </objectAnimator>
 </set>

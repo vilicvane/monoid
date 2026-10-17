@@ -1,9 +1,10 @@
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
+import type {RouteComponentProps} from 'routra-react';
 
 import {useEntrances} from '../../@entrances.js';
-import {getWalletConnectRequestExpiry} from '../../@lib/wallet-connect-authentication.js';
-import {Button} from '../@ui/button.js';
+import {getPendingActions} from '../../@lib/pending-action.js';
+import type {Router} from '../../@routes.js';
 import {
   View,
   ViewContent,
@@ -14,52 +15,36 @@ import {
 
 import {SessionList, SessionListItem} from './@sessions/session-list-item.js';
 
-export const SessionsView = observer((): ReactNode => {
-  const {router, walletKitService} = useEntrances();
-  const nextRequest = Array.from(walletKitService.requests.values()).find(
-    request => !walletKitService.isRespondingToRequest(request.id),
-  );
-  const nextProposal = Array.from(walletKitService.proposals.values()).find(
-    proposal => getWalletConnectRequestExpiry(proposal) > Date.now(),
-  );
+export const SessionsView = observer(
+  ({view}: RouteComponentProps<Router['sessions']>): ReactNode => {
+    const {router, walletKitService} = useEntrances();
+    const actions = getPendingActions(walletKitService);
+    const pendingTopics = new Set(actions.map(action => action.request.topic));
+    const active = !view.$leaving && view.$match.$exact.$active;
 
-  return (
-    <View>
-      <ViewHeader>
-        <ViewHeaderTitle>Sessions</ViewHeaderTitle>
-      </ViewHeader>
-      <ViewContent
-        footer={
-          (nextRequest || nextProposal) && (
-            <Button
-              onClick={() => {
-                if (nextRequest) {
-                  router.sessions.request({id: nextRequest.id}).$push();
-                } else {
-                  router.scan.connection({id: nextProposal!.id}).$push();
-                }
-              }}
-            >
-              View next request
-            </Button>
-          )
-        }
-      >
-        {walletKitService.sessions.size ? (
-          <SessionList>
-            {Array.from(walletKitService.sessions, ([topic, session]) => (
-              <SessionListItem
-                key={topic}
-                session={session}
-                record={walletKitService.sessionRecords.get(topic)!}
-                onClick={() => router.sessions.session({topic}).$push()}
-              />
-            ))}
-          </SessionList>
-        ) : (
-          <ViewPlaceholder>No connected sites</ViewPlaceholder>
-        )}
-      </ViewContent>
-    </View>
-  );
-});
+    return (
+      <View inert={!active}>
+        <ViewHeader>
+          <ViewHeaderTitle>Sessions</ViewHeaderTitle>
+        </ViewHeader>
+        <ViewContent>
+          {walletKitService.sessions.size ? (
+            <SessionList>
+              {Array.from(walletKitService.sessions, ([topic, session]) => (
+                <SessionListItem
+                  key={topic}
+                  session={session}
+                  record={walletKitService.sessionRecords.get(topic)!}
+                  hasPendingRequest={pendingTopics.has(topic)}
+                  onClick={() => router.sessions.session({topic}).$push()}
+                />
+              ))}
+            </SessionList>
+          ) : (
+            <ViewPlaceholder>No connected sites</ViewPlaceholder>
+          )}
+        </ViewContent>
+      </View>
+    );
+  },
+);

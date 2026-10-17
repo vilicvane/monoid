@@ -7,7 +7,12 @@ import {
   recoverAddress,
 } from 'ethers';
 
+import {CBORAppletError} from '../cbor-applet.js';
+
+import {MonoidCardError} from './card-error.js';
 import type {MonoidApplet, MonoidAppletSECP256K1Key} from './monoid-applet.js';
+
+const ACCOUNT_NOT_FOUND_MESSAGE = 'Account not on this card.';
 
 export async function signEvmDigest(
   applet: MonoidApplet,
@@ -25,19 +30,21 @@ export async function signEvmDigest(
   }
 
   const address = getAddress(expectedAddress);
-  const {publicKey} = await applet.viewKey(key);
+  const {publicKey} = await applet.viewKey(key).catch(handleSigningError);
 
   assertActive?.();
 
   if (computeAddress(hexlify(publicKey)) !== address) {
-    throw new Error('This card does not contain the selected account.');
+    throw new MonoidCardError(ACCOUNT_NOT_FOUND_MESSAGE);
   }
 
-  const {signature} = await applet.sign({
-    ...key,
-    cipher: 'ecdsa',
-    digest: digestBytes,
-  });
+  const {signature} = await applet
+    .sign({
+      ...key,
+      cipher: 'ecdsa',
+      digest: digestBytes,
+    })
+    .catch(handleSigningError);
 
   assertActive?.();
 
@@ -58,4 +65,11 @@ export async function signEvmDigest(
   }
 
   throw new Error('The signature does not match the selected account.');
+}
+
+function handleSigningError(error: unknown): never {
+  if (error instanceof CBORAppletError && error.source.code === 'NOT_FOUND') {
+    throw new MonoidCardError(ACCOUNT_NOT_FOUND_MESSAGE, {cause: error});
+  }
+  throw error;
 }

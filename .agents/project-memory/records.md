@@ -25,3 +25,7 @@
 23. [agent] `SetupCardView` still sends an `auth` field inside `setPIN`, which `CommandSetPIN` ignores in favor of session auth, so unlocking a set-up safe fails with `UNAUTHORIZED` until it calls `authenticate({pin, safe: true})` first; setting the safe PIN on a new card needs no auth and works; step 2 has only unused state. WIP, setup card, unlock safe.
 24. [agent] `MonoidStorageService` (`monoids` storage key, `MonoidData` holding only `id`) is still an empty stub whose constructor ignores `storage`. WIP, card list storage.
 25. [agent] verification on Windows: from the repo root run `npx tsc --build --pretty false` (clean at this checkpoint) and `npx prettier --check <files>`; ESLint only works from `src` (from the root it reports "TSConfig does not include this file"), and `@`-prefixed paths must be quoted in PowerShell. Lint baseline at this checkpoint is 14 errors: 12 already at `HEAD` in `@app.tsx`, `use-input-modal.tsx` and `setup-card-view.tsx`, and 2 from the `MonoidStorageService` stub. tooling, lint baseline.
+
+## d0ac890
+
+26. [user] use the roomy wallet-list layout on the Transactions wallet selection page; roomy spacing should be the default when a wallet list is the main content of a page. wallet list density, shared layout.

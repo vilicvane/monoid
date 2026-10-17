@@ -2,7 +2,8 @@ import type {ReactNode} from 'react';
 import {useCallback, useLayoutEffect, useRef} from 'react';
 
 import {useEntrances} from '../../@entrances.js';
-import {standbyIsoDep} from '../../@lib/isodep.js';
+import {IsoDepScanError, standbyIsoDep} from '../../@lib/isodep.js';
+import {isCredentialRequestCancelled} from '../../@services/index.js';
 
 type ScanCallback = (
   sessionId: string,
@@ -48,6 +49,7 @@ export function useIsoDepScanPrompt(): (
         const owner = Symbol();
         let content = initialContent;
         let scanning = false;
+        let failed = false;
         let finishing = false;
         let result: ScanResult | undefined;
         let callbackFinished = Promise.resolve();
@@ -96,6 +98,7 @@ export function useIsoDepScanPrompt(): (
           presenter.show(owner, {
             content,
             scanning,
+            error: failed,
             onDismiss: operation.cancel,
           });
         };
@@ -142,8 +145,30 @@ export function useIsoDepScanPrompt(): (
             }
           },
           connected => {
-            scanning = connected;
+            if (!result) {
+              scanning = connected;
+              show();
+            }
+          },
+          () => {
+            if (
+              finishing ||
+              !result ||
+              !('error' in result) ||
+              result.error instanceof IsoDepScanError ||
+              isCredentialRequestCancelled(result.error)
+            ) {
+              return false;
+            }
+
+            scanning = false;
+            failed = true;
+            content =
+              result.error instanceof Error
+                ? result.error.message
+                : String(result.error);
             show();
+            return true;
           },
         );
       });

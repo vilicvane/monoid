@@ -29,6 +29,7 @@ export const SafeView = observer(
     const {router, walletStorageService, errorService} = useEntrances();
 
     const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
+      safe: true,
       auth: 'access',
       retryOnError: true,
     });

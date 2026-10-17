@@ -38,7 +38,7 @@ export const keyGroupReveal = css<{$revealing?: boolean}>`
 `;
 
 const KeyGroupItemContainer = styled(KeyListItem)<{$revealing?: boolean}>`
-  &[role='button'] {
+  &:is(button, [role='button']) {
     box-sizing: border-box;
     width: 100%;
     border: 0;
@@ -48,6 +48,7 @@ const KeyGroupItemContainer = styled(KeyListItem)<{$revealing?: boolean}>`
     text-align: left;
     cursor: pointer;
 
+    &:disabled,
     &[aria-disabled='true'] {
       opacity: 0.5;
       cursor: default;
@@ -75,9 +76,12 @@ export const KeyGroupItem = ({
 } & (
     | {as?: 'div'; ref?: Ref<HTMLDivElement>}
     | {as: 'label'; ref?: Ref<HTMLLabelElement>}
+    | {as: 'button'; ref?: Ref<HTMLButtonElement>}
   )): ReactNode => (
   <KeyGroupItemContainer
     {...props}
+    type={props.as === 'button' ? 'button' : undefined}
+    disabled={props.as === 'button' ? disabled : undefined}
     role={onExpand ? 'button' : props.role}
     tabIndex={onExpand ? (disabled ? -1 : 0) : props.tabIndex}
     aria-disabled={onExpand && disabled ? true : undefined}

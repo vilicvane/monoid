@@ -18,6 +18,47 @@ import type {CBORCommandDefinitions} from '../cbor-applet.js';
 import {CBORApplet} from '../cbor-applet.js';
 
 const SafeItemType = x.union([SafeKnownType, SafeUnknownType]);
+const SafeItemKeyType = x.union([
+  x.literal('entropy'),
+  x.literal('seed'),
+  x.literal('master'),
+  x.literal('secp256k1'),
+  x.literal('secp256r1'),
+  x.literal('ed25519'),
+]);
+
+const Features = x.object({
+  curves: x.array(
+    x.object({
+      name: CurveName,
+      ciphers: x.array(CipherName),
+    }),
+  ),
+});
+
+const SafeInformation = x.object({
+  id: MonoidSafeId,
+  publicKey: PublicKey,
+  pin: x.union([x.number, x.literal(false)]),
+  unlocked: x.boolean,
+});
+
+export const MonoidAppletHello = x.object({
+  version: x.number,
+  id: MonoidId,
+  features: Features,
+  pin: x.union([x.number, x.literal(false)]),
+  safe: SafeInformation.optional(),
+});
+export type MonoidAppletHello = x.TypeOf<typeof MonoidAppletHello>;
+
+export const MonoidAppletHelloWithSafe = x.intersection([
+  MonoidAppletHello,
+  x.object({safe: SafeInformation}),
+]);
+export type MonoidAppletHelloWithSafe = x.TypeOf<
+  typeof MonoidAppletHelloWithSafe
+>;
 
 const KeyIndex = x.object({index: SafeIndex});
 const DerivableKeyType = x.union([x.literal('seed'), x.literal('master')]);
@@ -93,25 +134,10 @@ export type MonoidApplet = ReturnType<typeof createMonoidApplet>;
 export const monoidCommandDefinitions = {
   hello: {
     ins: 0x20,
-    request: x.object({}),
-    response: x.object({
-      version: x.number,
-      id: MonoidId,
-      features: x.object({
-        curves: x.array(
-          x.object({
-            name: CurveName,
-            ciphers: x.array(CipherName),
-          }),
-        ),
-      }),
-      pin: x.union([x.number, x.literal(false)]),
-      safe: x.object({
-        id: MonoidSafeId,
-        pin: x.union([x.number, x.literal(false)]),
-        unlocked: x.boolean,
-      }),
+    request: x.object({
+      safe: x.boolean.optional(),
     }),
+    response: MonoidAppletHello,
   },
 
   authenticate: {
@@ -132,6 +158,22 @@ export const monoidCommandDefinitions = {
     response: x.object({}),
   },
 
+  systemInformation: {
+    ins: 0x2f,
+    request: x.object({}),
+    response: x.object({
+      versions: x.object({
+        monoid: x.number,
+        javacard: x.tuple([x.number, x.number]),
+      }),
+      memories: x.object({
+        persistent: x.object({available: x.number}),
+        transient: x.object({reset: x.number, deselect: x.number}),
+      }),
+      features: Features,
+    }),
+  },
+
   list: {
     ins: 0x30,
     request: x.object({
@@ -145,9 +187,27 @@ export const monoidCommandDefinitions = {
           type: SafeItemType.optional(),
           key: XUint8Array.optional(),
           alias: x.string.optional(),
+          secret: x.boolean,
         }),
       ),
     }),
+  },
+
+  view: {
+    ins: 0x31,
+    request: x.object({index: SafeIndex}),
+    response: x.object({
+      key: XUint8Array.optional(),
+      alias: x.string.optional(),
+      secret: x.boolean,
+    }),
+  },
+
+  // Secret items cannot be read as plaintext, even with Safe authentication.
+  get: {
+    ins: 0x32,
+    request: x.object({index: SafeIndex}),
+    response: x.object({data: XUint8Array}),
   },
 
   set: {
@@ -156,8 +216,65 @@ export const monoidCommandDefinitions = {
       index: SafeIndex,
       alias: x.string.optional(),
       data: XUint8Array.optional(),
+      secret: x.boolean.optional(),
     }),
     response: x.object({}),
+  },
+
+  create: {
+    ins: 0x34,
+    request: x.intersection([
+      x.object({
+        data: XUint8Array,
+        key: XUint8Array.optional(),
+        alias: x.string.optional(),
+        secret: x.boolean.optional(),
+      }),
+      x.union([x.object({type: SafeItemType}), x.object({index: SafeIndex})]),
+    ]),
+    response: x.object({index: SafeIndex}),
+  },
+
+  remove: {
+    ins: 0x35,
+    request: x.object({index: SafeIndex}),
+    response: x.object({}),
+  },
+
+  // Requires Safe authentication; data is encrypted for recipientPublicKey.
+  exportItem: {
+    ins: 0x36,
+    request: x.object({
+      index: SafeIndex,
+      recipientPublicKey: PublicKey,
+    }),
+    response: x.object({
+      key: XUint8Array.optional(),
+      alias: x.string.optional(),
+      data: XUint8Array,
+    }),
+  },
+
+  // Preserve the original index and metadata, including omitted versus empty fields.
+  importItem: {
+    ins: 0x37,
+    request: x.object({
+      index: SafeIndex,
+      senderPublicKey: PublicKey,
+      key: XUint8Array.optional(),
+      alias: x.string.optional(),
+      data: XUint8Array,
+    }),
+    response: x.object({}),
+  },
+
+  createRandomKey: {
+    ins: 0x38,
+    request: x.object({
+      type: SafeItemKeyType,
+      length: x.number.optional(),
+    }),
+    response: x.object({index: SafeIndex}),
   },
 
   viewKey: {

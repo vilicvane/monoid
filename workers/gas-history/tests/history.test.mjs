@@ -4,8 +4,6 @@ import {test} from 'node:test';
 import {
   DAY_SECONDS,
   SAMPLE_INTERVAL_SECONDS as INTERVAL,
-  WEEK_SECONDS,
-  addSample,
   summarizeHistory,
 } from '../.bld/history.js';
 
@@ -76,29 +74,4 @@ test('windows advance when collection stops and preserve the actual last update 
   assert.equal(result.windows['24h'].from, now);
   assert.equal(result.windows['24h'].sampleCount, 0);
   assert.equal(result.windows['24h'].status, 'collecting');
-});
-
-test('same-bucket sampling replaces a point and drops data outside seven days', () => {
-  const previous = history(2016);
-  const replacement = {
-    ...previous.at(-1),
-    blockNumber: '3000',
-    baseFeePerGas: '42',
-  };
-  const replaced = addSample(previous, replacement);
-
-  assert.equal(replaced.length, 2016);
-  assert.equal(replaced.at(-1).baseFeePerGas, '42');
-  const appended = addSample(replaced, {
-    ...replacement,
-    timestamp: now + INTERVAL,
-  });
-  assert.equal(appended.length, 2016);
-  assert.ok(
-    appended.every(sample => sample.timestamp > now + INTERVAL - WEEK_SECONDS),
-  );
-  assert.equal(
-    summarizeHistory(appended, now + INTERVAL).windows['7d'].status,
-    'ready',
-  );
 });

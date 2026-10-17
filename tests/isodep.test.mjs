@@ -81,6 +81,7 @@ beforeEach(() => {
     starts: [],
     stops: [],
     closes: [],
+    closeOptions: [],
     listenerRemovals: [],
     exchanges: [],
     connections: [],
@@ -133,8 +134,10 @@ beforeEach(() => {
 
       await this.onStop?.(scanId);
     },
-    async closeSession({sessionId}) {
+    async closeSession(options) {
+      const {sessionId} = options;
       this.closes.push(sessionId);
+      this.closeOptions.push(options);
       this.emit('sessionEnded', {
         scanId: this.scanId,
         sessionId,
@@ -150,12 +153,13 @@ beforeEach(() => {
     tap(sessionId) {
       this.emit('sessionOpened', {scanId: this.scanId, sessionId, tag: {}});
     },
-    standby(callback, applet) {
+    standby(callback, applet, waitForRemoval) {
       const args = [
         callback,
         error => this.errors.push(error),
         () => this.cleanupCount++,
         connected => this.connections.push(connected),
+        waitForRemoval,
       ];
       const dispose = applet ? applet.standby(...args) : standbyIsoDep(...args);
       this.disposers.push(dispose);
@@ -184,10 +188,63 @@ test('successive card taps close only their sessions and leave scanning active',
 
   assert.deepEqual(seen, ['first', 'second']);
   assert.deepEqual(device.closes, ['first', 'second']);
+  assert.deepEqual(device.closeOptions, [
+    {sessionId: 'first', waitForRemoval: false},
+    {sessionId: 'second', waitForRemoval: false},
+  ]);
   assert.equal(device.starts.length, 1);
   assert.equal(device.stops.length, 0);
   assert.deepEqual(device.errors, []);
   assert.deepEqual(device.connections, [true, false, true, false]);
+});
+
+test('an operation error is reported before waiting for removal and cleanup resumes only after removal', async () => {
+  const removed = deferred();
+  const failure = new Error('The selected account is not on this card');
+  let failed = false;
+  device.onClose = sessionId =>
+    sessionId === 'wrong-card' ? removed.promise : undefined;
+  device.standby(
+    async sessionId => {
+      failed = sessionId === 'wrong-card';
+
+      if (failed) throw failure;
+    },
+    undefined,
+    () => {
+      if (failed) assert.deepEqual(device.errors, [failure]);
+
+      return failed;
+    },
+  );
+  await until(() => device.starts.length === 1);
+  device.tap('wrong-card');
+  await until(() => device.closes.length === 1);
+
+  assert.deepEqual(device.errors, [failure]);
+  assert.deepEqual(device.closeOptions, [
+    {sessionId: 'wrong-card', waitForRemoval: true},
+  ]);
+  assert.deepEqual(device.connections, [true, false]);
+  assert.equal(device.cleanupCount, 0);
+  device.emit('sessionEnded', {
+    scanId: device.scanId,
+    sessionId: 'wrong-card',
+    reason: 'closed',
+  });
+  await setImmediate();
+  assert.equal(device.cleanupCount, 0);
+  assert.deepEqual(device.errors, [failure]);
+
+  removed.resolve();
+  await until(() => device.cleanupCount === 1);
+  device.tap('correct-card');
+  await until(() => device.cleanupCount === 2);
+  assert.deepEqual(device.closeOptions[1], {
+    sessionId: 'correct-card',
+    waitForRemoval: false,
+  });
+  assert.deepEqual(device.errors, [failure]);
 });
 
 test('connection notification precedes SELECT and remains active while SELECT is pending', async () => {
@@ -359,18 +416,25 @@ test('SELECT and GET RESPONSE preserve APDU bytes and cannot switch to a newer s
   await assert.rejects(applet.sendRawCommand(command), /open NFC session/);
 });
 
-test('SELECT 6a82 reports an absent applet only after native session cleanup', async () => {
+test('SELECT 6a82 reports an absent applet before waiting for removal', async () => {
   const closed = deferred();
   let callbacks = 0;
   device.onExchange = () => ({data: [0x12, 0x34, 0x6a, 0x82]});
   device.onClose = () => closed.promise;
-  device.standby(async () => callbacks++, new TestApplet(new Uint8Array([1])));
+  device.standby(
+    async () => callbacks++,
+    new TestApplet(new Uint8Array([1])),
+    () => true,
+  );
   await until(() => device.starts.length === 1);
   device.tap('missing-applet');
   await until(() => device.closes.length === 1);
 
   assert.equal(callbacks, 0);
-  assert.equal(device.errors.length, 0);
+  assert.equal(device.errors.length, 1);
+  assert.deepEqual(device.closeOptions, [
+    {sessionId: 'missing-applet', waitForRemoval: true},
+  ]);
   assert.equal(device.cleanupCount, 0);
   closed.resolve();
   await until(() => device.cleanupCount === 1);
@@ -462,12 +526,13 @@ test('a SELECT 6a82 cannot hide a subsequent session cleanup failure', async () 
   );
   await until(() => device.starts.length === 1);
   device.tap('failed-close');
-  await until(() => device.errors.length === 1);
+  await until(() => device.errors.length === 2);
   await assert.rejects(dispose(), error => error === failure);
 
-  assert.equal(device.errors.length, 1);
-  assert.ok(device.errors[0] instanceof IsoDepScanError);
-  assert.equal(device.errors[0].cause, failure);
+  assert.equal(device.errors.length, 2);
+  assert.ok(device.errors[0] instanceof AppletNotFoundError);
+  assert.ok(device.errors[1] instanceof IsoDepScanError);
+  assert.equal(device.errors[1].cause, failure);
   assert.equal(device.cleanupCount, 1);
 });
 
@@ -504,7 +569,7 @@ for (const [reason, code] of [
   ['connect-timeout', 'TIMEOUT'],
   ['tag-lost', 'TAG_LOST'],
 ]) {
-  test(`a ${reason} without sessionOpened preserves its code after native cleanup`, async () => {
+  test(`a ${reason} without sessionOpened preserves its code before native cleanup`, async () => {
     const closed = deferred();
     let callbacks = 0;
     device.onClose = () => closed.promise;
@@ -518,7 +583,7 @@ for (const [reason, code] of [
     });
     await until(() => device.closes.length === 1);
 
-    assert.equal(device.errors.length, 0);
+    assert.equal(device.errors.length, 1);
     assert.equal(device.cleanupCount, 0);
     closed.resolve();
     await until(() => device.cleanupCount === 1);
@@ -581,6 +646,36 @@ test('cancel is immediate while completion and reopening wait for native stop, c
   assert.notEqual(device.starts[0], device.starts[1]);
   assert.deepEqual(device.errors, []);
   assert.equal(device.cleanupCount, 0);
+});
+
+test('cancel during removal waiting releases the scan and permits a fresh scan', async () => {
+  const removed = deferred();
+  const failure = new Error('Wrong card');
+  device.onClose = () => removed.promise;
+  device.onStop = async () => {
+    removed.reject(Object.assign(new Error('Cancelled'), {code: 'CANCELLED'}));
+  };
+  const dispose = device.standby(
+    async () => {
+      throw failure;
+    },
+    undefined,
+    () => true,
+  );
+  await until(() => device.starts.length === 1);
+  device.tap('waiting');
+  await until(() => device.closes.length === 1);
+  const completion = dispose();
+  device.standby(async () => {});
+  await completion;
+  await until(() => device.starts.length === 2);
+
+  assert.deepEqual(device.closeOptions, [
+    {sessionId: 'waiting', waitForRemoval: true},
+  ]);
+  assert.deepEqual(device.errors, [failure]);
+  assert.equal(device.cleanupCount, 0);
+  assert.equal(device.listenerRemovals.length, 5);
 });
 
 test('a scan cancelled before its turn never starts and finishes after the previous scan', async () => {
@@ -726,6 +821,59 @@ for (const [reason, state, event] of [
     await until(() => device.starts.length === 2);
     assert.notEqual(device.starts[0], device.starts[1]);
     assert.deepEqual(device.errors, []);
+  });
+
+  test(`${reason} cancels the pending operation before cleanup instead of continuing as though the card was removed`, async () => {
+    const removed = deferred();
+    let result;
+    const completed = [];
+    device.onClose = () => removed.promise;
+    const dispose = standbyIsoDep(
+      async () => {
+        result = 'input';
+      },
+      error => {
+        device.errors.push(error);
+        result = 'cancelled';
+      },
+      () => {
+        completed.push(result);
+        void dispose();
+      },
+      undefined,
+      () => true,
+    );
+    device.disposers.push(dispose);
+    await until(() => device.starts.length === 1);
+    device.tap('waiting');
+    await until(() => device.closes.length === 1);
+    device[state] = false;
+    device.emit(event, {});
+    device.emit('scanEnded', {scanId: device.scanId, reason});
+    removed.reject(
+      Object.assign(new Error('Scan interrupted'), {
+        code: reason === 'app-paused' ? 'APP_INACTIVE' : 'NFC_DISABLED',
+      }),
+    );
+    await until(() => device.stops.length === 1);
+    await until(() => device.listenerRemovals.length === 5);
+
+    assert.equal(device.errors.length, 1);
+    assert.equal(device.errors[0].constructor, Error);
+    assert.equal(device.errors[0].code, 'CANCELLED');
+    assert.equal(
+      device.errors[0].cause.code,
+      reason === 'app-paused' ? 'APP_INACTIVE' : 'NFC_DISABLED',
+    );
+    assert.deepEqual(completed, ['cancelled']);
+    assert.equal(device.starts.length, 1);
+    device[state] = true;
+    device.emit(event, {});
+    await setImmediate();
+    assert.equal(device.starts.length, 1);
+    device.standby(async () => {});
+    await until(() => device.starts.length === 2);
+    assert.equal(device.errors.length, 1);
   });
 
   test(`${reason} reports failed session and scan cleanup as one fatal error`, async () => {

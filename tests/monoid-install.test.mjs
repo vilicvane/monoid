@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {beforeEach, mock, test} from 'node:test';
 
-import {encode} from 'cbor2';
+import {decode, encode} from 'cbor2';
 
 let fixture;
 const bundle = [];
@@ -58,14 +58,19 @@ beforeEach(() => {
       id: Uint8Array.of(1, 2, 3, 4),
       pin: false,
       features: {curves: []},
-      safe: {id: Uint8Array.of(5, 6, 7, 8), pin: false, unlocked: false},
+      safe: {
+        id: Uint8Array.of(5, 6, 7, 8),
+        publicKey: Uint8Array.from([4, ...new Uint8Array(64)]),
+        pin: false,
+        unlocked: false,
+      },
     },
   };
   const code = Uint8Array.of(1, 2, 3);
   bundle.splice(
     0,
     bundle.length,
-    ...['safe', 'monoid'].map((stage, index) => ({
+    ...['identity', 'safe', 'monoid'].map((stage, index) => ({
       stage,
       packageAid: `f06d6f6e6f69640${index}`,
       appletAid: `f06d6f6e6f69640${index}010000`,
@@ -77,13 +82,14 @@ beforeEach(() => {
   );
 });
 
-test('installation processes Safe before Monoid and verifies SELECT + typed hello in the same session', async () => {
+test('installation processes Identity, Safe and Monoid in order and verifies safe-aware hello in the same session', async () => {
   const hello = await installMonoidApplets('connection', update =>
     fixture.progress.push(update),
   );
   assert.deepEqual(hello, fixture.hello);
   assert.deepEqual(fixture.events, [
     'open GP',
+    'identity',
     'safe',
     'monoid',
     'SELECT Monoid',
@@ -92,8 +98,15 @@ test('installation processes Safe before Monoid and verifies SELECT + typed hell
   assert(fixture.commands.every(command => command.sessionId === 'connection'));
   assert.deepEqual(
     fixture.progress.map(update => update.stage),
-    ['checking', 'safe', 'monoid', 'verifying'],
+    ['checking', 'identity', 'safe', 'monoid', 'verifying'],
   );
+  assert.deepEqual(
+    fixture.commands[0].data.slice(5),
+    Array.from(Buffer.from(bundle[2].appletAid, 'hex')),
+  );
+  assert.deepEqual(decode(Uint8Array.from(fixture.commands[1].data.slice(5))), {
+    safe: true,
+  });
 });
 
 test('bundle integrity is checked before authenticating or writing to the card', async () => {
@@ -115,13 +128,31 @@ test('a missing package stops before card access', async () => {
   assert.deepEqual(fixture.events, []);
 });
 
+test('a bundle with reordered dependencies stops before card access', async () => {
+  [bundle[0], bundle[1]] = [bundle[1], bundle[0]];
+  await assert.rejects(
+    installMonoidApplets('connection', () => {}),
+    /incomplete/,
+  );
+  assert.deepEqual(fixture.events, []);
+});
+
+test('a failed Identity installation never loads Safe or Monoid', async () => {
+  fixture.failStage = 'identity';
+  await assert.rejects(
+    installMonoidApplets('connection', () => {}),
+    /Card lost/,
+  );
+  assert.deepEqual(fixture.events, ['open GP', 'identity']);
+});
+
 test('a failed Safe installation never loads Monoid or reports verification', async () => {
   fixture.failStage = 'safe';
   await assert.rejects(
     installMonoidApplets('connection', () => {}),
     /Card lost/,
   );
-  assert.deepEqual(fixture.events, ['open GP', 'safe']);
+  assert.deepEqual(fixture.events, ['open GP', 'identity', 'safe']);
 });
 
 test('post-install hello must satisfy the app protocol before reporting success', async () => {
@@ -131,7 +162,7 @@ test('post-install hello must satisfy the app protocol before reporting success'
 });
 
 test('opening an existing session selects on a separate applet object without binding its template', async () => {
-  const template = createMonoidApplet(Buffer.from(bundle[1].appletAid, 'hex'));
+  const template = createMonoidApplet(Buffer.from(bundle[2].appletAid, 'hex'));
   const session = await template.openSession('existing');
   assert.notEqual(session, template);
   assert.deepEqual(await session.hello({}), fixture.hello);

@@ -79,6 +79,144 @@ public class SessionControllerTest {
     }
 
     @Test
+    public void removalWaitClosesTransportButRejectsDiscoveriesUntilRemoval() {
+        Fixture fixture = new Fixture();
+        FakeTransport transport = new FakeTransport();
+        String sessionId = fixture.startAndConnect(transport);
+        RecordingResult<Void> waiting = fixture.waitForRemoval(sessionId);
+        RecordingResult<Void> alsoWaiting = fixture.waitForRemoval(sessionId);
+        fixture.finishCleanup();
+
+        assertEquals(1, transport.closeCalls);
+        assertEquals(1, fixture.reader.removalCalls);
+        assertEquals(0, waiting.settlements);
+        assertSuccess(fixture.close(sessionId));
+        FakeTransport heldCard = new FakeTransport();
+        fixture.connect(heldCard);
+        assertEquals(0, heldCard.connectCalls);
+        assertEquals(1, fixture.events.opened.size());
+
+        fixture.reader.removal.resolve(null);
+        fixture.control.runAll();
+        assertSuccess(waiting);
+        assertSuccess(alsoWaiting);
+        assertSuccess(fixture.waitForRemoval(sessionId));
+        fixture.connect(new FakeTransport());
+        assertEquals(2, fixture.events.opened.size());
+    }
+
+    @Test
+    public void failedExchangeKeepsDiscoveryReservedUntilTheCallerChoosesRemoval() {
+        Fixture fixture = new Fixture();
+        FakeTransport transport = new FakeTransport();
+        String sessionId = fixture.startAndConnect(transport);
+        transport.exchangeFailure = "IO_ERROR";
+        fixture.exchange(sessionId, null);
+        fixture.finishExchange();
+        fixture.finishCleanup();
+        FakeTransport rediscovered = new FakeTransport();
+        fixture.connect(rediscovered);
+        assertEquals(0, rediscovered.connectCalls);
+
+        RecordingResult<Void> waiting = fixture.waitForRemoval(sessionId);
+        assertEquals(0, waiting.settlements);
+        assertEquals(1, fixture.reader.removalCalls);
+        fixture.reader.removal.resolve(null);
+        fixture.control.runAll();
+        assertSuccess(waiting);
+    }
+
+    @Test
+    public void detectedTagLossSatisfiesRemovalAfterTransportCleanup() {
+        Fixture fixture = new Fixture();
+        FakeTransport transport = new FakeTransport();
+        String sessionId = fixture.startAndConnect(transport);
+        transport.exchangeFailure = "TAG_LOST";
+        fixture.exchange(sessionId, null);
+        fixture.finishExchange();
+        RecordingResult<Void> waiting = fixture.waitForRemoval(sessionId);
+        assertEquals(0, waiting.settlements);
+        fixture.finishCleanup();
+        assertSuccess(waiting);
+        assertEquals(0, fixture.reader.removalCalls);
+    }
+
+    @Test
+    public void endingTheScanCancelsRemovalAndOldCallbacksCannotReleaseANewSession() {
+        for (String[] termination : new String[][] {
+            {"stopped", "CANCELLED"}, {"app-paused", "APP_INACTIVE"},
+            {"destroyed", "APP_INACTIVE"}, {"nfc-disabled", "NFC_DISABLED"}
+        }) {
+            Fixture fixture = new Fixture();
+            String sessionId = fixture.startAndConnect(new FakeTransport());
+            RecordingResult<Void> waiting = fixture.waitForRemoval(sessionId);
+            fixture.finishCleanup();
+            SessionController.Result<Void> oldRemoval = fixture.reader.removal;
+            if (termination[0].equals("stopped")) {
+                assertSuccess(fixture.stop("scan"));
+            } else {
+                fixture.controller.terminate(termination[0], termination[1]);
+            }
+            assertFailure(waiting, termination[1], null);
+            assertEquals(1, fixture.reader.stopCalls);
+
+            assertSuccess(fixture.start("next"));
+            fixture.connect(new FakeTransport());
+            String nextSession = fixture.events.lastSessionId();
+            RecordingResult<Void> nextWaiting = fixture.waitForRemoval(nextSession);
+            fixture.finishCleanup();
+            oldRemoval.resolve(null);
+            fixture.control.runAll();
+            assertEquals(0, nextWaiting.settlements);
+            assertEquals(1, waiting.settlements);
+            fixture.reader.removal.resolve(null);
+            fixture.control.runAll();
+            assertSuccess(nextWaiting);
+        }
+    }
+
+    @Test
+    public void stoppingBeforeCleanupCancelsRemovalWithoutStartingADetector() {
+        Fixture fixture = new Fixture();
+        String sessionId = fixture.startAndConnect(new FakeTransport());
+        RecordingResult<Void> waiting = fixture.waitForRemoval(sessionId);
+        RecordingResult<Void> stopped = fixture.stop("scan");
+        fixture.finishCleanup();
+        assertSuccess(stopped);
+        assertFailure(waiting, "CANCELLED", null);
+        assertEquals(0, fixture.reader.removalCalls);
+    }
+
+    @Test
+    public void removalDetectionFailureStopsTheScanInsteadOfPermittingRetry() {
+        for (String code : Arrays.asList("IO_ERROR", "UNSUPPORTED")) {
+            Fixture fixture = new Fixture();
+            String sessionId = fixture.startAndConnect(new FakeTransport());
+            RecordingResult<Void> waiting = fixture.waitForRemoval(sessionId);
+            fixture.finishCleanup();
+            fixture.reader.removal.reject(new SessionController.Failure(code,
+                "Unable to confirm removal.", null, null));
+            fixture.control.runAll();
+            assertFailure(waiting, code, null);
+            assertEquals(1, fixture.reader.stopCalls);
+            FakeTransport heldCard = new FakeTransport();
+            fixture.connect(heldCard);
+            assertEquals(0, heldCard.connectCalls);
+            assertSuccess(fixture.stop("scan"));
+        }
+    }
+
+    @Test
+    public void unknownRemovalWaitCannotPretendTheCardWasRemoved() {
+        Fixture fixture = new Fixture();
+        assertFailure(fixture.waitForRemoval("unknown"), "SESSION_CLOSED", null);
+        String sessionId = fixture.startAndConnect(new FakeTransport());
+        fixture.close(sessionId);
+        fixture.finishCleanup();
+        assertFailure(fixture.waitForRemoval(sessionId), "SESSION_CLOSED", null);
+    }
+
+    @Test
     public void discoveriesDuringReservationConnectionSessionAndCleanupAreDiscarded() {
         Fixture fixture = new Fixture();
         assertSuccess(fixture.start("scan"));
@@ -334,6 +472,7 @@ public class SessionControllerTest {
             assertEvent(fixture.events.ended.get(0), "scan", sessionId,
                 code.equals("TAG_LOST") ? "tag-lost" : "io-error", code);
             assertEquals(0, fixture.reader.stopCalls);
+            assertSuccess(fixture.close(sessionId));
             fixture.connect(new FakeTransport());
             assertEquals(2, fixture.events.opened.size());
         }
@@ -355,6 +494,7 @@ public class SessionControllerTest {
         assertEvent(ended, "scan", ended.sessionId, "tag-lost", "TAG_LOST");
         assertEquals(1, failed.connectCalls);
         assertEquals(0, fixture.reader.stopCalls);
+        assertSuccess(fixture.close(ended.sessionId));
         fixture.connect(new FakeTransport());
         assertEquals(1, fixture.events.opened.size());
         assertNotEquals(ended.sessionId, fixture.events.lastSessionId());
@@ -378,6 +518,7 @@ public class SessionControllerTest {
         assertTrue(fixture.events.opened.isEmpty());
         assertEvent(fixture.events.ended.get(0), "scan", fixture.events.ended.get(0).sessionId,
             "connect-timeout", "TIMEOUT");
+        assertSuccess(fixture.close(fixture.events.ended.get(0).sessionId));
         fixture.connect(new FakeTransport());
         deadline.action.run();
         assertEquals(1, fixture.events.opened.size());
@@ -817,6 +958,8 @@ public class SessionControllerTest {
         boolean startFailure;
         boolean stopFailure;
         Runnable onStop = () -> {};
+        SessionController.Result<Void> removal;
+        int removalCalls;
 
         @Override
         public void start(SessionController.TagCallback onTag) {
@@ -825,6 +968,12 @@ public class SessionControllerTest {
             if (startFailure) {
                 throw new IllegalStateException("Unable to start reader mode");
             }
+        }
+
+        @Override
+        public void waitForRemoval(SessionController.Result<Void> result) {
+            removalCalls++;
+            removal = result;
         }
 
         @Override
@@ -987,6 +1136,12 @@ public class SessionControllerTest {
         RecordingResult<Void> close(String sessionId) {
             RecordingResult<Void> result = new RecordingResult<>();
             controller.close(sessionId, result);
+            return result;
+        }
+
+        RecordingResult<Void> waitForRemoval(String sessionId) {
+            RecordingResult<Void> result = new RecordingResult<>();
+            controller.close(sessionId, true, result);
             return result;
         }
 

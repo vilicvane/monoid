@@ -22,19 +22,24 @@ const CardWirelessInterface = styled.img`
   width: calc(32 / 430 * 100%);
 `;
 
-const CardLogo = styled.img`
+const CardLogo = styled.img<{$error: boolean}>`
   position: absolute;
   top: calc(170 / 270 * 100%);
   right: 0;
   width: calc(60 / 430 * 100%);
-  background-color: var(--ion-color-primary);
+  background-color: var(
+    --ion-color-${props => (props.$error ? 'danger' : 'primary')}
+  );
+  transition: background-color 160ms ease-out;
 `;
 
 export function MonoidScanCard({
   scanning,
+  error = false,
   wavesActive = true,
 }: {
   scanning: boolean;
+  error?: boolean;
   wavesActive?: boolean;
 }): ReactNode {
   const frameRef = useRef<HTMLDivElement>(null);
@@ -73,7 +78,7 @@ export function MonoidScanCard({
     <CardFrame ref={frameRef}>
       <MonoidCardWaves scanning={scanning} active={wavesActive} />
       <CardWirelessInterface src={monoidCardWirelessInterface} alt="" />
-      <CardLogo src={monoidLogo} alt="" />
+      <CardLogo src={monoidLogo} alt="" $error={error} />
     </CardFrame>
   );
 }

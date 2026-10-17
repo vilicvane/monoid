@@ -9,6 +9,7 @@ import type {
   EvmCalldataCandidate,
   EvmContractVerification,
 } from '../../@lib/evm-calldata.js';
+import {UI_LOCALE} from '../../@lib/locale.js';
 
 import {
   DetailsPopup,
@@ -144,7 +145,9 @@ export function EvmCalldataVerification({
                 <InfoSectionRow>
                   <InfoSectionItemLabel>Verified at</InfoSectionItemLabel>
                   <span>
-                    {new Date(verification.verifiedAt).toLocaleString()}
+                    {new Date(verification.verifiedAt).toLocaleString(
+                      UI_LOCALE,
+                    )}
                   </span>
                 </InfoSectionRow>
               )}

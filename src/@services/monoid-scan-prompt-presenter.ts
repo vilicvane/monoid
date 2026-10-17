@@ -5,6 +5,7 @@ export type MonoidScanPromptPresentation = {
   owner: symbol;
   token: symbol;
   scanning: boolean;
+  error?: boolean;
   content: ReactNode;
   onDismiss: () => void;
   closing: boolean;

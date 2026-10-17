@@ -79,6 +79,7 @@ const CardContent = observer(
   }): ReactNode => {
     const {walletStorageService, errorService} = useEntrances();
     const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
+      safe: true,
       auth: 'access',
       retryOnError: true,
     });

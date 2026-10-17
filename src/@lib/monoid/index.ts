@@ -1,3 +1,4 @@
+export * from './card-error.js';
 export * from './get-applet-key.js';
 export * from './install.js';
 export * from './monoid-applet.js';

@@ -20,9 +20,11 @@ mock.module('capacitor-isodep-nfc', {
   },
 });
 
-const {createMonoidApplet} = await import(
+const {createMonoidApplet, MonoidAppletHelloWithSafe} = await import(
   '../.bld/app/@lib/monoid/monoid-applet.js'
 );
+const {CBORAppletError} = await import('../.bld/app/@lib/cbor-applet.js');
+const {AppletISOError} = await import('../.bld/app/@lib/applet.js');
 const {getAppletKey} = await import(
   '../.bld/app/@lib/monoid/get-applet-key.js'
 );
@@ -31,7 +33,7 @@ const {signEvmDigest} = await import(
 );
 
 const bytes = hex => new Uint8Array(Buffer.from(hex, 'hex'));
-const aid = bytes('f06d6f6e6f696401010000');
+const aid = bytes('f06d6f6e6f696402010000');
 const index = bytes('02400000000000000001');
 const indexes = {
   seed: index,
@@ -44,8 +46,12 @@ const path = bytes('8000002c8000003c800000000000000000000000');
 const digest = new Uint8Array(32).fill(0x12);
 const signature = new Uint8Array(64).fill(0x34);
 const publicKey = new Uint8Array(33).fill(0x56);
+const identityPublicKey = new Uint8Array([4, ...new Uint8Array(64).fill(0x78)]);
+const features = {
+  curves: [{name: 'secp256r1', ciphers: ['ecdsa']}],
+};
 
-async function createSession(response) {
+async function createSession(response, sw = 0x9000) {
   const commands = [];
 
   transceive = async request => {
@@ -64,6 +70,14 @@ async function createSession(response) {
 
     commands.push(command);
 
+    if (command[0] === 0x90 || command[0] === 0xb0) {
+      return {data: [0x90, 0]};
+    }
+
+    if (sw !== 0x9000) {
+      return {data: [sw >> 8, sw & 0xff]};
+    }
+
     const result =
       typeof response === 'function' ? response(command) : response;
 
@@ -76,16 +90,32 @@ async function createSession(response) {
 }
 
 function assertRequest(commands, ins, expected) {
-  assert.equal(commands.length, 1);
+  const encoded = encode(expected, {sortKeys: null});
+  const count = Math.ceil(encoded.length / 255);
 
-  const [command] = commands;
-  const payload = command.subarray(5);
+  assert.equal(commands.length, count);
 
-  assert.deepEqual(
-    command.subarray(0, 5),
-    new Uint8Array([0, ins, 0, 0, payload.length]),
+  for (const [index, command] of commands.entries()) {
+    const cla =
+      count === 1 ? 0 : index === 0 ? 0x90 : index === count - 1 ? 0xa0 : 0xb0;
+
+    assert.deepEqual(
+      command.subarray(0, 5),
+      new Uint8Array([
+        cla,
+        ins,
+        0,
+        0,
+        Math.min(255, encoded.length - index * 255),
+      ]),
+    );
+  }
+
+  const payload = new Uint8Array(
+    commands.flatMap(command => [...command.subarray(5)]),
   );
-  assert.deepEqual(payload, encode(expected, {sortKeys: null}));
+
+  assert.deepEqual(payload, encoded);
 
   const decoded = decode(payload);
 
@@ -94,6 +124,50 @@ function assertRequest(commands, ins, expected) {
 
   return decoded;
 }
+
+test('Hello includes Safe identity only when requested and preserves false PIN states', async () => {
+  const basic = {version: 1, id: bytes('01020304'), features, pin: false};
+  const safe = {
+    id: bytes('05060708'),
+    publicKey: identityPublicKey,
+    pin: false,
+    unlocked: false,
+  };
+
+  for (const request of [{}, {safe: false}, {safe: true}]) {
+    const response = request.safe ? {...basic, safe} : basic;
+    const {applet, commands} = await createSession(response);
+
+    assert.deepEqual(await applet.hello(request), response);
+    assertRequest(commands, 0x20, request);
+
+    if (request.safe) {
+      assert.deepEqual(MonoidAppletHelloWithSafe.satisfies(response), response);
+    } else {
+      assert.throws(() => MonoidAppletHelloWithSafe.satisfies(response));
+    }
+  }
+
+  const legacySafe = {id: safe.id, pin: false, unlocked: false};
+  const {applet} = await createSession({...basic, safe: legacySafe});
+
+  await assert.rejects(applet.hello({safe: true}));
+});
+
+test('System information uses the numeric transient memory values emitted by the card', async () => {
+  const response = {
+    versions: {monoid: 1, javacard: [3, 0]},
+    memories: {
+      persistent: {available: 16384},
+      transient: {reset: 2048, deselect: 1024},
+    },
+    features,
+  };
+  const {applet, commands} = await createSession(response);
+
+  assert.deepEqual(await applet.systemInformation({}), response);
+  assertRequest(commands, 0x2f, {});
+});
 
 test('raw key requests include their explicit curve type', async () => {
   for (const type of ['secp256k1', 'secp256r1', 'ed25519']) {
@@ -289,8 +363,13 @@ test('List encodes its filters and accepts custom items without a type name', as
   const keyPrefix = bytes('010203');
   const response = {
     items: [
-      {index, type: 'seed', alias: 'Main'},
-      {index: bytes('10010000000000000002'), key: keyPrefix, alias: 'Data'},
+      {index, type: 'seed', alias: 'Main', secret: true},
+      {
+        index: bytes('10010000000000000002'),
+        key: keyPrefix,
+        alias: 'Data',
+        secret: false,
+      },
     ],
   };
   const {applet, commands} = await createSession(response);
@@ -306,15 +385,199 @@ test('empty List request is a one-byte CBOR map', async () => {
   assert.deepEqual(commands, [bytes('0030000001a0')]);
 });
 
-test('Set keeps alias as text and places optional data last', async () => {
+test('List and View require the secret flag rather than assuming an item is public', async () => {
+  const listed = await createSession({items: [{index, type: 'seed'}]});
+
+  await assert.rejects(listed.applet.list({}));
+
+  const viewed = await createSession({alias: 'Main'});
+
+  await assert.rejects(viewed.applet.view({index}));
+});
+
+test('Set distinguishes omitted and explicit secret flags after replacement data', async () => {
   const data = bytes('01020304');
+
+  for (const secret of [undefined, false, true]) {
+    const options = secret === undefined ? {} : {secret};
+    const {applet, commands} = await createSession({});
+
+    await applet.set({...options, data, alias: '主账户', index});
+    assertRequest(commands, 0x33, {index, alias: '主账户', data, ...options});
+  }
+
   const {applet, commands} = await createSession({});
 
-  await applet.set({data, alias: '主账户', index});
-  assertRequest(commands, 0x33, {index, alias: '主账户', data});
-
   await assert.rejects(applet.set({index, alias: data}));
-  assert.equal(commands.length, 1);
+  assert.equal(commands.length, 0);
+});
+
+test('View exposes item metadata and Get returns plaintext bytes', async () => {
+  for (const [method, ins, response] of [
+    ['view', 0x31, {key: new Uint8Array(), alias: '', secret: true}],
+    ['view', 0x31, {secret: false}],
+    ['get', 0x32, {data: bytes('000102ff')}],
+  ]) {
+    const {applet, commands} = await createSession(response);
+
+    assert.deepEqual(await applet[method]({index}), response);
+    assertRequest(commands, ins, {index});
+  }
+});
+
+test('Create supports generated and explicit indexes with data before metadata', async () => {
+  const data = bytes('000102ff');
+  const key = new TextEncoder().encode('lookup');
+
+  for (const selector of [{type: 'seed'}, {type: 0x1001}, {index}]) {
+    const {applet, commands} = await createSession({index});
+
+    assert.deepEqual(
+      await applet.create({
+        ...selector,
+        secret: true,
+        alias: '主账户',
+        key,
+        data,
+      }),
+      {index},
+    );
+    assertRequest(commands, 0x34, {
+      data,
+      key,
+      alias: '主账户',
+      secret: true,
+      ...selector,
+    });
+  }
+
+  const {applet, commands} = await createSession({index});
+
+  await assert.rejects(applet.create({data}));
+  await assert.rejects(applet.create({type: 'seed'}));
+  assert.equal(commands.length, 0);
+});
+
+test('Remove selects an item by its original index', async () => {
+  const {applet, commands} = await createSession({});
+
+  assert.deepEqual(await applet.remove({index}), {});
+  assertRequest(commands, 0x35, {index});
+});
+
+test('Export and Import preserve opaque data and absent versus empty metadata', async () => {
+  // The card owns envelope encryption; this fixture only checks byte preservation.
+  const data = Uint8Array.from({length: 144}, (_, index) => index % 256);
+
+  for (const metadata of [{}, {key: new Uint8Array(), alias: ''}]) {
+    const response = {...metadata, data};
+    const source = await createSession(response);
+    const exported = await source.applet.exportItem({
+      recipientPublicKey: identityPublicKey,
+      index,
+    });
+
+    assert.deepEqual(exported, response);
+    assertRequest(source.commands, 0x36, {
+      index,
+      recipientPublicKey: identityPublicKey,
+    });
+
+    const target = await createSession({});
+
+    assert.deepEqual(
+      await target.applet.importItem({
+        ...exported,
+        senderPublicKey: identityPublicKey,
+        index,
+      }),
+      {},
+    );
+    assertRequest(target.commands, 0x37, {
+      index,
+      senderPublicKey: identityPublicKey,
+      ...metadata,
+      data,
+    });
+  }
+});
+
+test('Import chains a large encrypted envelope without changing its metadata or bytes', async () => {
+  const data = Uint8Array.from({length: 700}, (_, index) => index % 256);
+  const key = bytes('00ff');
+  const alias = '同步 👋';
+  const {applet, commands} = await createSession({});
+
+  assert.deepEqual(
+    await applet.importItem({
+      data,
+      alias,
+      key,
+      senderPublicKey: identityPublicKey,
+      index,
+    }),
+    {},
+  );
+  assertRequest(commands, 0x37, {
+    index,
+    senderPublicKey: identityPublicKey,
+    key,
+    alias,
+    data,
+  });
+  assert.deepEqual(
+    commands.map(command => command[0]),
+    [0x90, 0xb0, 0xb0, 0xa0],
+  );
+});
+
+test('CreateRandomKey covers explicit byte lengths and fixed-length curves', async () => {
+  for (const request of [
+    ...['entropy', 'seed', 'master'].map(type => ({type, length: 32})),
+    ...['secp256k1', 'secp256r1', 'ed25519'].map(type => ({type})),
+  ]) {
+    const {applet, commands} = await createSession({index});
+
+    assert.deepEqual(await applet.createRandomKey(request), {index});
+    assertRequest(commands, 0x38, request);
+  }
+});
+
+test('Safe access errors retain their card error codes', async () => {
+  for (const [method, request, code] of [
+    ['get', {index}, 'ACCESS_DENIED'],
+    [
+      'exportItem',
+      {index, recipientPublicKey: identityPublicKey},
+      'UNAUTHORIZED',
+    ],
+  ]) {
+    const source = {code};
+    const {applet} = await createSession({error: source});
+
+    await assert.rejects(applet[method](request), error => {
+      assert.ok(error instanceof CBORAppletError);
+      assert.deepEqual(error.source, source);
+      assert.equal(error.message, code);
+
+      return true;
+    });
+  }
+});
+
+test('Import preserves ISO status for invalid artifacts and conflicting existing items', async () => {
+  for (const sw of [0x6984, 0x6985]) {
+    const {applet} = await createSession({}, sw);
+
+    await assert.rejects(
+      applet.importItem({
+        index,
+        senderPublicKey: identityPublicKey,
+        data: new Uint8Array(144),
+      }),
+      error => error instanceof AppletISOError && error.sw === sw,
+    );
+  }
 });
 
 test('Authenticate and SetPIN follow their different firmware field orders', async () => {

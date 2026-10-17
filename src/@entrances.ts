@@ -12,6 +12,7 @@ import {Portals} from './@portals.js';
 import {ROUTE_SCHEMA, type ViewSwitchingState} from './@routes.js';
 import {
   AddressBookService,
+  AppPreferencesService,
   ChainService,
   ErrorService,
   EvmCallHistoryService,
@@ -23,6 +24,7 @@ import {
   MonoidStorageService,
   SiteLogoService,
   StorageService,
+  TransactionHistoryService,
   WalletKitService,
   WalletStorageService,
 } from './@services/index.js';
@@ -37,44 +39,46 @@ export class Entrances {
 
   @entrance
   get router() {
-    const router = routra<typeof ROUTE_SCHEMA, ViewSwitchingState>(
-      ROUTE_SCHEMA,
-      {},
-    );
+    return this.appPreferencesService.then(preferences => {
+      const router = routra<typeof ROUTE_SCHEMA, ViewSwitchingState>(
+        ROUTE_SCHEMA,
+        {},
+      );
 
-    router.$use(
-      new BrowserRouterPlugin({
-        default: router.sessions,
-        history: this.history,
-        segments: {
-          encodeState(state) {
-            return JSON.stringify(state, (_key, value) => {
-              if (value instanceof Uint8Array) {
-                return {
-                  $type: 'Uint8Array',
-                  value: Array.from(value),
-                };
-              }
-
-              return value;
-            });
-          },
-          decodeState(state) {
-            return JSON.parse(state, (_key, value) => {
-              if (value && typeof value === 'object' && '$type' in value) {
-                if (value.$type === 'Uint8Array') {
-                  return Uint8Array.from(value.value);
+      router.$use(
+        new BrowserRouterPlugin({
+          default: router[preferences.defaultFeature ?? 'features'],
+          history: this.history,
+          segments: {
+            encodeState(state) {
+              return JSON.stringify(state, (_key, value) => {
+                if (value instanceof Uint8Array) {
+                  return {
+                    $type: 'Uint8Array',
+                    value: Array.from(value),
+                  };
                 }
-              }
 
-              return value;
-            });
+                return value;
+              });
+            },
+            decodeState(state) {
+              return JSON.parse(state, (_key, value) => {
+                if (value && typeof value === 'object' && '$type' in value) {
+                  if (value.$type === 'Uint8Array') {
+                    return Uint8Array.from(value.value);
+                  }
+                }
+
+                return value;
+              });
+            },
           },
-        },
-      }),
-    );
+        }),
+      );
 
-    return router;
+      return router;
+    });
   }
 
   @entrance
@@ -90,7 +94,7 @@ export class Entrances {
   @entrance
   get monoidApplet() {
     return createMonoidApplet(
-      Uint8Array.from([0xf0, 0x6d, 0x6f, 0x6e, 0x6f, 0x69, 0x64, 0x01, 0x01]),
+      Uint8Array.from([0xf0, 0x6d, 0x6f, 0x6e, 0x6f, 0x69, 0x64, 0x02, 0x01]),
     );
   }
 
@@ -123,8 +127,15 @@ export class Entrances {
       this.storageService,
       this.addressBookService,
       this.evmCallHistoryService,
-    ]).then(([walletKit, storage, addresses, calls]) =>
-      WalletKitService.create(walletKit, storage, addresses, calls),
+      this.transactionHistoryService,
+    ]).then(([walletKit, storage, addresses, calls, transactions]) =>
+      WalletKitService.create(
+        walletKit,
+        storage,
+        addresses,
+        calls,
+        transactions,
+      ),
     );
   }
 
@@ -138,6 +149,13 @@ export class Entrances {
   @entrance
   get storageService() {
     return StorageService.create();
+  }
+
+  @entrance
+  get appPreferencesService() {
+    return this.storageService.then(storage =>
+      AppPreferencesService.create(storage),
+    );
   }
 
   @entrance
@@ -162,6 +180,13 @@ export class Entrances {
   @entrance
   get gasHistoryService() {
     return new GasHistoryService(import.meta.env.VITE_GAS_HISTORY_URL);
+  }
+
+  @entrance
+  get transactionHistoryService() {
+    return this.storageService.then(storage =>
+      TransactionHistoryService.create(storage),
+    );
   }
 
   @entrance

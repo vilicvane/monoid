@@ -15,5 +15,7 @@ export const NativeAmount = ({
   <FormattedNumber
     value={currency ? formatUnits(value, currency.decimals) : value.toString()}
     unit={currency?.symbol ?? 'base units'}
+    fullValue={value.toString()}
+    decimals={currency?.decimals}
   />
 );

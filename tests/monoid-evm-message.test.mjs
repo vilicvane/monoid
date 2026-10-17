@@ -62,7 +62,7 @@ function createApplet() {
 }
 
 test('the card sign command uses INS 0x41 and validates its binary response', async () => {
-  const applet = createMonoidApplet(getBytes('0xf06d6f6e6f696401010000'));
+  const applet = createMonoidApplet(getBytes('0xf06d6f6e6f696402010000'));
   const digest = getBytes(hashMessage(message()));
   const signature = plainSignature(signingKey.sign(digest));
 

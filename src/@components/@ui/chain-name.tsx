@@ -1,5 +1,3 @@
-import {IonIcon} from '@ionic/react';
-import info from 'lucide-static/icons/info.svg';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useState} from 'react';
 import {styled} from 'styled-components';
@@ -16,7 +14,6 @@ import {
 } from './details-popup.js';
 import {IconTagName, iconTagCSS} from './icon-tag.js';
 import {InfoSectionItemLabel, InfoSectionRow} from './info-section.js';
-import {inlineIconCSS} from './inline-icon.js';
 
 const Value = styled.button<{$tag?: boolean}>`
   display: flex;
@@ -37,12 +34,6 @@ const Value = styled.button<{$tag?: boolean}>`
   }
 
   ${({$tag}) => $tag && iconTagCSS}
-`;
-
-const DetailsIcon = styled(IonIcon)`
-  ${inlineIconCSS}
-  display: block;
-  align-self: center;
 `;
 
 const HeaderIcon = styled(ChainIcon)`
@@ -91,10 +82,7 @@ export const ChainValue = observer(
               <IconTagName>{name ?? identifier}</IconTagName>
             </>
           ) : (
-            <>
-              <span>{name ?? identifier}</span>
-              <DetailsIcon icon={info} aria-hidden="true" />
-            </>
+            <span>{name ?? identifier}</span>
           )}
         </Value>
         {showDetails && (

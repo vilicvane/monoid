@@ -1,5 +1,4 @@
 import {IonIcon} from '@ionic/react';
-import type {TransactionReceipt} from 'ethers';
 import list from 'lucide-static/icons/list.svg';
 import {observer} from 'mobx-react-lite';
 import {Fragment, type ReactNode, useEffect, useMemo, useState} from 'react';
@@ -16,6 +15,7 @@ import {
   parseEvmTokenTransfers,
 } from '../../@lib/evm-token-transfers.js';
 import {type EvmToken, getEvmTokenAddressKind} from '../../@lib/evm-token.js';
+import type {EvmTransactionReceipt} from '../../@lib/evm-transaction.js';
 import {getKeyWallets} from '../../@services/index.js';
 
 import {AddressDetailsContent} from './address-details.js';
@@ -147,28 +147,30 @@ const ActivityAddress = styled(InfoSectionRow)`
 export const EvmTokenActivity = observer(function EvmTokenActivity({
   chainId,
   signer,
+  account = signer,
   receipt,
 }: {
   chainId: string;
   signer: string;
-  receipt: TransactionReceipt;
+  account?: string;
+  receipt: EvmTransactionReceipt;
 }): ReactNode {
   const {evmTokenService, addressBookService, walletStorageService} =
     useEntrances();
   const [detailsKind, setDetailsKind] = useState<'transfers' | 'approvals'>();
   const [selectedDetail, setSelectedDetail] = useState<
     | {type: 'address' | 'token'; address: string}
-    | {type: 'amount'; value: bigint}
+    | {type: 'amount'; value: bigint; address: string}
   >();
   const transfers = useMemo(() => parseEvmTokenTransfers(receipt), [receipt]);
   const approvals = useMemo(() => parseEvmTokenApprovals(receipt), [receipt]);
   const changes = useMemo(
-    () => getEvmTokenChanges(transfers, signer),
-    [transfers, signer],
+    () => getEvmTokenChanges(transfers, account),
+    [transfers, account],
   );
   const latestApprovals = useMemo(
-    () => getLatestEvmTokenApprovals(approvals, signer),
-    [approvals, signer],
+    () => getLatestEvmTokenApprovals(approvals, account),
+    [approvals, account],
   );
   const ownAddresses = new Set(
     walletStorageService.keys
@@ -380,7 +382,18 @@ export const EvmTokenActivity = observer(function EvmTokenActivity({
           }
         >
           {selectedDetail?.type === 'amount' ? (
-            <FormattedNumberDetailsContent>
+            <FormattedNumberDetailsContent
+              title={
+                <EvmTokenAmount
+                  token={tokenFor(selectedDetail.address)}
+                  value={selectedDetail.value}
+                  maximumAsUnlimited={detailsKind === 'approvals'}
+                  zeroAsRevoked={detailsKind === 'approvals'}
+                  interactive={false}
+                />
+              }
+              decimals={tokenFor(selectedDetail.address).decimals}
+            >
               {selectedDetail.value.toString()}
             </FormattedNumberDetailsContent>
           ) : selectedDetail?.type === 'token' ? (
@@ -437,6 +450,7 @@ export const EvmTokenActivity = observer(function EvmTokenActivity({
                                   setSelectedDetail({
                                     type: 'amount',
                                     value: event.value,
+                                    address: token.address,
                                   })
                                 }
                               />

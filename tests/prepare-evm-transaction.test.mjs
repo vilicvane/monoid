@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-import {Transaction, keccak256} from 'ethers';
+import {JsonRpcProvider, Transaction, keccak256} from 'ethers';
 
 const {parseEvmTransaction} = await import(
   '../.bld/app/@lib/evm-transaction.js'
@@ -32,7 +32,7 @@ function createProvider(context) {
   };
 }
 
-test('fills pending nonce and EIP-1559 fees before estimating gas with the sender', async context => {
+test('fills pending nonce and signing fees while estimating execution independently', async context => {
   const provider = createProvider(context);
   const input = transaction({value: '9007199254740993', data: '0xaabb'});
   const original = structuredClone(input);
@@ -48,14 +48,15 @@ test('fills pending nonce and EIP-1559 fees before estimating gas with the sende
   assert.deepEqual(provider.estimateGas.mock.calls[0].arguments, [
     {
       chainId: 1n,
-      type: 2,
+      type: undefined,
       to: recipient,
       from: address,
       value: 9007199254740993n,
       data: '0xaabb',
       nonce: 7,
-      maxFeePerGas: 10n,
-      maxPriorityFeePerGas: 2n,
+      gasPrice: undefined,
+      maxFeePerGas: undefined,
+      maxPriorityFeePerGas: undefined,
     },
   ]);
   assert.equal(prepared.gasLimit, 21000n);
@@ -66,6 +67,76 @@ test('fills pending nonce and EIP-1559 fees before estimating gas with the sende
     'pending',
   ]);
   assert.deepEqual(input, original);
+});
+
+test('low-fee transactions reach signing without sending their fee cap to gas estimation', async context => {
+  for (const type of [0, 1, 2]) {
+    const provider = new JsonRpcProvider('http://localhost:0', 1, {
+      staticNetwork: true,
+      batchMaxCount: 1,
+    });
+    context.after(() => provider.destroy());
+    const requests = [];
+    provider._send = async request => {
+      requests.push(request);
+      if (request.method === 'eth_estimateGas') {
+        const [transaction] = request.params;
+        const fee = transaction.maxFeePerGas ?? transaction.gasPrice;
+        if (fee != null && BigInt(fee) < 10n) {
+          return [
+            {
+              id: request.id,
+              error: {
+                code: -32000,
+                message: 'max fee per gas less than block base fee',
+              },
+            },
+          ];
+        }
+        return [{id: request.id, result: '0x5208'}];
+      }
+      if (request.method === 'eth_getBalance') {
+        return [{id: request.id, result: '0x5208'}];
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+    const input = transaction({
+      type,
+      nonce: 7,
+      gas: 21000,
+      ...(type === 2
+        ? {maxFeePerGas: 1, maxPriorityFeePerGas: 0}
+        : {gasPrice: 1}),
+      ...(type === 0 ? {} : {accessList}),
+    });
+    const result = await prepareEvmTransaction(input, address, provider);
+
+    assert.equal(result.error, undefined);
+    const prepared = Transaction.from(result.unsignedTransaction);
+    assert.equal(prepared.type, type);
+    assert.equal(prepared.gasLimit, 21000n);
+    assert.equal(prepared.nonce, 7);
+    assert.equal(prepared.gasPrice, type === 2 ? null : 1n);
+    assert.equal(prepared.maxFeePerGas, type === 2 ? 1n : null);
+    assert.equal(prepared.maxPriorityFeePerGas, type === 2 ? 0n : null);
+    assert.deepEqual(
+      requests.map(request => request.method),
+      ['eth_estimateGas', 'eth_getBalance'],
+    );
+    const [estimate] = requests[0].params;
+    for (const field of [
+      'type',
+      'gasPrice',
+      'maxFeePerGas',
+      'maxPriorityFeePerGas',
+    ]) {
+      assert.equal(Object.hasOwn(estimate, field), false);
+    }
+    assert.equal(estimate.gas, '0x5208');
+    assert.equal(estimate.from, address.toLowerCase());
+    assert.equal(estimate.to, recipient.toLowerCase());
+    if (type !== 0) assert.deepEqual(estimate.accessList, accessList);
+  }
 });
 
 test('validates gas while preserving explicit fields including zero fees and nonce', async context => {
@@ -286,10 +357,7 @@ test('rejects incompatible partial fee suggestions without changing the explicit
     const original = structuredClone(input);
 
     const result = await prepareEvmTransaction(input, address, provider);
-    assert.equal(
-      result.error,
-      'Could not prepare this transaction. Try again.',
-    );
+    assert.equal(result.error, 'priorityFee cannot be more than maxFee');
     assert.equal(result.unsignedTransaction, undefined);
 
     assert.deepEqual(input, original);

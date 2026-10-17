@@ -23,7 +23,7 @@ export function useSwipeBack(
   const leaving = !!view.$leaving;
 
   useEffect(() => {
-    if (!enabled || leaving || view.$match.$path.length === 1) return;
+    if (!enabled || leaving) return;
 
     const element = ref.current!;
     let suppressClick = false;

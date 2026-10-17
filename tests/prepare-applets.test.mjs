@@ -1,20 +1,45 @@
 import assert from 'node:assert/strict';
-import {test} from 'node:test';
+import path from 'node:path';
+import {beforeEach, mock, test} from 'node:test';
 
 import {zipSync} from 'fflate';
 
-import {readAppletPackage} from '../scripts/prepare-applets.mjs';
+const sourceFiles = new Map();
+const writtenFiles = new Map();
+
+mock.module('node:fs/promises', {
+  namedExports: {
+    mkdir: async () => {},
+    readFile: async file => {
+      const data = sourceFiles.get(path.basename(file));
+      assert(data, `Missing ${path.basename(file)}`);
+      return data;
+    },
+    writeFile: async (file, data) => {
+      writtenFiles.set(path.basename(file), data);
+    },
+  },
+});
+
+const {prepareApplets, readAppletPackage} = await import(
+  '../scripts/prepare-applets.mjs'
+);
+
+beforeEach(() => {
+  sourceFiles.clear();
+  writtenFiles.clear();
+});
 
 const target = {
   packageAid: 'f06d6f6e6f696400',
   appletAid: 'f06d6f6e6f696400010000',
 };
-const packageAid = Buffer.from(target.packageAid, 'hex');
-const appletAid = Buffer.from(target.appletAid, 'hex');
 const component = (tag, body) =>
   Buffer.from([tag, body.length >> 8, body.length & 255, ...body]);
 
-function capFixture() {
+function capFixture({packageAid: packageHex, appletAid: appletHex} = target) {
+  const packageAid = Buffer.from(packageHex, 'hex');
+  const appletAid = Buffer.from(appletHex, 'hex');
   const data = {
     Header: component(1, [
       0xde,
@@ -73,7 +98,7 @@ test('CAP components use VM load order and exclude debug metadata regardless of 
   );
 });
 
-test('CAP bundle rejects a different package or applet before preparing the pair', () => {
+test('CAP bundle rejects a different package or applet before preparing the bundle', () => {
   const {zip} = capFixture();
   assert.throws(
     () => readAppletPackage(zip(), {...target, packageAid: 'a000000151000000'}),
@@ -97,4 +122,42 @@ test('CAP without optional Export remains loadable', () => {
   const {data, zip} = capFixture();
   delete data.Export;
   assert(readAppletPackage(zip(), target).code.length > 0);
+});
+
+test('preparation bundles Identity, Safe and Monoid with their current AIDs in dependency order', async t => {
+  t.mock.method(process.stdout, 'write', () => true);
+  const names = ['monoidsafeidentity', 'monoidsafe', 'monoid'];
+  const applets = names.map((name, index) => ({
+    name,
+    packageAid: `f06d6f6e6f69640${index}`,
+    appletAid: `f06d6f6e6f69640${index}010000`,
+  }));
+
+  for (const applet of applets) {
+    sourceFiles.set(`${applet.name}.cap`, capFixture(applet).zip());
+  }
+
+  await prepareApplets('approved-caps');
+
+  const manifest = JSON.parse(writtenFiles.get('manifest.json'));
+  assert.deepEqual(
+    manifest.map(({name, packageAid, appletAid}) => ({
+      name,
+      packageAid,
+      appletAid,
+    })),
+    applets,
+  );
+  assert.deepEqual(
+    [
+      ...writtenFiles.get('@applet-bundle.ts').matchAll(/stage: '([^']+)'/g),
+    ].map(match => match[1]),
+    ['identity', 'safe', 'monoid'],
+  );
+  assert(names.every(name => writtenFiles.has(`${name}.bin`)));
+
+  writtenFiles.clear();
+  sourceFiles.delete('monoid.cap');
+  await assert.rejects(prepareApplets('approved-caps'), /Missing/);
+  assert.equal(writtenFiles.size, 0);
 });

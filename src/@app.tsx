@@ -44,13 +44,11 @@ setupIonicReact();
 const App = observer((): ReactNode => {
   const {router, errorService, portals, keyboard} = useEntrances();
 
-  const fabAnchorRef = useRef<HTMLDivElement>(null);
   const popupAnchorRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
-    fabAnchorRef.current!.replaceWith(portals.fab);
     popupAnchorRef.current!.replaceWith(portals.popup);
-  }, [portals.fab, portals.popup]);
+  }, [portals.popup]);
 
   useEffect(() => {
     const backButtonListener = (event: any): void => {
@@ -91,7 +89,6 @@ const App = observer((): ReactNode => {
     >
       <Views />
       <NavBar />
-      <div ref={fabAnchorRef} />
       <div ref={popupAnchorRef} />
       <MonoidScanPromptHost />
     </IonApp>

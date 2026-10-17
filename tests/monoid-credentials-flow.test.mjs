@@ -3,6 +3,8 @@ import {registerHooks} from 'node:module';
 import {afterEach, mock, test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
 
+import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
+
 // Exercise the built hooks with effect cleanup and state-driven rerenders, without a DOM or sensor.
 let rendering;
 let fixture;
@@ -131,7 +133,14 @@ mock.module('../.bld/app/@lib/isodep.js', {
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    MonoidCardError,
     MonoidAppletInvalidPINError: {is: source => source?.code === 'INVALID_PIN'},
+    MonoidAppletHelloWithSafe: {
+      satisfies: hello => {
+        assert.ok(hello.safe);
+        return hello;
+      },
+    },
   },
 });
 const {isCredentialRequestCancelled} = await import(
@@ -221,6 +230,7 @@ function mount(overrides = {}) {
     gets: 0,
     readSignals: [],
     authenticated: [],
+    helloRequests: [],
     writes: [],
     removals: [],
     businessCalls: 0,
@@ -231,8 +241,9 @@ function mount(overrides = {}) {
   };
   state.presenter = new MonoidScanPromptPresenter();
   state.toast = options => state.notifications.push(options);
-  state.business = async applet => {
+  state.business = async (applet, _setContent, hello) => {
     state.businessCalls++;
+    state.businessHello = hello;
     await state.onBusiness?.(applet);
     state.businessCompleted++;
   };
@@ -288,7 +299,13 @@ function mount(overrides = {}) {
       },
     },
     monoidApplet: {
-      standby(callback, onError, onCleanup, onConnectionChange) {
+      standby(
+        callback,
+        onError,
+        onCleanup,
+        onConnectionChange,
+        waitForRemoval,
+      ) {
         assert.ok(
           state.scans.every(scan => scan.stopFinished),
           'A previous native scan must finish stopping before another starts',
@@ -298,6 +315,7 @@ function mount(overrides = {}) {
           onError,
           onCleanup,
           onConnectionChange,
+          waitForRemoval,
           stopRequested: false,
           stopFinished: false,
           stop: deferred(),
@@ -312,13 +330,23 @@ function mount(overrides = {}) {
     },
   };
   state.applet = {
-    async hello() {
+    async hello(request) {
+      state.helloRequests.push(request);
       await state.onHello?.();
 
       return {
+        version: 0,
         id: new Uint8Array(Buffer.from(state.cardId, 'hex')),
+        features: {curves: []},
         pin: state.helloPIN ?? 5,
-        safe: {id: new Uint8Array([5]), pin: 5, unlocked: true},
+        ...(request.safe && {
+          safe: {
+            id: new Uint8Array([5]),
+            publicKey: new Uint8Array(65),
+            pin: 5,
+            unlocked: true,
+          },
+        }),
       };
     },
     async authenticate({pin}) {
@@ -329,7 +357,12 @@ function mount(overrides = {}) {
   fixture = state;
   state.owner = new HookOwner(() => {
     fixture = state;
-    return useMonoidScanPrompt({auth: state.auth, retryOnError: true});
+    return useMonoidScanPrompt({
+      safe: state.safe,
+      ensureSetup: state.ensureSetup,
+      auth: state.auth,
+      retryOnError: true,
+    });
   });
   state.owner.flush();
   state.operation = state.owner.output[1]('Scan card', state.business);
@@ -362,6 +395,7 @@ function mount(overrides = {}) {
       scan.onError(error);
     }
     scan.callbackReturned = true;
+    scan.waitingForRemoval = scan.waitForRemoval();
     scan.onConnectionChange?.(false);
     if (cleanup && !scan.stopRequested) scan.onCleanup?.();
     await state.flush();
@@ -372,8 +406,9 @@ function mount(overrides = {}) {
     const scan = state.scans.at(-1);
     scan.presentationToken = state.presenter.current.token;
     scan.onConnectionChange(true);
-    scan.onConnectionChange(false);
     scan.onError(new AppletNotFoundError());
+    scan.waitingForRemoval = scan.waitForRemoval();
+    scan.onConnectionChange(false);
     scan.onCleanup();
     await state.flush();
     return scan;
@@ -445,9 +480,127 @@ test('prompt: late connection events cannot restart feedback during exit', async
   assert.equal(state.outcome, 'resolved');
 });
 
+test('prompt: a known card error stays visible until removal without restarting or a duplicate toast', async () => {
+  const failure = new MonoidCardError('Account not on this card.');
+  const state = mount({
+    auth: false,
+    onBusiness: () => {
+      throw failure;
+    },
+  });
+  const scan = await state.tap({cleanup: false});
+  const token = state.presenter.current.token;
+
+  assert.equal(scan.waitingForRemoval, true);
+  assert.equal(scan.stopRequested, false);
+  assert.equal(state.presenter.current.closing, false);
+  assert.equal(state.presenter.current.scanning, false);
+  assert.equal(state.presenter.current.error, true);
+  assert.match(
+    JSON.stringify(state.presenter.current.content),
+    /Account not on this card/,
+  );
+  assert.equal(state.presenter.current.content, failure.message);
+  assert.deepEqual(state.retryErrors, []);
+
+  scan.onConnectionChange(false);
+  await state.flush();
+  assert.equal(state.presenter.current.token, token);
+  assert.equal(state.presenter.current.error, true);
+  assert.equal(state.scans.length, 1);
+  assert.equal(state.businessCalls, 1);
+
+  scan.onCleanup();
+  await state.flush();
+  await state.finishExit();
+  assert.equal(state.scans.length, 2);
+  assert.equal(state.presenter.current.error, false);
+  assert.deepEqual(state.retryErrors, []);
+});
+
+test('prompt: missing PIN keeps the card visible and defers the input until removal', async () => {
+  const state = mount();
+  const scan = await state.tap({cleanup: false});
+
+  assert.equal(scan.waitingForRemoval, true);
+  assert.equal(state.presenter.current.closing, false);
+  assert.equal(state.presenter.current.error, false);
+  assert.match(
+    JSON.stringify(state.presenter.current.content),
+    /Remove card to enter Access PIN/,
+  );
+  assert.equal(state.inputs.length, 0);
+  assert.equal(state.authenticated.length, 0);
+
+  scan.onCleanup();
+  await state.flush();
+  await state.finishExit();
+  assert.equal(state.inputs.length, 1);
+});
+
+test('prompt: successful operations exit without waiting for removal', async () => {
+  const state = mount({auth: false});
+  const scan = await state.tap();
+
+  assert.equal(scan.waitingForRemoval, false);
+  assert.equal(state.presenter.current.closing, true);
+  await state.finishExit();
+  assert.equal(state.outcome, 'resolved');
+});
+
+test('prompt: blocked access PIN has a specific error and waits for removal', async () => {
+  const state = mount({
+    savedPINs: {[CARD_ID]: PIN},
+    onAuthenticate: () => {
+      throw new CBORAppletError({code: 'INVALID_PIN', tries: 0});
+    },
+  });
+  const scan = await state.tap({cleanup: false});
+
+  assert.equal(scan.waitingForRemoval, true);
+  assert.equal(state.presenter.current.content, 'Access PIN is blocked.');
+  assert.equal(state.presenter.current.error, true);
+  assert.equal(state.inputs.length, 0);
+  assert.equal(state.authenticated.length, 1);
+  assert.deepEqual(state.retryErrors, []);
+});
+
+test('prompt: an interrupted removal wait cancels the pending PIN flow', async () => {
+  const state = mount();
+  const scan = await state.tap({cleanup: false});
+  scan.onError(cancelled());
+  scan.onCleanup();
+  await state.flush();
+  await state.finishExit();
+
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.errors[0].code, 'CANCELLED');
+  assert.equal(state.inputs.length, 0);
+  assert.equal(state.scans.length, 1);
+});
+
+test('prompt: dismissing while waiting for removal cancels without retry', async () => {
+  const state = mount({
+    auth: false,
+    onBusiness: () => {
+      throw new MonoidCardError('Wrong card');
+    },
+  });
+  const scan = await state.tap({cleanup: false});
+  state.presenter.current.onDismiss();
+  await state.flush();
+
+  assert.equal(scan.stopRequested, true);
+  assert.equal(state.errors[0].code, 'CANCELLED');
+  scan.onCleanup();
+  await state.finishExit();
+  assert.equal(state.scans.length, 1);
+  assert.deepEqual(state.retryErrors, []);
+});
+
 for (const order of ['stop-first', 'animation-first']) {
   test(`prompt: missing applet waits for ${order} cleanup then redirects once without retry`, async () => {
-    const state = mount({auth: false});
+    const state = mount({auth: false, safe: true});
     const scan = await state.missingApplet();
 
     assert.equal(scan.stopRequested, true);
@@ -478,7 +631,7 @@ for (const order of ['stop-first', 'animation-first']) {
   });
 
   test(`prompt: leaving during ${order} cleanup prevents an applet-install redirect`, async () => {
-    const state = mount({auth: false});
+    const state = mount({auth: false, safe: true});
     await state.missingApplet();
     if (order === 'stop-first') await state.finishStop();
     else await state.finishAnimation();
@@ -496,7 +649,7 @@ for (const order of ['stop-first', 'animation-first']) {
 }
 
 test('prompt: failed native cleanup prevents an applet-install redirect', async () => {
-  const state = mount({auth: false});
+  const state = mount({auth: false, safe: true});
   const scan = await state.missingApplet();
   await state.finishAnimation();
   const failure = new Error('Native scan could not stop');
@@ -534,7 +687,7 @@ test('prompt: a business command returning 6a82 does not redirect to applet inst
 });
 
 test('prompt: card setup uses the same silent redirect outcome after exit', async () => {
-  const state = mount({auth: false, helloPIN: false});
+  const state = mount({auth: false, helloPIN: false, safe: true});
   await state.tap();
   assert.deepEqual(state.navigations, []);
   await state.finishExit();
@@ -550,6 +703,61 @@ test('prompt: card setup uses the same silent redirect outcome after exit', asyn
   assert.equal(state.scans.length, 1);
   assert.deepEqual(state.notifications, []);
   assert.deepEqual(state.retryErrors, []);
+  assert.deepEqual(state.helloRequests, [{safe: true}]);
+});
+
+for (const safe of [undefined, false, true]) {
+  test(`prompt: Safe metadata is requested only when enabled (${safe})`, async () => {
+    const state = mount({safe, savedPINs: {[CARD_ID]: PIN}});
+    await state.tap();
+    await state.finishExit();
+
+    assert.deepEqual(state.helloRequests, [safe ? {safe: true} : {}]);
+    assert.equal(!!state.businessHello.safe, !!safe);
+    assert.equal(state.outcome, 'resolved');
+    assert.deepEqual(state.authenticated, [PIN]);
+  });
+}
+
+for (const missingApplet of [false, true]) {
+  test(`prompt: ordinary operations stop on an uninitialized card (${missingApplet ? 'no applet' : 'no PIN'})`, async () => {
+    const state = mount({helloPIN: false, savedPINs: {[CARD_ID]: PIN}});
+    if (missingApplet) await state.missingApplet();
+    else await state.tap();
+
+    assert.deepEqual(state.notifications, []);
+    await state.finishStop();
+    assert.deepEqual(state.notifications, []);
+    await state.finishAnimation();
+
+    assert.deepEqual(state.helloRequests, missingApplet ? [] : [{}]);
+    assert.equal(state.scans.length, 1);
+    assert.equal(state.businessCalls, 0);
+    assert.equal(state.inputs.length, 0);
+    assert.deepEqual(state.authenticated, []);
+    assert.deepEqual(state.writes, []);
+    assert.deepEqual(state.navigations, []);
+    assert.deepEqual(state.retryErrors, []);
+    assert.equal(state.outcome, 'rejected');
+    assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
+    assert.equal(state.notifications.length, 1);
+    assert.equal(
+      state.notifications[0].message,
+      'Initialize this card from Safe first.',
+    );
+  });
+}
+
+test('prompt: setup can operate on an uninitialized card without requesting Safe metadata', async () => {
+  const state = mount({auth: false, ensureSetup: false, helloPIN: false});
+  await state.tap();
+  await state.finishExit();
+
+  assert.deepEqual(state.helloRequests, [{}]);
+  assert.equal(state.outcome, 'resolved');
+  assert.equal(state.businessCalls, 1);
+  assert.deepEqual(state.notifications, []);
+  assert.deepEqual(state.navigations, []);
 });
 
 for (const [phase, callback] of [

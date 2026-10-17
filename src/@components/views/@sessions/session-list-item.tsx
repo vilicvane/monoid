@@ -8,6 +8,7 @@ import type {
 import {getWalletKitSessionAddresses} from '../../../@services/index.js';
 import {Address} from '../../@ui/address.js';
 import {DateTime} from '../../@ui/date-time.js';
+import {IndicatorDot} from '../../@ui/indicator-dot.js';
 import {RippleEffect} from '../../@ui/ripple-effect.js';
 import {SiteLogo} from '../../@ui/site-logo.js';
 import {
@@ -26,7 +27,7 @@ const Item = styled.button`
   align-items: center;
   gap: 2px 12px;
   width: 100%;
-  padding: 12px var(--view-padding);
+  padding: 8px var(--view-padding);
   border: none;
   background: transparent;
   color: inherit;
@@ -47,7 +48,7 @@ const Name = styled.div`
   display: flex;
   align-items: center;
   min-width: 0;
-  gap: 6px;
+  gap: 4px;
   font-size: 16px;
   line-height: 20px;
 
@@ -63,6 +64,9 @@ const Name = styled.div`
 `;
 
 const Activity = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 6px;
   color: var(--color-text-secondary);
   font-size: 12px;
   white-space: nowrap;
@@ -94,10 +98,12 @@ const AccountAddress = styled(Address)`
 export function SessionListItem({
   session,
   record,
+  hasPendingRequest,
   onClick,
 }: {
   session: WalletKitSession;
   record: WalletKitSessionRecord;
+  hasPendingRequest: boolean;
   onClick: () => void;
 }): ReactNode {
   const {metadata} = session.peer;
@@ -108,7 +114,7 @@ export function SessionListItem({
     <Item
       type="button"
       className="ion-activatable"
-      aria-label={`View session with ${info.name}`}
+      aria-label={`View session with ${info.name}${hasPendingRequest ? ', pending request' : ''}`}
       onClick={onClick}
     >
       <SiteLogo
@@ -122,6 +128,9 @@ export function SessionListItem({
         <WalletConnectVerificationIcon info={info} />
       </Name>
       <Activity aria-label="Last active">
+        {hasPendingRequest && (
+          <IndicatorDot aria-hidden="true" title="Pending request" />
+        )}
         <DateTime value={record.lastActivityAt} compact />
       </Activity>
       {!!addresses.length && (

@@ -8,19 +8,20 @@ import {
   useState,
 } from 'react';
 
-import {useEntrances} from '../../../@entrances.js';
-import type {EvmCalldata} from '../../../@lib/evm-calldata.js';
-import type {EvmGasSettings} from '../../../@lib/evm-gas-settings.js';
+import {useEntrances} from '../../@entrances.js';
+import type {EvmCalldata} from '../../@lib/evm-calldata.js';
+import type {EvmGasSettings} from '../../@lib/evm-gas-settings.js';
 import {
   type EvmGasEstimate,
   type EvmGasTransaction,
   estimateEvmGas,
-} from '../../../@lib/evm-gas.js';
-import {getErc20CallTarget} from '../../../@lib/evm-token.js';
-import {getTypedDataFields} from '../../../@lib/typed-data-fields.js';
-import {EvmGasDetails} from '../../@ui/evm-gas-details.js';
-import {EvmTransactionData} from '../../@ui/evm-transaction-data.js';
-import {ExpandableAddress} from '../../@ui/expandable-address.js';
+} from '../../@lib/evm-gas.js';
+import {getErc20CallTarget} from '../../@lib/evm-token.js';
+import {getTypedDataFields} from '../../@lib/typed-data-fields.js';
+
+import {EvmGasDetails} from './evm-gas-details.js';
+import {EvmTransactionData} from './evm-transaction-data.js';
+import {ExpandableAddress} from './expandable-address.js';
 import {
   InfoFieldset,
   InfoFieldsetValue,
@@ -28,10 +29,10 @@ import {
   InfoSection,
   InfoSectionHeader,
   InfoSectionLoadingSpinner,
-} from '../../@ui/info-section.js';
-import {ErrorMessage, MessageSectionTitle} from '../../@ui/message-content.js';
-import {NativeAmount} from '../../@ui/native-amount.js';
-import {TypedDataFields} from '../../@ui/typed-data-fields.js';
+} from './info-section.js';
+import {ErrorMessage, MessageSectionTitle} from './message-content.js';
+import {NativeAmount} from './native-amount.js';
+import {TypedDataFields} from './typed-data-fields.js';
 
 export const TRANSACTION_TYPE_LABELS: Record<number, string> = {
   0: 'Legacy',
@@ -39,20 +40,24 @@ export const TRANSACTION_TYPE_LABELS: Record<number, string> = {
   2: 'EIP-1559',
 };
 
-export const WalletConnectTransaction = observer(
+export const EvmTransactionReview = observer(
   ({
     transaction,
     decodedData,
     preparing,
+    showGas = true,
     error,
     onGasChange,
+    minimumGas,
     ...addressProps
   }: {
     transaction: TransactionLike<string>;
     decodedData?: EvmCalldata;
     preparing: boolean;
+    showGas?: boolean;
     error?: string;
     onGasChange?: (settings: EvmGasSettings) => void;
+    minimumGas?: EvmGasSettings;
   } & Pick<
     ComponentProps<typeof TypedDataFields>,
     'getAddressKind' | 'getAddressMark' | 'onAddressClick'
@@ -98,7 +103,7 @@ export const WalletConnectTransaction = observer(
         : undefined;
 
     useEffect(() => {
-      if (preparing || !gas) return;
+      if (!showGas || preparing || !gas) return;
       let cancelled = false;
 
       void chainService
@@ -112,7 +117,7 @@ export const WalletConnectTransaction = observer(
       return () => {
         cancelled = true;
       };
-    }, [chainService, chainId, gas, preparing]);
+    }, [chainService, chainId, gas, preparing, showGas]);
 
     const accessList = transaction.accessList
       ? accessListify(transaction.accessList)
@@ -178,7 +183,7 @@ export const WalletConnectTransaction = observer(
             />
           </InfoSection>
         )}
-        {!preparing && gas && currentEstimate ? (
+        {!showGas ? null : !preparing && gas && currentEstimate ? (
           <EvmGasDetails
             chainId={chainId}
             transaction={gas}
@@ -186,6 +191,7 @@ export const WalletConnectTransaction = observer(
             currency={currency}
             showFees={!error}
             onChange={onGasChange}
+            minimum={minimumGas}
           />
         ) : preparing || gas ? (
           <InfoSection>

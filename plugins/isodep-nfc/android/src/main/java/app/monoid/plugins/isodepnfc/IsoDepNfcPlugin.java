@@ -54,15 +54,27 @@ public final class IsoDepNfcPlugin extends Plugin {
         sessions = new SessionController(new ReaderModeController<>(new ReaderModeController.Platform<Tag>() {
             @Override
             public void enable(ReaderModeController.TagCallback<Tag> onTag) {
+                // SKIP_NDEF_CHECK also bypasses Android's ignore/debounce path,
+                // causing its removal callback to fire even while a tag remains.
                 adapter.enableReaderMode(getActivity(), onTag::accept,
                     NfcAdapter.FLAG_READER_NFC_A | NfcAdapter.FLAG_READER_NFC_B
-                    | NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK | NfcAdapter.FLAG_READER_NO_PLATFORM_SOUNDS, null);
+                    | NfcAdapter.FLAG_READER_NO_PLATFORM_SOUNDS, null);
             }
 
             @Override
             public SessionController.Transport transport(Tag tag) {
                 IsoDep isoDep = IsoDep.get(tag);
                 return isoDep == null ? null : new AndroidIsoDepTransport(isoDep);
+            }
+
+            @Override
+            public void waitForRemoval(Tag tag, Runnable removed) throws SessionController.TransportException {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+                    throw new SessionController.TransportException("UNSUPPORTED");
+                }
+                if (!adapter.ignore(tag, TAG_REMOVAL_DEBOUNCE_MS, removed::run, main)) {
+                    throw new SessionController.TransportException("IO_ERROR");
+                }
             }
 
             @Override
@@ -223,7 +235,12 @@ public final class IsoDepNfcPlugin extends Plugin {
             if (id == null) {
                 return;
             }
-            sessions.close(id, new SessionController.Result<Void>() {
+            Object waitForRemoval = call.getData().opt("waitForRemoval");
+            if (waitForRemoval != null && !(waitForRemoval instanceof Boolean)) {
+                reject(call, "INVALID_ARGUMENT", "waitForRemoval must be a boolean.", id, null, null);
+                return;
+            }
+            sessions.close(id, Boolean.TRUE.equals(waitForRemoval), new SessionController.Result<Void>() {
                 @Override
                 public void resolve(Void ignored) {
                     call.resolve();

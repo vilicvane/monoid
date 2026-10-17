@@ -55,13 +55,8 @@ export class ErrorService {
             void this.presentAlert?.({
               header: 'Error Details',
               message: error instanceof Error ? error.stack : String(error),
-              buttons: ['Close'],
             });
           },
-        },
-        {
-          text: 'Dismiss',
-          role: 'cancel',
         },
       ],
     });

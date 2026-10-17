@@ -16,6 +16,7 @@ import {
   getEvmCalldataAddresses,
 } from '../../@lib/evm-calldata.js';
 import type {EvmGasSettings} from '../../@lib/evm-gas-settings.js';
+import {getEvmPermit} from '../../@lib/evm-permit.js';
 import {getEvmTokenAddressKind} from '../../@lib/evm-token.js';
 import {formatEvmTransactionError} from '../../@lib/evm-transaction-error.js';
 import {prepareEvmTransaction} from '../../@lib/prepare-evm-transaction.js';
@@ -34,6 +35,10 @@ import {getWalletSigningAccount} from '../@monoid/get-wallet-signing-account.js'
 import {AddressDetails} from '../@ui/address-details.js';
 import {AsyncButton, Button} from '../@ui/button.js';
 import {ChainTag} from '../@ui/chain-name.js';
+import {
+  EvmTransactionReview,
+  TRANSACTION_TYPE_LABELS,
+} from '../@ui/evm-transaction-review.js';
 import {MessageContent} from '../@ui/message-content.js';
 import {
   View,
@@ -49,10 +54,6 @@ import {
   WalletConnectSignButton,
   type WalletConnectSigningState,
 } from './@sessions/wallet-connect-sign-button.js';
-import {
-  TRANSACTION_TYPE_LABELS,
-  WalletConnectTransaction,
-} from './@sessions/wallet-connect-transaction.js';
 import {WalletConnectTypedData} from './@sessions/wallet-connect-typed-data.js';
 
 const TransactionTypeLabel = styled.span`
@@ -93,7 +94,11 @@ export const WalletConnectRequestView = observer(
             : payload.method === 'eth_sendTransaction'
               ? getEvmTransactionAddresses(payload.transaction)
               : [];
-        return {payload, addresses};
+        const permit =
+          payload.method === 'eth_signTypedData_v4'
+            ? getEvmPermit(payload.typedData)
+            : undefined;
+        return {payload, addresses, permit};
       } catch (error) {
         return {error: (error as Error).message};
       }
@@ -126,6 +131,8 @@ export const WalletConnectRequestView = observer(
         session?.expiry ?? Infinity,
       ) * 1000;
     const available = !ended;
+    const retainTransaction =
+      !available && payload?.method === 'eth_sendTransaction';
     const busy = state !== undefined;
     const currentPreparation =
       preparation?.input === transactionInput ? preparation : undefined;
@@ -136,6 +143,11 @@ export const WalletConnectRequestView = observer(
     const transaction = currentPreparation?.transaction ?? transactionInput;
     const transactionChainId =
       payload?.method === 'eth_sendTransaction' ? payload.chainId : undefined;
+    const displayChainId =
+      payload?.method === 'eth_signTypedData_v4' &&
+      payload.typedData.domain.chainId !== undefined
+        ? `eip155:${BigInt(payload.typedData.domain.chainId)}`
+        : transactionChainId;
     const transactionTarget = transaction?.to ?? undefined;
     const transactionData =
       transaction?.data ?? (transaction ? '0x' : undefined);
@@ -169,8 +181,11 @@ export const WalletConnectRequestView = observer(
           ownAddresses,
           signedAddresses,
         ),
-        !!transactionChainId &&
-          evmTokenService.isListed(transactionChainId, address),
+        transactionChainId
+          ? evmTokenService.isListed(transactionChainId, address)
+          : !!review?.permit &&
+              address.toLowerCase() === review.permit.token.toLowerCase() &&
+              evmTokenService.isListed(review.permit.chainId, address),
       );
     const addressMark = (address: string): AddressMark | undefined =>
       addressBookService.getMark('evm', address);
@@ -358,10 +373,16 @@ export const WalletConnectRequestView = observer(
     }, [active, pending, state]);
 
     useEffect(() => {
-      if (active && !available && !busy && nextId !== undefined) {
+      if (
+        active &&
+        !available &&
+        !retainTransaction &&
+        !busy &&
+        nextId !== undefined
+      ) {
         router.sessions.request({id: nextId}).$replace();
       }
-    }, [active, available, busy, router, nextId]);
+    }, [active, available, retainTransaction, busy, router, nextId]);
 
     const reject = async (): Promise<void> => {
       setState('responding');
@@ -387,45 +408,52 @@ export const WalletConnectRequestView = observer(
         <ViewContent
           footerReveal="end"
           footer={
-            <>
-              {available &&
-                signingPayload &&
-                (active ? (
-                  <WalletConnectSignButton
-                    key={signingPayload.digest}
-                    view={view}
-                    topic={request!.topic}
-                    payload={signingPayload}
-                    decodedData={decodedData}
-                    disabled={
-                      busy ||
-                      (!account && !submission) ||
-                      (payload?.method === 'eth_sendTransaction' &&
-                        !decodedData)
-                    }
-                    color={signColor}
-                    onStateChange={setState}
-                    onComplete={complete}
-                  />
-                ) : (
-                  <Button disabled loading={busy} color={signColor}>
-                    {payload?.method === 'eth_sendTransaction'
-                      ? 'Send'
-                      : 'Sign'}
+            (available || retainTransaction) && (
+              <>
+                {retainTransaction && (
+                  <Button disabled footerReveal="always">
+                    {Date.now() >= expiry
+                      ? 'Request expired'
+                      : 'Request unavailable'}
                   </Button>
-                ))}
-              {available && currentPreparation?.error && (
-                <Button
-                  onClick={() => {
-                    setPreparation(undefined);
-                    setPreparationAttempt(value => value + 1);
-                  }}
-                >
-                  Retry
-                </Button>
-              )}
-              {available ? (
-                !submission && (
+                )}
+                {available &&
+                  signingPayload &&
+                  (active ? (
+                    <WalletConnectSignButton
+                      key={signingPayload.digest}
+                      view={view}
+                      topic={request!.topic}
+                      payload={signingPayload}
+                      decodedData={decodedData}
+                      disabled={
+                        busy ||
+                        (!account && !submission) ||
+                        (payload?.method === 'eth_sendTransaction' &&
+                          !decodedData)
+                      }
+                      color={signColor}
+                      onStateChange={setState}
+                      onComplete={complete}
+                    />
+                  ) : (
+                    <Button disabled loading={busy} color={signColor}>
+                      {payload?.method === 'eth_sendTransaction'
+                        ? 'Send'
+                        : 'Sign'}
+                    </Button>
+                  ))}
+                {available && currentPreparation?.error && (
+                  <Button
+                    onClick={() => {
+                      setPreparation(undefined);
+                      setPreparationAttempt(value => value + 1);
+                    }}
+                  >
+                    Retry
+                  </Button>
+                )}
+                {available && !submission && (
                   <AsyncButton
                     footerReveal="always"
                     color="neutral"
@@ -434,22 +462,18 @@ export const WalletConnectRequestView = observer(
                   >
                     Reject
                   </AsyncButton>
-                )
-              ) : (
-                <Button footerReveal="always" onClick={() => void complete()}>
-                  Close
-                </Button>
-              )}
-            </>
+                )}
+              </>
+            )
           }
         >
           {session && request && (
             <WalletConnectSite
               metadata={session.peer.metadata}
               verified={request.verifyContext.verified}
-              compact={payload?.method === 'eth_sendTransaction'}
+              compact
             >
-              {transactionChainId && <ChainTag chainId={transactionChainId} />}
+              {displayChainId && <ChainTag chainId={displayChainId} />}
               {transaction?.type != null && (
                 <TransactionTypeLabel title="Transaction type">
                   {TRANSACTION_TYPE_LABELS[transaction.type]}
@@ -457,7 +481,7 @@ export const WalletConnectRequestView = observer(
               )}
             </WalletConnectSite>
           )}
-          {!available ? (
+          {!available && !retainTransaction ? (
             <ViewPlaceholder role="status">
               Request no longer available
             </ViewPlaceholder>
@@ -471,11 +495,21 @@ export const WalletConnectRequestView = observer(
               >
                 {payload.method === 'eth_sendTransaction' ? (
                   transaction ? (
-                    <WalletConnectTransaction
+                    <EvmTransactionReview
                       transaction={transaction}
-                      decodedData={decodedData}
+                      decodedData={
+                        decodedData ??
+                        (retainTransaction
+                          ? {
+                              data: transactionData!,
+                              target: transactionTarget,
+                              candidates: [],
+                            }
+                          : undefined)
+                      }
                       preparing={!currentPreparation}
-                      error={currentPreparation?.error}
+                      showGas={available}
+                      error={available ? currentPreparation?.error : undefined}
                       onGasChange={
                         active && available && !busy && !submission
                           ? changeGas
@@ -489,6 +523,8 @@ export const WalletConnectRequestView = observer(
                 ) : payload.method === 'eth_signTypedData_v4' ? (
                   <WalletConnectTypedData
                     data={payload.typedData}
+                    permit={review?.permit}
+                    signer={payload.address}
                     getAddressKind={addressKind}
                     getAddressMark={addressMark}
                     onAddressClick={setSelectedAddress}
@@ -508,13 +544,17 @@ export const WalletConnectRequestView = observer(
             <ViewPlaceholder role="status">{review?.error}</ViewPlaceholder>
           )}
         </ViewContent>
-        {active && available && !busy && selectedAddress && payload && (
-          <AddressDetails
-            address={selectedAddress}
-            kind={addressKind(selectedAddress)}
-            onDismiss={() => setSelectedAddress(undefined)}
-          />
-        )}
+        {active &&
+          (available || retainTransaction) &&
+          !busy &&
+          selectedAddress &&
+          payload && (
+            <AddressDetails
+              address={selectedAddress}
+              kind={addressKind(selectedAddress)}
+              onDismiss={() => setSelectedAddress(undefined)}
+            />
+          )}
       </View>
     );
   },

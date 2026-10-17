@@ -2,9 +2,10 @@ import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 
 import {useEntrances} from '../../../@entrances.js';
+import {WalletAccountFieldset} from '../../@key/wallet-account-fieldset.js';
 import {WalletAccountList} from '../../@key/wallet-account-list.js';
 import {ChainTag} from '../../@ui/chain-name.js';
-import {InfoFieldset, InfoLegend, InfoSection} from '../../@ui/info-section.js';
+import {InfoSection} from '../../@ui/info-section.js';
 
 export const WalletConnectMessage = observer(
   ({
@@ -19,26 +20,22 @@ export const WalletConnectMessage = observer(
     children: ReactNode;
   }): ReactNode => {
     const {walletStorageService} = useEntrances();
-    const account = (
-      <WalletAccountList
-        keys={walletStorageService.keys}
-        addressType="evm"
-        addresses={[address]}
-        compact={!!accountLabel}
-        contained={!!accountLabel}
-      />
-    );
-
     return (
       <InfoSection>
         {chainId && <ChainTag chainId={chainId} />}
         {accountLabel ? (
-          <InfoFieldset>
-            <InfoLegend>{accountLabel}</InfoLegend>
-            {account}
-          </InfoFieldset>
+          <WalletAccountFieldset
+            keys={walletStorageService.keys}
+            address={address}
+            label={accountLabel}
+          />
         ) : (
-          account
+          <WalletAccountList
+            keys={walletStorageService.keys}
+            addressType="evm"
+            addresses={[address]}
+            compact
+          />
         )}
         {children}
       </InfoSection>

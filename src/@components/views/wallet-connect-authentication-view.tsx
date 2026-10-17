@@ -46,31 +46,33 @@ export const WalletConnectAuthenticationView = observer(
         <ViewContent
           footerReveal="end"
           footer={
-            <>
-              {available && active && proposal ? (
-                <WalletConnectApproveButton
-                  view={view}
-                  proposal={proposal}
-                  disabled={connecting || !view.authentication.length}
-                  onStateChange={setConnectionState}
-                />
-              ) : (
-                <Button disabled loading={connecting}>
-                  Sign
-                </Button>
-              )}
-              <AsyncButton
-                footerReveal="always"
-                color={available ? 'neutral' : 'primary'}
-                disabled={connecting}
-                handler={async () => {
-                  if (available) await walletKitService.reject(view.id);
-                  router.scan.$reset();
-                }}
-              >
-                {available ? 'Reject' : 'Scan again'}
-              </AsyncButton>
-            </>
+            available && (
+              <>
+                {active && proposal ? (
+                  <WalletConnectApproveButton
+                    view={view}
+                    proposal={proposal}
+                    disabled={connecting || !view.authentication.length}
+                    onStateChange={setConnectionState}
+                  />
+                ) : (
+                  <Button disabled loading={connecting}>
+                    Sign
+                  </Button>
+                )}
+                <AsyncButton
+                  footerReveal="always"
+                  color="neutral"
+                  disabled={connecting}
+                  handler={async () => {
+                    await walletKitService.reject(view.id);
+                    router.scan.$reset();
+                  }}
+                >
+                  Reject
+                </AsyncButton>
+              </>
+            )
           }
         >
           {proposal && (

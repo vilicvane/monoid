@@ -18,6 +18,7 @@ export function standbyIsoDep(
   onError: (error: unknown) => void,
   onCleanup?: () => void,
   onConnectionChange?: (connected: boolean) => void,
+  waitForRemoval?: () => boolean,
 ): () => Promise<void> {
   let disposed = false;
   let connectedSessionId: string | undefined;
@@ -63,20 +64,41 @@ export function standbyIsoDep(
       sessionId: string,
       operation: () => Promise<void>,
     ): Promise<void> => {
-      let failure: unknown;
-
       try {
         await operation();
       } catch (error) {
-        failure = error;
+        if (!disposed && !scanEnded && scanFailure === undefined) {
+          onError(error);
+        }
       }
 
+      const waitingForRemoval =
+        !disposed && !scanEnded && (waitForRemoval?.() ?? false);
+
       try {
-        await IsoDepNfc.closeSession({sessionId});
+        await IsoDepNfc.closeSession({
+          sessionId,
+          waitForRemoval: waitingForRemoval,
+        });
       } catch (error) {
-        scanFailure = error;
-        cleanupFailure ??= {error};
-        stop();
+        const {code} = error as IsoDepNfcError;
+        const cancelled =
+          (disposed || scanEnded !== undefined) &&
+          (code === 'CANCELLED' ||
+            code === 'APP_INACTIVE' ||
+            code === 'NFC_DISABLED');
+
+        if (cancelled && waitingForRemoval && !disposed) {
+          onError(
+            Object.assign(new Error('NFC scan cancelled.', {cause: error}), {
+              code: 'CANCELLED',
+            }),
+          );
+        } else if (!cancelled) {
+          scanFailure = error;
+          cleanupFailure ??= {error};
+          stop();
+        }
       } finally {
         if (connectedSessionId === sessionId) {
           setConnectedSession(undefined);
@@ -88,10 +110,6 @@ export function standbyIsoDep(
         scanFailure === undefined &&
         scanEnded?.reason !== 'io-error'
       ) {
-        if (failure !== undefined) {
-          onError(failure);
-        }
-
         onCleanup?.();
       }
     };

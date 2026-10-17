@@ -1,7 +1,7 @@
 import {css, styled} from 'styled-components';
 
 import {InfoSection} from './info-section.js';
-import {Tag} from './tag.js';
+import {Tag, darkTagCSS} from './tag.js';
 
 const messageBlockCSS = css`
   margin: 0 -2px;
@@ -28,7 +28,7 @@ export const ErrorMessage = styled(InfoSection).attrs({role: 'status'})`
   font-size: 14px;
 `;
 
-export const MessageSectionTitle = styled(Tag)`
+export const MessageSectionTitle = styled(Tag)<{$emphasized?: boolean}>`
   align-self: flex-start;
   max-width: 100%;
   height: auto;
@@ -36,4 +36,22 @@ export const MessageSectionTitle = styled(Tag)`
   background-color: transparent;
   line-height: 20px;
   overflow-wrap: anywhere;
+  ${({$emphasized}) => $emphasized && darkTagCSS}
+`;
+
+export const MessageSectionTags = styled.div`
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  isolation: isolate;
+
+  > ${MessageSectionTitle} {
+    max-width: none;
+  }
+
+  > ${MessageSectionTitle}:first-child:not(:last-child) {
+    z-index: 1;
+    margin-right: calc(-1 * var(--tag-overlap) - var(--tag-inline-margin));
+    background-color: white;
+  }
 `;

@@ -1,6 +1,12 @@
-import {styled} from 'styled-components';
+import {css, styled} from 'styled-components';
 
 export const TAG_HEIGHT = 22;
+
+export const darkTagCSS = css`
+  background-color: var(--ion-color-dark);
+  border-color: var(--ion-color-dark-shade);
+  color: var(--ion-color-dark-contrast);
+`;
 
 export const Tag = styled.div`
   flex-shrink: 0;
@@ -24,6 +30,12 @@ export const PrimaryTag = styled(Tag)`
   background-color: var(--ion-color-primary);
   border-color: var(--ion-color-primary-shade);
   color: var(--ion-color-primary-contrast);
+`;
+
+export const WarningTag = styled(Tag)`
+  background-color: var(--ion-color-warning);
+  border-color: var(--ion-color-warning-shade);
+  color: var(--ion-color-warning-contrast);
 `;
 
 export const WhiteTag = styled(Tag)`

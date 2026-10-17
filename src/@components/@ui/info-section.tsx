@@ -2,9 +2,9 @@ import {css, styled} from 'styled-components';
 
 import {inlineIconCSS} from './inline-icon.js';
 import {LoadingSpinner} from './loading-spinner.js';
-import {TAG_HEIGHT, Tag} from './tag.js';
+import {TAG_HEIGHT, Tag, darkTagCSS} from './tag.js';
 
-export const InfoSection = styled.div<{$alignBottom?: boolean}>`
+export const InfoSection = styled.div`
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -12,15 +12,6 @@ export const InfoSection = styled.div<{$alignBottom?: boolean}>`
   & + & {
     margin-top: calc(var(--view-section-gap, 16px) - 8px);
   }
-
-  ${({$alignBottom}) =>
-    $alignBottom &&
-    css`
-      && {
-        margin-top: auto;
-        padding-top: calc(var(--view-section-gap, 16px) - 8px);
-      }
-    `}
 `;
 
 export const InfoSectionTitle = styled.div``;
@@ -44,7 +35,7 @@ export const InfoFieldset = styled(InfoSection).attrs({as: 'fieldset'})<{
 }>`
   --info-fieldset-border-width: 0.5px;
   --info-fieldset-padding: 12px;
-  --info-fieldset-label-inset: 6px;
+  --info-fieldset-label-inset: 8px;
   --info-fieldset-title-overlap: ${TAG_HEIGHT / 2}px;
 
   position: relative;
@@ -80,9 +71,18 @@ export const InfoLegend = styled(Tag).attrs({as: 'legend'})`
         --info-fieldset-border-width
       )
   );
-  background-color: var(--ion-color-dark);
-  border-color: var(--ion-color-dark-shade);
-  color: var(--ion-color-dark-contrast);
+  ${darkTagCSS}
+`;
+
+export const InfoFieldsetHeader = styled.legend`
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  padding: 0;
+
+  display: flex;
+  align-items: center;
+  gap: 8px;
 `;
 
 export const InfoSectionHeader = styled.div`
@@ -199,12 +199,13 @@ export const InfoTable = styled.table`
   }
 `;
 
-export const InfoTableSummary = styled.tr`
-  th {
-    color: var(--ion-color-medium-shade);
-  }
+export const InfoSummaryRow = styled(InfoSectionRow)`
+  --color-text-label: var(--ion-color-medium-shade);
+  flex-wrap: nowrap;
+  white-space: nowrap;
 
-  td {
+  > :last-child {
+    flex-shrink: 0;
     font-size: 16px;
   }
 `;

@@ -14,6 +14,8 @@ import {
 const {signEvmDigest} = await import(
   '../.bld/app/@lib/monoid/sign-evm-digest.js'
 );
+const {CBORAppletError} = await import('../.bld/app/@lib/cbor-applet.js');
+const {AppletNotFoundError} = await import('../.bld/app/@lib/applet.js');
 
 // Public fixture: secp256k1 scalar 1, also used by the message signing tests.
 const signingKey = new SigningKey(`0x${'1'.padStart(64, '0')}`);
@@ -136,5 +138,53 @@ test('rejects a digest that is not 32 bytes before accessing the card', async ()
       signEvmDigest(applet, key, digest, address),
       /Invalid EVM digest length/,
     );
+  }
+});
+
+test('explains a missing card key during lookup or signing and allows another card attempt', async () => {
+  const digest = TypedDataEncoder.hash(domain, types, message);
+
+  for (const operation of ['viewKey', 'sign']) {
+    const applet = createApplet(digest);
+    const original = applet[operation];
+    const cause = new CBORAppletError({code: 'NOT_FOUND'});
+    applet[operation] = async () => {
+      throw cause;
+    };
+    if (operation === 'viewKey') {
+      applet.sign = async () => assert.fail('Cannot sign without the key');
+    }
+
+    await assert.rejects(
+      signEvmDigest(applet, key, digest, address),
+      error =>
+        error.message === 'Account not on this card.' && error.cause === cause,
+    );
+
+    applet[operation] = original;
+    applet.sign = createApplet(digest).sign;
+    const signature = await signEvmDigest(applet, key, digest, address);
+    assert.equal(verifyTypedData(domain, types, message, signature), address);
+  }
+});
+
+test('preserves other protocol, applet-selection and transport errors during signing', async () => {
+  const digest = TypedDataEncoder.hash(domain, types, message);
+  for (const operation of ['viewKey', 'sign']) {
+    for (const error of [
+      new CBORAppletError({code: 'UNAUTHORIZED'}),
+      new AppletNotFoundError(new Uint8Array()),
+      Object.assign(new Error('Tag lost'), {code: 'TAG_LOST'}),
+      new Error('NOT_FOUND'),
+    ]) {
+      const applet = createApplet(digest);
+      applet[operation] = async () => {
+        throw error;
+      };
+      await assert.rejects(
+        signEvmDigest(applet, key, digest, address),
+        caught => caught === error,
+      );
+    }
   }
 });

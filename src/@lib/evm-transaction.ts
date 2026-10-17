@@ -1,5 +1,7 @@
 import {
+  type Log,
   type TransactionLike,
+  type TransactionReceipt,
   accessListify,
   getAddress,
   getBytes,
@@ -7,6 +9,21 @@ import {
   getUint,
   hexlify,
 } from 'ethers';
+
+export type EvmTransaction = {
+  chainId: bigint;
+  hash: string;
+  from: string;
+  to: string | null;
+  value: bigint;
+};
+
+export type EvmTransactionReceipt = Pick<
+  TransactionReceipt,
+  'hash' | 'status' | 'blockNumber' | 'fee'
+> & {
+  logs: readonly Pick<Log, 'address' | 'topics' | 'data' | 'index'>[];
+};
 
 const UINT256_LIMIT = BigInt(1) << BigInt(256);
 

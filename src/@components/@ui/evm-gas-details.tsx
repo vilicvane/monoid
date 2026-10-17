@@ -13,6 +13,7 @@ import {
   type EvmGasTransaction,
   compareEvmGas,
 } from '../../@lib/evm-gas.js';
+import {UI_LOCALE} from '../../@lib/locale.js';
 import {
   GAS_HISTORY_MAX_AGE_SECONDS,
   type GasHistory,
@@ -28,19 +29,19 @@ import {EvmGasEditor} from './evm-gas-editor.js';
 import {FormattedNumber} from './formatted-number.js';
 import {IconButton} from './icon-button.js';
 import {
+  InfoPanel,
   InfoSectionHeader,
   InfoSectionItemLabel,
   InfoSectionRow,
-  InfoTable,
+  InfoSummaryRow,
   InfoTableSection,
-  InfoTableSummary,
 } from './info-section.js';
 import {inlineIconCSS} from './inline-icon.js';
-import {MessageSectionTitle} from './message-content.js';
+import {MessageSectionTags, MessageSectionTitle} from './message-content.js';
 import {NativeAmount} from './native-amount.js';
 import {Tag} from './tag.js';
 
-const Heading = styled.button`
+const Heading = styled(MessageSectionTags).attrs({as: 'button'})`
   margin: 0;
   padding: 0;
   border: 0;
@@ -48,17 +49,6 @@ const Heading = styled.button`
   color: inherit;
   font: inherit;
   cursor: pointer;
-
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  isolation: isolate;
-`;
-
-const Title = styled(MessageSectionTitle)`
-  z-index: 1;
-  margin-right: calc(-1 * var(--tag-overlap) - var(--tag-inline-margin));
-  background-color: white;
 `;
 
 const GAS_LEVEL_LABELS = {low: 'Low', normal: 'Normal', high: 'High'};
@@ -113,6 +103,7 @@ export const EvmGasDetails = ({
   currency,
   showFees = true,
   onChange,
+  minimum,
 }: {
   chainId: string;
   transaction: EvmGasTransaction;
@@ -120,6 +111,7 @@ export const EvmGasDetails = ({
   currency?: NativeCurrency;
   showFees?: boolean;
   onChange?: (settings: EvmGasSettings) => void;
+  minimum?: EvmGasSettings;
 }): ReactNode => {
   const {gasHistoryService} = useEntrances();
   const [showDetails, setShowDetails] = useState(false);
@@ -180,7 +172,7 @@ export const EvmGasDetails = ({
           aria-haspopup="dialog"
           onClick={() => setShowDetails(true)}
         >
-          <Title as="span">Gas</Title>
+          <MessageSectionTitle as="span">Gas</MessageSectionTitle>
           <RateTag
             as="span"
             $level={comparison?.level}
@@ -211,26 +203,24 @@ export const EvmGasDetails = ({
         </DetailsButton>
       </InfoSectionHeader>
       {showFees && (
-        <InfoTable aria-label="Gas fees">
-          <tbody>
-            <InfoTableSummary>
-              <th scope="row">Expected fee</th>
-              <td>
-                {expectedFee !== undefined ? (
-                  <NativeAmount value={expectedFee} currency={currency} />
-                ) : (
-                  'Unavailable'
-                )}
-              </td>
-            </InfoTableSummary>
-            <InfoTableSummary>
-              <th scope="row">Max. fee</th>
-              <td>
-                <NativeAmount value={maximumFee} currency={currency} />
-              </td>
-            </InfoTableSummary>
-          </tbody>
-        </InfoTable>
+        <InfoPanel role="group" aria-label="Gas fees">
+          <InfoSummaryRow>
+            <InfoSectionItemLabel>Expected fee</InfoSectionItemLabel>
+            <span>
+              {expectedFee !== undefined ? (
+                <NativeAmount value={expectedFee} currency={currency} />
+              ) : (
+                'Unavailable'
+              )}
+            </span>
+          </InfoSummaryRow>
+          <InfoSummaryRow>
+            <InfoSectionItemLabel>Max. fee</InfoSectionItemLabel>
+            <span>
+              <NativeAmount value={maximumFee} currency={currency} />
+            </span>
+          </InfoSummaryRow>
+        </InfoPanel>
       )}
       {showDetails && (
         <DetailsPopup
@@ -274,6 +264,7 @@ export const EvmGasDetails = ({
           </DetailsPopupSection>
           {onChange ? (
             <EvmGasEditor
+              minimum={minimum}
               chainId={chainId}
               transaction={transaction}
               networkFeePerGas={gas?.networkFeePerGas}
@@ -288,7 +279,7 @@ export const EvmGasDetails = ({
               <InfoSectionRow>
                 <InfoSectionItemLabel>Gas limit</InfoSectionItemLabel>
                 <DetailValue>
-                  {transaction.gasLimit.toLocaleString('en-US')}
+                  {transaction.gasLimit.toLocaleString(UI_LOCALE)}
                 </DetailValue>
               </InfoSectionRow>
               <InfoSectionRow>

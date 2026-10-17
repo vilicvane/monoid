@@ -17,6 +17,7 @@ export async function prepareEvmTransaction(
   input: TransactionLike<string>,
   address: string,
   provider: Provider,
+  balanceBlock: 'pending' | 'latest' = 'pending',
 ): Promise<EvmTransactionPreparation> {
   const transaction = {...input};
 
@@ -77,6 +78,11 @@ export async function prepareEvmTransaction(
     const estimatedGas = await provider.estimateGas({
       ...transaction,
       from: address,
+      // Estimate execution independently of the fee offered for inclusion.
+      type: undefined,
+      gasPrice: undefined,
+      maxFeePerGas: undefined,
+      maxPriorityFeePerGas: undefined,
     });
 
     if (
@@ -92,7 +98,7 @@ export async function prepareEvmTransaction(
     const fee =
       prepared.type === 2 ? prepared.maxFeePerGas! : prepared.gasPrice!;
     const required = prepared.value + prepared.gasLimit * fee;
-    const balance = await provider.getBalance(address, 'pending');
+    const balance = await provider.getBalance(address, balanceBlock);
 
     if (balance < required) {
       throw new Error('Insufficient funds for the amount and maximum gas fee.');

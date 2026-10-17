@@ -6,7 +6,12 @@ import {
   formatScientificDecimal,
 } from '../../@lib/format-decimal.js';
 
-import {DetailsPopup} from './details-popup.js';
+import {
+  DetailsPopup,
+  DetailsPopupDivider,
+  DetailsPopupTitle,
+} from './details-popup.js';
+import {InfoSectionItemLabel, InfoSectionRow} from './info-section.js';
 import {MessageContent} from './message-content.js';
 
 const Value = styled.button`
@@ -32,7 +37,8 @@ const ZeroCount = styled.sub`
   vertical-align: baseline;
 `;
 
-export const FormattedNumberDetailsContent = styled(MessageContent)`
+const DetailsValue = styled(MessageContent)`
+  max-width: 100%;
   margin: 0;
   padding: 0;
   background: transparent;
@@ -40,6 +46,33 @@ export const FormattedNumberDetailsContent = styled(MessageContent)`
   font-size: 16px;
   text-align: center;
 `;
+
+export function FormattedNumberDetailsContent({
+  children,
+  title,
+  decimals,
+}: {
+  children: ReactNode;
+  title?: ReactNode;
+  decimals?: number;
+}): ReactNode {
+  return title !== undefined ? (
+    <>
+      <DetailsPopupTitle>{title}</DetailsPopupTitle>
+      <DetailsPopupDivider />
+      <InfoSectionRow>
+        <InfoSectionItemLabel>Raw value</InfoSectionItemLabel>
+        <DetailsValue as="span">{children}</DetailsValue>
+      </InfoSectionRow>
+      <InfoSectionRow>
+        <InfoSectionItemLabel>Decimals</InfoSectionItemLabel>
+        <span>{decimals ?? 'Unknown'}</span>
+      </InfoSectionRow>
+    </>
+  ) : (
+    <DetailsValue>{children}</DetailsValue>
+  );
+}
 
 const Exponent = styled.sup`
   position: relative;
@@ -56,6 +89,7 @@ export const FormattedNumber = ({
   displayValue,
   displayValueColor,
   fullValue,
+  decimals,
   interactive = true,
   onClick,
 }: {
@@ -65,6 +99,7 @@ export const FormattedNumber = ({
   displayValue?: string;
   displayValueColor?: string;
   fullValue?: string;
+  decimals?: number;
   interactive?: boolean;
   onClick?: () => void;
 }): ReactNode => {
@@ -115,7 +150,14 @@ export const FormattedNumber = ({
           aria-label="Full value"
           onDismiss={() => setShowDetails(false)}
         >
-          <FormattedNumberDetailsContent>
+          <FormattedNumberDetailsContent
+            title={
+              fullValue !== undefined
+                ? `${displayValue ?? value}${suffix}`
+                : undefined
+            }
+            decimals={decimals}
+          >
             {fullValue ?? `${value}${suffix}`}
           </FormattedNumberDetailsContent>
         </DetailsPopup>

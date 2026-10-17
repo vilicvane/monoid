@@ -24,12 +24,6 @@ const Container = styled.div`
 
 const Tabs = styled(Tabs_)`
   flex: 1;
-
-  transition: padding-right 0.2s ease-out;
-
-  ${Container}.fab-active & {
-    padding-right: 25%;
-  }
 `;
 
 export const NavBar = observer((): ReactNode => {

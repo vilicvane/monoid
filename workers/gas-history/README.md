@@ -1,34 +1,76 @@
 # Monoid gas history
 
-Cloudflare Worker for the APP's historical base-fee comparison. It is an
-independent package in the Monoid repository; its dependencies and deployment do
-not participate in the Android or Vite build.
+Cloudflare Worker for the APP's historical Ethereum base-fee comparison. This
+independent package does not participate in the Android or Vite build.
 
-## Sampling and comparison
+## Collection
 
-- Ethereum mainnet (`eip155:1`) is the initial allowlist.
-- One scheduled run every five minutes reads the latest block from the configured
-  Ethereum RPC. The planned run time determines the sample bucket; the block
-  timestamp is checked for freshness.
-- Workers KV retains seven days of decimal-string base-fee samples. The scheduled
-  handler is the only writer; HTTP readers never trigger RPC requests.
-- The response contains rolling 24-hour and seven-day P25/P75 thresholds. A
-  window is ready with at least 90% of its expected samples and samples within
-  15 minutes of both ends. Otherwise its status is `collecting`, with null
-  thresholds. A fresh deployment accumulates its own history; it does not label
-  a short bootstrap window as a complete day.
-- Sampling is an approximation of the distribution over time. Brief spikes
-  between samples are not retained. KV is eventually consistent; missing samples
-  are reflected in `sampleCount` and the coverage checks.
-- Workers Cache serves the public response for up to 60 seconds. `updatedAt`
-  always identifies the last actual sample, not the time the response was read.
-  Consumers must reject stale history. The APP uses a 15-minute freshness limit.
-- Only the APP's historical comparison uses this data. Current transaction fees
-  continue to come from its RPC provider.
+Ethereum mainnet (`eip155:1`) is sampled at five-minute boundaries. Each sample
+uses the last block at or before that boundary, with the real block number and
+base fee in decimal wei. A block more than five minutes old at the boundary is
+rejected. The timestamp search uses actual block timestamps; its initial
+12-second estimate does not assume every slot produced a block.
+
+A single SQLite Durable Object owns the samples and two persistent cursors:
+
+- `nextForward` is the next unprocessed regular sampling bucket. Every run starts
+  there and proceeds chronologically to the current bucket. Delayed or failed
+  runs never jump directly to the latest bucket. Buckets outside seven-day
+  retention are no longer needed and may be skipped.
+- `nextBackward` is the next historical bucket to collect. It moves backward
+  through the required seven-day window, preserving existing samples. Historical
+  collection runs continuously at the configured RPC rate until it is complete.
+
+Cron wakes the collector every five minutes. While either cursor has work,
+Durable Object alarms start successive batches immediately; historical progress
+is not limited to one small batch per Cron invocation. Regular catch-up takes
+priority before historical collection in each batch. Once both cursors are
+caught up, alarms stop and the next Cron wakes regular collection.
+
+Each batch makes at most 40 RPC requests and has a 90-second RPC deadline, with a
+10-second timeout per request. These are checkpoint boundaries, not rate limits:
+the next batch resumes without waiting five minutes. `RPC_REQUESTS_PER_SECOND`
+sets the actual request rate (default 0.5, or one request every two seconds).
+Requests are serial and spaced, with
+spacing preserved between batches. This default is a conservative local setting,
+not a claimed PublicNode quota. HTTP 429 respects `Retry-After`; other failures
+use exponential backoff from 5 seconds to 5 minutes.
+
+New samples, retention deletion and both cursors commit in one SQLite transaction.
+A failed historical or regular request leaves that bucket's cursor unchanged;
+successfully completed buckets are saved before retry. Duplicate samples never
+overwrite existing values. A persisted watchdog alarm recovers from interruption
+between a checkpoint and scheduling the next batch. HTTP readers only access
+committed data and never start Ethereum RPC work.
+
+At first wake, the collector imports the existing `samples:eip155:1` KV value.
+Existing samples retain their original values. Thereafter SQLite is authoritative;
+the old KV namespace is retained solely for migration and is no longer written.
+Before initial migration, HTTP reads can still serve that existing KV snapshot.
+
+## Comparison and API
+
+`GET /api/gas-history/eip155:1` returns:
+
+- `chainId`, `metric: "baseFeePerGas"`, `sampleIntervalSeconds: 300`;
+- `updatedAt`: the most recent actual sample's Unix timestamp, or null;
+- `windows["24h"]` and `windows["7d"]`: `from`, `to`, `sampleCount`,
+  `expectedSampleCount`, `status`, `p25`, and `p75`.
+
+Each window's lower boundary is exclusive and upper boundary inclusive. A window
+is `ready` only with at least 90% of its expected samples and samples within
+15 minutes of both ends. Otherwise it is `collecting` with null thresholds.
+P25/P75 are non-negative decimal strings in wei. Five-minute sampling approximates
+the time distribution; brief spikes between samples are not retained.
+
+The endpoint supports GET, HEAD, OPTIONS and public CORS. Unsupported paths return 404. It has no HTTP write or transaction-submission routes. Workers Cache may
+serve responses for 60 seconds; `updatedAt` is not advanced by a read. The APP
+rejects history older than 15 minutes and continues to obtain current transaction
+fees from its own RPC provider.
 
 ## Local development
 
-Requires Node.js 22 or later. Run these commands in this directory:
+Requires Node.js 22 or later. In this directory:
 
 ```sh
 npm ci
@@ -37,68 +79,50 @@ npm run lint
 ```
 
 Copy `.dev.vars.example` to `.dev.vars` and set `ETHEREUM_RPC_URL` to an Ethereum
-mainnet RPC endpoint. `.dev.vars` is ignored by Git. Then run:
+RPC serving at least seven days of block history. The file is ignored by Git.
 
 ```sh
 npm run dev
-```
-
-The default local endpoint is
-`http://127.0.0.1:8787/api/gas-history/eip155:1`. In local development only, a sample
-can be collected by requesting:
-
-```sh
 curl "http://127.0.0.1:8787/__scheduled?cron=*/5+*+*+*+*"
+curl "http://127.0.0.1:8787/api/gas-history/eip155:1"
 ```
 
-## API
-
-`GET /api/gas-history/eip155:1` returns JSON with:
-
-- `chainId`, `metric: "baseFeePerGas"`, and `sampleIntervalSeconds: 300`;
-- `updatedAt`: Unix seconds, or null before the first sample;
-- `windows["24h"]` and `windows["7d"]`: `from`, `to` (Unix seconds),
-  `sampleCount`, `expectedSampleCount`, `status`, `p25`, and `p75`.
-
-Thresholds are non-negative decimal strings in wei. The lower boundary of each
-window is exclusive; the upper boundary is inclusive. Unsupported paths return 404. The endpoint supports GET, HEAD, OPTIONS and public CORS; it has no
-user-specific data or transaction submission routes.
+The local scheduled route wakes the collector; its alarms continue historical
+collection. Collection logs expose added samples, forward/backward progress,
+both cursors, sample count, request count, pending work and retry state.
 
 ## Deployment
 
-The deployed Worker is `monoid-gas-history`, with a dedicated KV namespace and
-the route `www.monoid.app/api/gas-history/*`. Other website routes are not handled
-by this Worker. Existing redirect rules must exclude `/api/` so these requests
-can reach the Worker.
+The Worker is `monoid-gas-history`, routed only at
+`www.monoid.app/api/gas-history/*`. Existing website redirects must exclude
+`/api/`. `wrangler.jsonc` binds `GAS_COLLECTOR` to the SQLite class
+`GasHistoryCollector`; migration `v1` creates it. Do not reset this namespace on
+redeploy: it contains both history and durable cursors.
 
-`ETHEREUM_RPC_URL` is stored as a Worker secret. It currently uses the public
-Ethereum mainnet endpoint `https://ethereum-rpc.publicnode.com`. To replace the
-provider, update this secret; APP changes are not required.
+`ETHEREUM_RPC_URL` is a Worker secret, currently pointing at
+`https://ethereum-rpc.publicnode.com`. `RPC_REQUESTS_PER_SECOND` is a configurable
+Worker variable. Updating these does not require APP changes.
 
-On the current development machine, Wrangler is authenticated in WSL. Run
-deployment commands there, without copying its OAuth credentials to Windows.
-From this directory:
+Wrangler is authenticated in WSL on the current machine. Keep its credentials
+there and run the Linux Wrangler from outside the Windows dependency tree:
 
 ```sh
-npx wrangler login
-npx wrangler secret put ETHEREUM_RPC_URL
-npm run deploy
+cd /tmp
+npx --yes wrangler@4.151.1 deploy \
+  --config /mnt/c/Projects/monoid/workers/gas-history/wrangler.jsonc
 ```
 
-For a new deployment account, create a dedicated namespace with
-`npx wrangler kv namespace create GAS_HISTORY`, then update the account, route,
-and namespace ID in `wrangler.jsonc` before deploying.
-
-The public endpoint is `https://www.monoid.app/api/gas-history/eip155:1`.
-Check its response and the scheduled-run logs. Set the APP's
-`VITE_GAS_HISTORY_URL` to `https://www.monoid.app/api`, or
-`http://127.0.0.1:8787/api` for local development. The service appends
-`/gas-history/eip155:1` to this API base URL. Restart Vite or rebuild the APP after
-changing this build-time variable. Without a configured URL, the APP continues
-to display current fees and leaves the historical comparison unavailable.
-
-A deployment bundle can be checked without publishing:
+For local bundle validation, run in this package directory:
 
 ```sh
 npx wrangler deploy --dry-run --outdir .bld/bundle
 ```
+
+After deployment, verify migration, successful alarm batches running between
+Cron invocations, increasing sample counts and both windows becoming ready.
+Once history is complete, verify that a subsequent Cron resumes from the saved
+forward cursor and preserves complete coverage.
+
+The public endpoint is `https://www.monoid.app/api/gas-history/eip155:1`. The APP's
+`VITE_GAS_HISTORY_URL` remains `https://www.monoid.app/api`; the service appends
+`/gas-history/eip155:1`. Local development can use `http://127.0.0.1:8787/api`.

@@ -15,4 +15,11 @@
     {"binding": "GAS_HISTORY", "id": "ce27962f059a4932807190d86d44c5e4"},
   ],
   "observability": {"enabled": true},
+  "vars": {"RPC_REQUESTS_PER_SECOND": "0.5"},
+  "durable_objects": {
+    "bindings": [
+      {"name": "GAS_COLLECTOR", "class_name": "GasHistoryCollector"},
+    ],
+  },
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["GasHistoryCollector"]}],
 }

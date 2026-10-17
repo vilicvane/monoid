@@ -287,7 +287,8 @@ function MonoidScanPromptLayer({
         <div ref={cardRef}>
           <MonoidScanCard
             scanning={presentation.scanning}
-            wavesActive={arrived && !closing}
+            error={presentation.error}
+            wavesActive={arrived && !closing && !presentation.error}
           />
         </div>
         <PromptStateContent ref={stateContentRef}>

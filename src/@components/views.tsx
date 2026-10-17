@@ -3,12 +3,18 @@ import {Match, Route} from 'routra-react';
 
 import {useEntrances} from '../@entrances.js';
 
+import {FeaturesView} from './views/features-view.js';
 import {SafeMatch} from './views/safe/index.js';
 import {ScanView} from './views/scan-view.js';
 import {SessionSwitchView} from './views/session-switch-view.js';
 import {SessionView} from './views/session-view.js';
+import {SessionsRequestFab} from './views/sessions-request-fab.js';
 import {SessionsView} from './views/sessions-view.js';
+import {TransactionHistoryView} from './views/transaction-history-view.js';
+import {TransactionReplacementView} from './views/transaction-replacement-view.js';
 import {TransactionView} from './views/transaction-view.js';
+import {TransactionWalletsView} from './views/transaction-wallets-view.js';
+import {TransactionsView} from './views/transactions-view.js';
 import {WalletConnectAuthenticationView} from './views/wallet-connect-authentication-view.js';
 import {WalletConnectRequestView} from './views/wallet-connect-request-view.js';
 import {WalletConnectView} from './views/wallet-connect-view.js';
@@ -20,7 +26,29 @@ export const Views = (): ReactNode => {
   return (
     <>
       <WalletConnectRequests />
+      <SessionsRequestFab />
+      <Route view={router.features.$view()} component={FeaturesView} />
       <Route view={router.sessions.$exact.$view()} component={SessionsView} />
+      <Route
+        view={router.transactions.$exact.$view()}
+        component={TransactionWalletsView}
+      />
+      <Route
+        view={router.transactions.wallet.$exact.$view()}
+        component={TransactionsView}
+      />
+      <Route
+        view={router.transactions.wallet.transaction.$exact.$view({
+          parallel: true,
+        })}
+        component={TransactionHistoryView}
+      />
+      <Route
+        view={router.transactions.wallet.transaction.replace.$view({
+          parallel: true,
+        })}
+        component={TransactionReplacementView}
+      />
       <Route
         view={router.sessions.request.$view({parallel: true})}
         component={WalletConnectRequestView}

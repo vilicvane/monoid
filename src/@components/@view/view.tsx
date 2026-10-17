@@ -79,6 +79,12 @@ const Container = styled.div`
     }
   }
 
+  &.switching-from,
+  &.switching-to {
+    /* Keep swipe layers stable near zero progress to avoid WebView buffer churn. */
+    will-change: transform;
+  }
+
   &.switching-from {
     z-index: var(--view-entering-z-index);
     transform: translateX(calc(var(--view-swipe-progress) * 100%));

@@ -81,6 +81,9 @@ function setup(context, transaction = {}, chainId = 1n) {
   };
   const addressBook = {rememberSigned: context.mock.fn(async () => {})};
   const callHistory = {rememberSigned: context.mock.fn(async () => {})};
+  const transactionHistory = {
+    rememberSubmitted: context.mock.fn(async () => {}),
+  };
   const accepted = new Map();
   const provider = {
     getNetwork: context.mock.fn(async () => ({chainId})),
@@ -113,6 +116,7 @@ function setup(context, transaction = {}, chainId = 1n) {
     storage,
     addressBook,
     callHistory,
+    transactionHistory,
     records,
   );
   return {
@@ -122,6 +126,7 @@ function setup(context, transaction = {}, chainId = 1n) {
     values,
     addressBook,
     callHistory,
+    transactionHistory,
     requests,
     request,
     sessions,
@@ -155,6 +160,16 @@ test('persists exact signed bytes before broadcasting, responds with the hash an
     });
     return {hash};
   });
+  state.transactionHistory.rememberSubmitted.mock.mockImplementationOnce(
+    async signedTransaction => {
+      assert.equal(signedTransaction, raw);
+      assert.equal(kit.respondSessionRequest.mock.callCount(), 0);
+      assert.equal(
+        values.get('walletKitTransactionSubmissions')[1].broadcast,
+        true,
+      );
+    },
+  );
 
   assert.equal(await approve(state), true);
 
@@ -169,6 +184,7 @@ test('persists exact signed bytes before broadcasting, responds with the hash an
   assert.deepEqual(values.get('walletKitTransactionSubmissions'), {});
   assert.equal(provider.broadcastTransaction.mock.callCount(), 1);
   assert.equal(state.callHistory.rememberSigned.mock.callCount(), 0);
+  assert.equal(state.transactionHistory.rememberSubmitted.mock.callCount(), 1);
 });
 
 test('remembers reviewed calldata addresses and final implementation calls only after a matching transaction is signed', async context => {
@@ -452,6 +468,7 @@ test('an initial persistence failure prevents every network send and leaves a re
 
   assert.equal(provider.getNetwork.mock.callCount(), 0);
   assert.equal(provider.broadcastTransaction.mock.callCount(), 0);
+  assert.equal(state.transactionHistory.rememberSubmitted.mock.callCount(), 0);
   assert.deepEqual(service.getTransactionSubmission(1), {
     topic,
     signedTransaction: raw,
@@ -468,12 +485,19 @@ test('a failed website response retries the same hash without RPC or a second br
     throw failure;
   });
   await assert.rejects(approve(state), failure);
+  assert.deepEqual(
+    state.transactionHistory.rememberSubmitted.mock.calls.map(
+      call => call.arguments,
+    ),
+    [[raw]],
+  );
 
   const reloaded = await WalletKitService.create(
     kit,
     storage,
     addressBook,
     state.callHistory,
+    state.transactionHistory,
   );
   assert.deepEqual(reloaded.getTransactionSubmission(1), {
     topic,
@@ -485,10 +509,65 @@ test('a failed website response retries the same hash without RPC or a second br
     true,
   );
   assert.equal(provider.broadcastTransaction.mock.callCount(), 1);
+  assert.deepEqual(
+    state.transactionHistory.rememberSubmitted.mock.calls.map(
+      call => call.arguments,
+    ),
+    [[raw], [raw]],
+  );
   assert.equal(
     kit.respondSessionRequest.mock.calls[1].arguments[0].response.result,
     hash,
   );
+});
+
+test('a failed history write preserves the accepted submission and retries without RPC after reload', async context => {
+  const state = setup(context);
+  const {
+    kit,
+    provider,
+    storage,
+    addressBook,
+    callHistory,
+    transactionHistory,
+    raw,
+  } = state;
+  const failure = new Error('History storage unavailable');
+  transactionHistory.rememberSubmitted.mock.mockImplementationOnce(async () => {
+    throw failure;
+  });
+
+  await assert.rejects(approve(state), failure);
+
+  assert.equal(provider.broadcastTransaction.mock.callCount(), 1);
+  assert.equal(kit.respondSessionRequest.mock.callCount(), 0);
+  assert.deepEqual(state.values.get('walletKitTransactionSubmissions'), {
+    1: {topic, signedTransaction: raw, broadcast: true},
+  });
+
+  const reloaded = await WalletKitService.create(
+    kit,
+    storage,
+    addressBook,
+    callHistory,
+    transactionHistory,
+  );
+  assert.equal(
+    await reloaded.approveTransactionRequest(
+      1,
+      topic,
+      state.unsigned,
+      state.signature,
+    ),
+    true,
+  );
+  assert.equal(provider.broadcastTransaction.mock.callCount(), 1);
+  assert.equal(provider.getNetwork.mock.callCount(), 1);
+  assert.deepEqual(
+    transactionHistory.rememberSubmitted.mock.calls.map(call => call.arguments),
+    [[raw], [raw]],
+  );
+  assert.deepEqual(state.values.get('walletKitTransactionSubmissions'), {});
 });
 
 test('reload does not automatically broadcast and uncertain retries resend only the identical bytes', async context => {
@@ -499,12 +578,14 @@ test('reload does not automatically broadcast and uncertain retries resend only 
     throw failure;
   });
   await assert.rejects(approve(state), failure);
+  assert.equal(state.transactionHistory.rememberSubmitted.mock.callCount(), 0);
 
   const reloaded = await WalletKitService.create(
     kit,
     storage,
     addressBook,
     state.callHistory,
+    state.transactionHistory,
   );
   assert.equal(provider.broadcastTransaction.mock.callCount(), 1);
   assert.equal(reloaded.getTransactionSubmission(1).broadcast, false);
@@ -535,6 +616,10 @@ test('a broadcast with a lost response is recognized by its exact hash without a
   assert.equal(await approve(state), true);
   assert.equal(provider.broadcastTransaction.mock.callCount(), 1);
   assert.equal(provider.getTransaction.mock.callCount(), 2);
+  assert.deepEqual(
+    state.transactionHistory.rememberSubmitted.mock.calls[0].arguments,
+    [state.raw],
+  );
 });
 
 test('a recovered pending submission already known by its hash only sends the website response', async context => {
@@ -544,10 +629,15 @@ test('a recovered pending submission already known by its hash only sends the we
     throw new Error('Offline');
   });
   await assert.rejects(approve(state), /Offline/);
+  assert.equal(state.transactionHistory.rememberSubmitted.mock.callCount(), 0);
   accepted.set(hash, {hash});
 
   assert.equal(await approve(state), true);
   assert.equal(provider.broadcastTransaction.mock.callCount(), 1);
+  assert.deepEqual(
+    state.transactionHistory.rememberSubmitted.mock.calls[0].arguments,
+    [state.raw],
+  );
 });
 
 test('a retry cannot substitute new nonce or gas settings for the persisted transaction', async context => {
@@ -676,6 +766,10 @@ test('a different RPC network or unrelated lookup hash cannot confirm or broadca
     );
     assert.equal(state.provider.broadcastTransaction.mock.callCount(), 0);
     assert.equal(state.kit.respondSessionRequest.mock.callCount(), 0);
+    assert.equal(
+      state.transactionHistory.rememberSubmitted.mock.callCount(),
+      0,
+    );
   }
 });
 
@@ -693,6 +787,7 @@ test('a wrong hash after a broadcast error is not accepted as a successful send'
   await assert.rejects(approve(state), failure);
   assert.equal(state.kit.respondSessionRequest.mock.callCount(), 0);
   assert.equal(state.service.getTransactionSubmission(1).broadcast, false);
+  assert.equal(state.transactionHistory.rememberSubmitted.mock.callCount(), 0);
 });
 
 test('restore prunes submissions whose request is no longer pending without broadcasting', async context => {
@@ -709,6 +804,7 @@ test('restore prunes submissions whose request is no longer pending without broa
     storage,
     addressBook,
     state.callHistory,
+    state.transactionHistory,
   );
   assert.equal(reloaded.getTransactionSubmission(1), undefined);
   await Promise.resolve();

@@ -176,12 +176,14 @@ export function EvmTokenTag({
   className,
   interactive = true,
   onClick,
+  'aria-label': ariaLabel,
 }: {
   token: EvmToken;
   kind: AddressKind;
   className?: string;
   interactive?: boolean;
   onClick?: () => void;
+  'aria-label'?: string;
 }): ReactNode {
   const [showDetails, setShowDetails] = useState(false);
 
@@ -191,7 +193,11 @@ export function EvmTokenTag({
         as={interactive ? 'button' : 'span'}
         type={interactive ? 'button' : undefined}
         className={className}
-        aria-label={interactive ? `${token.symbol} token details` : undefined}
+        aria-label={
+          interactive
+            ? (ariaLabel ?? `${token.symbol} token details`)
+            : undefined
+        }
         aria-haspopup={interactive ? 'dialog' : undefined}
         onClick={
           interactive ? (onClick ?? (() => setShowDetails(true))) : undefined
@@ -305,6 +311,7 @@ export function EvmTokenAmount({
             : undefined
       }
       fullValue={value.toString()}
+      decimals={token.decimals}
       onClick={onClick}
     />
   );

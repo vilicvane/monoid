@@ -66,6 +66,7 @@ function getDraft(settings: EvmGasSettings): GasDraft {
 function parseDraft(
   draft: GasDraft,
   type: EvmGasTransaction['type'],
+  minimum?: EvmGasSettings,
 ):
   | {settings: EvmGasSettings; error?: never}
   | {settings?: never; error: string} {
@@ -87,6 +88,21 @@ function parseDraft(
         type === 2 ? parseFee(draft.maxPriorityFeePerGas) : null,
     };
     assertEvmGasSettings({...settings, type});
+    if (minimum) {
+      const fields =
+        type === 2
+          ? (['maxFeePerGas', 'maxPriorityFeePerGas'] as const)
+          : (['gasPrice'] as const);
+      for (const field of fields) {
+        if (settings[field]! < minimum[field]!) {
+          throw new Error(
+            `Replacement fees must be at least ${formatUnits(minimum[field]!, 'gwei')} gwei.`,
+          );
+        }
+      }
+      if (settings.gasLimit < minimum.gasLimit)
+        throw new Error(`Gas limit must be at least ${minimum.gasLimit}.`);
+    }
     return {settings};
   } catch (error) {
     return {error: (error as Error).message};
@@ -99,12 +115,14 @@ export const EvmGasEditor = ({
   networkFeePerGas,
   currency,
   onApply,
+  minimum,
 }: {
   chainId: string;
   transaction: EvmGasTransaction;
   networkFeePerGas?: bigint;
   currency?: NativeCurrency;
   onApply: (settings: EvmGasSettings) => void;
+  minimum?: EvmGasSettings;
 }): ReactNode => {
   const {chainService} = useEntrances();
   const id = useId();
@@ -113,7 +131,7 @@ export const EvmGasEditor = ({
   const [options, setOptions] = useState<{
     presets?: EvmGasPresets;
   }>();
-  const {settings, error} = parseDraft(draft, transaction.type);
+  const {settings, error} = parseDraft(draft, transaction.type, minimum);
   const eip1559 = transaction.type === 2;
   const changed =
     settings &&
@@ -152,6 +170,27 @@ export const EvmGasEditor = ({
       .getRPC(chainId)
       .then(provider => getEvmGasPresets(transaction, provider))
       .then(presets => {
+        if (minimum) {
+          for (const preset of Object.values(presets)) {
+            for (const field of [
+              'gasPrice',
+              'maxFeePerGas',
+              'maxPriorityFeePerGas',
+            ] as const) {
+              if (
+                preset[field] != null &&
+                minimum[field] != null &&
+                preset[field]! < minimum[field]!
+              )
+                preset[field] = minimum[field];
+            }
+            if (
+              preset.maxFeePerGas != null &&
+              preset.maxPriorityFeePerGas! > preset.maxFeePerGas
+            )
+              preset.maxFeePerGas = preset.maxPriorityFeePerGas;
+          }
+        }
         if (!cancelled) setOptions({presets});
       })
       .catch(() => {
@@ -161,7 +200,7 @@ export const EvmGasEditor = ({
     return () => {
       cancelled = true;
     };
-  }, [chainService, chainId, transaction]);
+  }, [chainService, chainId, transaction, minimum]);
 
   const fields: {key: keyof GasDraft; label: string; unit?: string}[] = [
     {key: 'gasLimit', label: 'Gas limit'},

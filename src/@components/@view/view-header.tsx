@@ -51,13 +51,12 @@ export const ViewHeaderTitle = styled.h1`
   margin: 0;
 `;
 
-export const ViewHeaderButton = styled(IconButton)`
+export const ViewHeaderButton = styled(IconButton).attrs({feedback: 'color'})`
   grid-column: 3;
   align-self: center;
   justify-self: end;
   margin-right: -8px;
-  font-size: 24px;
-  color: var(--ion-color-medium-shade);
+  font-size: 20px;
 `;
 
 export const viewHeaderTagCSS = css`
@@ -67,6 +66,12 @@ export const viewHeaderTagCSS = css`
   min-width: 0;
   max-width: 100%;
   margin: 0;
+
+  &:last-child {
+    grid-column: 3;
+    justify-self: end;
+    margin-right: var(--tag-inline-margin);
+  }
 
   /* Align the border to the text edge, then apply the tag's optical offset. */
   contain: layout;

@@ -8,13 +8,13 @@
     <objectAnimator
         android:propertyName="scaleX"
         android:valueFrom="1" android:valueTo="4" android:valueType="floatType"
-        android:startOffset="@integer/monoid_launch_approach_start"
-        android:duration="@integer/monoid_launch_approach_duration"
+        android:startOffset="@integer/monoid_launch_plus_effect_start"
+        android:duration="@integer/monoid_launch_plus_effect_duration"
         android:interpolator="@android:interpolator/fast_out_slow_in" />
     <objectAnimator
         android:propertyName="scaleY"
         android:valueFrom="1" android:valueTo="4" android:valueType="floatType"
-        android:startOffset="@integer/monoid_launch_approach_start"
-        android:duration="@integer/monoid_launch_approach_duration"
+        android:startOffset="@integer/monoid_launch_plus_effect_start"
+        android:duration="@integer/monoid_launch_plus_effect_duration"
         android:interpolator="@android:interpolator/fast_out_slow_in" />
 </set>

@@ -9,7 +9,7 @@ import {
   getWalletKitSessionAddresses,
 } from '../../@services/index.js';
 import {WalletAccountList} from '../@key/wallet-account-list.js';
-import {AsyncButton, Button} from '../@ui/button.js';
+import {AsyncButton} from '../@ui/button.js';
 import {InfoSectionItemLabel} from '../@ui/info-section.js';
 import {
   View,
@@ -110,21 +110,12 @@ export const SessionSwitchView = observer(
         </ViewHeader>
         <ViewContent
           footer={
-            <>
-              <AsyncButton
-                disabled={!canSwitch || pending || !selectionChanged}
-                handler={switchAccounts}
-              >
-                {waitingForWebsite ? 'Waiting for website' : 'Switch'}
-              </AsyncButton>
-              <Button
-                color="neutral"
-                disabled={pending}
-                onClick={() => router.$back()}
-              >
-                Cancel
-              </Button>
-            </>
+            <AsyncButton
+              disabled={!canSwitch || pending || !selectionChanged}
+              handler={switchAccounts}
+            >
+              {waitingForWebsite ? 'Waiting for website' : 'Switch'}
+            </AsyncButton>
           }
         >
           <WalletConnectSite
