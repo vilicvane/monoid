@@ -4,6 +4,7 @@ import {styled} from 'styled-components';
 
 import {useEntrances} from '../../../@entrances.js';
 import type {EvmPermit} from '../../../@lib/evm-permit.js';
+import type {EvmPermit2} from '../../../@lib/evm-permit2.js';
 import type {EvmTypedData} from '../../../@lib/evm-typed-data.js';
 import {formatSigningJSON} from '../../../@lib/format-signing-json.js';
 import {getTypedDataFields} from '../../../@lib/typed-data-fields.js';
@@ -24,6 +25,7 @@ import {
 } from '../../@ui/typed-data-fields.js';
 
 import {WalletConnectPermit} from './wallet-connect-permit.js';
+import {WalletConnectPermit2} from './wallet-connect-permit2.js';
 
 const MessageHeader = styled(InfoSectionHeader)`
   > button:last-child {
@@ -41,11 +43,13 @@ const DomainContent = styled(MessageContent).attrs({as: 'div'})`
 export const WalletConnectTypedData = observer(function WalletConnectTypedData({
   data,
   permit,
+  permit2,
   signer,
   ...addressProps
 }: {
   data: EvmTypedData;
   permit?: EvmPermit;
+  permit2?: EvmPermit2;
   signer: string;
 } & Pick<
   ComponentProps<typeof TypedDataFields>,
@@ -75,7 +79,7 @@ export const WalletConnectTypedData = observer(function WalletConnectTypedData({
 
   return (
     <>
-      {!token && (
+      {!token && !permit2 && (
         <InfoSection>
           <MessageSectionTitle>Domain</MessageSectionTitle>
           <TypedDataFields
@@ -86,19 +90,32 @@ export const WalletConnectTypedData = observer(function WalletConnectTypedData({
         </InfoSection>
       )}
       <InfoSection>
-        <MessageHeader>
-          <MessageSectionTitle $emphasized={!!permit}>
-            {formatSigningJSON(data.primaryType).slice(1, -1)}
+        {permit2 ? (
+          <MessageSectionTitle
+            as="button"
+            type="button"
+            $emphasized
+            aria-label="Permit2 signing domain"
+            aria-haspopup="dialog"
+            onClick={() => setShowDomain(true)}
+          >
+            Permit2
           </MessageSectionTitle>
-          {token && (
-            <EvmTokenTag
-              token={token}
-              kind={addressProps.getAddressKind?.(token.address) ?? 'unknown'}
-              aria-label={`${token.symbol} signing domain`}
-              onClick={() => setShowDomain(true)}
-            />
-          )}
-        </MessageHeader>
+        ) : (
+          <MessageHeader>
+            <MessageSectionTitle $emphasized={!!permit}>
+              {formatSigningJSON(data.primaryType).slice(1, -1)}
+            </MessageSectionTitle>
+            {token && (
+              <EvmTokenTag
+                token={token}
+                kind={addressProps.getAddressKind?.(token.address) ?? 'unknown'}
+                aria-label={`${token.symbol} signing domain`}
+                onClick={() => setShowDomain(true)}
+              />
+            )}
+          </MessageHeader>
+        )}
         {permit ? (
           <WalletConnectPermit
             {...messageProps}
@@ -106,6 +123,8 @@ export const WalletConnectTypedData = observer(function WalletConnectTypedData({
             token={token}
             signer={signer}
           />
+        ) : permit2 ? (
+          <WalletConnectPermit2 {...messageProps} permit={permit2} />
         ) : (
           <TypedDataFields {...messageProps} />
         )}

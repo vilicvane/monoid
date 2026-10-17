@@ -275,6 +275,7 @@ export function EvmTokenAmount({
   showSymbol = true,
   interactive = true,
   maximumAsUnlimited = false,
+  maximum = MaxUint256,
   zeroAsRevoked = false,
   onClick,
 }: {
@@ -283,13 +284,14 @@ export function EvmTokenAmount({
   showSymbol?: boolean;
   interactive?: boolean;
   maximumAsUnlimited?: boolean;
+  maximum?: bigint;
   zeroAsRevoked?: boolean;
   onClick?: () => void;
 }): ReactNode {
   const revoked = zeroAsRevoked && value === BigInt(0);
   const displayValue = revoked
     ? 'Revoked'
-    : maximumAsUnlimited && value === MaxUint256
+    : maximumAsUnlimited && value === maximum
       ? 'Unlimited'
       : undefined;
 

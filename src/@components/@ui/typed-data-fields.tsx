@@ -122,9 +122,8 @@ export function TypedDataFieldList({
             </FieldHeader>
             <FieldValue
               $block={
-                field.kind !== 'value' ||
-                field.type === 'address' ||
-                !!renderedValue?.block
+                renderedValue?.block ??
+                (field.kind !== 'value' || field.type === 'address')
               }
               $nested={field.kind !== 'value'}
             >

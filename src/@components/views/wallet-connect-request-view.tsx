@@ -17,6 +17,7 @@ import {
 } from '../../@lib/evm-calldata.js';
 import type {EvmGasSettings} from '../../@lib/evm-gas-settings.js';
 import {getEvmPermit} from '../../@lib/evm-permit.js';
+import {getEvmPermit2} from '../../@lib/evm-permit2.js';
 import {getEvmTokenAddressKind} from '../../@lib/evm-token.js';
 import {formatEvmTransactionError} from '../../@lib/evm-transaction-error.js';
 import {prepareEvmTransaction} from '../../@lib/prepare-evm-transaction.js';
@@ -98,7 +99,11 @@ export const WalletConnectRequestView = observer(
           payload.method === 'eth_signTypedData_v4'
             ? getEvmPermit(payload.typedData)
             : undefined;
-        return {payload, addresses, permit};
+        const permit2 =
+          payload.method === 'eth_signTypedData_v4'
+            ? getEvmPermit2(payload.typedData)
+            : undefined;
+        return {payload, addresses, permit, permit2};
       } catch (error) {
         return {error: (error as Error).message};
       }
@@ -173,6 +178,13 @@ export const WalletConnectRequestView = observer(
     const signedAddresses = new Set(
       addresses.filter(address => addressBookService.hasSigned('evm', address)),
     );
+    const permitChainId = review?.permit?.chainId ?? review?.permit2?.chainId;
+    const permitTokens = new Set(
+      (review?.permit
+        ? [review.permit.token]
+        : (review?.permit2?.details.map(detail => detail.token) ?? [])
+      ).map(address => address.toLowerCase()),
+    );
     const addressKind = (address: string): AddressKind =>
       getEvmTokenAddressKind(
         getAddressKind(
@@ -183,9 +195,9 @@ export const WalletConnectRequestView = observer(
         ),
         transactionChainId
           ? evmTokenService.isListed(transactionChainId, address)
-          : !!review?.permit &&
-              address.toLowerCase() === review.permit.token.toLowerCase() &&
-              evmTokenService.isListed(review.permit.chainId, address),
+          : !!permitChainId &&
+              permitTokens.has(address.toLowerCase()) &&
+              evmTokenService.isListed(permitChainId, address),
       );
     const addressMark = (address: string): AddressMark | undefined =>
       addressBookService.getMark('evm', address);
@@ -524,6 +536,7 @@ export const WalletConnectRequestView = observer(
                   <WalletConnectTypedData
                     data={payload.typedData}
                     permit={review?.permit}
+                    permit2={review?.permit2}
                     signer={payload.address}
                     getAddressKind={addressKind}
                     getAddressMark={addressMark}

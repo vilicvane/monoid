@@ -1,13 +1,11 @@
-import {MaxUint256} from 'ethers';
 import {type ComponentProps, type ReactNode, useEffect, useState} from 'react';
 
 import type {EvmPermit} from '../../../@lib/evm-permit.js';
 import type {EvmToken} from '../../../@lib/evm-token.js';
-import {PopupDateTime} from '../../@ui/date-time.js';
-import {EvmTokenAmount} from '../../@ui/evm-token.js';
-import {FormattedNumber} from '../../@ui/formatted-number.js';
 import {ErrorMessage} from '../../@ui/message-content.js';
 import {TypedDataFields} from '../../@ui/typed-data-fields.js';
+
+import {PermitAmount, PermitTime} from './wallet-connect-permit-value.js';
 
 export function WalletConnectPermit({
   permit,
@@ -36,54 +34,13 @@ export function WalletConnectPermit({
         renderValue={field => {
           if (field.name === 'value') {
             return {
-              content:
-                value === BigInt(0) ? (
-                  <FormattedNumber
-                    value="0"
-                    displayValue="Revoke"
-                    fullValue="0"
-                    unit={token?.symbol}
-                    decimals={token?.decimals}
-                  />
-                ) : token ? (
-                  <EvmTokenAmount
-                    token={token}
-                    value={value}
-                    maximumAsUnlimited
-                  />
-                ) : (
-                  <FormattedNumber
-                    value={value.toString()}
-                    fullValue={value.toString()}
-                    unit={value === MaxUint256 ? undefined : 'base units'}
-                    displayValue={
-                      value === MaxUint256 ? 'Unlimited' : undefined
-                    }
-                    displayValueColor="var(--color-address-warning)"
-                  />
-                ),
+              content: <PermitAmount value={value} token={token} />,
             };
           }
 
           if (field.name === 'deadline') {
             return {
-              content:
-                deadline === MaxUint256 ? (
-                  <FormattedNumber
-                    value={deadline.toString()}
-                    displayValue="No expiry"
-                  />
-                ) : deadline <= BigInt(8_640_000_000_000) ? (
-                  <PopupDateTime
-                    value={Number(deadline) * 1000}
-                    showTimestamp
-                  />
-                ) : (
-                  <FormattedNumber
-                    value={deadline.toString()}
-                    unit="Unix seconds"
-                  />
-                ),
+              content: <PermitTime value={deadline} />,
             };
           }
 
