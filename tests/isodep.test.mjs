@@ -350,11 +350,11 @@ test('SELECT and GET RESPONSE preserve APDU bytes and cannot switch to a newer s
   assert.deepEqual(device.exchanges, [
     {sessionId: 'first', data: [0, 0xa4, 4, 0, 3, 1, 2, 3]},
     {sessionId: 'first', data: [...command]},
-    {sessionId: 'first', data: [0, 0xc0, 0, 0]},
+    {sessionId: 'first', data: [0, 0xc0, 0, 0, 1]},
     {sessionId: 'second', data: [0, 0xa4, 4, 0, 3, 1, 2, 3]},
     {sessionId: 'first', data: [...command]},
     {sessionId: 'second', data: [...command]},
-    {sessionId: 'second', data: [0, 0xc0, 0, 0]},
+    {sessionId: 'second', data: [0, 0xc0, 0, 0, 1]},
   ]);
   await assert.rejects(applet.sendRawCommand(command), /open NFC session/);
 });
@@ -403,7 +403,7 @@ test('a business command returning 6a82 does not imply an absent applet', async 
     data[1] === 0xa4 ? {data: [0x90, 0x00]} : {data: [0x42, 0x6a, 0x82]};
   device.standby(
     async applet => {
-      await applet.sendCommand(0x01, new Uint8Array());
+      await applet.sendCommand(0x01, new Uint8Array([0xa0]));
     },
     new TestApplet(new Uint8Array([1])),
   );
@@ -434,7 +434,7 @@ for (const sw of [0x9000, 0x6a82]) {
 
     assert.deepEqual(device.exchanges, [
       {sessionId: 'select-response', data: [0, 0xa4, 4, 0, 1, 1]},
-      {sessionId: 'select-response', data: [0, 0xc0, 0, 0]},
+      {sessionId: 'select-response', data: [0, 0xc0, 0, 0, 1]},
     ]);
 
     if (sw === 0x9000) {

@@ -3,7 +3,7 @@ import {css, styled} from 'styled-components';
 
 import type {AddressChain} from '../../@lib/wallet-address.js';
 import {collapseOutAnimationCSS, popInAnimationCSS} from '../@animations.js';
-import {Tag} from '../@ui/tag.js';
+import {PrimaryTag, Tag} from '../@ui/tag.js';
 
 import {AddressChainIcon} from './address-chain-icon.js';
 
@@ -16,7 +16,15 @@ export const KeyTags = styled.div`
 
 export const KeyTag = Tag;
 
+const overlappingKeyTagCSS = css`
+  margin-left: calc(
+    -1 * var(--key-item-gap) - var(--tag-overlap) - var(--tag-inline-margin)
+  );
+`;
+
 export const KeyTypeTag = styled(KeyTag)`
+  z-index: 1;
+
   &.seed {
     background-color: var(--color-seed-light);
     border-color: var(--color-seed-light-shade);
@@ -30,7 +38,8 @@ export const KeyTypeTag = styled(KeyTag)`
   }
 `;
 
-export const KeyAliasTag = styled(KeyTag)`
+export const KeyAliasTag = styled(PrimaryTag)`
+  border-color: transparent;
   flex-shrink: 1;
   min-width: 0;
   display: block;
@@ -40,9 +49,9 @@ export const KeyAliasTag = styled(KeyTag)`
   white-space: nowrap;
   line-height: 20px;
 
-  background-color: var(--ion-color-primary);
-  border-color: var(--ion-color-primary-shade);
-  color: var(--ion-color-primary-contrast);
+  ${KeyTypeTag} + & {
+    ${overlappingKeyTagCSS}
+  }
 `;
 
 const KeyDerivationTagContainer = styled(KeyTag)`
@@ -91,7 +100,7 @@ export const KeyDerivationBadge = styled(KeyTag)<{
   $primary?: boolean;
   $revealing?: boolean;
 }>`
-  margin-left: -12px;
+  ${overlappingKeyTagCSS}
   height: 20px;
   width: 20px;
   padding: 0;

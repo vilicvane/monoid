@@ -2,9 +2,12 @@ import type {HTMLProps, ReactNode} from 'react';
 import {useLayoutEffect, useRef} from 'react';
 import {styled} from 'styled-components';
 
+import type {HighlightRange} from './highlighted-text.js';
+import {decorateHighlightedText} from './highlighted-text.js';
+
 const Container = styled.div`
   display: flex;
-  justify-content: space-between;
+  justify-content: var(--ellipsis-alignment, space-between);
   overflow: hidden;
   white-space: nowrap;
 `;
@@ -24,10 +27,12 @@ const Ellipsis = styled.span`
 export const EllipsisInMiddle = ({
   children: text,
   ellipsis = '...',
+  highlightRanges,
   ...props
 }: {
   children: string;
   ellipsis?: string;
+  highlightRanges?: readonly HighlightRange[];
 } & Omit<HTMLProps<HTMLDivElement>, 'children'>): ReactNode => {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -62,6 +67,7 @@ export const EllipsisInMiddle = ({
       left.textContent = text;
 
       if (left.offsetWidth <= containerWidth) {
+        if (highlightRanges) decorateHighlightedText(left, highlightRanges);
         return;
       }
 
@@ -80,8 +86,17 @@ export const EllipsisInMiddle = ({
         text,
         'rtl',
       );
+
+      if (highlightRanges) {
+        decorateHighlightedText(left, highlightRanges);
+        decorateHighlightedText(
+          right,
+          highlightRanges,
+          text.length - (right.textContent?.length ?? 0),
+        );
+      }
     }
-  }, [text]);
+  }, [text, ellipsis, highlightRanges]);
 
   return (
     <Container ref={containerRef} {...props}>

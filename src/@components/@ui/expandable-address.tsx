@@ -1,4 +1,4 @@
-import {type ReactNode, useState} from 'react';
+import {type ReactNode, useMemo, useState} from 'react';
 import {styled} from 'styled-components';
 
 import {
@@ -9,11 +9,11 @@ import type {AddressMark} from '../../@services/index.js';
 
 import {AddressMarker, getAddressMarkerLabel} from './address-marker.js';
 import {EllipsisInMiddle} from './ellipsis-in-middle.js';
+import type {HighlightRange} from './highlighted-text.js';
+import {inlineIconRowCSS} from './inline-icon.js';
 
 const Container = styled.button<{$severity?: 'warning' | 'danger'}>`
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  ${inlineIconRowCSS}
   width: 100%;
   padding: 0;
   border: 0;
@@ -36,17 +36,32 @@ export function ExpandableAddress({
   kind,
   mark,
   onClick,
+  highlightEdges = false,
+  className,
 }: {
   children: string;
   kind?: AddressKind;
   mark?: AddressMark;
   onClick?: () => void;
+  highlightEdges?: boolean;
+  className?: string;
 }): ReactNode {
   const [expanded, setExpanded] = useState(false);
+  const highlightRanges = useMemo<readonly HighlightRange[] | undefined>(() => {
+    if (!highlightEdges) return undefined;
+
+    const start = address.startsWith('0x') ? 2 : 0;
+
+    return [
+      [start, start + 8],
+      [address.length - 8, address.length],
+    ];
+  }, [address, highlightEdges]);
 
   return (
     <Container
       type="button"
+      className={className}
       $severity={kind ? getAddressSeverity(kind, mark) : undefined}
       aria-label={
         kind ? `${address}, ${getAddressMarkerLabel(kind, mark)}` : address
@@ -55,7 +70,13 @@ export function ExpandableAddress({
       onClick={onClick ?? (() => setExpanded(!expanded))}
     >
       <Value>
-        {expanded ? address : <EllipsisInMiddle>{address}</EllipsisInMiddle>}
+        {expanded ? (
+          address
+        ) : (
+          <EllipsisInMiddle highlightRanges={highlightRanges}>
+            {address}
+          </EllipsisInMiddle>
+        )}
       </Value>
       {kind && <AddressMarker kind={kind} mark={mark} />}
     </Container>

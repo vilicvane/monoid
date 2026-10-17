@@ -49,49 +49,37 @@ export abstract class Applet<TCommandDefinitions> {
   }
 
   async sendCommand<TIns extends keyof TCommandDefinitions & number>(
-    ...args:
-      | [
-          ins: TIns,
-          data: (TCommandDefinitions[TIns] &
-            AppletCommandDefinition)['request'],
-        ]
-      | [
-          cla: number,
-          ins: TIns,
-          p1: number,
-          p2: number,
-          data: (TCommandDefinitions[TIns] &
-            AppletCommandDefinition)['request'],
-        ]
+    ins: TIns,
+    data: (TCommandDefinitions[TIns] & AppletCommandDefinition)['request'],
   ): Promise<(TCommandDefinitions[TIns] & AppletCommandDefinition)['response']>;
-  async sendCommand(
-    ...args:
-      | [ins: number, data: unknown]
-      | [cla: number, ins: number, p1: number, p2: number, data: unknown]
-  ): Promise<unknown> {
-    let cla: number;
-    let ins: number;
-    let p1: number;
-    let p2: number;
+  async sendCommand(ins: number, data: unknown): Promise<unknown> {
+    const payload = this.encode(data, ins);
 
-    let data: unknown;
-
-    if (args.length === 2) {
-      [ins, data] = args;
-      cla = 0x00;
-      p1 = 0x00;
-      p2 = 0x00;
-    } else {
-      [cla, ins, p1, p2, data] = args;
+    if (payload.length === 0 || payload.length > 8192) {
+      throw new RangeError(
+        'Encoded applet requests must contain 1–8192 bytes.',
+      );
     }
 
-    const cbor = this.encode(data);
+    for (let offset = 0; ; offset += 255) {
+      const frame = payload.subarray(offset, offset + 255);
+      const last = offset + frame.length === payload.length;
+      const cla =
+        payload.length <= 255 ? 0x00 : offset === 0 ? 0x90 : last ? 0xa0 : 0xb0;
+      const response = await this.transceive(
+        new Uint8Array([cla, ins, 0x00, 0x00, frame.length, ...frame]),
+      );
 
-    const command = new Uint8Array([cla, ins, p1, p2, cbor.length, ...cbor]);
+      if (last) {
+        return this.decode(await this.readResponse(response));
+      }
 
-    const response = await this.sendRawCommand(command);
-
-    return this.decode(response);
+      if (response.sw !== 0x9000 || response.data.length !== 0) {
+        throw new Error(
+          'Expected an empty acknowledgement for an APDU fragment.',
+        );
+      }
+    }
   }
 
   private async select(): Promise<void> {
@@ -146,7 +134,7 @@ export abstract class Applet<TCommandDefinitions> {
 
     while (response.sw1 === 0x61) {
       response = await this.transceive(
-        new Uint8Array([0x00, 0xc0, 0x00, 0x00]),
+        new Uint8Array([0x00, 0xc0, 0x00, 0x00, response.sw2]),
       );
       buffer = new Uint8Array([...buffer, ...response.data]);
     }
@@ -154,7 +142,7 @@ export abstract class Applet<TCommandDefinitions> {
     return buffer;
   }
 
-  protected abstract encode(data: unknown): Uint8Array;
+  protected abstract encode(data: unknown, ins: number): Uint8Array;
 
   protected abstract decode(data: Uint8Array): unknown;
 
@@ -176,6 +164,7 @@ const ISO7816_SW_CODE_TEXT_MAP = new Map([
   [0x9000, 'No Error'],
   [0x6100, 'Response bytes remaining'],
   [0x6700, 'Wrong length'],
+  [0x6883, 'No matching request in progress'],
   [0x6982, 'Security condition not satisfied'],
   [0x6983, 'File invalid'],
   [0x6984, 'Data invalid'],

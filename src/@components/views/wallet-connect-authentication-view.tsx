@@ -5,7 +5,7 @@ import type {RouteComponentProps} from 'routra-react';
 
 import {useEntrances} from '../../@entrances.js';
 import type {Router} from '../../@routes.js';
-import {Button} from '../@ui/button.js';
+import {AsyncButton, Button} from '../@ui/button.js';
 import {MessageContent} from '../@ui/message-content.js';
 import {
   View,
@@ -26,7 +26,7 @@ export const WalletConnectAuthenticationView = observer(
   }: RouteComponentProps<
     Router['scan']['connection']['authentication']
   >): ReactNode => {
-    const {router} = useEntrances();
+    const {router, walletKitService} = useEntrances();
     const [connectionState, setConnectionState] = useState<
       'signing' | 'connecting'
     >();
@@ -59,14 +59,17 @@ export const WalletConnectAuthenticationView = observer(
                   Sign
                 </Button>
               )}
-              <Button
+              <AsyncButton
                 footerReveal="always"
                 color={available ? 'neutral' : 'primary'}
                 disabled={connecting}
-                onClick={() => router.scan.$reset()}
+                handler={async () => {
+                  if (available) await walletKitService.reject(view.id);
+                  router.scan.$reset();
+                }}
               >
                 {available ? 'Reject' : 'Scan again'}
-              </Button>
+              </AsyncButton>
             </>
           }
         >

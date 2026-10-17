@@ -29,9 +29,37 @@ export const BUILTIN_CHAIN_ICONS: Readonly<Record<string, string>> = {
   'eip155:8453': getChainIconURL('base'),
 };
 
+export type NativeCurrency = {
+  symbol: string;
+  decimals: number;
+};
+
+export const BUILTIN_CHAIN_CURRENCIES: Readonly<
+  Record<string, NativeCurrency>
+> = {
+  'eip155:1': {symbol: 'ETH', decimals: 18},
+  'eip155:10': {symbol: 'ETH', decimals: 18},
+  'eip155:56': {symbol: 'BNB', decimals: 18},
+  'eip155:100': {symbol: 'XDAI', decimals: 18},
+  'eip155:137': {symbol: 'POL', decimals: 18},
+  'eip155:250': {symbol: 'FTM', decimals: 18},
+  'eip155:324': {symbol: 'ETH', decimals: 18},
+  'eip155:999': {symbol: 'HYPE', decimals: 18},
+  'eip155:8453': {symbol: 'ETH', decimals: 18},
+  'eip155:42161': {symbol: 'ETH', decimals: 18},
+  'eip155:43114': {symbol: 'AVAX', decimals: 18},
+  'eip155:59144': {symbol: 'ETH', decimals: 18},
+  'eip155:84532': {symbol: 'ETH', decimals: 18},
+  'eip155:421614': {symbol: 'ETH', decimals: 18},
+  'eip155:534352': {symbol: 'ETH', decimals: 18},
+  'eip155:11155111': {symbol: 'ETH', decimals: 18},
+  'eip155:11155420': {symbol: 'ETH', decimals: 18},
+};
+
 export type ChainDirectory = {
   names: Record<string, string>;
   icons: Record<string, string>;
+  currencies: Record<string, NativeCurrency>;
 };
 
 export function parseChainDirectory(value: unknown): ChainDirectory {
@@ -41,6 +69,7 @@ export function parseChainDirectory(value: unknown): ChainDirectory {
 
   const names: Record<string, string> = {};
   const icons: Record<string, string> = {};
+  const currencies: Record<string, NativeCurrency> = {};
 
   for (const chain of value) {
     if (
@@ -72,9 +101,31 @@ export function parseChainDirectory(value: unknown): ChainDirectory {
     ) {
       icons[id] = getChainIconURL(chain.chainSlug.trim());
     }
+
+    if ('nativeCurrency' in chain) {
+      const currency = chain.nativeCurrency;
+      if (
+        typeof currency === 'object' &&
+        currency !== null &&
+        'symbol' in currency &&
+        typeof currency.symbol === 'string' &&
+        currency.symbol.trim() &&
+        'decimals' in currency &&
+        typeof currency.decimals === 'number' &&
+        Number.isInteger(currency.decimals) &&
+        currency.decimals >= 0 &&
+        // ethers formatUnits supports at most 80 decimal places.
+        currency.decimals <= 80
+      ) {
+        currencies[id] = {
+          symbol: currency.symbol.trim(),
+          decimals: currency.decimals,
+        };
+      }
+    }
   }
 
-  return {names, icons};
+  return {names, icons, currencies};
 }
 
 function getChainIconURL(slug: string): string {

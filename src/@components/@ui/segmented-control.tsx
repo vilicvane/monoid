@@ -56,6 +56,10 @@ const Option = styled.label<{$color?: OptionColor}>`
   min-width: 0;
   cursor: pointer;
 
+  &:has(input:disabled) {
+    cursor: default;
+  }
+
   ${({$color}) =>
     $color &&
     css`
@@ -71,6 +75,10 @@ const OptionInput = styled.input`
 
   &:checked + span {
     color: var(--color-segmented-selected-contrast);
+  }
+
+  &:disabled + span {
+    color: var(--color-text-dim);
   }
 
   &:focus-visible + span {
@@ -113,6 +121,7 @@ export const SegmentedControl = <Value extends string>({
   value,
   options,
   onChange,
+  disabled = false,
   'aria-label': ariaLabel,
 }: {
   value: Value;
@@ -123,6 +132,7 @@ export const SegmentedControl = <Value extends string>({
     color?: OptionColor;
   }[];
   onChange: (value: Value) => void;
+  disabled?: boolean;
   'aria-label': string;
 }): ReactNode => {
   const name = useId();
@@ -132,6 +142,7 @@ export const SegmentedControl = <Value extends string>({
     <Container
       role="radiogroup"
       aria-label={ariaLabel}
+      aria-disabled={disabled}
       $count={options.length || 1}
       $index={selectedIndex}
       $color={options[selectedIndex]?.color}
@@ -143,6 +154,7 @@ export const SegmentedControl = <Value extends string>({
             name={name}
             value={option.value}
             checked={value === option.value}
+            disabled={disabled}
             onChange={() => onChange(option.value)}
           />
           <OptionLabel>

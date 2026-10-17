@@ -7,6 +7,8 @@ import {styled} from 'styled-components';
 import {useEntrances} from '../../@entrances.js';
 
 import {CenteredPopup} from './centered-popup.js';
+import {ChainIcon} from './chain-icon.js';
+import {IconTagName, iconTagCSS} from './icon-tag.js';
 import {
   InfoSectionHeader,
   InfoSectionItemLabel,
@@ -15,7 +17,7 @@ import {
 } from './info-section.js';
 import {inlineIconCSS} from './inline-icon.js';
 
-const Value = styled.button`
+const Value = styled.button<{$tag?: boolean}>`
   display: flex;
   align-items: baseline;
   gap: 4px;
@@ -32,6 +34,8 @@ const Value = styled.button`
   > span {
     min-width: 0;
   }
+
+  ${({$tag}) => $tag && iconTagCSS}
 `;
 
 const DetailsIcon = styled(IonIcon)`
@@ -45,14 +49,6 @@ const Header = styled(InfoSectionHeader)`
   gap: 6px;
 `;
 
-const Logo = styled.img`
-  flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  object-fit: contain;
-`;
-
 const Identifier = styled.span`
   max-width: 100%;
   font-family:
@@ -62,13 +58,19 @@ const Identifier = styled.span`
 `;
 
 export const ChainValue = observer(
-  ({chainId, className}: {chainId: string; className?: string}): ReactNode => {
+  ({
+    chainId,
+    className,
+    appearance = 'text',
+  }: {
+    chainId: string;
+    className?: string;
+    appearance?: 'text' | 'tag';
+  }): ReactNode => {
     const {chainService} = useEntrances();
     const name = chainService.getChainName(chainId);
-    const icon = chainService.getChainIcon(chainId);
     const identifier = chainId.slice(chainId.indexOf(':') + 1);
     const [showDetails, setShowDetails] = useState(false);
-    const [failedIcon, setFailedIcon] = useState<string>();
 
     useEffect(() => {
       void chainService.refresh().catch(console.warn);
@@ -77,13 +79,23 @@ export const ChainValue = observer(
     return (
       <>
         <Value
+          $tag={appearance === 'tag'}
           className={className}
           type="button"
           aria-haspopup="dialog"
           onClick={() => setShowDetails(true)}
         >
-          <span>{name ?? identifier}</span>
-          <DetailsIcon icon={info} aria-hidden="true" />
+          {appearance === 'tag' ? (
+            <>
+              <ChainIcon chainId={chainId} />
+              <IconTagName>{name ?? identifier}</IconTagName>
+            </>
+          ) : (
+            <>
+              <span>{name ?? identifier}</span>
+              <DetailsIcon icon={info} aria-hidden="true" />
+            </>
+          )}
         </Value>
         {showDetails && (
           <CenteredPopup
@@ -92,14 +104,7 @@ export const ChainValue = observer(
           >
             <Header>
               <InfoSectionTitle>{name ?? 'Unknown network'}</InfoSectionTitle>
-              {icon && icon !== failedIcon && (
-                <Logo
-                  src={icon}
-                  alt=""
-                  referrerPolicy="no-referrer"
-                  onError={() => setFailedIcon(icon)}
-                />
-              )}
+              <ChainIcon chainId={chainId} />
             </Header>
             <InfoSectionRow>
               <InfoSectionItemLabel>Chain ID</InfoSectionItemLabel>
@@ -112,7 +117,12 @@ export const ChainValue = observer(
   },
 );
 
-export const ChainName = styled(ChainValue)`
-  align-self: flex-start;
-  font-size: 14px;
-`;
+export const ChainTag = ({
+  chainId,
+  className,
+}: {
+  chainId: string;
+  className?: string;
+}): ReactNode => (
+  <ChainValue chainId={chainId} className={className} appearance="tag" />
+);

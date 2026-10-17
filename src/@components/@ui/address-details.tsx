@@ -1,7 +1,6 @@
 import {getAddress} from 'ethers';
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
-import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
 import type {AddressKind} from '../../@lib/address-status.js';
@@ -15,14 +14,8 @@ import {
   InfoSectionItemLabel,
   InfoSectionRow,
 } from './info-section.js';
-import {MessageContent} from './message-content.js';
+import {PopupAddress} from './popup-address.js';
 import {SegmentedControl} from './segmented-control.js';
-
-const Address = styled(MessageContent)`
-  margin: 0;
-  padding: 0;
-  background: transparent;
-`;
 
 export const AddressDetails = observer(function AddressDetails({
   address,
@@ -41,7 +34,7 @@ export const AddressDetails = observer(function AddressDetails({
       <KeyTags>
         <KeyDerivationTag chain="evm">EVM</KeyDerivationTag>
       </KeyTags>
-      <Address aria-label="Full address">{getAddress(address)}</Address>
+      <PopupAddress>{getAddress(address)}</PopupAddress>
       <InfoSection>
         <InfoSectionRow>
           <InfoSectionItemLabel>Identity</InfoSectionItemLabel>

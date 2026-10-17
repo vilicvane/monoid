@@ -5,8 +5,8 @@ import type {RouteComponentProps} from 'routra-react';
 
 import {BIP39PathString} from '../../../../../@atomics.js';
 import {useEntrances} from '../../../../../@entrances.js';
-import {parseDerivationPath} from '../../../../../@lib/bip39.js';
 import {CBORAppletError} from '../../../../../@lib/cbor-applet.js';
+import {getAppletKey} from '../../../../../@lib/monoid/index.js';
 import type {AddressType} from '../../../../../@lib/wallet-address.js';
 import {
   ADDRESS_TYPES,
@@ -15,7 +15,7 @@ import {
 import type {Router} from '../../../../../@routes.js';
 import type {WalletKeyPublicKeyData} from '../../../../../@services/index.js';
 import {getWalletData} from '../../../../../@services/index.js';
-import {hexToUint8Array, uint8ArrayToHex} from '../../../../../@utils/index.js';
+import {uint8ArrayToHex} from '../../../../../@utils/index.js';
 import {AddressTypeSelector} from '../../../../@key/address-type-selector.js';
 import {useMonoidScanPrompt} from '../../../../@monoid/monoid-scan-prompt.js';
 import {Button} from '../../../../@ui/button.js';
@@ -84,12 +84,7 @@ export const DeriveKeyView = observer(
 
           const {publicKey} = await applet
             .viewKey({
-              index: hexToUint8Array(view.index),
-              ...(key.type === 'seed' && {
-                seed: options.seed,
-              }),
-              curve: options.curve,
-              path: parseDerivationPath(effectivePath),
+              ...getAppletKey(key, addressType, effectivePath),
               ...(options.taproot && {taproot: true}),
             })
             .catch(error => {

@@ -3,6 +3,8 @@ import rotateCcw from 'lucide-static/icons/rotate-ccw.svg';
 import {type InputHTMLAttributes, type ReactNode, useRef} from 'react';
 import {styled} from 'styled-components';
 
+import {selectionTransition} from '../@animations.js';
+
 export const Input = styled.input`
   border: solid 0.5px var(--ion-color-light-shade);
   box-sizing: content-box;
@@ -24,6 +26,63 @@ export const Input = styled.input`
     outline-color: var(--ion-color-danger);
   }
 `;
+
+export const PopupInput = styled(Input)`
+  field-sizing: content;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px 0;
+  border: none;
+  border-bottom: solid 0.5px var(--color-segmented-border);
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 16px;
+  outline: none;
+  transition:
+    color ${selectionTransition.duration}ms linear,
+    min-width ${selectionTransition.duration}ms ${selectionTransition.easing},
+    border-bottom-color ${selectionTransition.duration}ms linear,
+    border-bottom-width ${selectionTransition.duration}ms
+      ${selectionTransition.easing},
+    padding-bottom ${selectionTransition.duration}ms
+      ${selectionTransition.easing};
+
+  &:focus {
+    min-width: min(2ch, 100%);
+    border-bottom-width: 1px;
+    padding-bottom: 3.5px;
+  }
+
+  &:focus:not([aria-invalid='true']) {
+    border-bottom-color: currentColor;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+`;
+
+export const PopupNumberInput = (
+  props: InputHTMLAttributes<HTMLInputElement>,
+): ReactNode => (
+  <PopupInput
+    {...props}
+    onFocus={event => {
+      props.onFocus?.(event);
+      const input = event.currentTarget;
+      requestAnimationFrame(() => {
+        if (document.activeElement !== input) return;
+        const start = input.value.search(/[1-9]/);
+        input.setSelectionRange(
+          start < 0 ? input.value.length : start,
+          input.value.length,
+        );
+      });
+    }}
+  />
+);
 
 const InputContainer = styled.div`
   position: relative;

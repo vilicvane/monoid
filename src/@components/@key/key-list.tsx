@@ -15,11 +15,21 @@ const ADDRESS_PLACEHOLDER_BACKGROUNDS: Record<AddressChain, string> = {
     color-mix(in srgb, #f7931a 10%, var(--ion-background-color, white)))`,
 };
 
-export const KeyList = styled.div<{$compact?: boolean}>`
-  --key-list-item-padding-block: ${props => (props.$compact ? 4 : 12)}px;
+export const KeyList = styled.div<{
+  $compact?: boolean;
+  $compactContent?: boolean;
+  $contained?: boolean;
+}>`
+  --key-list-item-padding-block: ${props =>
+    props.$compact ? (props.$contained ? 0 : 4) : 12}px;
+  --key-list-item-padding-inline: ${props =>
+    props.$contained
+      ? 'calc(-1 * var(--tag-inline-margin))'
+      : 'var(--view-padding)'};
+  --key-list-item-content-gap: ${props => (props.$compactContent ? 4 : 8)}px;
 
   flex: 1;
-  margin: 0 calc(-1 * var(--view-padding));
+  margin: 0 calc(-1 * var(--key-list-item-padding-inline));
 `;
 
 export const KeyListItem = styled.div`
@@ -30,7 +40,8 @@ export const KeyListItem = styled.div`
   justify-content: space-between;
   gap: var(--key-item-gap);
 
-  padding: var(--key-list-item-padding-block, 12px) var(--view-padding);
+  padding: var(--key-list-item-padding-block, 12px)
+    var(--key-list-item-padding-inline, var(--view-padding));
 
   overflow: hidden;
 `;
@@ -42,7 +53,7 @@ export const KeyListItemContent = styled.div`
 
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--key-list-item-content-gap, 8px);
 `;
 
 export const KeyListAddress = styled(Address)`

@@ -10,7 +10,6 @@ import {hexToUint8Array} from '../../../../@utils/index.js';
 import {KeyAliasTag} from '../../../@key/key-tags.js';
 import {KeyType} from '../../../@key/key-type.js';
 import {useMonoidScanPrompt} from '../../../@monoid/monoid-scan-prompt.js';
-import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 import {
   ViewHeader,
@@ -19,7 +18,7 @@ import {
   viewHeaderTagCSS,
 } from '../../../@view/index.js';
 
-const AliasTag = styled(KeyAliasTag)`
+const AliasTag = styled.button`
   ${viewHeaderTagCSS}
 `;
 
@@ -29,7 +28,6 @@ export const KeyHeader = observer(
   ({data}: {data: WalletKeyData}): ReactNode => {
     const {errorService} = useEntrances();
 
-    const toast = useToast();
     const [aliasInput, showAliasInput] = useInputModal();
     const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
       auth: 'access',
@@ -77,8 +75,6 @@ export const KeyHeader = observer(
           });
         },
       );
-
-      toast({message: 'Alias saved'});
     });
 
     return (
@@ -88,14 +84,14 @@ export const KeyHeader = observer(
             <KeyType type={data.type} />
           </ViewHeaderTitle>
           {data.alias && (
-            <AliasTag
-              as="button"
+            <KeyAliasTag
+              as={AliasTag}
               type="button"
               onClick={onClick}
               aria-label="Edit key alias"
             >
               {data.alias}
-            </AliasTag>
+            </KeyAliasTag>
           )}
           <ViewHeaderIdentifier
             identifier={{type: 'safe-item', index: data.index}}

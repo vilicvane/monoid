@@ -20,8 +20,7 @@ const Container = styled(Buttons)<{$revealed: boolean}>`
   z-index: 1;
 
   margin: 0;
-  padding: var(--view-padding) calc(var(--view-padding) - 2px)
-    var(--view-padding-bottom);
+  padding: var(--view-padding) var(--view-padding) var(--view-padding-bottom);
 
   pointer-events: none;
 

@@ -14,9 +14,13 @@ import {
   AddressBookService,
   ChainService,
   ErrorService,
+  EvmCallHistoryService,
+  EvmCalldataService,
+  GasHistoryService,
   MonoidCredentialsStore,
   MonoidScanPromptPresenter,
   MonoidStorageService,
+  SiteLogoService,
   StorageService,
   WalletKitService,
   WalletStorageService,
@@ -117,8 +121,9 @@ export class Entrances {
       this.walletKit,
       this.storageService,
       this.addressBookService,
-    ]).then(([walletKit, storage, addresses]) =>
-      WalletKitService.create(walletKit, storage, addresses),
+      this.evmCallHistoryService,
+    ]).then(([walletKit, storage, addresses, calls]) =>
+      WalletKitService.create(walletKit, storage, addresses, calls),
     );
   }
 
@@ -135,9 +140,33 @@ export class Entrances {
   }
 
   @entrance
+  get siteLogoService() {
+    return this.storageService.then(storage => SiteLogoService.create(storage));
+  }
+
+  @entrance
   get chainService() {
     return this.storageService.then(storageService =>
       ChainService.create(storageService),
+    );
+  }
+
+  @entrance
+  get evmCalldataService() {
+    return this.chainService.then(
+      chainService => new EvmCalldataService(chainService),
+    );
+  }
+
+  @entrance
+  get gasHistoryService() {
+    return new GasHistoryService(import.meta.env.VITE_GAS_HISTORY_URL);
+  }
+
+  @entrance
+  get evmCallHistoryService() {
+    return this.storageService.then(storage =>
+      EvmCallHistoryService.create(storage),
     );
   }
 

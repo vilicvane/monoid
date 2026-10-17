@@ -1,10 +1,12 @@
 import {styled} from 'styled-components';
 
+export const TAG_HEIGHT = 22;
+
 export const Tag = styled.div`
   flex-shrink: 0;
-  margin: 0 -2px;
+  margin: 0 var(--tag-inline-margin);
 
-  height: 22px;
+  height: ${TAG_HEIGHT}px;
   padding: 0 6px;
   font-size: 13px;
   border-radius: 12px;
@@ -16,4 +18,20 @@ export const Tag = styled.div`
   display: flex;
   align-items: center;
   justify-content: center;
+`;
+
+export const PrimaryTag = styled(Tag)`
+  background-color: var(--ion-color-primary);
+  border-color: var(--ion-color-primary-shade);
+  color: var(--ion-color-primary-contrast);
+`;
+
+export const WhiteTag = styled(Tag)`
+  background-color: white;
+`;
+
+export const BlackTag = styled(Tag)`
+  background-color: black;
+  border-color: black;
+  color: white;
 `;

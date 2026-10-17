@@ -92,15 +92,16 @@ export const WalletConnectView = observer(
                   Connect
                 </AsyncButton>
               )}
-              <Button
+              <AsyncButton
                 color={available ? 'neutral' : 'primary'}
                 disabled={connecting}
-                onClick={() => {
+                handler={async () => {
+                  if (available) await walletKitService.reject(view.id);
                   router.scan.$reset();
                 }}
               >
                 {available ? 'Reject' : 'Scan again'}
-              </Button>
+              </AsyncButton>
             </>
           }
         >

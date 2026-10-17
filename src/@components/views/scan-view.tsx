@@ -212,7 +212,6 @@ export const ScanView = observer(
     const revealRef = useRef<(duration: number) => Promise<boolean>>(undefined);
     const completeRef = useRef<() => void>(undefined);
     const scannedUriRef = useRef<{uri: string; consumed: boolean}>(undefined);
-    const claimedProposalIdRef = useRef<number>(undefined);
     const [scanAttempt, setScanAttempt] = useState(0);
     const [status, setStatus] = useState<ScanStatus>('starting');
     const [settledPhase, setSettledPhase] = useState<QrScanPreviewPhase>();
@@ -290,7 +289,6 @@ export const ScanView = observer(
       setSettledPhase(undefined);
       setConnectionResult(undefined);
       scannedUriRef.current = undefined;
-      claimedProposalIdRef.current = undefined;
 
       void (async () => {
         await scanLifecycle.closing;
@@ -417,20 +415,18 @@ export const ScanView = observer(
       if (!scannedUri) return;
 
       if (scannedUri.consumed) {
-        // Returning during departure starts a new scan instead of reusing
-        // a connection that was cancelled when the page became inactive.
+        // A consumed QR code starts a new scan when this page is revisited.
         setStatus('starting');
         setScanAttempt(attempt => attempt + 1);
         return;
       }
 
       const controller = new AbortController();
-      let pendingProposalId: number | undefined;
       scannedUri.consumed = true;
 
       void walletKitService
         .connect(scannedUri.uri, controller.signal)
-        .then(async proposal => {
+        .then(proposal => {
           if (!proposal) return;
 
           if (
@@ -438,11 +434,9 @@ export const ScanView = observer(
             view.$leaving ||
             !view.$match.$exact.$active
           ) {
-            await walletKitService.reject(proposal.id);
             return;
           }
 
-          pendingProposalId = proposal.id;
           setConnectionResult({
             proposalId: proposal.id,
             signal: controller.signal,
@@ -456,14 +450,8 @@ export const ScanView = observer(
 
       return () => {
         controller.abort();
-        if (
-          pendingProposalId !== undefined &&
-          claimedProposalIdRef.current !== pendingProposalId
-        ) {
-          errorService.catch(walletKitService.reject(pendingProposalId));
-        }
       };
-    }, [connecting, active, walletKitService, errorService, view]);
+    }, [connecting, active, walletKitService, view]);
 
     useEffect(() => {
       if (
@@ -479,7 +467,6 @@ export const ScanView = observer(
         setStatus('error');
         errorService.catch(Promise.reject(connectionResult.error));
       } else {
-        claimedProposalIdRef.current = connectionResult.proposalId;
         router.scan.connection({id: connectionResult.proposalId}).$push();
       }
     }, [status, settledPhase, active, connectionResult, router, errorService]);

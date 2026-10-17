@@ -1,5 +1,6 @@
-import {decode, encode} from 'cbor2';
 import * as x from 'x-value';
+
+import {xCBOR} from '../@x-value/index.js';
 
 import type {AppletCommandDefinition} from './applet.js';
 import {Applet} from './applet.js';
@@ -7,14 +8,25 @@ import {Applet} from './applet.js';
 export class CBORApplet<
   TCommandDefinitions,
 > extends Applet<TCommandDefinitions> {
-  protected encode(data: unknown): Uint8Array {
-    return encode(data, {
-      rejectUndefined: true,
-    });
+  private readonly definitions: Map<number, CBORCommandDefinition>;
+
+  constructor(aid: Uint8Array, definitions: CBORCommandDefinitions) {
+    super(aid);
+
+    this.definitions = new Map(
+      Object.values(definitions).map(definition => [
+        definition.ins,
+        definition,
+      ]),
+    );
+  }
+
+  protected encode(data: unknown, ins: number): Uint8Array {
+    return this.definitions.get(ins)!.request.encode(xCBOR, data as object);
   }
 
   protected decode(data: Uint8Array): unknown {
-    const decoded = decode(data);
+    const decoded = xCBOR.unpack(data);
 
     if (XCBORErrorResponse.is(decoded)) {
       throw new CBORAppletError(decoded.error);
@@ -31,7 +43,7 @@ export class CBORApplet<
   > &
     CBORCommandDefinitionsToMethods<TCBORCommandDefinitions> {
     return Object.create(
-      new CBORApplet(aid),
+      new CBORApplet(aid, definitions),
       Object.fromEntries(
         Object.entries(definitions).map(([key, definition]) => [
           key,
@@ -40,10 +52,7 @@ export class CBORApplet<
               this: CBORApplet<Record<number, AppletCommandDefinition>>,
               request: unknown,
             ) {
-              const response = await this.sendCommand(
-                definition.ins,
-                definition.request.satisfies(request),
-              );
+              const response = await this.sendCommand(definition.ins, request);
 
               return definition.response.satisfies(response);
             },

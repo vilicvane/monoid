@@ -77,10 +77,13 @@ for (const keyType of ['seed', 'master']) {
 
       assert.deepEqual(requests, [
         {
+          type: keyType,
           index: bytes(INDEX),
-          ...(keyType === 'seed' && {seed}),
-          curve,
-          path: parseDerivationPath(path),
+          derivation: {
+            type: curve === 'ed25519' ? 'slip10' : 'bip32',
+            ...(curve === 'ed25519' && {curve}),
+            path: parseDerivationPath(path),
+          },
           ...(addressType === 'bitcoin-taproot' && {taproot: true}),
         },
       ]);
@@ -113,6 +116,7 @@ test('raw keys omit all derivation options, while raw Taproot still requests a t
 
     assert.deepEqual(requests, [
       {
+        type: curve,
         index: bytes(INDEX),
         ...(addressType === 'bitcoin-taproot' && {taproot: true}),
       },
@@ -135,7 +139,9 @@ test('the applet schema preserves the raw Taproot flag without curve or path', a
     'bitcoin-taproot',
   );
 
-  assert.deepEqual(requests, [[0x40, {index: bytes(INDEX), taproot: true}]]);
+  assert.deepEqual(requests, [
+    [0x40, {type: 'secp256k1', index: bytes(INDEX), taproot: true}],
+  ]);
 });
 
 test('unsupported selections reject before talking to the card', async () => {
@@ -236,7 +242,10 @@ test('initial card scanning includes raw Ed25519 and reports progress only for s
       address: '1'.repeat(32),
     },
   });
-  assert.deepEqual(requests[3], {index: new Uint8Array([4])});
+  assert.deepEqual(requests[3], {
+    type: 'ed25519',
+    index: new Uint8Array([4]),
+  });
 });
 
 test('initial scans skip unsupported firmware results but propagate other card errors', async () => {

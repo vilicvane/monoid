@@ -9,7 +9,10 @@ http://ionicframework.com/docs/theming/ */
 
   --nav-bar-height: 50px;
 
-  --key-item-gap: 10px;
+  --key-item-gap: 8px;
+  --tag-inline-margin: -1px;
+  --tag-overlap: 3px;
+  --info-border-radius: 4px;
 
   --view-z-index: 0;
   --view-entering-z-index: 1;
@@ -18,8 +21,10 @@ http://ionicframework.com/docs/theming/ */
 
   --color-text-secondary: #666666;
   --color-text-dim: #999999;
+  --color-text-warning: #b58a08;
+  --color-text-caution: #c8751a;
 
-  --color-address-warning: #b58a08;
+  --color-address-warning: var(--color-text-warning);
   --color-address-danger: var(--ion-color-danger-shade);
 
   --color-seed-light: #dcead4;

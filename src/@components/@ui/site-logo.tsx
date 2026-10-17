@@ -4,9 +4,8 @@ import type {ReactNode} from 'react';
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {styled} from 'styled-components';
 
+import {useEntrances} from '../../@entrances.js';
 import {getSiteLogoUrls} from '../../@lib/site-logo.js';
-
-const loadedLogos = new Map<string, number>();
 
 const Container = styled.div<{$loaded: boolean; $size: number}>`
   display: grid;
@@ -76,20 +75,49 @@ function SiteLogoImage({
   urls: readonly string[];
   size: number;
 }): ReactNode {
-  const cacheKey = JSON.stringify(urls);
-  const [{index, loaded}, setImage] = useState(() => {
-    const index = loadedLogos.get(cacheKey);
-    return {index: index ?? 0, loaded: index !== undefined};
+  const {siteLogoService} = useEntrances();
+  const [{sources, index, src, loaded}, setImage] = useState(() => {
+    const cached = siteLogoService.getCached(urls);
+    return {
+      sources: cached
+        ? [cached.url, ...urls.filter(url => url !== cached.url)]
+        : urls,
+      index: 0,
+      src: cached?.src,
+      loaded: !!cached,
+    };
   });
   const imageRef = useRef<HTMLImageElement>(null);
-  const src = urls[index];
+  const url = sources[index];
 
   const nextImage = useCallback(() => {
-    if (loadedLogos.get(cacheKey) === index) loadedLogos.delete(cacheKey);
+    if (url) siteLogoService.remove(url);
     setImage(image =>
-      image.index === index ? {index: index + 1, loaded: false} : image,
+      image.index === index
+        ? {...image, index: index + 1, src: undefined, loaded: false}
+        : image,
     );
-  }, [cacheKey, index]);
+  }, [siteLogoService, url, index]);
+
+  useEffect(() => {
+    if (!url) return;
+
+    let active = true;
+
+    void siteLogoService
+      .load(url)
+      // A browser may display a cross-origin image even when CORS prevents caching it.
+      .catch(() => url)
+      .then(src => {
+        if (active) {
+          setImage(image => (image.index === index ? {...image, src} : image));
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [siteLogoService, url, index]);
 
   useEffect(() => {
     const image = imageRef.current;
@@ -122,7 +150,6 @@ function SiteLogoImage({
           referrerPolicy="no-referrer"
           $loaded={loaded}
           onLoad={() => {
-            loadedLogos.set(cacheKey, index);
             setImage(image =>
               image.index === index ? {...image, loaded: true} : image,
             );

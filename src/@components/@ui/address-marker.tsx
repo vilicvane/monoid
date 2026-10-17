@@ -6,21 +6,25 @@ import shieldX from 'lucide-static/icons/shield-x.svg';
 import userPen from 'lucide-static/icons/user-pen.svg';
 import user from 'lucide-static/icons/user.svg';
 import type {ReactNode} from 'react';
-import {styled} from 'styled-components';
+import {css, styled} from 'styled-components';
 
 import type {AddressKind} from '../../@lib/address-status.js';
 import type {AddressMark} from '../../@services/index.js';
 
 import {inlineIconCSS} from './inline-icon.js';
 
-const Marker = styled(IonIcon)<{$color: string}>`
+const Marker = styled(IonIcon)<{$color?: string}>`
   ${inlineIconCSS}
-  color: ${({$color}) => $color};
+  ${({$color}) =>
+    $color &&
+    css`
+      color: ${$color};
+    `}
 `;
 
 const markers: Record<
   AddressKind | AddressMark,
-  {icon: string; color: string; label: string; description: string}
+  {icon: string; color?: string; label: string; description: string}
 > = {
   signer: {
     icon: userPen,
@@ -36,7 +40,6 @@ const markers: Record<
   },
   seen: {
     icon: history,
-    color: 'var(--ion-color-medium-tint)',
     label: 'Seen before',
     description: 'Included in a message you previously signed.',
   },

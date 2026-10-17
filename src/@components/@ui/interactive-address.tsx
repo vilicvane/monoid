@@ -1,23 +1,13 @@
-import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
-import checkCheck from 'lucide-static/icons/check-check.svg';
-import copy from 'lucide-static/icons/copy.svg';
-import ms from 'ms';
 import type {HTMLAttributes, ReactNode} from 'react';
 import {styled} from 'styled-components';
 
-import {useEntrances} from '../../@entrances.js';
-import {useTemporaryState} from '../@hooks/interactions.js';
-import {useCopyAddress} from '../@hooks/use-copy-address.js';
-
 import {Address as Address_} from './address.js';
+import {CopyButton} from './copy-button.js';
+import {inlineIconRowCSS} from './inline-icon.js';
 
-const Container = styled.div<{$copyable: boolean}>`
-  position: relative;
-  padding-right: ${({$copyable}) => ($copyable ? '20px' : '0')};
-
-  display: flex;
-  align-items: center;
+const Container = styled.div`
+  ${inlineIconRowCSS}
 `;
 
 const Address = styled(Address_)`
@@ -29,26 +19,6 @@ const Address = styled(Address_)`
   }
 `;
 
-const CopyButton = styled.button`
-  position: absolute;
-  top: 50%;
-  right: -4px;
-  transform: translateY(-50%);
-
-  width: 24px;
-  height: 24px;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  font-size: inherit;
-  background: transparent;
-  color: var(--ion-color-medium);
-`;
-
-const COPIED_STATE_DURATION = ms('1s');
-
 export const InteractiveAddress = ({
   clickable = false,
   copyable = false,
@@ -59,13 +29,8 @@ export const InteractiveAddress = ({
   copyable?: boolean;
   children: string;
 }): ReactNode => {
-  const {errorService} = useEntrances();
-  const copyAddress = useCopyAddress();
-
-  const [copied, setCopied] = useTemporaryState(false, COPIED_STATE_DURATION);
-
   return (
-    <Container {...props} $copyable={copyable}>
+    <Container {...props}>
       <Address
         className={classNames({
           clickable,
@@ -78,18 +43,7 @@ export const InteractiveAddress = ({
       >
         {address}
       </Address>
-      {copyable && (
-        <CopyButton
-          type="button"
-          aria-label="Copy address"
-          onClick={errorService.catch(async () => {
-            await copyAddress(address);
-            setCopied(true);
-          })}
-        >
-          <IonIcon icon={copied ? checkCheck : copy} />
-        </CopyButton>
-      )}
+      {copyable && <CopyButton value={address} label="Copy address" />}
     </Container>
   );
 };

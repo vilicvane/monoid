@@ -1,0 +1,18 @@
+{
+  "root": true,
+  "ignorePatterns": ["node_modules/", ".bld/", ".wrangler/"],
+  "overrides": [
+    {
+      "files": ["src/**/*.ts"],
+      "extends": ["plugin:@mufan/typescript"],
+      "parserOptions": {"project": "tsconfig.json"}
+    },
+    {
+      "files": ["tests/**/*.mjs"],
+      "extends": ["plugin:@mufan/javascript"],
+      "env": {"es2021": true, "node": true},
+      "parserOptions": {"sourceType": "module"},
+      "rules": {"@mufan/import": "off"}
+    }
+  ]
+}

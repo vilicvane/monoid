@@ -1,7 +1,8 @@
-import {hexlify} from 'ethers';
+import {Transaction, type TransactionLike, hexlify} from 'ethers';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
+import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
 import {
@@ -9,13 +10,28 @@ import {
   getAddressKind,
   getAddressSeverity,
 } from '../../@lib/address-status.js';
+import {
+  type EvmCalldata,
+  getEvmCalldataAddresses,
+} from '../../@lib/evm-calldata.js';
+import type {EvmGasSettings} from '../../@lib/evm-gas-settings.js';
+import {formatEvmTransactionError} from '../../@lib/evm-transaction-error.js';
+import {prepareEvmTransaction} from '../../@lib/prepare-evm-transaction.js';
 import {getTypedDataAddresses} from '../../@lib/typed-data-fields.js';
-import {parseWalletConnectSignRequest} from '../../@lib/wallet-connect-request.js';
+import {
+  type WalletConnectPreparedTransaction,
+  parseWalletConnectRequest,
+} from '../../@lib/wallet-connect-request.js';
+import {
+  assertWalletConnectTransaction,
+  getEvmTransactionAddresses,
+} from '../../@lib/wallet-connect-transaction.js';
 import type {Router} from '../../@routes.js';
 import {type AddressMark, getKeyWallets} from '../../@services/index.js';
 import {getWalletSigningAccount} from '../@monoid/get-wallet-signing-account.js';
 import {AddressDetails} from '../@ui/address-details.js';
 import {AsyncButton, Button} from '../@ui/button.js';
+import {ChainTag} from '../@ui/chain-name.js';
 import {MessageContent} from '../@ui/message-content.js';
 import {
   View,
@@ -27,8 +43,23 @@ import {
 
 import {WalletConnectMessage} from './@scan/wallet-connect-message.js';
 import {WalletConnectSite} from './@scan/wallet-connect-site.js';
-import {WalletConnectSignButton} from './@sessions/wallet-connect-sign-button.js';
+import {
+  WalletConnectSignButton,
+  type WalletConnectSigningState,
+} from './@sessions/wallet-connect-sign-button.js';
+import {
+  TRANSACTION_TYPE_LABELS,
+  WalletConnectTransaction,
+} from './@sessions/wallet-connect-transaction.js';
 import {WalletConnectTypedData} from './@sessions/wallet-connect-typed-data.js';
+
+const TransactionTypeLabel = styled.span`
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--ion-color-medium-shade);
+  font-size: 13px;
+  white-space: nowrap;
+`;
 
 export const WalletConnectRequestView = observer(
   ({view}: RouteComponentProps<Router['sessions']['request']>): ReactNode => {
@@ -37,10 +68,11 @@ export const WalletConnectRequestView = observer(
       walletKitService,
       walletStorageService,
       addressBookService,
-      errorService,
+      chainService,
+      evmCalldataService,
     } = useEntrances();
 
-    // Keep the reviewed message and site stable through replies and transitions.
+    // Keep the reviewed request and site stable through replies and transitions.
     const [request] = useState(() => {
       const pending = walletKitService.requests.get(view.id);
       return pending && structuredClone(pending);
@@ -51,17 +83,36 @@ export const WalletConnectRequestView = observer(
     const [review] = useState(() => {
       if (!request || !session) return undefined;
       try {
-        const payload = parseWalletConnectSignRequest(request, session);
+        const payload = parseWalletConnectRequest(request, session);
         const addresses =
           payload.method === 'eth_signTypedData_v4'
             ? getTypedDataAddresses(payload.typedData)
-            : [];
+            : payload.method === 'eth_sendTransaction'
+              ? getEvmTransactionAddresses(payload.transaction)
+              : [];
         return {payload, addresses};
       } catch (error) {
         return {error: (error as Error).message};
       }
     });
-    const [state, setState] = useState<'signing' | 'responding'>();
+    const payload = review?.payload;
+    const [transactionInput, setTransactionInput] = useState(() =>
+      payload?.method === 'eth_sendTransaction'
+        ? payload.transaction
+        : undefined,
+    );
+    const [state, setState] = useState<WalletConnectSigningState>();
+    const [preparation, setPreparation] = useState<{
+      input: TransactionLike<string>;
+      transaction: TransactionLike<string>;
+      payload?: WalletConnectPreparedTransaction;
+      error?: string;
+    }>();
+    const [preparationAttempt, setPreparationAttempt] = useState(0);
+    const [dataReview, setDataReview] = useState<{
+      chainId: string;
+      data: EvmCalldata;
+    }>();
     const [ended, setEnded] = useState(!request || !session);
     const [selectedAddress, setSelectedAddress] = useState<string>();
     const active = !view.$leaving && view.$match.$exact.$active;
@@ -73,7 +124,31 @@ export const WalletConnectRequestView = observer(
       ) * 1000;
     const available = !ended;
     const busy = state !== undefined;
-    const payload = review?.payload;
+    const currentPreparation =
+      preparation?.input === transactionInput ? preparation : undefined;
+    const signingPayload =
+      payload?.method === 'eth_sendTransaction'
+        ? currentPreparation?.payload
+        : payload;
+    const transaction = currentPreparation?.transaction ?? transactionInput;
+    const transactionChainId =
+      payload?.method === 'eth_sendTransaction' ? payload.chainId : undefined;
+    const transactionTarget = transaction?.to ?? undefined;
+    const transactionData =
+      transaction?.data ?? (transaction ? '0x' : undefined);
+    const decodedData =
+      dataReview?.chainId === transactionChainId &&
+      dataReview?.data.target === transactionTarget &&
+      dataReview?.data.data === transactionData
+        ? dataReview?.data
+        : undefined;
+    const addresses = [
+      ...new Set([
+        ...(review?.addresses ?? []),
+        ...(decodedData ? getEvmCalldataAddresses(decodedData) : []),
+      ]),
+    ];
+    const submission = walletKitService.getTransactionSubmission(view.id);
     const ownAddresses = new Set(
       walletStorageService.keys
         .flatMap(getKeyWallets)
@@ -81,15 +156,13 @@ export const WalletConnectRequestView = observer(
         .map(wallet => wallet.address.toLowerCase()),
     );
     const signedAddresses = new Set(
-      review?.addresses?.filter(address =>
-        addressBookService.hasSigned('evm', address),
-      ),
+      addresses.filter(address => addressBookService.hasSigned('evm', address)),
     );
     const addressKind = (address: string): AddressKind =>
       getAddressKind(address, payload!.address, ownAddresses, signedAddresses);
     const addressMark = (address: string): AddressMark | undefined =>
       addressBookService.getMark('evm', address);
-    const severities = review?.addresses?.map(address =>
+    const severities = addresses.map(address =>
       getAddressSeverity(addressKind(address), addressMark(address)),
     );
     const signColor = severities?.includes('danger')
@@ -105,6 +178,113 @@ export const WalletConnectRequestView = observer(
         request.id !== view.id &&
         !walletKitService.isRespondingToRequest(request.id),
     )?.id;
+
+    useEffect(() => {
+      if (!transactionChainId || transactionData === undefined || !available)
+        return;
+      const controller = new AbortController();
+      const signal = AbortSignal.any([
+        controller.signal,
+        AbortSignal.timeout(20000),
+      ]);
+
+      void (async () => {
+        const raw: EvmCalldata = {
+          data: transactionData,
+          target: transactionTarget,
+          candidates: [],
+        };
+        const data =
+          transactionTarget && transactionData !== '0x'
+            ? await evmCalldataService
+                .decode(
+                  transactionChainId,
+                  transactionTarget,
+                  transactionData,
+                  signal,
+                )
+                .catch(() => ({...raw, issue: 'unavailable' as const}))
+            : raw;
+        if (!controller.signal.aborted)
+          setDataReview({chainId: transactionChainId, data});
+      })();
+
+      return () => controller.abort();
+    }, [
+      transactionChainId,
+      transactionTarget,
+      transactionData,
+      available,
+      evmCalldataService,
+    ]);
+
+    useEffect(() => {
+      if (
+        payload?.method !== 'eth_sendTransaction' ||
+        !transactionInput ||
+        !available
+      )
+        return;
+      let cancelled = false;
+      setPreparation(undefined);
+
+      void (async () => {
+        const saved = walletKitService.getTransactionSubmission(view.id);
+        const result = saved
+          ? {
+              transaction: Transaction.from(saved.signedTransaction),
+              unsignedTransaction: Transaction.from(saved.signedTransaction)
+                .unsignedSerialized,
+              error: undefined,
+            }
+          : await prepareEvmTransaction(
+              transactionInput,
+              payload.address,
+              await chainService.getRPC(payload.chainId),
+            );
+        const {unsignedTransaction} = result;
+        if (unsignedTransaction)
+          assertWalletConnectTransaction(payload, unsignedTransaction);
+
+        if (!cancelled) {
+          setPreparation({
+            input: transactionInput,
+            transaction: result.transaction,
+            error: result.error,
+            payload: unsignedTransaction
+              ? {
+                  ...payload,
+                  unsignedTransaction,
+                  digest: Transaction.from(unsignedTransaction).unsignedHash,
+                }
+              : undefined,
+          });
+        }
+      })().catch((error: unknown) => {
+        if (!cancelled)
+          setPreparation({
+            input: transactionInput,
+            transaction: transactionInput,
+            error: formatEvmTransactionError(error),
+          });
+      });
+
+      return () => {
+        cancelled = true;
+      };
+    }, [
+      payload,
+      transactionInput,
+      available,
+      preparationAttempt,
+      chainService,
+      walletKitService,
+      view.id,
+    ]);
+
+    const changeGas = (settings: EvmGasSettings): void => {
+      setTransactionInput({...transaction!, ...settings});
+    };
 
     const complete = async (): Promise<void> => {
       if (view.$leaving || !view.$match.$exact.$active) return;
@@ -129,34 +309,17 @@ export const WalletConnectRequestView = observer(
       const timer = setTimeout(
         () => {
           setEnded(true);
-          errorService.catch(walletKitService.rejectRequest(view.id));
         },
         Math.max(0, expiry - Date.now()),
       );
       return () => clearTimeout(timer);
-    }, [active, expiry, errorService, walletKitService, view.id]);
+    }, [active, expiry]);
 
     useEffect(() => {
-      if (active && !pending && state !== 'responding') setEnded(true);
-    }, [active, pending, state]);
-
-    useEffect(() => {
-      if (view.$leaving) {
-        errorService.catch(walletKitService.rejectRequest(view.id));
+      if (active && !pending && state !== 'responding' && state !== 'sending') {
+        setEnded(true);
       }
-    }, [view.$leaving, view.id, walletKitService, errorService]);
-
-    useEffect(
-      () => () => {
-        const entries = router.sessions.request.$view({
-          parallel: true,
-        }).$entries;
-        if (!entries.some(entry => entry.id === view.id)) {
-          errorService.catch(walletKitService.rejectRequest(view.id));
-        }
-      },
-      [router, view.id, walletKitService, errorService],
-    );
+    }, [active, pending, state]);
 
     useEffect(() => {
       if (active && !available && !busy && nextId !== undefined) {
@@ -178,9 +341,11 @@ export const WalletConnectRequestView = observer(
       <View inert={!active}>
         <ViewHeader>
           <ViewHeaderTitle>
-            {request?.params.request.method === 'eth_signTypedData_v4'
-              ? 'Sign typed data'
-              : 'Sign message'}
+            {request?.params.request.method === 'eth_sendTransaction'
+              ? 'Send transaction'
+              : request?.params.request.method === 'eth_signTypedData_v4'
+                ? 'Sign typed data'
+                : 'Sign message'}
           </ViewHeaderTitle>
         </ViewHeader>
         <ViewContent
@@ -188,30 +353,52 @@ export const WalletConnectRequestView = observer(
           footer={
             <>
               {available &&
-                payload &&
+                signingPayload &&
                 (active ? (
                   <WalletConnectSignButton
+                    key={signingPayload.digest}
                     view={view}
-                    payload={payload}
-                    disabled={busy || !account}
+                    topic={request!.topic}
+                    payload={signingPayload}
+                    decodedData={decodedData}
+                    disabled={
+                      busy ||
+                      (!account && !submission) ||
+                      (payload?.method === 'eth_sendTransaction' &&
+                        !decodedData)
+                    }
                     color={signColor}
                     onStateChange={setState}
                     onComplete={complete}
                   />
                 ) : (
                   <Button disabled loading={busy} color={signColor}>
-                    Sign
+                    {payload?.method === 'eth_sendTransaction'
+                      ? 'Send'
+                      : 'Sign'}
                   </Button>
                 ))}
-              {available ? (
-                <AsyncButton
-                  footerReveal="always"
-                  color="neutral"
-                  disabled={busy}
-                  handler={reject}
+              {available && currentPreparation?.error && (
+                <Button
+                  onClick={() => {
+                    setPreparation(undefined);
+                    setPreparationAttempt(value => value + 1);
+                  }}
                 >
-                  Reject
-                </AsyncButton>
+                  Retry
+                </Button>
+              )}
+              {available ? (
+                !submission && (
+                  <AsyncButton
+                    footerReveal="always"
+                    color="neutral"
+                    disabled={busy}
+                    handler={reject}
+                  >
+                    Reject
+                  </AsyncButton>
+                )
               ) : (
                 <Button footerReveal="always" onClick={() => void complete()}>
                   Close
@@ -224,31 +411,63 @@ export const WalletConnectRequestView = observer(
             <WalletConnectSite
               metadata={session.peer.metadata}
               verified={request.verifyContext.verified}
-            />
+              compact={payload?.method === 'eth_sendTransaction'}
+            >
+              {transactionChainId && <ChainTag chainId={transactionChainId} />}
+              {transaction?.type != null && (
+                <TransactionTypeLabel title="Transaction type">
+                  {TRANSACTION_TYPE_LABELS[transaction.type]}
+                </TransactionTypeLabel>
+              )}
+            </WalletConnectSite>
           )}
           {!available ? (
             <ViewPlaceholder role="status">
               Request no longer available
             </ViewPlaceholder>
           ) : payload ? (
-            <WalletConnectMessage address={payload.address}>
-              {payload.method === 'eth_signTypedData_v4' ? (
-                <WalletConnectTypedData
-                  data={payload.typedData}
-                  getAddressKind={addressKind}
-                  getAddressMark={addressMark}
-                  onAddressClick={setSelectedAddress}
-                />
-              ) : (
-                <MessageContent
-                  aria-label={
-                    payload.text === undefined ? 'Message (hex)' : 'Message'
-                  }
-                >
-                  {payload.text ?? hexlify(payload.message)}
-                </MessageContent>
-              )}
-            </WalletConnectMessage>
+            <>
+              <WalletConnectMessage
+                address={payload.address}
+                accountLabel={
+                  payload.method === 'eth_sendTransaction' ? 'From' : undefined
+                }
+              >
+                {payload.method === 'eth_sendTransaction' ? (
+                  transaction ? (
+                    <WalletConnectTransaction
+                      transaction={transaction}
+                      decodedData={decodedData}
+                      preparing={!currentPreparation}
+                      error={currentPreparation?.error}
+                      onGasChange={
+                        active && available && !busy && !submission
+                          ? changeGas
+                          : undefined
+                      }
+                      getAddressKind={addressKind}
+                      getAddressMark={addressMark}
+                      onAddressClick={setSelectedAddress}
+                    />
+                  ) : null
+                ) : payload.method === 'eth_signTypedData_v4' ? (
+                  <WalletConnectTypedData
+                    data={payload.typedData}
+                    getAddressKind={addressKind}
+                    getAddressMark={addressMark}
+                    onAddressClick={setSelectedAddress}
+                  />
+                ) : (
+                  <MessageContent
+                    aria-label={
+                      payload.text === undefined ? 'Message (hex)' : 'Message'
+                    }
+                  >
+                    {payload.text ?? hexlify(payload.message)}
+                  </MessageContent>
+                )}
+              </WalletConnectMessage>
+            </>
           ) : (
             <ViewPlaceholder role="status">{review?.error}</ViewPlaceholder>
           )}

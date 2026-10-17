@@ -86,11 +86,13 @@ export const CenteredPopup = ({
   className,
   children,
   onDismiss,
+  initialFocus = 'control',
   'aria-label': ariaLabel,
 }: {
   className?: string;
   children: ReactNode;
   onDismiss: () => void;
+  initialFocus?: 'control' | 'dialog';
   'aria-label': string;
 }): ReactNode => {
   const {
@@ -132,10 +134,14 @@ export const CenteredPopup = ({
     const focusInitial = (): void => {
       const stops = getTabStops(dialog);
       const target =
-        stops.find(element => element.matches('input[type="radio"]:checked')) ??
-        stops.find(element => element.matches('button')) ??
-        stops[0] ??
-        dialog;
+        initialFocus === 'dialog'
+          ? dialog
+          : (stops.find(element =>
+              element.matches('input[type="radio"]:checked'),
+            ) ??
+            stops.find(element => element.matches('button')) ??
+            stops[0] ??
+            dialog);
 
       target.focus({preventScroll: true});
     };
@@ -202,7 +208,7 @@ export const CenteredPopup = ({
         trigger.focus({preventScroll: true});
       }
     };
-  }, [trigger]);
+  }, [trigger, initialFocus]);
 
   return (
     <>

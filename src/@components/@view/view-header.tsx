@@ -27,7 +27,7 @@ const ViewHeaderContainer = styled.div`
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-content: center;
   align-items: baseline;
-  gap: 10px;
+  gap: 8px;
 
   border-bottom: solid 0.5px transparent;
 
@@ -61,7 +61,7 @@ export const ViewHeaderButton = styled(IconButton)`
 `;
 
 export const viewHeaderTagCSS = css`
-  --view-header-tag-optical-offset: 1px;
+  --view-header-tag-optical-offset: 2px;
 
   justify-self: start;
   min-width: 0;

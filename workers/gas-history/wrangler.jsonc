@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "monoid-gas-history",
+  "account_id": "ca460ca2dd53b5a2335003df88d0db8f",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-17",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    {"pattern": "www.monoid.app/api/gas-history/*", "zone_name": "monoid.app"},
+  ],
+  "cache": {"enabled": true},
+  "triggers": {"crons": ["*/5 * * * *"]},
+  "kv_namespaces": [
+    {"binding": "GAS_HISTORY", "id": "ce27962f059a4932807190d86d44c5e4"},
+  ],
+  "observability": {"enabled": true},
+}

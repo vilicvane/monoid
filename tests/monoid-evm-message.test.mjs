@@ -21,12 +21,14 @@ const {signEvmMessage} = await import(
 // Public fixture: secp256k1 scalar 1, also used by the address tests.
 const signingKey = new SigningKey(`0x${'1'.padStart(64, '0')}`);
 const address = computeAddress(signingKey.publicKey);
-const rawKey = {index: getBytes('0x04010000000000000001')};
+const rawKey = {type: 'secp256k1', index: getBytes('0x04010000000000000001')};
 const derivedKey = {
+  type: 'seed',
   index: getBytes('0x02400000000000000002'),
-  seed: 'Bitcoin seed',
-  curve: 'secp256k1',
-  path: getBytes('0x8000002c8000003c800000000000000000000000'),
+  derivation: {
+    type: 'bip32',
+    path: getBytes('0x8000002c8000003c800000000000000000000000'),
+  },
 };
 
 function message(nonce = 'fixture0') {
@@ -113,9 +115,9 @@ for (const [nonce, recoveryBit, digest] of [
 
 test('preserves raw, seed and master references for both card operations', async () => {
   const masterKey = {
+    type: 'master',
     index: getBytes('0x03400000000000000003'),
-    curve: derivedKey.curve,
-    path: derivedKey.path,
+    derivation: derivedKey.derivation,
   };
 
   for (const key of [rawKey, derivedKey, masterKey]) {

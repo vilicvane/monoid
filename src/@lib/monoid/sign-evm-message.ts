@@ -1,11 +1,11 @@
 import {hashMessage} from 'ethers';
 
-import type {MonoidApplet, MonoidAppletKey} from './monoid-applet.js';
+import type {MonoidApplet, MonoidAppletSECP256K1Key} from './monoid-applet.js';
 import {signEvmDigest} from './sign-evm-digest.js';
 
 export async function signEvmMessage(
   applet: MonoidApplet,
-  key: MonoidAppletKey,
+  key: MonoidAppletSECP256K1Key,
   message: string | Uint8Array,
   expectedAddress: string,
   assertActive?: () => void,

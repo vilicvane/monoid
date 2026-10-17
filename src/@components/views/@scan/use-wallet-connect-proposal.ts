@@ -9,7 +9,7 @@ export function useWalletConnectProposal(
   active: boolean,
   submitting: boolean,
 ): {proposal: WalletKitTypes.SessionProposal | undefined; available: boolean} {
-  const {router, walletKitService, errorService} = useEntrances();
+  const {walletKitService} = useEntrances();
   // Retain the site's content while the rejected page fades out.
   const [proposal] = useState(() => walletKitService.proposals.get(id));
   const expiry = proposal ? getWalletConnectRequestExpiry(proposal) : 0;
@@ -22,25 +22,12 @@ export function useWalletConnectProposal(
     const timer = setTimeout(
       () => {
         setEnded(true);
-        errorService.catch(walletKitService.reject(id));
       },
       Math.max(0, expiry - Date.now()),
     );
 
     return () => clearTimeout(timer);
-  }, [active, proposal, expiry, walletKitService, errorService, id]);
-
-  useEffect(
-    () => () => {
-      // Routra retains the outgoing route until its transition completes.
-      // Moving between account selection and signing keeps the request alive.
-      const entries = router.scan.connection.$view({parallel: true}).$entries;
-      if (!entries.some(entry => entry.id === id)) {
-        errorService.catch(walletKitService.reject(id));
-      }
-    },
-    [router, walletKitService, errorService, id],
-  );
+  }, [active, proposal, expiry]);
 
   useEffect(() => {
     if (active && !pending && !submitting) setEnded(true);

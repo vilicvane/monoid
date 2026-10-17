@@ -100,6 +100,8 @@ export const WalletAccountList = observer(
     keys,
     addressType,
     addresses,
+    compact = false,
+    contained = false,
     additionalAddresses = addresses ?? [],
     selectedAddresses = new Set(),
     onToggle,
@@ -108,6 +110,8 @@ export const WalletAccountList = observer(
     keys: readonly WalletKeyData[];
     addressType: 'evm';
     addresses?: readonly string[];
+    compact?: boolean;
+    contained?: boolean;
     additionalAddresses?: readonly string[];
   } & Partial<SelectionProps>): ReactNode => {
     const groups = new Map<WalletKeyData['index'], AccountGroup>();
@@ -136,7 +140,11 @@ export const WalletAccountList = observer(
     }
 
     return (
-      <KeyList $compact={!onToggle}>
+      <KeyList
+        $compact={!onToggle}
+        $compactContent={compact}
+        $contained={contained}
+      >
         {Array.from(groups, ([index, group]) => (
           <WalletAccountGroup
             key={index}

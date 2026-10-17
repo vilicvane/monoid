@@ -19,7 +19,7 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 export const Buttons = styled.div`
-  margin: auto -2px 0;
+  margin: auto 0 0;
 
   display: flex;
   flex-direction: column;
@@ -28,13 +28,16 @@ export const Buttons = styled.div`
 
 const Container = styled.button<{$color: NonNullable<ButtonProps['color']>}>`
   position: relative;
+  isolation: isolate;
 
   height: 40px;
+  margin: 0 -2px;
 
   background-color: var(--ion-color-${props => props.$color});
   border: solid 0.5px var(--ion-color-${props => props.$color}-shade);
   color: var(--ion-color-${props => props.$color}-contrast);
   border-radius: 20px;
+  overflow: hidden;
   font-size: 16px;
 
   transition:
@@ -46,6 +49,13 @@ const Container = styled.button<{$color: NonNullable<ButtonProps['color']>}>`
   align-items: center;
   justify-content: center;
   gap: 8px;
+
+  > ion-ripple-effect {
+    z-index: -1;
+    color: black;
+    /* Ionic's ripple animation peaks at 0.16 opacity. */
+    opacity: calc(0.05 / 0.16);
+  }
 
   &:disabled {
     background-color: var(--button-disabled-background, transparent);

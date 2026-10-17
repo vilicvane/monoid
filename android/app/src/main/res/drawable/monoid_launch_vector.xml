@@ -4,17 +4,19 @@
     android:width="288dp" android:height="288dp"
     android:viewportWidth="320" android:viewportHeight="320">
     <group android:scaleX="0.8" android:scaleY="0.8" android:translateX="32" android:translateY="32">
-        <group android:name="one" android:pivotX="90" android:pivotY="160">
-            <path android:name="one_shape" android:fillColor="#FFFFFF" android:pathData="M100 190H80V150H60V130H100V190Z" />
+        <group android:name="key_assembly" android:pivotX="150" android:pivotY="160">
+            <group android:name="one" android:pivotX="90" android:pivotY="160">
+                <path android:name="one_shape" android:fillColor="#FFFFFF" android:pathData="M100 190H80V150H60V130H100V190Z" />
+            </group>
+            <group android:name="zero" android:pivotX="230" android:pivotY="160">
+                <path android:name="zero_shape" android:fillColor="#FFFFFF" android:pathData="M260 190H200V130H260V190ZM220 170H240V150H220V170Z" />
+            </group>
+            <!-- Replace the overlapping glyphs with their exact union at the final frame. -->
+            <path android:name="key" android:fillColor="#FFFFFF" android:fillAlpha="0"
+                android:pathData="M95 150H145V130H205V190H145V170H115V190H95V150Z M165 150V170H185V150Z" />
         </group>
         <group android:name="plus" android:pivotX="150" android:pivotY="160">
             <path android:name="plus_shape" android:fillColor="#FFFFFF" android:pathData="M160 190H140V170H120V150H140V130H160V150H180V170H160V190Z" />
         </group>
-        <group android:name="zero" android:pivotX="230" android:pivotY="160">
-            <path android:name="zero_shape" android:fillColor="#FFFFFF" android:pathData="M260 190H200V130H260V190ZM220 170H240V150H220V170Z" />
-        </group>
-        <!-- Replace the overlapping glyphs with their exact union at the final frame. -->
-        <path android:name="key" android:fillColor="#FFFFFF" android:fillAlpha="0"
-            android:pathData="M95 150H145V130H205V190H145V170H115V190H95V150Z M165 150V170H185V150Z" />
     </group>
 </vector>

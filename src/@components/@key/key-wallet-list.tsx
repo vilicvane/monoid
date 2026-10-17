@@ -1,3 +1,4 @@
+import {Clipboard} from '@capacitor/clipboard';
 import {IonIcon, useIonAlert} from '@ionic/react';
 import copy from 'lucide-static/icons/copy.svg';
 import star from 'lucide-static/icons/star.svg';
@@ -8,9 +9,12 @@ import {
   type MouseEvent,
   type ReactNode,
   type RefObject,
+  useContext,
+  useEffect,
   useRef,
   useState,
 } from 'react';
+import {RouteContext} from 'routra-react';
 import {styled} from 'styled-components';
 import {UnmountAnimationClone} from 'unmount-animation-clone';
 
@@ -26,7 +30,6 @@ import {
   getKeyWallets,
   getWalletReference,
 } from '../../@services/index.js';
-import {useCopyAddress} from '../@hooks/use-copy-address.js';
 import {SwipeAction, SwipeableItem} from '../@ui/swipeable-item.js';
 
 import {
@@ -42,6 +45,7 @@ import {
   KeyListPlaceholder,
 } from './key-list.js';
 import {KeyDerivationBadge, KeyDerivationTag, KeyTags} from './key-tags.js';
+import {ReceiveAddressPopup} from './receive-address-popup.js';
 
 const pathCollator = new Intl.Collator('en', {numeric: true});
 
@@ -53,6 +57,17 @@ const CHAIN_LABELS: Record<AddressChain, string> = {
 
 const WalletRow = styled(SwipeableItem)<{$revealing?: boolean}>`
   ${keyGroupReveal}
+`;
+
+const WalletItem = styled(KeyGroupItem)`
+  cursor: pointer;
+`;
+
+const WalletAddress = styled(KeyListAddress)`
+  &:focus-visible {
+    outline: 2px solid var(--ion-color-primary);
+    outline-offset: 2px;
+  }
 `;
 
 const WalletPath = styled(KeyDerivationTag)`
@@ -80,9 +95,11 @@ export const KeyWalletList = observer(
     emptyFocusRef?: RefObject<HTMLDivElement | null>;
   }): ReactNode => {
     const {walletStorageService, errorService} = useEntrances();
-    const copyAddress = useCopyAddress();
+    const {view} = useContext(RouteContext);
+    const active = !view.$leaving && view.$match.$exact.$active;
     const [presentAlert] = useIonAlert();
     const [openWallet, setOpenWallet] = useState<string>();
+    const [receiveWallet, setReceiveWallet] = useState<WalletKeyWalletData>();
     const listRef = useRef<HTMLDivElement>(null);
     const derivable = data.type === 'seed' || data.type === 'master';
     const availableWallets = getKeyWallets(data);
@@ -93,6 +110,10 @@ export const KeyWalletList = observer(
       : availableWallets;
     const defaultWallet = getDefaultWallet(data, availableWallets);
     const groups = new Map<AddressChain, WalletKeyWalletData[]>();
+
+    useEffect(() => {
+      setReceiveWallet(undefined);
+    }, [active, data.index]);
 
     for (const wallet of wallets) {
       const chain = ADDRESS_TYPES[wallet.addressType].chain;
@@ -146,7 +167,7 @@ export const KeyWalletList = observer(
                           <SwipeAction
                             type="button"
                             onClick={errorService.catch(async () => {
-                              await copyAddress(wallet.address);
+                              await Clipboard.write({string: wallet.address});
                               setOpenWallet(current =>
                                 current === id ? undefined : current,
                               );
@@ -222,7 +243,9 @@ export const KeyWalletList = observer(
                                             'button',
                                           ));
 
-                                      nextTarget?.focus({preventScroll: true});
+                                      nextTarget?.focus({
+                                        preventScroll: true,
+                                      });
                                     },
                                   });
                                 },
@@ -235,7 +258,7 @@ export const KeyWalletList = observer(
                         </>
                       }
                     >
-                      <KeyGroupItem
+                      <WalletItem
                         data-swipeable-content={collapsedRow ? true : undefined}
                         aria-expanded={collapsedRow ? false : undefined}
                         aria-label={
@@ -251,6 +274,13 @@ export const KeyWalletList = observer(
                               }
                             : undefined
                         }
+                        onClick={event => {
+                          event.currentTarget
+                            .querySelector<HTMLElement>('[role="button"]')
+                            ?.focus({preventScroll: true});
+                          setOpenWallet(undefined);
+                          setReceiveWallet(wallet);
+                        }}
                       >
                         <KeyListItemContent>
                           <KeyTags>
@@ -263,7 +293,8 @@ export const KeyWalletList = observer(
                                       'data-swipeable-content': true,
                                       'aria-expanded': true,
                                       'aria-label': `Collapse ${CHAIN_LABELS[chain]} addresses`,
-                                      onClick: () => {
+                                      onClick: event => {
+                                        event.stopPropagation();
                                         setOpenWallet(undefined);
                                         collapse();
                                       },
@@ -295,9 +326,31 @@ export const KeyWalletList = observer(
                               </UnmountAnimationClone>
                             )}
                           </KeyTags>
-                          <KeyListAddress>{wallet.address}</KeyListAddress>
+                          <WalletAddress
+                            role={collapsedRow ? undefined : 'button'}
+                            tabIndex={collapsedRow ? undefined : 0}
+                            data-swipeable-content
+                            aria-haspopup={collapsedRow ? undefined : 'dialog'}
+                            aria-label={
+                              collapsedRow
+                                ? undefined
+                                : `Receive at ${wallet.address}`
+                            }
+                            onKeyDown={event => {
+                              if (
+                                !collapsedRow &&
+                                (event.key === 'Enter' || event.key === ' ')
+                              ) {
+                                event.preventDefault();
+
+                                if (!event.repeat) event.currentTarget.click();
+                              }
+                            }}
+                          >
+                            {wallet.address}
+                          </WalletAddress>
                         </KeyListItemContent>
-                      </KeyGroupItem>
+                      </WalletItem>
                     </WalletRow>
                   );
                 });
@@ -309,6 +362,12 @@ export const KeyWalletList = observer(
           <KeyListItem>
             <KeyListPlaceholder>No derived addresses</KeyListPlaceholder>
           </KeyListItem>
+        )}
+        {active && receiveWallet && (
+          <ReceiveAddressPopup
+            wallet={receiveWallet}
+            onDismiss={() => setReceiveWallet(undefined)}
+          />
         )}
       </KeyList>
     );

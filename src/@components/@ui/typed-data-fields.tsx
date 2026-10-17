@@ -20,7 +20,7 @@ const Fields = styled.dl`
 `;
 
 const Field = styled(InfoSectionRow)`
-  gap: 2px 0;
+  gap: 2px 2ch;
   font-size: inherit;
 
   > :last-child {
@@ -34,12 +34,12 @@ const FieldHeader = styled.dt`
   color: var(--color-text-secondary);
 `;
 
-const FieldValue = styled.dd<{$block: boolean}>`
+const FieldValue = styled.dd<{$block: boolean; $nested: boolean}>`
   width: ${({$block}) => ($block ? '100%' : 'max-content')};
   max-width: 100%;
   min-height: 1.5em;
   margin: 0;
-  padding-left: 2ch;
+  padding-left: ${({$nested}) => ($nested ? '2ch' : '0')};
 
   > ${Fields} {
     margin-top: 2px;
@@ -52,21 +52,24 @@ export function TypedDataFields({
   getAddressKind,
   getAddressMark,
   onAddressClick,
+  renderValue,
 }: {
   fields: TypedDataFieldValue[];
   label: string;
   getAddressKind?: (address: string) => AddressKind;
   getAddressMark?: (address: string) => AddressMark | undefined;
   onAddressClick?: (address: string) => void;
+  renderValue?: (field: TypedDataFieldValue, path: string) => ReactNode;
 }): ReactNode {
   return (
     <MessageContent as="div" aria-label={label}>
       {fields.length ? (
-        <FieldList
+        <TypedDataFieldList
           fields={fields}
           getAddressKind={getAddressKind}
           getAddressMark={getAddressMark}
           onAddressClick={onAddressClick}
+          renderValue={renderValue}
         />
       ) : (
         '{}'
@@ -75,20 +78,29 @@ export function TypedDataFields({
   );
 }
 
-function FieldList({
+export function TypedDataFieldList({
   fields,
   getAddressKind,
   getAddressMark,
   onAddressClick,
+  renderValue,
+  path = '',
+  label,
 }: {
   fields: TypedDataFieldValue[];
   getAddressKind?: (address: string) => AddressKind;
   getAddressMark?: (address: string) => AddressMark | undefined;
   onAddressClick?: (address: string) => void;
+  renderValue?: (field: TypedDataFieldValue, path: string) => ReactNode;
+  path?: string;
+  label?: string;
 }): ReactNode {
   return (
-    <Fields>
-      {fields.map(field => {
+    <Fields aria-label={label}>
+      {fields.map((field, index) => {
+        const fieldPath = path ? `${path}.${index}` : String(index);
+        const renderedValue =
+          field.kind === 'value' ? renderValue?.(field, fieldPath) : undefined;
         const chainId =
           field.kind === 'value' &&
           field.name === 'chainId' &&
@@ -97,14 +109,21 @@ function FieldList({
             : undefined;
 
         return (
-          <Field key={field.name}>
+          <Field key={index}>
             <FieldHeader>
               {formatSigningJSON(field.name).slice(1, -1)}
             </FieldHeader>
             <FieldValue
-              $block={field.kind !== 'value' || field.type === 'address'}
+              $block={
+                field.kind !== 'value' ||
+                field.type === 'address' ||
+                renderedValue !== undefined
+              }
+              $nested={field.kind !== 'value'}
             >
-              {field.kind === 'value' ? (
+              {renderedValue !== undefined ? (
+                renderedValue
+              ) : field.kind === 'value' ? (
                 field.type === 'address' ? (
                   <ExpandableAddress
                     kind={getAddressKind?.(field.value as string)}
@@ -123,11 +142,13 @@ function FieldList({
                   formatValue(field.type, field.value)
                 )
               ) : field.children.length ? (
-                <FieldList
+                <TypedDataFieldList
                   fields={field.children}
                   getAddressKind={getAddressKind}
                   getAddressMark={getAddressMark}
                   onAddressClick={onAddressClick}
+                  renderValue={renderValue}
+                  path={fieldPath}
                 />
               ) : field.kind === 'array' ? (
                 '[]'

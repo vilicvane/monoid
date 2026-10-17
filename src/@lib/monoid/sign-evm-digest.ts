@@ -7,11 +7,11 @@ import {
   recoverAddress,
 } from 'ethers';
 
-import type {MonoidApplet, MonoidAppletKey} from './monoid-applet.js';
+import type {MonoidApplet, MonoidAppletSECP256K1Key} from './monoid-applet.js';
 
 export async function signEvmDigest(
   applet: MonoidApplet,
-  key: MonoidAppletKey,
+  key: MonoidAppletSECP256K1Key,
   digest: string,
   expectedAddress: string,
   assertActive?: () => void,

@@ -25,7 +25,31 @@ export type XCBORTypes = {
 
 export const xCBOR = x.medium<UsingXCBORMedium>({
   packing: {
-    pack: data => encode(data),
+    pack: data =>
+      encode(omitUndefinedProperties(data), {
+        rejectUndefined: true,
+        sortKeys: null,
+      }),
     unpack: data => decode(data),
   },
 });
+
+function omitUndefinedProperties(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(omitUndefinedProperties);
+  }
+
+  if (value !== null && typeof value === 'object') {
+    const prototype = Object.getPrototypeOf(value);
+
+    if (prototype === Object.prototype || prototype === null) {
+      return Object.fromEntries(
+        Object.entries(value)
+          .filter(([, child]) => child !== undefined)
+          .map(([key, child]) => [key, omitUndefinedProperties(child)]),
+      );
+    }
+  }
+
+  return value;
+}

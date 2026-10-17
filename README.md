@@ -2,6 +2,11 @@
 
 Just another awesome magic.
 
+## Development services
+
+- [Gas history Worker](workers/gas-history/README.md): Ethereum base-fee sampling,
+  Cloudflare configuration, and the APP's `VITE_GAS_HISTORY_URL` setting.
+
 ## Research
 
 - [Security Key 签名算法支持顺序](research/security-key/README.md)

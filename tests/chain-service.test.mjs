@@ -16,9 +16,15 @@ const DIRECTORY = [
     chainId: 1,
     name: 'Ethereum Mainnet',
     chainSlug: 'ethereum',
+    nativeCurrency: {symbol: 'ETH', decimals: 18},
     rpc: ['https://unused.example'],
   },
-  {chainId: 987654321, name: 'Example Network', chainSlug: 'example'},
+  {
+    chainId: 987654321,
+    name: 'Example Network',
+    chainSlug: 'example',
+    nativeCurrency: {symbol: 'COIN', decimals: 6},
+  },
 ];
 
 function createStorage(context, cache) {
@@ -63,6 +69,11 @@ test('fresh cached names and built-in fallbacks are available without a network 
   );
   assert.equal(service.getChainName('eip155:999999999'), undefined);
   assert.equal(service.getChainIcon('eip155:999999999'), undefined);
+  assert.deepEqual(service.getNativeCurrency('eip155:1'), {
+    symbol: 'ETH',
+    decimals: 18,
+  });
+  assert.equal(service.getNativeCurrency('eip155:987654321'), undefined);
   await service.refresh();
   assert.equal(fetch.mock.callCount(), 0);
   assert.equal(storage.set.mock.callCount(), 0);
@@ -70,6 +81,27 @@ test('fresh cached names and built-in fallbacks are available without a network 
   context.mock.timers.setTime(NOW + 1);
   await service.refresh();
   assert.equal(fetch.mock.callCount(), 1);
+});
+
+test('cached currency metadata is usable offline without guessing unknown currencies', async context => {
+  context.mock.timers.enable({apis: ['Date'], now: NOW});
+  const fetch = mockFetch(context);
+  const cache = {
+    updatedAt: NOW,
+    names: {'eip155:987654321': 'Cached Network'},
+    icons: {},
+    currencies: {'eip155:987654321': {symbol: 'COIN', decimals: 6}},
+  };
+  const storage = createStorage(context, cache);
+  const service = await ChainService.create(storage);
+
+  assert.deepEqual(service.getNativeCurrency('eip155:987654321'), {
+    symbol: 'COIN',
+    decimals: 6,
+  });
+  assert.equal(service.getNativeCurrency('eip155:999999999'), undefined);
+  assert.equal(fetch.mock.callCount(), 0);
+  assert.equal(storage.set.mock.callCount(), 0);
 });
 
 test('stale cache is returned immediately while one shared background request refreshes names', async context => {
@@ -96,6 +128,7 @@ test('stale cache is returned immediately while one shared background request re
     () => [
       service.getChainName('eip155:987654321'),
       service.getChainIcon('eip155:987654321'),
+      service.getNativeCurrency('eip155:987654321'),
     ],
     metadata => observed.push(metadata),
   );
@@ -104,7 +137,11 @@ test('stale cache is returned immediately while one shared background request re
 
   assert.equal(fetch.mock.callCount(), 1);
   assert.deepEqual(observed, [
-    ['Example Network', 'https://icons.llamao.fi/icons/chains/rsz_example.jpg'],
+    [
+      'Example Network',
+      'https://icons.llamao.fi/icons/chains/rsz_example.jpg',
+      {symbol: 'COIN', decimals: 6},
+    ],
   ]);
   assert.deepEqual(storage.set.mock.calls[0].arguments, [
     'chainDirectory',
@@ -118,6 +155,10 @@ test('stale cache is returned immediately while one shared background request re
         'eip155:1': 'https://icons.llamao.fi/icons/chains/rsz_ethereum.jpg',
         'eip155:987654321':
           'https://icons.llamao.fi/icons/chains/rsz_example.jpg',
+      },
+      currencies: {
+        'eip155:1': {symbol: 'ETH', decimals: 18},
+        'eip155:987654321': {symbol: 'COIN', decimals: 6},
       },
     },
   ]);

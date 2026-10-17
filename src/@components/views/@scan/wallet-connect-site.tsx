@@ -7,7 +7,9 @@ import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import {parseHttpUrl} from '../../../@lib/site-logo.js';
+import {IconTag, IconTagName, IconTagRow} from '../../@ui/icon-tag.js';
 import {SiteLogo} from '../../@ui/site-logo.js';
+import {TAG_HEIGHT} from '../../@ui/tag.js';
 
 const Container = styled.section`
   flex-shrink: 0;
@@ -22,26 +24,32 @@ const Container = styled.section`
     margin: 0 0 4px;
     font-size: 20px;
   }
+`;
 
-  p {
-    margin: 0;
-    color: var(--color-text-secondary);
-    font-size: 14px;
-    line-height: 1.5;
-  }
+const CompactContainer = styled(IconTagRow).attrs({as: 'section'})`
+  flex-shrink: 0;
+  margin: 8px 0 12px;
 `;
 
 const Identity = styled.div`
   min-width: 0;
 `;
 
-const Domain = styled.p`
+const SiteText = styled.p`
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
+`;
+
+const Domain = styled(SiteText)`
   display: flex;
   align-items: center;
   gap: 6px;
 
   span {
     min-width: 0;
+    overflow-wrap: anywhere;
   }
 `;
 
@@ -59,7 +67,7 @@ const VerificationIcon = styled(IonIcon)<{
         : 'var(--color-text-secondary)'};
 `;
 
-const Verification = styled.p<{$dangerous: boolean}>`
+const Verification = styled(SiteText)<{$dangerous: boolean}>`
   display: flex;
   align-items: center;
   gap: 6px;
@@ -128,28 +136,56 @@ export function WalletConnectVerificationIcon({
   );
 }
 
-export function WalletConnectSite(props: SiteProps): ReactNode {
+export function WalletConnectSite({
+  compact = false,
+  children,
+  ...props
+}: SiteProps & {compact?: boolean; children?: ReactNode}): ReactNode {
   const info = getWalletConnectSiteInfo(props);
   const {url, name, valid, dangerous, message} = info;
   const {metadata} = props;
+  const details = (
+    <>
+      <Domain>
+        <span title={url?.hostname}>
+          {url?.hostname ?? 'Invalid site address'}
+        </span>
+        {valid && <WalletConnectVerificationIcon info={info} />}
+      </Domain>
+      {!valid && (
+        <Verification $dangerous={dangerous}>
+          <WalletConnectVerificationIcon info={info} />
+          {message}
+        </Verification>
+      )}
+    </>
+  );
+
+  if (compact) {
+    return (
+      <CompactContainer aria-label="Site">
+        <IconTag title={name}>
+          <SiteLogo
+            name={name}
+            url={metadata.url}
+            icons={metadata.icons}
+            size={TAG_HEIGHT}
+          />
+          <IconTagName suffix={<WalletConnectVerificationIcon info={info} />}>
+            {name}
+          </IconTagName>
+        </IconTag>
+        {children}
+      </CompactContainer>
+    );
+  }
 
   return (
     <Container aria-label="Site">
       <SiteLogo name={name} url={metadata.url} icons={metadata.icons} />
       <Identity>
         <h2 title={name}>{name}</h2>
-        <Domain>
-          <span title={url?.hostname}>
-            {url?.hostname ?? 'Invalid site address'}
-          </span>
-          {valid && <WalletConnectVerificationIcon info={info} />}
-        </Domain>
-        {!valid && (
-          <Verification $dangerous={dangerous}>
-            <WalletConnectVerificationIcon info={info} />
-            {message}
-          </Verification>
-        )}
+        {details}
       </Identity>
     </Container>
   );

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <animated-vector xmlns:android="http://schemas.android.com/apk/res/android" android:drawable="@drawable/monoid_launch_vector">
+    <target android:name="key_assembly" android:animation="@animator/monoid_launch_assembly" />
     <target android:name="one" android:animation="@animator/monoid_launch_one" />
     <target android:name="plus" android:animation="@animator/monoid_launch_plus" />
     <target android:name="zero" android:animation="@animator/monoid_launch_zero" />
