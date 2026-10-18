@@ -135,12 +135,17 @@ function setup(context, incoming) {
   const addressBook = {rememberSigned: context.mock.fn(async () => {})};
   const callHistory = {rememberSigned: context.mock.fn(async () => {})};
   const history = {rememberSubmitted: context.mock.fn(async () => {})};
+  const solanaHistory = {
+    rememberSubmitted: context.mock.fn(async () => {}),
+    rememberSigned: context.mock.fn(async () => {}),
+  };
   const service = new WalletKitService(
     kit,
     storage,
     addressBook,
     callHistory,
     history,
+    solanaHistory,
     {
       [TOPIC]: {
         connectedAt: 1,
@@ -168,6 +173,7 @@ function setup(context, incoming) {
     approved,
     storage,
     history,
+    solanaHistory,
   };
 }
 
@@ -390,10 +396,8 @@ test('returns one signed transaction plus signature without broadcasting or reco
     transaction: fixture.encoded,
     pubkey: payer.address,
   });
-  const {service, approve, kit, requests, history, storage} = setup(
-    context,
-    incoming,
-  );
+  const {service, approve, kit, requests, history, solanaHistory, storage} =
+    setup(context, incoming);
   const next = structuredClone(incoming);
   next.id = 2;
   requests.push(next);
@@ -410,6 +414,11 @@ test('returns one signed transaction plus signature without broadcasting or reco
   assert.deepEqual(returned.signatures[1], fixture.bytes.slice(65, 129));
   assert.equal(service.getTransactionSubmission(1), undefined);
   assert.equal(history.rememberSubmitted.mock.callCount(), 0);
+  assert.equal(solanaHistory.rememberSubmitted.mock.callCount(), 0);
+  assert.deepEqual(
+    solanaHistory.rememberSigned.mock.calls[0].arguments.slice(0, 3),
+    [CHAIN, payer.address, response.response.result.transaction],
+  );
   assert.equal(
     storage.set.mock.calls.some(
       call => call.arguments[0] === 'walletKitTransactionSubmissions',
@@ -425,7 +434,7 @@ test('returns an ordered batch signed by each independently selected account', a
     {transactions: fixtures.map(item => item.encoded)},
     BATCH,
   );
-  const {service, approve, kit} = setup(context, incoming);
+  const {approve, kit, solanaHistory} = setup(context, incoming);
   const results = [signed(fixtures[0], cosigner), signed(fixtures[1], payer)];
 
   assert.equal(await approve(results), true);
@@ -433,6 +442,20 @@ test('returns an ordered batch signed by each independently selected account', a
     kit.respondSessionRequest.mock.calls[0].arguments[0].response;
   assert.deepEqual(Object.keys(response.result), ['transactions']);
   assert.equal(response.result.transactions.length, 2);
+  assert.deepEqual(
+    solanaHistory.rememberSigned.mock.calls.map(call =>
+      call.arguments.slice(0, 3),
+    ),
+    response.result.transactions.map((encoded, index) => [
+      CHAIN,
+      results[index].address,
+      encoded,
+    ]),
+  );
+  assert.equal(
+    solanaHistory.rememberSigned.mock.calls[0].arguments[3],
+    solanaHistory.rememberSigned.mock.calls[1].arguments[3],
+  );
   response.result.transactions.forEach((encoded, index) => {
     const parsed = parseSolanaTransaction(encoded);
     assert.deepEqual(parsed.messageBytes, fixtures[index].message);
@@ -442,6 +465,41 @@ test('returns an ordered batch signed by each independently selected account', a
       base58.decode(results[index].signature),
     );
   });
+});
+
+test('single and batch signing await history before publication and retry failed writes without broadcasting', async context => {
+  for (const batch of [false, true]) {
+    const fixtures = [transaction(1), transaction(2, 0)];
+    const incoming = batch
+      ? request({transactions: fixtures.map(item => item.encoded)}, BATCH)
+      : request({transaction: fixtures[0].encoded, pubkey: cosigner.address});
+    const {approve, kit, solanaHistory} = setup(context, incoming);
+    const started = Promise.withResolvers();
+    const finish = Promise.withResolvers();
+    solanaHistory.rememberSigned.mock.mockImplementationOnce(async () => {
+      started.resolve();
+      await finish.promise;
+      throw new Error('History storage unavailable');
+    });
+    const signedValues = [
+      signed(fixtures[0], cosigner),
+      signed(fixtures[1], payer),
+    ].slice(0, batch ? 2 : 1);
+    const approving = approve(signedValues);
+    await started.promise;
+    assert.equal(kit.respondSessionRequest.mock.callCount(), 0);
+    finish.resolve();
+    await assert.rejects(approving, /History storage unavailable/);
+    assert.equal(kit.respondSessionRequest.mock.callCount(), 0);
+    assert.equal(await approve(signedValues), true);
+    assert.equal(kit.respondSessionRequest.mock.callCount(), 1);
+    assert.equal(solanaHistory.rememberSubmitted.mock.callCount(), 0);
+    const calls = solanaHistory.rememberSigned.mock.calls;
+    assert.deepEqual(
+      calls[0].arguments.slice(0, 3),
+      calls[batch ? 2 : 1].arguments.slice(0, 3),
+    );
+  }
 });
 
 test('validates the entire batch before publishing any result', async context => {

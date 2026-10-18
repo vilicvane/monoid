@@ -7,12 +7,14 @@ import {routra} from 'routra';
 import {BrowserHistory, BrowserRouterPlugin} from 'routra/browser';
 
 import {Keyboard} from './@keyboard.js';
+import {hasBitcoinWallet} from './@lib/bitcoin-wallet.js';
 import {createMonoidApplet} from './@lib/monoid/index.js';
 import {Portals} from './@portals.js';
 import {ROUTE_SCHEMA, type ViewSwitchingState} from './@routes.js';
 import {
   AddressBookService,
   AppPreferencesService,
+  BitcoinWalletService,
   ChainService,
   ErrorService,
   EvmCallHistoryService,
@@ -24,6 +26,7 @@ import {
   MonoidStorageService,
   SiteLogoService,
   SolanaTokenService,
+  SolanaTransactionHistoryService,
   StorageService,
   TransactionHistoryService,
   WalletKitService,
@@ -40,7 +43,10 @@ export class Entrances {
 
   @entrance
   get router() {
-    return this.appPreferencesService.then(preferences => {
+    return Promise.all([
+      this.appPreferencesService,
+      this.walletStorageService,
+    ]).then(([preferences, wallets]) => {
       const router = routra<typeof ROUTE_SCHEMA, ViewSwitchingState>(
         ROUTE_SCHEMA,
         {},
@@ -48,7 +54,13 @@ export class Entrances {
 
       router.$use(
         new BrowserRouterPlugin({
-          default: router[preferences.defaultFeature ?? 'features'],
+          default:
+            router[
+              preferences.defaultFeature === 'bitcoin' &&
+              !hasBitcoinWallet(wallets.keys)
+                ? 'features'
+                : (preferences.defaultFeature ?? 'features')
+            ],
           history: this.history,
           segments: {
             encodeState(state) {
@@ -129,13 +141,15 @@ export class Entrances {
       this.addressBookService,
       this.evmCallHistoryService,
       this.transactionHistoryService,
-    ]).then(([walletKit, storage, addresses, calls, transactions]) =>
+      this.solanaTransactionHistoryService,
+    ]).then(([walletKit, storage, addresses, calls, transactions, solana]) =>
       WalletKitService.create(
         walletKit,
         storage,
         addresses,
         calls,
         transactions,
+        solana,
       ),
     );
   }
@@ -187,6 +201,20 @@ export class Entrances {
   get transactionHistoryService() {
     return this.storageService.then(storage =>
       TransactionHistoryService.create(storage),
+    );
+  }
+
+  @entrance
+  get bitcoinWalletService() {
+    return this.storageService.then(storage =>
+      BitcoinWalletService.create(storage),
+    );
+  }
+
+  @entrance
+  get solanaTransactionHistoryService() {
+    return this.storageService.then(storage =>
+      SolanaTransactionHistoryService.create(storage),
     );
   }
 

@@ -103,6 +103,7 @@ export const SwipeAction = styled.button<{$color?: string}>`
   gap: 4px;
 
   .lucide {
+    overflow: visible;
     flex-shrink: 0;
     width: 18px;
     height: 18px;
@@ -139,12 +140,14 @@ const Content = styled.div`
 
 export const SwipeableItem = ({
   open,
+  disabled = false,
   onOpenChange,
   actions,
   children,
   className,
 }: {
   open: boolean;
+  disabled?: boolean;
   onOpenChange: (open: boolean) => void;
   actions: ReactNode;
   children: ReactNode;
@@ -213,6 +216,8 @@ export const SwipeableItem = ({
   }, []);
 
   useEffect(() => {
+    if (disabled) return;
+
     let initialOffset = 0;
     const clamp = (offset: number): number =>
       Math.max(-actionsWidth, Math.min(0, offset));
@@ -258,7 +263,7 @@ export const SwipeableItem = ({
     gesture.enable();
 
     return () => gesture.destroy();
-  }, [actionsWidth, open]);
+  }, [actionsWidth, open, disabled]);
 
   useEffect(() => {
     if (!open) {
@@ -289,11 +294,13 @@ export const SwipeableItem = ({
         } as CSSProperties
       }
       role="group"
-      tabIndex={0}
+      tabIndex={disabled ? -1 : 0}
       aria-label="Item actions"
       aria-controls={actionsId}
-      aria-keyshortcuts="ArrowLeft ArrowRight Escape"
+      aria-keyshortcuts={disabled ? undefined : 'ArrowLeft ArrowRight Escape'}
       onKeyDown={event => {
+        if (disabled) return;
+
         if (event.key === 'Escape' && open) {
           event.preventDefault();
           onOpenChange(false);

@@ -10,6 +10,10 @@ import {
   MonoidScanStatePromptContentHighlight,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
+import {
+  PINKind,
+  getPINInputPlaceholder,
+} from '../../../@monoid/pin-input-placeholder.js';
 import {Button} from '../../../@ui/button.js';
 import {Step, Steps} from '../../../@ui/step.js';
 import {useToast} from '../../../@ui/toast.js';
@@ -57,10 +61,12 @@ export const SetupCardView = ({
     async (): Promise<void> => {
       const safePIN = await showSafePINInput({
         type: 'password',
-        placeholder: 'Enter Safe PIN',
-        description: view.pin
-          ? undefined
-          : 'Will be used as initial Access PIN',
+        ...getPINInputPlaceholder('Safe'),
+        description: view.pin ? undefined : (
+          <>
+            Will be used as initial <PINKind kind="Access" /> PIN
+          </>
+        ),
         center: true,
       });
 

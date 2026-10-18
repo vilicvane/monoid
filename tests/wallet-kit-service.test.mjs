@@ -112,6 +112,7 @@ function setup(sessions = {}, records = {}, requests = []) {
     addressBook,
     callHistory,
     createTransactionHistory(),
+    createTransactionHistory(),
     records,
   );
   // WalletKit returns the SDK store's array despite its Record return type.
@@ -539,6 +540,7 @@ test('creates an empty service on first installation', async () => {
     createAddressBook(),
     createCallHistory(),
     createTransactionHistory(),
+    createTransactionHistory(),
   );
 
   assert.deepEqual(storage.get.mock.calls[0].arguments, [
@@ -572,6 +574,7 @@ test('restores persisted records without changing activity and prunes disconnect
     storage,
     createAddressBook(),
     createCallHistory(),
+    createTransactionHistory(),
     createTransactionHistory(),
   );
 

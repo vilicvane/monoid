@@ -5,10 +5,11 @@ import {AppletISOError} from '../../../../@lib/applet.js';
 import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {
   type MonoidApplet,
-  MonoidAppletHelloWithSafe,
+  type MonoidAppletHelloWithSafe,
   MonoidAppletInvalidPINError,
   MonoidCardError,
   MonoidWrongCardError,
+  initializeMonoidCard,
 } from '../../../../@lib/monoid/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 import type {ScannedCardData, ScannedCardItemData} from '../common.js';
@@ -185,47 +186,24 @@ export async function initializeBackupTarget(
     throw new MonoidCardError('Safe PIN must contain 6 to 16 characters.');
   }
 
-  if (hello.pin !== false && hello.safe.pin !== false && hello.safe.unlocked) {
-    getBackupCardIdentity(hello);
-    return hello;
-  }
-
-  if (hello.safe.pin === false && hello.pin !== false) {
-    throw new MonoidCardError(
-      'This card’s PIN state needs attention. Initialize it from Safe first.',
-    );
-  }
-
-  if (hello.safe.pin !== false) {
-    try {
-      await applet.authenticate({safe: true, pin});
-    } catch (error) {
-      if (
-        error instanceof CBORAppletError &&
-        MonoidAppletInvalidPINError.is(error.source)
-      ) {
-        throw new MonoidCardError(
-          error.source.tries === 0
-            ? 'Safe PIN blocked'
-            : `Incorrect Safe PIN, ${error.source.tries} ${error.source.tries === 1 ? 'try' : 'tries'} left`,
-        );
-      }
-
-      throw error;
+  try {
+    const initialized = await initializeMonoidCard(applet, hello, pin, signal);
+    assertBackupCard(initialized, expectedIdentity);
+    return initialized;
+  } catch (error) {
+    if (
+      error instanceof CBORAppletError &&
+      MonoidAppletInvalidPINError.is(error.source)
+    ) {
+      throw new MonoidCardError(
+        error.source.tries === 0
+          ? 'Safe PIN blocked'
+          : `Incorrect Safe PIN, ${error.source.tries} ${error.source.tries === 1 ? 'try' : 'tries'} left`,
+      );
     }
-  }
 
-  throwIfCancelled(signal);
-  // The firmware initializes an unset Access PIN to this same value. Existing
-  // Access PINs are preserved, including when restoring Safe access.
-  await applet.setPIN({safe: true, pin});
-  throwIfCancelled(signal);
-  const initialized = MonoidAppletHelloWithSafe.satisfies(
-    await applet.hello({safe: true}),
-  );
-  throwIfCancelled(signal);
-  assertBackupCard(initialized, expectedIdentity);
-  return initialized;
+    throw error;
+  }
 }
 
 export class CardBackupSession {

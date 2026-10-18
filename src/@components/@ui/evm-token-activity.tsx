@@ -33,53 +33,25 @@ import {
 } from './evm-token.js';
 import {ExpandableAddress} from './expandable-address.js';
 import {FormattedNumberDetailsContent} from './formatted-number.js';
-import {IconButton} from './icon-button.js';
 import {
   InfoSectionDivider,
   InfoSectionHeader,
   InfoSectionItemLabel,
-  InfoSectionRow,
-  InfoTable,
   InfoTableSection,
 } from './info-section.js';
-import {inlineIconCSS} from './inline-icon.js';
 import {PopupAddress} from './popup-address.js';
 import {BlackTag} from './tag.js';
-
-const DetailsButton = styled(IconButton)`
-  ${inlineIconCSS}
-`;
-
-const Changes = styled(InfoTable)`
-  width: 100%;
-  margin: 0;
-  border: 0;
-  border-radius: 0;
-  overflow: visible;
-  background: transparent;
-
-  td {
-    padding-inline: 0;
-  }
-
-  tr:first-child > * {
-    padding-top: 4px;
-  }
-
-  tr:last-child > * {
-    padding-bottom: 4px;
-  }
-`;
-
-const Change = styled.div`
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-  min-width: 0;
-  text-align: left;
-`;
+import {
+  TokenActivity as Activity,
+  TokenActivityAddress as ActivityAddress,
+  TokenActivityHeader as ActivityHeader,
+  TokenActivitySummary as ActivitySummary,
+  TokenActivityAmount as Amount,
+  TokenChange as Change,
+  TokenChangeAmount as ChangeAmount,
+  TokenChangesTable as Changes,
+  TokenActivityDetailsButton as DetailsButton,
+} from './token-activity.js';
 
 const TokenTag = styled(EvmTokenTag)`
   align-self: center;
@@ -88,60 +60,6 @@ const TokenTag = styled(EvmTokenTag)`
 
 const TokenLabel = styled(EvmTokenLabel)`
   max-width: 60%;
-`;
-
-const Amount = styled.span<{$change?: bigint}>`
-  flex-shrink: 0;
-  max-width: 100%;
-  margin-left: auto;
-  text-align: right;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-  color: ${({$change}) =>
-    $change !== undefined && $change > BigInt(0)
-      ? 'var(--ion-color-safe-shade)'
-      : $change !== undefined && $change < BigInt(0)
-        ? 'var(--color-text-danger)'
-        : 'inherit'};
-`;
-
-const ChangeAmount = styled(Amount)`
-  font-size: 18px;
-`;
-
-const Activity = styled(DetailsPopupSection)`
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 8px 12px;
-`;
-
-const ActivityHeader = styled(InfoSectionHeader)`
-  grid-column: 1 / -1;
-  font-size: 14px;
-`;
-
-const ActivitySummary = styled(Change).attrs({as: 'button'})`
-  grid-column: 1 / -1;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-`;
-
-const ActivityAddress = styled(InfoSectionRow)`
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: subgrid;
-  align-items: baseline;
-  gap: inherit;
-
-  > :last-child {
-    min-width: 0;
-    margin-left: 0;
-    text-align: left;
-  }
 `;
 
 export const EvmTokenActivity = observer(function EvmTokenActivity({

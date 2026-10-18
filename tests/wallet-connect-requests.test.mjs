@@ -58,6 +58,9 @@ function fixture(context) {
     router: {
       $path: 'features',
       features: route(),
+      bitcoin: Object.assign(route(), {
+        wallet: Object.assign(route(), {send: route()}),
+      }),
       sessions,
       transactions,
       scan: Object.assign(route(), {connection: route()}),
@@ -89,7 +92,7 @@ test('a settled feature hub presents a new request once', context => {
   assert.deepEqual(pushed, [1]);
 });
 
-for (const feature of ['features', 'transactions']) {
+for (const feature of ['features', 'transactions', 'bitcoin']) {
   for (const transition of ['$transition', '$switching']) {
     test(`${feature} ${transition} delays automatic request navigation until settled`, context => {
       const {router, requests, pushed} = fixture(context);
@@ -108,21 +111,43 @@ for (const feature of ['features', 'transactions']) {
   }
 }
 
-test('browsing Transactions allows new requests to open', context => {
+for (const feature of ['transactions', 'bitcoin']) {
+  test(`browsing ${feature} allows new requests to open`, context => {
+    const {router, requests, pushed} = fixture(context);
+    runInAction(() => {
+      router[feature].$matched = true;
+    });
+    WalletConnectRequests();
+    runInAction(() => requests.set(1, {id: 1}));
+    assert.deepEqual(pushed, [1]);
+    runInAction(() => {
+      router[feature].$matched = false;
+    });
+    assert.deepEqual(pushed, [1]);
+
+    runInAction(() => requests.set(2, {id: 2}));
+    assert.deepEqual(pushed, [1, 2]);
+  });
+}
+
+test('bitcoin send review keeps incoming requests manual after returning to the wallet', context => {
   const {router, requests, pushed} = fixture(context);
   runInAction(() => {
-    router.transactions.$matched = true;
+    router.bitcoin.$matched = true;
+    router.bitcoin.wallet.send.$matched = true;
   });
   WalletConnectRequests();
-  runInAction(() => requests.set(1, {id: 1}));
-  assert.deepEqual(pushed, [1]);
   runInAction(() => {
-    router.transactions.$matched = false;
+    requests.set(1, {id: 1});
+    requests.set(2, {id: 2});
   });
-  assert.deepEqual(pushed, [1]);
-
-  runInAction(() => requests.set(2, {id: 2}));
-  assert.deepEqual(pushed, [1, 2]);
+  assert.deepEqual(pushed, []);
+  runInAction(() => {
+    router.bitcoin.wallet.send.$matched = false;
+  });
+  assert.deepEqual(pushed, []);
+  runInAction(() => requests.set(3, {id: 3}));
+  assert.deepEqual(pushed, [3]);
 });
 
 test('speed up and cancel review keep new requests queued', context => {

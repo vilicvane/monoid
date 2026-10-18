@@ -1,4 +1,4 @@
-import {observable, runInAction} from 'mobx';
+import {observable, reaction, runInAction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
@@ -8,7 +8,7 @@ import {useEntrances} from '../../../../@entrances.js';
 import type {AddressType} from '../../../../@lib/wallet-address.js';
 import type {Router} from '../../../../@routes.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
-import {KeyListItem, KeyListPlaceholder} from '../../../@key/key-list.js';
+import {KeyListPlaceholder} from '../../../@key/key-list.js';
 import {
   MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
@@ -21,12 +21,17 @@ import {
   ViewHeader,
   ViewHeaderIdentifier,
   ViewHeaderTitle,
+  ViewPlaceholder,
 } from '../../../@view/index.js';
 import {
   getCardKeyAddressTypes,
   getLocalCardKeyAddress,
   readCardKeyAddress,
 } from '../card-address.js';
+import {
+  assertCardForAliasUpdate,
+  writeCardAliases,
+} from '../card-alias-update.js';
 import {
   getCardKeyData,
   importCardKey,
@@ -111,6 +116,8 @@ const CardContent = observer(
     );
     const [editingIndex, setEditingIndex] = useState<SafeIndexHex>();
     const [deriving, setDeriving] = useState(false);
+    const [updatingCard, setUpdatingCard] = useState(false);
+    const busy = deriving || updatingCard;
     const mounted = useRef(true);
 
     useEffect(() => {
@@ -136,7 +143,11 @@ const CardContent = observer(
           : 'outdated'
         : 'new';
 
-      return {item, ref, state};
+      const canWriteAlias =
+        existingKey?.alias !== undefined &&
+        existingKey.alias !== (item.key.alias ?? '');
+
+      return {item, ref, state, canWriteAlias};
     });
     const keyItemMap = new Map(
       keyItems.map(keyItem => [keyItem.item.key.index, keyItem]),
@@ -158,10 +169,16 @@ const CardContent = observer(
         ? selectedResources.filter(item => !isCardKeyItem(item)).length
         : 0;
     const missing = selectedKeys.filter(({ref}) => !ref);
+    const writableKeys = selectedKeys.filter(
+      ({canWriteAlias}) => canWriteAlias,
+    );
     const canImport =
       selectedResources.length > 0 &&
       selectedKeys.length === selectedResources.length &&
       selectedKeys.every(({ref, state}) => ref && state !== 'up-to-date');
+    const updating =
+      selectedKeys.length > 0 &&
+      selectedKeys.every(({state}) => state !== 'new');
     const editing = items.find(item => item.key.index === editingIndex);
 
     const [imported, setImported] = useState(false);
@@ -176,7 +193,7 @@ const CardContent = observer(
     };
 
     const deriveSelected = async (): Promise<void> => {
-      if (deriving || missing.length === 0) {
+      if (busy || missing.length === 0) {
         return;
       }
 
@@ -231,6 +248,83 @@ const CardContent = observer(
       }
     };
 
+    const updateCard = async (): Promise<void> => {
+      if (busy || writableKeys.length === 0) return;
+
+      const pending = new Map(
+        writableKeys.map(({item}) => [
+          item.key.index,
+          indexToKeyMap.get(item.key.index)!.alias!,
+        ]),
+      );
+      const total = pending.size;
+      const operation = new AbortController();
+      const stopWatching = reaction(
+        () => !!view.$leaving || !view.$match.$exact.$active,
+        leaving => {
+          if (leaving) operation.abort();
+        },
+        {fireImmediately: true},
+      );
+      setUpdatingCard(true);
+      setImported(false);
+
+      try {
+        await scanPrompt(
+          'Scan card to update',
+          async (applet, setStateContent, _hello, signal) => {
+            const cancel = (): void => operation.abort();
+            signal.addEventListener('abort', cancel, {once: true});
+            if (signal.aborted) cancel();
+
+            const showProgress = (): void => {
+              setStateContent(
+                <MonoidScanStatePromptProgress
+                  current={Math.min(total, total - pending.size + 1)}
+                  total={total}
+                >
+                  Updating aliases
+                </MonoidScanStatePromptProgress>,
+              );
+            };
+
+            try {
+              showProgress();
+              await writeCardAliases(
+                applet,
+                pending,
+                operation.signal,
+                (index, alias) => {
+                  runInAction(() => {
+                    card.items.find(item => item.index === index)!.alias =
+                      alias;
+                  });
+
+                  if (mounted.current && view.card === card) {
+                    setItems(current =>
+                      current.map(item =>
+                        item.key.index === index
+                          ? {...item, key: {...item.key, alias}}
+                          : item,
+                      ),
+                    );
+                  }
+
+                  showProgress();
+                },
+              );
+            } finally {
+              signal.removeEventListener('abort', cancel);
+            }
+          },
+          hello => assertCardForAliasUpdate(hello, card),
+        );
+      } finally {
+        stopWatching();
+        if (mounted.current) setUpdatingCard(false);
+      }
+    };
+
     return (
       <>
         <ViewContent
@@ -239,6 +333,7 @@ const CardContent = observer(
               <ViewActionButton
                 visible={deriving || missing.length > 0}
                 loading={deriving}
+                disabled={updatingCard}
                 onClick={errorService.catch(deriveSelected)}
               >
                 Derive
@@ -247,7 +342,7 @@ const CardContent = observer(
                 visible={imported ? !!backToSafe : canImport}
                 id="import-button"
                 color={imported ? 'neutral' : 'primary'}
-                disabled={deriving || (!imported && !canImport)}
+                disabled={busy || (!imported && !canImport)}
                 onClick={errorService.catch(async () => {
                   if (imported) {
                     backToSafe?.();
@@ -273,7 +368,15 @@ const CardContent = observer(
                   setImported(true);
                 })}
               >
-                {imported ? 'Back to Safe' : 'Import'}
+                {imported ? 'Back to Safe' : updating ? 'Update' : 'Import'}
+              </ViewActionButton>
+              <ViewActionButton
+                visible={updatingCard || writableKeys.length > 0}
+                loading={updatingCard}
+                disabled={deriving}
+                onClick={errorService.catch(updateCard)}
+              >
+                Update card
               </ViewActionButton>
               <ViewActionButton
                 visible={
@@ -282,7 +385,7 @@ const CardContent = observer(
                   missing.length === 0
                 }
                 color="neutral"
-                disabled={deriving}
+                disabled={busy}
                 onClick={() => {
                   router.safe
                     .copyItems({
@@ -315,46 +418,46 @@ const CardContent = observer(
               this filter.
             </KeyListPlaceholder>
           )}
-          <CardResourceList>
-            {visibleItems.map(resource => {
-              const keyItem = keyItemMap.get(resource.index);
-              if (!keyItem) {
+          {visibleItems.length > 0 ? (
+            <CardResourceList>
+              {visibleItems.map(resource => {
+                const keyItem = keyItemMap.get(resource.index);
+                if (!keyItem) {
+                  return (
+                    <CardResourceItem
+                      key={resource.index}
+                      data={resource}
+                      selected={selectedIndexSet.has(resource.index)}
+                      disabled={busy}
+                      onSelect={selected =>
+                        selectItem(resource.index, selected)
+                      }
+                    />
+                  );
+                }
+
+                const {item, ref, state, canWriteAlias} = keyItem;
                 return (
-                  <CardResourceItem
-                    key={resource.index}
-                    data={resource}
-                    selected={selectedIndexSet.has(resource.index)}
-                    disabled={deriving}
-                    onSelect={selected => selectItem(resource.index, selected)}
+                  <KeyItem
+                    key={item.key.index}
+                    data={item.key}
+                    addressType={item.addressType}
+                    address={ref?.address}
+                    state={state}
+                    canWriteAlias={canWriteAlias}
+                    selected={selectedIndexSet.has(item.key.index)}
+                    disabled={busy}
+                    onSelect={selected => selectItem(item.key.index, selected)}
+                    onChangeAddressType={() => setEditingIndex(item.key.index)}
                   />
                 );
-              }
-
-              const {item, ref, state} = keyItem;
-              return (
-                <KeyItem
-                  key={item.key.index}
-                  data={item.key}
-                  addressType={item.addressType}
-                  address={ref?.address}
-                  state={state}
-                  selected={selectedIndexSet.has(item.key.index)}
-                  disabled={deriving}
-                  onSelect={selected => selectItem(item.key.index, selected)}
-                  onChangeAddressType={() => setEditingIndex(item.key.index)}
-                />
-              );
-            })}
-            {visibleItems.length === 0 && (
-              <KeyListItem>
-                <KeyListPlaceholder>
-                  {card.items.length
-                    ? 'No keys on this card.'
-                    : 'This card has no resources.'}
-                </KeyListPlaceholder>
-              </KeyListItem>
-            )}
-          </CardResourceList>
+              })}
+            </CardResourceList>
+          ) : (
+            <ViewPlaceholder>
+              {card.items.length ? 'No keys' : 'No items'}
+            </ViewPlaceholder>
+          )}
         </ViewContent>
         {editing && (
           <AddressTypePicker

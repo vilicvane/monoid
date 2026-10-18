@@ -2,9 +2,12 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
 
-const {getSolanaSignatureStatus, watchSolanaTransaction} = await import(
-  '../.bld/app/@lib/watch-solana-transaction.js'
-);
+const {
+  SOLANA_SIGNED_TRANSACTION_LOOKUP_TIMEOUT,
+  canRefreshSolanaTransaction,
+  getSolanaSignatureStatus,
+  watchSolanaTransaction,
+} = await import('../.bld/app/@lib/watch-solana-transaction.js');
 
 const signature = 'test-signature';
 const confirmed = {slot: 123, confirmationStatus: 'confirmed', err: null};
@@ -14,8 +17,91 @@ const transaction = {
   meta: {fee: 5000, err: null},
 };
 
-function setup(context, implementation) {
-  context.mock.timers.enable({apis: ['setTimeout']});
+test('balance metadata is read with confirmation and malformed balances do not erase status or fee', async context => {
+  const address = '11111111111111111111111111111111';
+  const result = {
+    ...transaction,
+    transaction: {
+      ...transaction.transaction,
+      message: {accountKeys: [address]},
+    },
+    meta: {
+      ...transaction.meta,
+      preBalances: [100000],
+      postBalances: [95000],
+      preTokenBalances: [],
+      postTokenBalances: [],
+    },
+  };
+  const {changes, stop} = setup(context, async method =>
+    method === 'getSignatureStatuses' ? {value: [confirmed]} : result,
+  );
+  await setImmediate();
+  assert.deepEqual(changes.at(-1), {
+    status: 'confirmed',
+    slot: 123,
+    fee: 5000n,
+    balances: {native: [{address, before: 100000n, after: 95000n}], tokens: []},
+  });
+  stop();
+  result.meta.preBalances = [Number.MAX_SAFE_INTEGER + 1];
+  const updates = [];
+  context.after(
+    watchSolanaTransaction({
+      signature,
+      initial: {status: 'confirmed', slot: 123},
+      request: async method => {
+        assert.equal(method, 'getTransaction');
+        return result;
+      },
+      onChange: value => updates.push(value),
+    }),
+  );
+  await setImmediate();
+  assert.deepEqual(updates.at(-1), {
+    status: 'confirmed',
+    slot: 123,
+    fee: 5000n,
+    balances: {tokens: []},
+  });
+});
+
+test('refresh is offered for unavailable balance details but not while loading or after a complete result', () => {
+  const complete = {
+    status: 'confirmed',
+    slot: 123,
+    fee: 5000n,
+    balances: {native: [], tokens: []},
+  };
+  for (const value of [
+    {status: 'pending'},
+    {status: 'signed'},
+    {status: 'confirmed', slot: 123},
+    complete,
+  ]) {
+    assert.equal(canRefreshSolanaTransaction(value), false);
+  }
+  for (const value of [
+    {status: 'not-found'},
+    {status: 'pending', error: Error('Offline')},
+    {...complete, balances: {}},
+    {...complete, balances: {tokens: []}},
+    {...complete, balances: {native: []}},
+    {
+      ...complete,
+      balances: {
+        native: [],
+        tokens: [{before: {amount: 1n}}],
+      },
+    },
+    {...complete, fee: undefined},
+  ]) {
+    assert.equal(canRefreshSolanaTransaction(value), true);
+  }
+});
+
+function setup(context, implementation, options = {}) {
+  context.mock.timers.enable({apis: ['setTimeout', 'Date'], now: 1_000_000});
   const changes = [];
   const request = context.mock.fn(
     implementation ?? (async () => ({value: [null]})),
@@ -24,6 +110,7 @@ function setup(context, implementation) {
     signature,
     request,
     onChange: value => changes.push(value),
+    ...options,
   });
   context.after(stop);
   return {changes, request, stop};
@@ -47,6 +134,94 @@ test('queries historical statuses and keeps missing or processed transactions pe
   assert.equal(request.mock.callCount(), 2);
 });
 
+test('signed transactions become not found only after a successful empty lookup at the five minute deadline', async context => {
+  const notFoundAfter = 1_000_000 + SOLANA_SIGNED_TRANSACTION_LOOKUP_TIMEOUT;
+  const {changes, request} = setup(context, undefined, {
+    initial: {status: 'signed'},
+    notFoundAfter,
+  });
+  await setImmediate();
+  assert.deepEqual(changes, [{status: 'signed'}]);
+
+  context.mock.timers.setTime(notFoundAfter - 5001);
+  context.mock.timers.tick(5000);
+  await setImmediate();
+  assert.deepEqual(changes.at(-1), {status: 'signed'});
+
+  context.mock.timers.tick(5000);
+  await setImmediate();
+  assert.deepEqual(changes.at(-1), {status: 'not-found'});
+  const calls = request.mock.callCount();
+  context.mock.timers.tick(60000);
+  await setImmediate();
+  assert.equal(request.mock.callCount(), calls);
+});
+
+test('offline or malformed responses after the deadline do not change signed to not found', async context => {
+  const error = new Error('Offline');
+  const {changes, request} = setup(
+    context,
+    async () => {
+      throw error;
+    },
+    {initial: {status: 'signed'}, notFoundAfter: 0},
+  );
+  await setImmediate();
+  assert.deepEqual(changes.at(-1), {status: 'signed', error});
+
+  request.mock.mockImplementation(async () => ({value: []}));
+  context.mock.timers.tick(5000);
+  await setImmediate();
+  assert.equal(changes.at(-1).status, 'signed');
+  assert.match(changes.at(-1).error.message, /Invalid Solana signature status/);
+
+  request.mock.mockImplementation(async () => ({value: [null]}));
+  context.mock.timers.tick(5000);
+  await setImmediate();
+  assert.deepEqual(changes.at(-1), {status: 'not-found'});
+});
+
+test('a processed signed transaction becomes pending even after the lookup deadline', async context => {
+  const {changes, request} = setup(
+    context,
+    async () => ({value: [{...confirmed, confirmationStatus: 'processed'}]}),
+    {initial: {status: 'signed'}, notFoundAfter: 0},
+  );
+  await setImmediate();
+  assert.deepEqual(changes.at(-1), {status: 'pending'});
+
+  request.mock.mockImplementation(async () => ({value: [null]}));
+  context.mock.timers.tick(5000);
+  await setImmediate();
+  assert.deepEqual(changes.at(-1), {status: 'pending'});
+});
+
+test('a refreshed not-found transaction can recover to an on-chain result', async context => {
+  const {changes, request} = setup(
+    context,
+    async method =>
+      method === 'getSignatureStatuses' ? {value: [confirmed]} : transaction,
+    {initial: {status: 'not-found'}, notFoundAfter: 0},
+  );
+  await setImmediate();
+  assert.deepEqual(changes, [
+    {status: 'confirmed', slot: 123},
+    {status: 'confirmed', slot: 123, balances: {}, fee: 5000n},
+  ]);
+  context.mock.timers.tick(5000);
+  await setImmediate();
+  assert.equal(request.mock.callCount(), 2);
+});
+
+test('submitted pending transactions are not marked not found by a signed-transaction deadline', async context => {
+  const {changes} = setup(context, undefined, {
+    initial: {status: 'pending'},
+    notFoundAfter: 0,
+  });
+  await setImmediate();
+  assert.deepEqual(changes.at(-1), {status: 'pending'});
+});
+
 test('confirmed and finalized both display confirmed with a fee and then stop polling', async context => {
   for (const confirmationStatus of ['confirmed', 'finalized']) {
     await context.test(confirmationStatus, async context => {
@@ -58,7 +233,7 @@ test('confirmed and finalized both display confirmed with a fee and then stop po
       await setImmediate();
       assert.deepEqual(changes, [
         {status: 'confirmed', slot: 123},
-        {status: 'confirmed', slot: 123, fee: 5000n},
+        {status: 'confirmed', slot: 123, balances: {}, fee: 5000n},
       ]);
       assert.deepEqual(request.mock.calls[1].arguments.slice(0, 2), [
         'getTransaction',
@@ -89,6 +264,7 @@ test('only confirmed execution errors mark failure and still retain transaction 
   assert.deepEqual(changes.at(-1), {
     status: 'failed',
     slot: 123,
+    balances: {},
     fee: 5000n,
     executionError: JSON.stringify(err),
   });
@@ -111,6 +287,7 @@ test('a lagging transaction response retains confirmed and polls only the missin
   assert.deepEqual(changes.at(-1), {
     status: 'confirmed',
     slot: 123,
+    balances: {},
     fee: 5000n,
   });
   assert.deepEqual(
@@ -126,7 +303,11 @@ test('transaction metadata may be unavailable without inventing a fee or an erro
       : {...transaction, meta: null},
   );
   await setImmediate();
-  assert.deepEqual(changes.at(-1), {status: 'confirmed', slot: 123});
+  assert.deepEqual(changes.at(-1), {
+    status: 'confirmed',
+    slot: 123,
+    balances: {},
+  });
   context.mock.timers.tick(5000);
   await setImmediate();
   assert.equal(request.mock.callCount(), 2);
@@ -152,6 +333,7 @@ test('RPC errors remain retryable and do not erase an already confirmed status',
   assert.deepEqual(changes.at(-1), {
     status: 'confirmed',
     slot: 123,
+    balances: {},
     fee: 5000n,
   });
 });
@@ -250,5 +432,40 @@ test('disposal during details keeps the last status and stops future polling', a
   context.mock.timers.tick(30000);
   await setImmediate();
   assert.deepEqual(changes, [{status: 'confirmed', slot: 123}]);
+  assert.equal(request.mock.callCount(), 2);
+});
+
+test('restored confirmation fetches missing details without reverting to pending', async context => {
+  context.mock.timers.enable({apis: ['setTimeout']});
+  const changes = [];
+  let available = false;
+  const request = context.mock.fn(async method => {
+    assert.equal(method, 'getTransaction');
+    if (!available) throw new Error('Offline');
+    return transaction;
+  });
+  context.after(
+    watchSolanaTransaction({
+      signature,
+      request,
+      initial: {status: 'confirmed', slot: 123},
+      onChange: value => changes.push(value),
+    }),
+  );
+  await setImmediate();
+  assert.equal(changes.at(-1).status, 'confirmed');
+  assert.equal(changes.at(-1).error.message, 'Offline');
+
+  available = true;
+  context.mock.timers.tick(5000);
+  await setImmediate();
+  assert.deepEqual(changes.at(-1), {
+    status: 'confirmed',
+    slot: 123,
+    balances: {},
+    fee: 5000n,
+  });
+  context.mock.timers.tick(30000);
+  await setImmediate();
   assert.equal(request.mock.callCount(), 2);
 });

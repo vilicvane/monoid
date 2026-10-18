@@ -68,13 +68,27 @@ Jupiter 的批量查询和本地缓存适合钱包元数据加载。限流按服
 
 经典 SPL Token 已增加 Transfer、TransferChecked、Approve、ApproveChecked、Revoke，以及关联 Token 账户的 Create / CreateIdempotent 审阅。展示签名中的 Token account 地址、执行权限账户及多签账户，不以 owner 钱包地址替换真实来源或目标账户。checked 指令以签入的 Mint、小数位和原始金额为准；unchecked 指令仅在账户状态可确定时通过链上账户补全 Mint 和小数位，否则展示 base units。链上数据与签入内容不符时提示，读取失败不改写签名，也不阻断原始内容审阅。关联账户创建校验 PDA 和程序，可供同一交易后续指令补全信息；未知指令可写入的账户不参与状态推断，批量签名也不假定网站的执行顺序。Revoke 不猜测原 delegate，最大 SPL 授权金额不显示为 Unlimited。
 
-主网 Token 名称和图标已接入可选的 Jupiter 元数据查询，按精确 Mint 匹配经典 Token Program；成功结果持久缓存 24 小时，缺失或失败间隔 5 分钟重试。请求串行、起点至少相隔 2 秒，每批最多 100 个 Mint。服务商小数位不作为签名金额依据，不匹配时保留原始 Token 展示；devnet / testnet 不套用主网名称。尚未接入 Token-2022 专用审阅和 Solana 本地交易历史，未知指令继续展示程序、账户权限及原始数据。
+主网 Token 名称和图标已接入可选的 Jupiter 元数据查询，按精确 Mint 匹配经典 Token Program；成功结果持久缓存 24 小时，缺失或失败间隔 5 分钟重试。请求串行、起点至少相隔 2 秒，每批最多 100 个 Mint。服务商小数位不作为签名金额依据，不匹配时保留原始 Token 展示；devnet / testnet 不套用主网名称。尚未接入 Token-2022 专用审阅，未知指令继续展示程序、账户权限及原始数据。
 
 签前模拟与预期手续费已接入交易审阅页。`simulateTransaction` 使用完整原始交易字节，设置 `sigVerify: false`、`replaceRecentBlockhash: false`，不替换 blockhash 或重新编译消息；优先展示同一次模拟返回的有效 fee，缺失时使用原始 message 的 `getFeeForMessage` 结果。费用不可用时不显示零。详情可查看执行状态、Compute units、Slot、日志并刷新。请求过期后停止模拟并隐藏费用操作。
 
 模拟失败、RPC 不可用或费用缺失采用黄色警示，等待本轮检查完成后仍允许签名。模拟结果不保证实际执行结果：链上执行失败会回滚指令的转账、授权等状态变化，但仍可能收取手续费；模拟失败的交易也可能在状态变化后成功执行。批量请求最多两笔并发，每笔独立模拟，不继承前一笔的状态，并在页面提示此限制。当前未推导模拟资产净变化。[Solana 交易与失败语义](https://solana.com/docs/core/transactions)
 
 广播前持久化完整签名后的交易，重试复用相同字节；响应丢失时先查询签名状态，已经被接收的交易只重试网站回复，不再刷卡或重复发送。默认启用 RPC preflight，沿用请求提供的发送选项，不替换过期的 blockhash。新方法需要网站重新连接授权。[WalletConnect 发送接口](https://docs.reown.com/advanced/multichain/rpc-reference/solana-rpc#solana_signandsendtransaction)、[Solana 广播语义](https://solana.com/docs/rpc/http/sendtransaction)
+
+Solana 本地历史接入现有 Transactions 入口，与 EVM 共用钱包分组、列表行和交易详情样式。单笔或批量交易完成本地签名验证后，先保存记录再回复网站；只签名、由网站广播的交易先显示 Signed，不推定已经提交。Monoid 自行广播且被 RPC 接收的交易显示 Pending。每笔按实际选中的签名钱包归档，不以费用支付者替代；网络、地址和交易签名保留大小写及各自边界，重复记录保留首次签名时间。已记录的交易不依赖 WalletConnect 会话继续存在。
+
+记录使用原始 message 字节的 SHA-256 摘要作为本地 ID，与链上的交易标识分开。只有费用支付者的第一个签名槽非空时才有可查询的交易签名；缺少此签名时仍保存 Signed 记录，但不查询 RPC，也不展示虚构的 Hash 或 Explorer 链接。重复取得同一消息的其他签名时补全已有签名槽，不重新编译消息或改动 blockhash。
+
+在钱包列表、交易列表及详情可见时查询带真实交易签名的 Signed 或 Pending 记录，不增加全局后台追踪。Signed 记录被 RPC 查到 processed 后转为 Pending，confirmed / finalized 后显示执行成功或失败。自首次签名起至少五分钟，且 RPC 成功返回空结果，才标为 Not found 并停止自动查询；这不代表交易执行失败或已经过期。RPC 故障不会把 Signed 改成 Not found，已经观察到的 Pending 也不会仅因后续暂时查不到而回退。Not found 可在详情中通过 Refresh 重新查询，并恢复为 Pending 或终态。
+
+确认状态、Slot、手续费、余额快照和执行失败信息会持久保存。完整终态可离线查看；已经确认但暂未读取手续费或余额时，重新进入详情只补取交易详情，临时 RPC 故障不将已确认状态重置为 Pending。已读取但数据缺失时显示不可用或不完整，可通过 Refresh 再次查询，不自动循环补取。此历史只覆盖开始记录之后的本地签名或提交，不回查钱包的全链历史，也不将消息签名纳入交易列表。
+
+Transaction 页从同一次 `getTransaction` 的执行前后余额展示当前签名账户的 SOL 与 SPL 净变化，详情可查看其他账户。SOL 余额差已经包含手续费及租金押金的存入或退回，单列的 Transaction fee 是其中的费用信息，不能再次从净变化中扣除；费用支付者可能不是当前签名账户。SPL 按 owner、Mint 和 Token Program 合并多个 Token account，零净变化不显示；owner 缺失时只按 Token account 展示，不推断属于 signer。缺失余额字段不作为零，余额差也不推导成逐笔转账事件。名称和图标复用可选的主网 Jupiter 缓存，数值精度仍以 RPC 返回的小数位为准。
+
+本地历史回归覆盖网络与地址隔离、非费用支付者签名、重复记录与签名补全、存储失败重试、崩溃恢复，以及存储尚未完成时先收到确认的交接。浏览器使用独立模拟 RPC 与存储核对钱包分组、Signed / Not found / Pending / Confirmed / Failed、缺少费用支付者签名、跨账户批量记录、离线详情、手动 Refresh 恢复及重载持久化，并检查 390px 与 320px 布局。浏览器记录由公开测试交易构造，不等同于真实卡片签名或网站广播；没有为验证历史而广播真实交易。
+
+余额页面的浏览器验证覆盖 v0 加载地址索引、signer 与费用支付者分离、同 Mint 多账户合并、零净额自转账、Token account 创建与关闭、未知 owner、失败仅扣手续费、缺数据后的 Refresh，以及余额持久化后的离线重载。390px 和 320px 已核对长名称、大金额、Token / 地址 / 完整数值详情复用同一遮罩及滚动安全区；EVM 交易详情回归正常。这些结果来自公开测试密钥和模拟 RPC，尚不替代真实链上交易的设备验收。
 
 本地测试已覆盖请求绑定、共同签名、持久化恢复、丢失响应和 Relay 重试；浏览器使用模拟卡片与 RPC 验证了审阅、发送和确认页面。三个网络的 Reown RPC 均用空交易探测确认发送方法可达，没有广播有效交易；真实卡片与链上发送仍待设备联调。
 

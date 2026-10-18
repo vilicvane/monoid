@@ -35,6 +35,7 @@ const Layer = styled.div`
 const Dialog = styled.div`
   --color-text-label: rgba(255, 255, 255, 0.7);
   --color-text-secondary: white;
+  --color-message-background: rgba(255, 255, 255, 0.12);
   --color-segmented-border: rgba(255, 255, 255, 0.45);
   --color-address-tag-background: rgba(255, 255, 255, 0.08);
   --color-address-tag-border: rgba(255, 255, 255, 0.55);

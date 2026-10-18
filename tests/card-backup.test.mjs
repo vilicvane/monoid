@@ -3,6 +3,7 @@ import {test} from 'node:test';
 
 import {AppletISOError} from '../.bld/app/@lib/applet.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {initializeMonoidCard} from '../.bld/app/@lib/monoid/initialize-card.js';
 import {
   assertBackupCard,
   CardBackupSession,
@@ -431,6 +432,7 @@ function uninitializedTarget({hasSafePIN = false} = {}) {
       },
       async hello(request) {
         state.calls.push(['hello', request]);
+        await state.onHello?.();
         return state.result;
       },
     },
@@ -520,14 +522,15 @@ test('an already restored destination returns its fresh ready state without chan
   assert.deepEqual(state.calls, []);
 });
 
-for (const stopAfter of ['before-start', 'authenticate', 'setPIN']) {
+for (const stopAfter of ['before-start', 'authenticate', 'setPIN', 'hello']) {
   test(`initialization cancellation after ${stopAfter} starts no later card command`, async () => {
     const state = uninitializedTarget({hasSafePIN: true});
     const controller = new AbortController();
     if (stopAfter === 'before-start') controller.abort();
     else if (stopAfter === 'authenticate')
       state.onAuthenticate = () => controller.abort();
-    else state.onSetPIN = () => controller.abort();
+    else if (stopAfter === 'setPIN') state.onSetPIN = () => controller.abort();
+    else state.onHello = () => controller.abort();
 
     await assert.rejects(
       initializeBackupTarget(
@@ -545,7 +548,9 @@ for (const stopAfter of ['before-start', 'authenticate', 'setPIN']) {
         ? []
         : stopAfter === 'authenticate'
           ? ['authenticate']
-          : ['authenticate', 'setPIN'],
+          : stopAfter === 'setPIN'
+            ? ['authenticate', 'setPIN']
+            : ['authenticate', 'setPIN', 'hello'],
     );
   });
 }
@@ -573,16 +578,23 @@ test('incorrect existing Safe PIN is attempted once and never followed by a writ
 
 for (const invalidResult of [
   'access-unset',
+  'access-blocked',
+  'safe-unset',
   'safe-locked',
   'safe-blocked',
   'identity-changed',
+  'monoid-id-changed',
 ]) {
   test(`initialization cannot succeed when final Hello reports ${invalidResult}`, async () => {
     const state = uninitializedTarget();
     if (invalidResult === 'access-unset') state.result.pin = false;
+    else if (invalidResult === 'access-blocked') state.result.pin = 0;
+    else if (invalidResult === 'safe-unset') state.result.safe.pin = false;
     else if (invalidResult === 'safe-locked')
       state.result.safe.unlocked = false;
     else if (invalidResult === 'safe-blocked') state.result.safe.pin = 0;
+    else if (invalidResult === 'monoid-id-changed')
+      state.result.id = hello(3).id;
     else state.result.safe.publicKey = hello(3).safe.publicKey;
 
     await assert.rejects(
@@ -593,7 +605,7 @@ for (const invalidResult of [
         PIN,
         signal(),
       ),
-      /Initialize|blocked|Wrong card/i,
+      /incomplete|blocked|Wrong card/i,
     );
     assert.deepEqual(
       state.calls.map(([method]) => method),
@@ -601,6 +613,65 @@ for (const invalidResult of [
     );
   });
 }
+
+test('shared initialization preserves an invalid Safe PIN error for interactive retry', async () => {
+  const state = uninitializedTarget({hasSafePIN: true});
+  const invalidPIN = new CBORAppletError({code: 'INVALID_PIN', tries: 4});
+  state.onAuthenticate = () => {
+    throw invalidPIN;
+  };
+
+  await assert.rejects(
+    initializeMonoidCard(state.applet, state.fresh, PIN, signal()),
+    error => error === invalidPIN,
+  );
+  assert.deepEqual(state.calls, [['authenticate', {safe: true, pin: PIN}]]);
+});
+
+for (const invalidState of ['access-blocked', 'safe-blocked', 'safe-unset']) {
+  test(`shared initialization starts no commands when ${invalidState}`, async () => {
+    const state = uninitializedTarget({hasSafePIN: true});
+    if (invalidState === 'access-blocked') state.fresh.pin = 0;
+    else if (invalidState === 'safe-blocked') state.fresh.safe.pin = 0;
+    else {
+      state.fresh.pin = 5;
+      state.fresh.safe.pin = false;
+    }
+
+    await assert.rejects(
+      initializeMonoidCard(state.applet, state.fresh, PIN, signal()),
+      /blocked|needs attention/,
+    );
+    assert.deepEqual(state.calls, []);
+  });
+}
+
+test('shared initialization rejects invalid PIN formats before writing a new Safe', async () => {
+  const state = uninitializedTarget();
+  await assert.rejects(
+    initializeMonoidCard(state.applet, state.fresh, 'short', signal()),
+    /6 to 16 characters/,
+  );
+  assert.deepEqual(state.calls, []);
+});
+
+test('shared initialization restores a locked Safe without separately setting an existing Access PIN', async () => {
+  const state = uninitializedTarget({hasSafePIN: true});
+  state.fresh.pin = 5;
+  const result = await initializeMonoidCard(
+    state.applet,
+    state.fresh,
+    PIN,
+    signal(),
+  );
+
+  assert.deepEqual(state.calls, [
+    ['authenticate', {safe: true, pin: PIN}],
+    ['setPIN', {safe: true, pin: PIN}],
+    ['hello', {safe: true}],
+  ]);
+  assert.equal(result.safe.unlocked, true);
+});
 
 test('wrong Safe PIN is attempted once and never exports or retains the PIN', async () => {
   const {session, source} = await ready();

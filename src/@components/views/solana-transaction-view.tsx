@@ -1,37 +1,16 @@
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useMemo, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
-import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
 import {getSignedSolanaTransactionSignature} from '../../@lib/send-solana-transaction.js';
+import {canRefreshSolanaTransaction} from '../../@lib/watch-solana-transaction.js';
 import type {Router} from '../../@routes.js';
 import {useSolanaTransactionConfirmation} from '../@hooks/use-solana-transaction-confirmation.js';
-import {WalletAccountList} from '../@key/wallet-account-list.js';
 import {AsyncButton} from '../@ui/button.js';
-import {ChainTag} from '../@ui/chain-name.js';
-import {IconTagSection} from '../@ui/icon-tag.js';
-import {
-  InfoSection,
-  InfoSectionItemLabel,
-  InfoSectionRow,
-} from '../@ui/info-section.js';
 import {ErrorMessage} from '../@ui/message-content.js';
-import {NativeAmount} from '../@ui/native-amount.js';
-import {TransactionDetailsPanel} from '../@ui/transaction-details-panel.js';
-import {TransactionStatus} from '../@ui/transaction-status.js';
-import {
-  View,
-  ViewContent,
-  ViewHeader,
-  ViewHeaderTitle,
-} from '../@view/index.js';
 
-const Status = styled(TransactionStatus)`
-  grid-column: 3;
-  align-self: center;
-  justify-self: end;
-`;
+import {SolanaTransactionDetails} from './@sessions/solana-transaction-details.js';
 
 export const SolanaTransactionView = observer(
   ({
@@ -39,8 +18,7 @@ export const SolanaTransactionView = observer(
   }: RouteComponentProps<
     Router['sessions']['solanaTransaction']
   >): ReactNode => {
-    const {chainService, walletKitService, walletStorageService} =
-      useEntrances();
+    const {walletKitService} = useEntrances();
     const signature = useMemo(
       () => getSignedSolanaTransactionSignature(view.signedTransaction),
       [view.signedTransaction],
@@ -53,92 +31,41 @@ export const SolanaTransactionView = observer(
       active,
       attempt,
     );
-    const {status} = confirmation;
-    const confirmationError = confirmation.error !== undefined;
+    const refreshConfirmation = canRefreshSolanaTransaction(confirmation);
     const retryResponse =
       walletKitService.requests.has(view.id) &&
       !walletKitService.isRespondingToRequest(view.id);
 
     return (
-      <View inert={!active}>
-        <ViewHeader>
-          <ViewHeaderTitle>Transaction</ViewHeaderTitle>
-          <Status status={status} />
-        </ViewHeader>
-        <ViewContent
-          footer={
-            (confirmationError || retryResponse) && (
-              <AsyncButton
-                color="neutral"
-                handler={async () => {
-                  if (confirmationError) setAttempt(value => value + 1);
-                  if (retryResponse) {
-                    await walletKitService.resumeSolanaTransactionRequest(
-                      view.id,
-                      view.topic,
-                    );
-                  }
-                }}
-              >
-                Refresh
-              </AsyncButton>
-            )
-          }
-        >
-          <IconTagSection>
-            <ChainTag chainId={view.chainId} />
-          </IconTagSection>
-          <InfoSection>
-            <WalletAccountList
-              keys={walletStorageService.keys}
-              addressType="solana"
-              addresses={[view.address]}
-              compact
-              contained
-            />
-          </InfoSection>
-          <TransactionDetailsPanel
-            hash={signature}
-            explorerURL={chainService.getTransactionExplorerURL(
-              view.chainId,
-              signature,
-            )}
-          >
-            {status !== 'pending' && (
-              <>
-                <InfoSectionRow>
-                  <InfoSectionItemLabel>Slot</InfoSectionItemLabel>
-                  <span>{confirmation.slot}</span>
-                </InfoSectionRow>
-                {confirmation.fee !== undefined && (
-                  <InfoSectionRow>
-                    <InfoSectionItemLabel>Transaction fee</InfoSectionItemLabel>
-                    <NativeAmount
-                      value={confirmation.fee}
-                      currency={chainService.getNativeCurrency(view.chainId)}
-                    />
-                  </InfoSectionRow>
-                )}
-              </>
-            )}
-          </TransactionDetailsPanel>
-          {status === 'failed' && (
-            <ErrorMessage>
-              {confirmation.executionError ?? 'Transaction failed.'}
-            </ErrorMessage>
-          )}
-          {confirmationError && (
-            <ErrorMessage>
-              {confirmation.error instanceof Error
-                ? confirmation.error.message
-                : 'Could not check confirmation.'}
-            </ErrorMessage>
-          )}
-          {retryResponse && (
-            <ErrorMessage>Could not notify the website.</ErrorMessage>
-          )}
-        </ViewContent>
-      </View>
+      <SolanaTransactionDetails
+        chainId={view.chainId}
+        signature={signature}
+        address={view.address}
+        confirmation={confirmation}
+        active={active}
+        footer={
+          (refreshConfirmation || retryResponse) && (
+            <AsyncButton
+              color="neutral"
+              handler={async () => {
+                if (refreshConfirmation) setAttempt(value => value + 1);
+                if (retryResponse) {
+                  await walletKitService.resumeSolanaTransactionRequest(
+                    view.id,
+                    view.topic,
+                  );
+                }
+              }}
+            >
+              Refresh
+            </AsyncButton>
+          )
+        }
+      >
+        {retryResponse && (
+          <ErrorMessage>Could not notify the website.</ErrorMessage>
+        )}
+      </SolanaTransactionDetails>
     );
   },
 );

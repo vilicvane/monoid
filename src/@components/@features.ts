@@ -1,5 +1,9 @@
 import type {LucideIcon} from 'lucide-react';
-import {Globe as globe, History as history} from 'lucide-react';
+import {
+  Bitcoin as bitcoin,
+  Globe as globe,
+  History as history,
+} from 'lucide-react';
 
 import {
   FEATURES as FEATURE_DEFINITIONS,
@@ -10,6 +14,7 @@ const FEATURE_VISUALS: Record<FeatureRoute, {icon: LucideIcon; color: string}> =
   {
     sessions: {icon: globe, color: 'var(--ion-color-primary)'},
     transactions: {icon: history, color: 'var(--ion-color-safe)'},
+    bitcoin: {icon: bitcoin, color: '#f7931a'},
   };
 
 export const FEATURES = FEATURE_DEFINITIONS.map(feature => ({

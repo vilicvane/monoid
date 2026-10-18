@@ -9,8 +9,8 @@ import {
   InfoFieldset,
   InfoFieldsetValue,
   InfoLegend,
-  InfoSectionItemLabel,
 } from '../../@ui/info-section.js';
+import {InfoMessage} from '../../@ui/message-content.js';
 import {SolanaTokenAmount} from '../../@ui/solana-token.js';
 
 export function WalletConnectSolanaToken({
@@ -81,9 +81,7 @@ export function WalletConnectSolanaToken({
           </InfoFieldsetValue>
         </InfoFieldset>
       ) : (
-        <InfoSectionItemLabel>
-          Clears this token account’s delegate.
-        </InfoSectionItemLabel>
+        <InfoMessage>Clears this token account’s delegate.</InfoMessage>
       )}
       {'additionalSigners' in decoded && decoded.additionalSigners && (
         <InfoFieldset>

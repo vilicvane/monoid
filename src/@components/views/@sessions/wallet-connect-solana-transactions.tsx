@@ -40,9 +40,11 @@ import {
 } from '../../@ui/info-section.js';
 import {inlineIconCSS} from '../../@ui/inline-icon.js';
 import {
+  InfoMessage,
   MessageContent,
   MessageSectionHeader,
   MessageSectionTitle,
+  WarningMessage,
 } from '../../@ui/message-content.js';
 import {NativeAmount} from '../../@ui/native-amount.js';
 import {SolanaTokenTag} from '../../@ui/solana-token.js';
@@ -120,7 +122,7 @@ function SolanaInstruction({
         )}
       </MessageSectionHeader>
       {instruction.token?.warning && (
-        <UnknownLabel>{instruction.token.warning}</UnknownLabel>
+        <WarningMessage>{instruction.token.warning}</WarningMessage>
       )}
       {tokenInstruction ? (
         <WalletConnectSolanaToken
@@ -257,10 +259,10 @@ export const WalletConnectSolanaTransactions = observer(
     return (
       <>
         {showSimulation && payload.transactions.length > 1 && (
-          <InfoSectionItemLabel>
+          <InfoMessage>
             Each transaction is simulated independently, without changes from
             the others.
-          </InfoSectionItemLabel>
+          </InfoMessage>
         )}
         {payload.transactions.map(({transaction, addresses}, index) => {
           const review = reviews?.[index];

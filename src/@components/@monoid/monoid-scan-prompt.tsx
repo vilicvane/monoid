@@ -16,6 +16,7 @@ import {
   MonoidAppletInvalidPINError,
   MonoidCardError,
   MonoidWrongCardError,
+  initializeMonoidCard,
 } from '../../@lib/monoid/index.js';
 import {renderIcon} from '../../@lib/render-icon.js';
 import {
@@ -26,6 +27,8 @@ import {
 import {uint8ArrayToHex} from '../../@utils/index.js';
 import {useToast} from '../@ui/toast.js';
 import {useInputModal} from '../@ui/use-input-modal.js';
+
+import {getPINInputPlaceholder} from './pin-input-placeholder.js';
 
 export const MonoidScanStatePromptContentHighlight = styled.span`
   color: white;
@@ -84,6 +87,10 @@ type MonoidScanPromptCallback<TSafe extends boolean> = (
 type MonoidScanPromptValidateCard<TSafe extends boolean> = (
   hello: MonoidScanPromptHello<TSafe>,
 ) => void;
+
+type PINRequest =
+  | {type: 'access'; id: MonoidIdHex}
+  | {type: 'setup'; hello: MonoidAppletHelloWithSafe};
 
 /** The scan ended quietly because another page will handle the card. */
 export class MonoidScanRedirectError extends Error {
@@ -178,12 +185,15 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
 
     let retryStateContent = initialStateContent;
     let enteredPIN: {id: MonoidIdHex; pin: MonoidPIN} | undefined;
+    let setupPIN:
+      | {hello: MonoidAppletHelloWithSafe; pin: MonoidPIN}
+      | undefined;
     let update:
       | {type: 'set' | 'remove'; id: MonoidIdHex; pin: MonoidPIN}
       | undefined;
     let result:
       | {type: 'success'}
-      | {type: 'input'; id: MonoidIdHex; message?: string}
+      | {type: 'input'; request: PINRequest; message?: string}
       | {type: 'redirect'; navigate: () => void}
       | {type: 'uninitialized'}
       | {type: 'error'; error: unknown; retry: boolean}
@@ -212,7 +222,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
       setAppletCallbackAndPromise(undefined);
     };
 
-    const promptPIN = (id: MonoidIdHex, errorMessage?: string): void => {
+    const promptPIN = (request: PINRequest, errorMessage?: string): void => {
       if (disposed) {
         return;
       }
@@ -229,19 +239,38 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
 
       void showPINInput({
         type: 'password',
-        placeholder: 'Enter Access PIN',
+        ...(request.type === 'setup'
+          ? getPINInputPlaceholder(
+              'Safe',
+              request.hello.safe.pin === false ? 'Set' : 'Enter existing',
+            )
+          : getPINInputPlaceholder('Access')),
+        description:
+          request.type === 'setup'
+            ? request.hello.pin === false
+              ? 'Will be used as initial Access PIN'
+              : 'Access PIN stays the same'
+            : undefined,
         center: true,
+        maxLength: 16,
       }).then(value => {
         if (disposed) {
           return;
         }
 
         if (MonoidPIN.is(value)) {
-          enteredPIN = {id, pin: value};
+          if (request.type === 'setup') {
+            setupPIN = {hello: request.hello, pin: value};
+          } else {
+            enteredPIN = {id: request.id, pin: value};
+          }
           setStateContent(retryStateContent);
           startScan();
         } else if (value !== undefined) {
-          promptPIN(id, 'Incorrect PIN format, expected 6 to 16 characters.');
+          promptPIN(
+            request,
+            'Incorrect PIN format, expected 6 to 16 characters.',
+          );
         } else {
           fail(cancelled());
         }
@@ -324,7 +353,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
       finishing = false;
 
       if (completed.type === 'input') {
-        promptPIN(completed.id, completed.message);
+        promptPIN(completed.request, completed.message);
       } else if (completed.type === 'success') {
         settled = true;
         resolve();
@@ -366,7 +395,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
 
           setStateContent('Greeting to monoid...');
 
-          const hello = (
+          let hello = (
             includeSafe
               ? MonoidAppletHelloWithSafe.satisfies(
                   await applet.hello({safe: true}),
@@ -384,6 +413,22 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
           const id = uint8ArrayToHex(hello.id);
           const safe = includeSafe ? hello.safe : undefined;
 
+          // A setup PIN belongs to the exact applet and Safe seen before input.
+          if (
+            setupPIN &&
+            (id !== uint8ArrayToHex(setupPIN.hello.id) ||
+              !safe ||
+              uint8ArrayToHex(safe.publicKey) !==
+                uint8ArrayToHex(setupPIN.hello.safe.publicKey))
+          ) {
+            throw new MonoidWrongCardError(
+              uint8ArrayToHex(setupPIN.hello.safe.id),
+            );
+          }
+
+          const setup = setupPIN;
+          setupPIN = undefined;
+
           retryStateContent = safe ? (
             <>
               Scan card{' '}
@@ -396,33 +441,101 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
             'Scan card again'
           );
 
-          if (ensureSetup && hello.pin === false) {
+          let initializedAccessPIN = false;
+
+          if (
+            ensureSetup &&
+            (hello.pin === false ||
+              (safe && (safe.pin === false || !safe.unlocked)))
+          ) {
             if (!safe) {
               result = {type: 'uninitialized'};
               return;
             }
 
-            result = {
-              type: 'redirect',
-              navigate: () => {
-                router.safe
-                  .setupCard({
-                    id,
-                    pin: hello.pin !== false,
-                    safe: {
-                      id: uint8ArrayToHex(safe.id),
-                      pin: safe.pin !== false,
-                      unlocked: safe.unlocked,
-                    },
-                  })
-                  .$push();
-              },
-            };
+            if (safe.pin === 0 || hello.pin === 0) {
+              result = {
+                type: 'error',
+                error: new MonoidCardError(
+                  safe.pin === 0 ? 'Safe PIN blocked' : 'Access PIN blocked',
+                ),
+                retry: false,
+              };
+              return;
+            }
 
-            return;
+            const setupHello = MonoidAppletHelloWithSafe.satisfies(hello);
+
+            // Re-prompt if another operation initialized the Safe since input.
+            if (
+              !setup ||
+              (setup.hello.safe.pin === false && safe.pin !== false)
+            ) {
+              result = {
+                type: 'input',
+                request: {type: 'setup', hello: setupHello},
+              };
+              return;
+            }
+
+            setStateContent(
+              safe.pin === false ? 'Setting Safe PIN...' : 'Unlocking safe...',
+            );
+
+            const needsAccessPIN = hello.pin === false;
+
+            try {
+              hello = (await initializeMonoidCard(
+                applet,
+                setupHello,
+                setup.pin,
+                credentialsRequest.signal,
+              )) as MonoidScanPromptHello<TSafe>;
+            } catch (error) {
+              if (disposed) return;
+
+              if (
+                error instanceof CBORAppletError &&
+                MonoidAppletInvalidPINError.is(error.source)
+              ) {
+                if (error.source.tries === 0) {
+                  result = {
+                    type: 'error',
+                    error: new MonoidCardError('Safe PIN blocked', {
+                      cause: error,
+                    }),
+                    retry: false,
+                  };
+                  return;
+                }
+
+                result = {
+                  type: 'input',
+                  request: {
+                    type: 'setup',
+                    hello: {
+                      ...setupHello,
+                      safe: {...safe, pin: error.source.tries},
+                    },
+                  },
+                  message: `Incorrect Safe PIN, tries remaining: ${error.source.tries}`,
+                };
+                return;
+              }
+
+              throw error;
+            }
+
+            if (disposed) return;
+
+            // Only an unset Access PIN inherits the Safe PIN during setup.
+            if (needsAccessPIN) {
+              enteredPIN = {id, pin: setup.pin};
+              initializedAccessPIN = true;
+            }
           }
 
-          if (auth === 'access') {
+          if (auth === 'access' || initializedAccessPIN) {
             const entered = enteredPIN?.id === id ? enteredPIN.pin : undefined;
 
             enteredPIN = undefined;
@@ -434,7 +547,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
             }
 
             if (pin === undefined) {
-              result = {type: 'input', id};
+              result = {type: 'input', request: {type: 'access', id}};
 
               return;
             }
@@ -466,7 +579,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
 
                 result = {
                   type: 'input',
-                  id,
+                  request: {type: 'access', id},
                   message: `Incorrect PIN, tries remaining: ${error.source.tries}`,
                 };
 
@@ -628,6 +741,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
       pins = {};
       unlockedPINs = undefined;
       enteredPIN = undefined;
+      setupPIN = undefined;
       update = undefined;
       result = undefined;
       void stop?.().catch(error => errorService.catch(Promise.reject(error)));

@@ -37,7 +37,11 @@ import {
   InfoTableSection,
 } from './info-section.js';
 import {inlineIconCSS} from './inline-icon.js';
-import {MessageSectionTags, MessageSectionTitle} from './message-content.js';
+import {
+  InfoMessage,
+  MessageSectionTags,
+  MessageSectionTitle,
+} from './message-content.js';
 import {NativeAmount} from './native-amount.js';
 import {Tag} from './tag.js';
 
@@ -71,7 +75,11 @@ const RateTag = styled(Tag)<{$level?: EvmGasComparison['level']}>`
       css`
         color: ${color};
         border-color: color-mix(in srgb, ${color} 45%, white);
-        background-color: color-mix(in srgb, ${color} 12%, white);
+        background: linear-gradient(
+          135deg,
+          color-mix(in srgb, ${color} 18%, white),
+          color-mix(in srgb, ${color} 6%, white)
+        );
       `
     );
   }}
@@ -88,12 +96,6 @@ const DetailValue = styled.span`
 
 const Level = styled(DetailValue)<{$level?: EvmGasComparison['level']}>`
   color: ${({$level}) => gasLevelColor($level) ?? 'inherit'};
-`;
-
-const Note = styled.div`
-  color: var(--color-text-label);
-  font-size: 12px;
-  text-align: center;
 `;
 
 export const EvmGasDetails = ({
@@ -299,7 +301,7 @@ export const EvmGasDetails = ({
               )}
             </DetailsPopupSection>
           )}
-          <Note>Additional network fees are not included.</Note>
+          <InfoMessage>Additional network fees are not included.</InfoMessage>
         </DetailsPopup>
       )}
     </InfoTableSection>

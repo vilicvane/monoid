@@ -18,9 +18,11 @@ import {
   InfoSectionItemLabel,
   InfoSectionRow,
 } from '../../@ui/info-section.js';
+import {InfoMessage} from '../../@ui/message-content.js';
 import {NativeAmount} from '../../@ui/native-amount.js';
 import {WarningTag} from '../../@ui/tag.js';
 import {TransactionDetailsPanel} from '../../@ui/transaction-details-panel.js';
+import {TransactionHeaderStatus} from '../../@ui/transaction-status.js';
 import {
   View,
   ViewContent,
@@ -62,7 +64,7 @@ export const TransactionDetails = observer(function TransactionDetails({
     (!!detail.submission || (status === 'pending' && !confirmation.nonceUsed));
   const replace = (kind: 'speed-up' | 'cancel'): void => {
     router.transactions
-      .wallet({address: transaction.from})
+      .wallet({address: transaction.from, addressType: 'evm'})
       .transaction({chainId, hash})
       .replace({kind})
       .$push();
@@ -89,7 +91,7 @@ export const TransactionDetails = observer(function TransactionDetails({
             color="neutral"
             onClick={() =>
               router.transactions
-                .wallet({address: transaction.from})
+                .wallet({address: transaction.from, addressType: 'evm'})
                 .transaction({chainId, hash: confirmation.replacementHash})
                 .$push()
             }
@@ -104,6 +106,7 @@ export const TransactionDetails = observer(function TransactionDetails({
     <View inert={!active}>
       <ViewHeader>
         <ViewHeaderTitle>Transaction</ViewHeaderTitle>
+        <TransactionHeaderStatus status={status} />
       </ViewHeader>
       <ViewContent footer={actions}>
         <IconTagSection>
@@ -137,12 +140,10 @@ export const TransactionDetails = observer(function TransactionDetails({
           />
         )}
         {status === 'pending' && confirmation.nonceUsed && (
-          <InfoSection>
-            <InfoSectionItemLabel>
-              This nonce has already been used. Waiting for the transaction
-              result.
-            </InfoSectionItemLabel>
-          </InfoSection>
+          <InfoMessage>
+            This nonce has already been used. Waiting for the transaction
+            result.
+          </InfoMessage>
         )}
         <TransactionDetailsPanel
           hash={hash}

@@ -117,6 +117,7 @@ function setup(context, transaction = {}, chainId = 1n) {
     addressBook,
     callHistory,
     transactionHistory,
+    {rememberSubmitted: context.mock.fn(async () => {})},
     records,
   );
   return {
@@ -498,6 +499,7 @@ test('a failed website response retries the same hash without RPC or a second br
     addressBook,
     state.callHistory,
     state.transactionHistory,
+    {rememberSubmitted: context.mock.fn(async () => {})},
   );
   assert.deepEqual(reloaded.getTransactionSubmission(1), {
     topic,
@@ -551,6 +553,7 @@ test('a failed history write preserves the accepted submission and retries witho
     addressBook,
     callHistory,
     transactionHistory,
+    {rememberSubmitted: context.mock.fn(async () => {})},
   );
   assert.equal(
     await reloaded.approveTransactionRequest(
@@ -586,6 +589,7 @@ test('reload does not automatically broadcast and uncertain retries resend only 
     addressBook,
     state.callHistory,
     state.transactionHistory,
+    {rememberSubmitted: context.mock.fn(async () => {})},
   );
   assert.equal(provider.broadcastTransaction.mock.callCount(), 1);
   assert.equal(reloaded.getTransactionSubmission(1).broadcast, false);
@@ -805,6 +809,7 @@ test('restore prunes submissions whose request is no longer pending without broa
     addressBook,
     state.callHistory,
     state.transactionHistory,
+    {rememberSubmitted: context.mock.fn(async () => {})},
   );
   assert.equal(reloaded.getTransactionSubmission(1), undefined);
   await Promise.resolve();

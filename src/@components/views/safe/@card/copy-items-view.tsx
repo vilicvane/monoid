@@ -28,6 +28,10 @@ import {
   MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
+import {
+  PINKind,
+  getPINInputPlaceholder,
+} from '../../../@monoid/pin-input-placeholder.js';
 import {AppIcon} from '../../../@ui/app-icon.js';
 import {Button, Buttons} from '../../../@ui/button.js';
 import {CenteredPopup} from '../../../@ui/centered-popup.js';
@@ -461,11 +465,17 @@ export const CopyItemsView = observer(
       const isNew = expected.safe.pin === false;
       let pin = await showSafePINInput({
         type: 'password',
-        placeholder: isNew ? 'Set Safe PIN' : 'Enter existing Safe PIN',
+        ...getPINInputPlaceholder('Safe', isNew ? 'Set' : 'Enter existing'),
         description:
-          expected.pin === false
-            ? 'Will be used as initial Access PIN'
-            : 'Access PIN stays the same',
+          expected.pin === false ? (
+            <>
+              Will be used as initial <PINKind kind="Access" /> PIN
+            </>
+          ) : (
+            <>
+              <PINKind kind="Access" /> PIN stays the same
+            </>
+          ),
         center: true,
         maxLength: 16,
       });
@@ -562,7 +572,7 @@ export const CopyItemsView = observer(
       } else if (exported < transfers.length) {
         let pin = await showSafePINInput({
           type: 'password',
-          placeholder: 'Enter source card Safe PIN',
+          ...getPINInputPlaceholder('Safe', 'Enter source card'),
           center: true,
           maxLength: 16,
         });

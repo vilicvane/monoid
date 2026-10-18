@@ -22,36 +22,14 @@ import {FormattedNumber} from './formatted-number.js';
 import {IconTag, IconTagName} from './icon-tag.js';
 import {InfoSectionItemLabel, InfoSectionRow} from './info-section.js';
 import {CenteredPopupAddress} from './popup-address.js';
+import {
+  TokenLabel as Label,
+  TokenLabelName as LabelName,
+} from './token-label.js';
 import {TokenDetailsHeader, TokenLogo} from './token-logo.js';
 
 const Title = styled(DetailsPopupTitle)<{$color?: string}>`
   color: ${({$color}) => $color ?? 'inherit'};
-`;
-
-const Label = styled.span`
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  max-width: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--color-text-secondary);
-  font: inherit;
-  font-size: 16px;
-  text-align: left;
-
-  > ${TokenLogo} {
-    flex-shrink: 0;
-    width: 24px;
-    height: 24px;
-  }
-`;
-
-const LabelName = styled(Title).attrs({as: 'span'})`
-  font: inherit;
-  text-align: inherit;
 `;
 
 const TokenIdentity = observer(function TokenIdentity({

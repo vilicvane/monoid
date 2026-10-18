@@ -20,6 +20,7 @@ export function WalletConnectRequests(): null {
       if (
         [
           router.features,
+          router.bitcoin,
           router.sessions,
           router.transactions,
           router.scan,
@@ -32,6 +33,7 @@ export function WalletConnectRequests(): null {
       // Requests received while reviewing one stay in the manual queue on exit.
       if (
         router.sessions.request.$matched ||
+        router.bitcoin.wallet.send.$matched ||
         router.transactions.wallet.transaction.replace.$matched
       ) {
         requests.forEach(({id}) => presented.add(id));

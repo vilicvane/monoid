@@ -1,6 +1,11 @@
+import {
+  type SolanaTransactionBalances,
+  parseSolanaTransactionBalances,
+} from './solana-transaction-balances.js';
 import type {SolanaRPCRequest} from './solana-transaction-review.js';
 
 const POLL_INTERVAL = 5_000;
+export const SOLANA_SIGNED_TRANSACTION_LOOKUP_TIMEOUT = 5 * 60_000;
 
 export type SolanaSignatureStatus = {
   slot: number;
@@ -9,11 +14,12 @@ export type SolanaSignatureStatus = {
 };
 
 export type SolanaTransactionConfirmation =
-  | {status: 'pending'; error?: unknown}
+  | {status: 'signed' | 'not-found' | 'pending'; error?: unknown}
   | {
       status: 'confirmed' | 'failed';
       slot: number;
       fee?: bigint;
+      balances?: SolanaTransactionBalances;
       executionError?: string;
       error?: unknown;
     };
@@ -65,15 +71,21 @@ export function watchSolanaTransaction({
   signature,
   request,
   onChange,
+  initial,
+  notFoundAfter,
 }: {
   signature: string;
   request: SolanaRPCRequest;
   onChange: (confirmation: SolanaTransactionConfirmation) => void;
+  initial?: SolanaTransactionConfirmation;
+  notFoundAfter?: number;
 }): () => void {
   const controller = new AbortController();
   const {signal} = controller;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let confirmation: SolanaTransactionConfirmation = {status: 'pending'};
+  let confirmation: SolanaTransactionConfirmation = initial ?? {
+    status: 'pending',
+  };
 
   const poll = async (): Promise<void> => {
     confirmation = {...confirmation};
@@ -81,14 +93,20 @@ export function watchSolanaTransaction({
     let detailsLoaded = false;
 
     try {
-      if (confirmation.status === 'pending') {
+      if (
+        confirmation.status === 'pending' ||
+        confirmation.status === 'signed' ||
+        confirmation.status === 'not-found'
+      ) {
         const status = await getSolanaSignatureStatus(
           request,
           signature,
           signal,
         );
 
-        if (status && status.confirmationStatus !== 'processed') {
+        if (status?.confirmationStatus === 'processed') {
+          confirmation = {status: 'pending'};
+        } else if (status) {
           confirmation = {
             status: status.err === null ? 'confirmed' : 'failed',
             slot: status.slot,
@@ -101,10 +119,21 @@ export function watchSolanaTransaction({
           };
           onChange(confirmation);
           if (signal.aborted) return;
+        } else if (
+          confirmation.status !== 'pending' &&
+          notFoundAfter !== undefined &&
+          Date.now() >= notFoundAfter
+        ) {
+          // A successful empty lookup is not evidence of execution failure,
+          // or of expiry for transactions using a durable nonce.
+          confirmation = {status: 'not-found'};
         }
       }
 
-      if (confirmation.status !== 'pending') {
+      if (
+        confirmation.status === 'confirmed' ||
+        confirmation.status === 'failed'
+      ) {
         const transaction = await request(
           'getTransaction',
           [
@@ -139,6 +168,7 @@ export function watchSolanaTransaction({
           confirmation = {
             ...confirmation,
             slot: transaction.slot,
+            balances: parseSolanaTransactionBalances(transaction),
             ...(transaction.meta !== null && {
               fee: BigInt(transaction.meta.fee as number),
             }),
@@ -153,7 +183,11 @@ export function watchSolanaTransaction({
 
     if (signal.aborted) return;
     onChange(confirmation);
-    if (!signal.aborted && !detailsLoaded) {
+    if (
+      !signal.aborted &&
+      !detailsLoaded &&
+      confirmation.status !== 'not-found'
+    ) {
       timer = setTimeout(() => void poll(), POLL_INTERVAL);
     }
   };
@@ -163,6 +197,26 @@ export function watchSolanaTransaction({
     controller.abort();
     clearTimeout(timer);
   };
+}
+
+export function canRefreshSolanaTransaction(
+  confirmation: SolanaTransactionConfirmation,
+): boolean {
+  return (
+    confirmation.error !== undefined ||
+    confirmation.status === 'not-found' ||
+    ((confirmation.status === 'confirmed' ||
+      confirmation.status === 'failed') &&
+      confirmation.balances !== undefined &&
+      (confirmation.fee === undefined ||
+        confirmation.balances.native === undefined ||
+        confirmation.balances.tokens === undefined ||
+        confirmation.balances.tokens.some(
+          token =>
+            (token.before !== undefined && token.before.owner === undefined) ||
+            (token.after !== undefined && token.after.owner === undefined),
+        )))
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

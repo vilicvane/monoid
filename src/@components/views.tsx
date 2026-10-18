@@ -3,6 +3,11 @@ import {Match, Route} from 'routra-react';
 
 import {useEntrances} from '../@entrances.js';
 
+import {BitcoinSendView} from './views/bitcoin-send-view.js';
+import {BitcoinTransactionView} from './views/bitcoin-transaction-view.js';
+import {BitcoinTransactionsView} from './views/bitcoin-transactions-view.js';
+import {BitcoinWalletView} from './views/bitcoin-wallet-view.js';
+import {BitcoinWalletsView} from './views/bitcoin-wallets-view.js';
 import {FeaturesView} from './views/features-view.js';
 import {SafeMatch} from './views/safe/index.js';
 import {ScanView} from './views/scan-view.js';
@@ -10,6 +15,7 @@ import {SessionSwitchView} from './views/session-switch-view.js';
 import {SessionView} from './views/session-view.js';
 import {SessionsRequestFab} from './views/sessions-request-fab.js';
 import {SessionsView} from './views/sessions-view.js';
+import {SolanaTransactionHistoryView} from './views/solana-transaction-history-view.js';
 import {SolanaTransactionView} from './views/solana-transaction-view.js';
 import {TransactionHistoryView} from './views/transaction-history-view.js';
 import {TransactionReplacementView} from './views/transaction-replacement-view.js';
@@ -29,6 +35,26 @@ export const Views = (): ReactNode => {
       <WalletConnectRequests />
       <SessionsRequestFab />
       <Route view={router.features.$view()} component={FeaturesView} />
+      <Route
+        view={router.bitcoin.$exact.$view()}
+        component={BitcoinWalletsView}
+      />
+      <Route
+        view={router.bitcoin.wallet.$exact.$view()}
+        component={BitcoinWalletView}
+      />
+      <Route
+        view={router.bitcoin.wallet.send.$view({parallel: true})}
+        component={BitcoinSendView}
+      />
+      <Route
+        view={router.bitcoin.wallet.transactions.$view()}
+        component={BitcoinTransactionsView}
+      />
+      <Route
+        view={router.bitcoin.wallet.transaction.$view({parallel: true})}
+        component={BitcoinTransactionView}
+      />
       <Route view={router.sessions.$exact.$view()} component={SessionsView} />
       <Route
         view={router.transactions.$exact.$view()}
@@ -49,6 +75,12 @@ export const Views = (): ReactNode => {
           parallel: true,
         })}
         component={TransactionReplacementView}
+      />
+      <Route
+        view={router.transactions.wallet.solanaTransaction.$view({
+          parallel: true,
+        })}
+        component={SolanaTransactionHistoryView}
       />
       <Route
         view={router.sessions.request.$view({parallel: true})}

@@ -9,6 +9,11 @@ export const FEATURES = [
     name: 'Transactions',
     description: 'View your transaction history.',
   },
+  {
+    route: 'bitcoin',
+    name: 'Bitcoin',
+    description: 'Send and receive BTC.',
+  },
 ] as const;
 
 export type FeatureRoute = (typeof FEATURES)[number]['route'];

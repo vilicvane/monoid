@@ -57,6 +57,7 @@ import {getSolanaSignatureStatus} from '../@lib/watch-solana-transaction.js';
 
 import type {AddressBookService} from './address-book-service.js';
 import type {EvmCallHistoryService} from './evm-call-history-service.js';
+import type {SolanaTransactionHistoryService} from './solana-transaction-history-service.js';
 import type {StorageService} from './storage-service.js';
 import type {TransactionHistoryService} from './transaction-history-service.js';
 
@@ -138,6 +139,7 @@ export type WalletKitSolanaTransactionSubmission = {
   signedTransaction: string;
   sendOptions: SolanaSendOptions;
   broadcast: boolean;
+  timestamp: number;
 };
 
 declare global {
@@ -191,6 +193,7 @@ export class WalletKitService {
     WalletKitSolanaTransactionSubmission
   >([], {deep: false});
   private writingSolanaSubmissions = Promise.resolve();
+  private recordedSolanaSubmissions = new Set<number>();
 
   constructor(
     private kit: IWalletKit,
@@ -198,6 +201,7 @@ export class WalletKitService {
     private addressBook: AddressBookService,
     private callHistory: EvmCallHistoryService,
     private transactionHistory: TransactionHistoryService,
+    private solanaTransactionHistory: SolanaTransactionHistoryService,
     records: Record<string, WalletKitSessionRecord> = {},
     submissions: StorageMapping['walletKitTransactionSubmissions'] = {},
     solanaSubmissions: StorageMapping['walletKitSolanaTransactionSubmissions'] = {},
@@ -216,6 +220,10 @@ export class WalletKitService {
           submission,
         ]),
       );
+      // create() restores accepted submissions to history before cleanup can run.
+      for (const [id, submission] of this.solanaTransactionSubmissions) {
+        if (submission.broadcast) this.recordedSolanaSubmissions.add(id);
+      }
     });
     this.refreshSessions();
 
@@ -555,9 +563,14 @@ export class WalletKitService {
 
     let solanaChanged = false;
     runInAction(() => {
-      for (const id of this.solanaTransactionSubmissions.keys()) {
-        if (!this.requests.has(id) && !this.responses.has(id)) {
+      for (const [id, submission] of this.solanaTransactionSubmissions) {
+        if (
+          !this.requests.has(id) &&
+          !this.responses.has(id) &&
+          (!submission.broadcast || this.recordedSolanaSubmissions.has(id))
+        ) {
           this.solanaTransactionSubmissions.delete(id);
+          this.recordedSolanaSubmissions.delete(id);
           solanaChanged = true;
         }
       }
@@ -723,6 +736,7 @@ export class WalletKitService {
           signedTransaction,
           sendOptions: payload.sendOptions,
           broadcast: false,
+          timestamp: Date.now(),
         };
         runInAction(() =>
           this.solanaTransactionSubmissions.set(id, submission!),
@@ -749,15 +763,42 @@ export class WalletKitService {
           }
         }
         submission = {...submission, broadcast: true};
+      }
+
+      // Establish history before publishing broadcast state: the result view
+      // can receive confirmation before either storage write has completed.
+      const remember = this.solanaTransactionHistory.rememberSubmitted(
+        submission.chainId,
+        submission.address,
+        submission.signedTransaction,
+        submission.timestamp,
+      );
+      if (this.solanaTransactionSubmissions.get(id) !== submission) {
         runInAction(() =>
           this.solanaTransactionSubmissions.set(id, submission!),
         );
-        await this.saveSolanaTransactionSubmissions();
+        await Promise.all([remember, this.saveSolanaTransactionSubmissions()]);
+      } else {
+        await remember;
       }
+      this.recordedSolanaSubmissions.add(id);
 
       if (!validate()) return false;
       return this.publishRequestResponse(request, {signature});
     }
+
+    const timestamp = Date.now();
+    await Promise.all(
+      transactions.map(async (transaction, index) =>
+        this.solanaTransactionHistory.rememberSigned(
+          payload.chainId,
+          signed[index].address,
+          transaction,
+          timestamp,
+        ),
+      ),
+    );
+    if (!validate()) return false;
 
     return this.publishRequestResponse(
       request,
@@ -1074,18 +1115,31 @@ export class WalletKitService {
     addressBook: AddressBookService,
     callHistory: EvmCallHistoryService,
     transactionHistory: TransactionHistoryService,
+    solanaTransactionHistory: SolanaTransactionHistoryService,
   ): Promise<WalletKitService> {
     const [records, submissions, solanaSubmissions] = await Promise.all([
       storage.get('walletKitSessionRecords'),
       storage.get('walletKitTransactionSubmissions'),
       storage.get('walletKitSolanaTransactionSubmissions'),
     ]);
+    // A crash after broadcast must not let request cleanup discard its history.
+    for (const submission of Object.values(solanaSubmissions ?? {})) {
+      if (submission.broadcast) {
+        await solanaTransactionHistory.rememberSubmitted(
+          submission.chainId,
+          submission.address,
+          submission.signedTransaction,
+          submission.timestamp,
+        );
+      }
+    }
     return new WalletKitService(
       kit,
       storage,
       addressBook,
       callHistory,
       transactionHistory,
+      solanaTransactionHistory,
       records ?? {},
       submissions ?? {},
       solanaSubmissions ?? {},

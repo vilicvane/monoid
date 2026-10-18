@@ -2,12 +2,17 @@ import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 import {UnmountAnimationClone} from 'unmount-animation-clone';
 
-import {normalizeWalletAddress} from '../../@lib/wallet-address.js';
+import {
+  ADDRESS_TYPE_LABELS,
+  type AddressType,
+  normalizeWalletAddress,
+} from '../../@lib/wallet-address.js';
 import type {
   WalletKeyData,
   WalletKeyWalletData,
 } from '../../@services/index.js';
 import {getKeyWallets} from '../../@services/index.js';
+import {InfoSectionItemLabel} from '../@ui/info-section.js';
 import {InteractiveAddress} from '../@ui/interactive-address.js';
 import {RippleEffect} from '../@ui/ripple-effect.js';
 
@@ -132,6 +137,7 @@ export const WalletAccountList = observer(
     keys,
     addressType,
     addresses,
+    selectionLabel,
     compact = false,
     compactContent = false,
     contained = false,
@@ -143,8 +149,9 @@ export const WalletAccountList = observer(
     disabled = false,
   }: {
     keys: readonly WalletKeyData[];
-    addressType: 'evm' | 'solana' | readonly ('evm' | 'solana')[];
+    addressType: AddressType | readonly AddressType[];
     addresses?: readonly string[];
+    selectionLabel?: string;
     compact?: boolean;
     compactContent?: boolean;
     contained?: boolean;
@@ -178,76 +185,84 @@ export const WalletAccountList = observer(
     }
 
     return (
-      <KeyList
-        $compact={compact}
-        $compactContent={compactContent}
-        $contained={contained}
-      >
-        {Array.from(groups, ([index, group]) => (
-          <WalletAccountGroup
-            key={index}
-            group={group}
-            showAddressType={!!onOpen || addressTypes.length > 1}
-            autoExpand={
-              (!onToggle && !onOpen) ||
-              groups.size === 1 ||
-              group.wallets.some(wallet =>
-                selected.has(normalizeWalletAddress(wallet.address)),
-              )
-            }
-            selectedAddresses={selected}
-            onToggle={onToggle}
-            onOpen={onToggle ? undefined : onOpen}
-            renderStatus={renderStatus}
-            disabled={disabled}
-          />
-        ))}
-        {additionalAddresses
-          .filter(address => !seen.has(normalizeWalletAddress(address)))
-          .map(address => (
-            <KeyGroupItem
-              as={onToggle ? 'label' : onOpen ? 'button' : 'div'}
-              key={normalizeWalletAddress(address)}
-              className={!onToggle && onOpen ? 'ion-activatable' : undefined}
+      <>
+        {selectionLabel &&
+          (groups.size > 0 || additionalAddresses.length > 0) && (
+            <InfoSectionItemLabel>{selectionLabel}</InfoSectionItemLabel>
+          )}
+        <KeyList
+          $compact={compact}
+          $compactContent={compactContent}
+          $contained={contained}
+        >
+          {Array.from(groups, ([index, group]) => (
+            <WalletAccountGroup
+              key={index}
+              group={group}
+              showAddressType={!!onOpen || addressTypes.length > 1}
+              autoExpand={
+                (!onToggle && !onOpen) ||
+                groups.size === 1 ||
+                group.wallets.some(wallet =>
+                  selected.has(normalizeWalletAddress(wallet.address)),
+                )
+              }
+              selectedAddresses={selected}
+              onToggle={onToggle}
+              onOpen={onToggle ? undefined : onOpen}
+              renderStatus={renderStatus}
               disabled={disabled}
-              onClick={!onToggle && onOpen ? () => onOpen(address) : undefined}
-            >
-              {onToggle && (
-                <KeyCheckbox
-                  aria-label={`Select ${address}`}
-                  checked={selected.has(normalizeWalletAddress(address))}
-                  onChange={() => onToggle(address)}
-                  disabled={disabled}
-                />
-              )}
-              <KeyListItemContent>
-                <KeyTags>
-                  <KeyListPlaceholder>Not in Safe</KeyListPlaceholder>
-                  {renderStatus?.([address])}
-                </KeyTags>
-                {onToggle || onOpen ? (
-                  <KeyListAddress>{address}</KeyListAddress>
-                ) : (
-                  <KeyListAddress as={InteractiveAddress} copyable>
-                    {address}
-                  </KeyListAddress>
-                )}
-              </KeyListItemContent>
-              {!onToggle && onOpen && !disabled && <RippleEffect />}
-            </KeyGroupItem>
+            />
           ))}
-        {!groups.size && !additionalAddresses.length && (
-          <KeyListItem>
-            <KeyListPlaceholder>
-              {onToggle
-                ? addressTypes.length === 1
-                  ? `No ${addressTypes[0] === 'evm' ? 'EVM' : 'Solana'} accounts in Safe.`
-                  : 'No accounts in Safe.'
-                : 'No accounts.'}
-            </KeyListPlaceholder>
-          </KeyListItem>
-        )}
-      </KeyList>
+          {additionalAddresses
+            .filter(address => !seen.has(normalizeWalletAddress(address)))
+            .map(address => (
+              <KeyGroupItem
+                as={onToggle ? 'label' : onOpen ? 'button' : 'div'}
+                key={normalizeWalletAddress(address)}
+                className={!onToggle && onOpen ? 'ion-activatable' : undefined}
+                disabled={disabled}
+                onClick={
+                  !onToggle && onOpen ? () => onOpen(address) : undefined
+                }
+              >
+                {onToggle && (
+                  <KeyCheckbox
+                    aria-label={`Select ${address}`}
+                    checked={selected.has(normalizeWalletAddress(address))}
+                    onChange={() => onToggle(address)}
+                    disabled={disabled}
+                  />
+                )}
+                <KeyListItemContent>
+                  <KeyTags>
+                    <KeyListPlaceholder>Not in Safe</KeyListPlaceholder>
+                    {renderStatus?.([address])}
+                  </KeyTags>
+                  {onToggle || onOpen ? (
+                    <KeyListAddress>{address}</KeyListAddress>
+                  ) : (
+                    <KeyListAddress as={InteractiveAddress} copyable>
+                      {address}
+                    </KeyListAddress>
+                  )}
+                </KeyListItemContent>
+                {!onToggle && onOpen && !disabled && <RippleEffect />}
+              </KeyGroupItem>
+            ))}
+          {!groups.size && !additionalAddresses.length && (
+            <KeyListItem>
+              <KeyListPlaceholder>
+                {onToggle
+                  ? addressTypes.length === 1
+                    ? `No ${ADDRESS_TYPE_LABELS[addressTypes[0]]} accounts in Safe.`
+                    : 'No accounts in Safe.'
+                  : 'No accounts.'}
+              </KeyListPlaceholder>
+            </KeyListItem>
+          )}
+        </KeyList>
+      </>
     );
   },
 );

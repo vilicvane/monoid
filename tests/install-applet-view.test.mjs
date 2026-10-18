@@ -34,9 +34,6 @@ mock.module('../.bld/app/@services/index.js', {
     isCredentialRequestCancelled: error => error?.code === 'CANCELLED',
   },
 });
-mock.module('../.bld/app/@utils/index.js', {
-  namedExports: {uint8ArrayToHex: bytes => Buffer.from(bytes).toString('hex')},
-});
 mock.module('../.bld/app/@components/@monoid/use-isodep-scan-prompt.js', {
   namedExports: {
     useIsoDepScanPrompt: () => (_initial, callback) => {
@@ -183,36 +180,21 @@ test('missing approved bundle disables installation and explains the pending sta
   assert.deepEqual(state.installs, []);
 });
 
-test('verified installation enters setup only after the whole scan has exited', async () => {
-  const state = mount();
-  state.click();
-  await state.connect();
-  assert.deepEqual(state.installs, ['native-session']);
-  assert.deepEqual(state.routes, []);
-  state.scanFinished.resolve();
-  await state.finished;
-  assert.deepEqual(state.routes, [
-    {
-      type: 'setup',
-      data: {
-        id: '01020304',
-        pin: false,
-        safe: {id: '05060708', pin: true, unlocked: false},
-      },
-    },
-  ]);
-  assert.deepEqual(state.errors, []);
-});
-
-test('already configured cards return to the ordinary card scan', async () => {
-  const state = mount();
-  state.hello.pin = 5;
-  state.click();
-  await state.connect();
-  state.scanFinished.resolve();
-  await state.finished;
-  assert.deepEqual(state.routes, [{type: 'scan'}]);
-});
+for (const pin of [false, 5]) {
+  test(`verified installation returns to card scanning only after scan exit (${pin === false ? 'unset' : 'configured'} Access PIN)`, async () => {
+    const state = mount();
+    state.hello.pin = pin;
+    state.click();
+    await state.connect();
+    assert.deepEqual(state.installs, ['native-session']);
+    assert.deepEqual(state.routes, []);
+    state.scanFinished.resolve();
+    await state.finished;
+    // The ordinary card scan now performs any required Safe setup inline.
+    assert.deepEqual(state.routes, [{type: 'scan'}]);
+    assert.deepEqual(state.errors, []);
+  });
+}
 
 for (const destination of ['unmounted', 'leaving', 'inactive']) {
   test(`completion cannot navigate when the installation page is ${destination}`, async () => {

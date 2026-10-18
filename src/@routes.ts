@@ -8,6 +8,16 @@ import type {WalletConnectAuthentication} from './@lib/wallet-connect-authentica
 
 export const ROUTE_SCHEMA = {
   features: true,
+  bitcoin: {
+    wallet: {
+      $state: undefined! as {address: string},
+      send: true,
+      transactions: true,
+      transaction: {
+        $state: undefined! as {txid: string},
+      },
+    },
+  },
   sessions: {
     request: {
       $state: undefined! as {id: number},
@@ -35,12 +45,18 @@ export const ROUTE_SCHEMA = {
   },
   transactions: {
     wallet: {
-      $state: undefined! as {address: string},
+      $state: undefined! as {
+        address: string;
+        addressType: 'evm' | 'solana';
+      },
       transaction: {
         $state: undefined! as {chainId: string; hash: string},
         replace: {
           $state: undefined! as {kind: EvmTransactionReplacementKind},
         },
+      },
+      solanaTransaction: {
+        $state: undefined! as {chainId: string; id: string},
       },
     },
   },

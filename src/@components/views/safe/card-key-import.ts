@@ -56,7 +56,9 @@ export function importCardKey(
     }
 
     existing.type = incoming.type;
-    existing.alias = incoming.alias;
+    if (incoming.alias) {
+      existing.alias = incoming.alias;
+    }
 
     if (incoming.publicKey !== undefined) {
       existing.publicKey = incoming.publicKey;
@@ -79,7 +81,7 @@ export function isWalletKeyUpToDate(
 ): boolean {
   return (
     existing.type === incoming.type &&
-    existing.alias === incoming.alias &&
+    (!incoming.alias || existing.alias === incoming.alias) &&
     (incoming.publicKey === undefined ||
       existing.publicKey === incoming.publicKey) &&
     (incoming.taprootOutputKey === undefined ||

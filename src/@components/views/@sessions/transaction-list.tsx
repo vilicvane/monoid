@@ -1,8 +1,12 @@
 import {observer} from 'mobx-react-lite';
-import type {ReactNode} from 'react';
+import type {ComponentProps, ReactNode} from 'react';
 import {styled} from 'styled-components';
 
-import type {TransactionHistoryItem} from '../../../@services/index.js';
+import type {
+  SolanaTransactionHistoryItem,
+  TransactionHistoryItem,
+} from '../../../@services/index.js';
+import {useSolanaTransactionConfirmation} from '../../@hooks/use-solana-transaction-confirmation.js';
 import {useTransactionConfirmation} from '../../@hooks/use-transaction-confirmation.js';
 import {ChainTag} from '../../@ui/chain-name.js';
 import {PopupDateTime} from '../../@ui/date-time.js';
@@ -91,23 +95,104 @@ export const TransactionListItem = observer(function TransactionListItem({
   const confirmation = useTransactionConfirmation(transaction, active);
 
   return (
+    <TransactionItem
+      chainId={chainId}
+      hash={transaction.hash}
+      timestamp={transaction.timestamp}
+      status={confirmation.status}
+      onClick={onClick}
+    />
+  );
+});
+
+export const SolanaTransactionListItem = observer(
+  function SolanaTransactionListItem({
+    transaction,
+    active,
+    onClick,
+  }: {
+    transaction: SolanaTransactionHistoryItem;
+    active: boolean;
+    onClick: () => void;
+  }): ReactNode {
+    const confirmation = useSolanaTransactionConfirmation(
+      transaction.chainId,
+      transaction.signature,
+      active,
+    );
+
+    return (
+      <TransactionItem
+        chainId={transaction.chainId}
+        hash={transaction.signature}
+        timestamp={transaction.timestamp}
+        status={confirmation.status}
+        onClick={onClick}
+      />
+    );
+  },
+);
+
+function TransactionItem({
+  chainId,
+  hash,
+  timestamp,
+  status,
+  onClick,
+}: {
+  chainId: string;
+  hash?: string;
+  timestamp: number;
+  status: ComponentProps<typeof TransactionStatus>['status'];
+  onClick: () => void;
+}): ReactNode {
+  return (
+    <TransactionListRow
+      chain={<ChainTag chainId={chainId} />}
+      metadata={
+        <>
+          <PopupDateTime value={timestamp} />
+          <Status status={status} />
+        </>
+      }
+      hash={hash}
+      onClick={onClick}
+    />
+  );
+}
+
+export function TransactionListRow({
+  chain,
+  metadata,
+  hash,
+  onClick,
+}: {
+  chain: ReactNode;
+  metadata: ReactNode;
+  hash?: string;
+  onClick: () => void;
+}): ReactNode {
+  return (
     <Item>
       <Header>
-        <ChainTag chainId={chainId} />
-        <Metadata>
-          <PopupDateTime value={transaction.timestamp} />
-          <Status status={confirmation.status} />
-        </Metadata>
+        {chain}
+        <Metadata>{metadata}</Metadata>
       </Header>
       <HashButton
         type="button"
         className="ion-activatable"
-        aria-label={`View transaction ${transaction.hash}`}
+        aria-label={
+          hash ? `View transaction ${hash}` : 'View signed transaction'
+        }
         onClick={onClick}
       >
-        <EllipsisInMiddle>{transaction.hash}</EllipsisInMiddle>
+        {hash ? (
+          <EllipsisInMiddle>{hash}</EllipsisInMiddle>
+        ) : (
+          'Signed transaction'
+        )}
         <RippleEffect />
       </HashButton>
     </Item>
   );
-});
+}

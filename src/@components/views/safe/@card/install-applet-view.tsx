@@ -3,13 +3,11 @@ import type {RouteComponentProps} from 'routra-react';
 
 import {useEntrances} from '../../../../@entrances.js';
 import {
-  type MonoidAppletHelloWithSafe,
   hasAppletBundle,
   installMonoidApplets,
 } from '../../../../@lib/monoid/index.js';
 import type {Router} from '../../../../@routes.js';
 import {isCredentialRequestCancelled} from '../../../../@services/index.js';
-import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
 import {Button} from '../../../@ui/button.js';
 import {
@@ -50,13 +48,11 @@ export const InstallAppletView = ({
     setStep(1);
     setProgress(undefined);
 
-    let hello: MonoidAppletHelloWithSafe | undefined;
-
     try {
       await scanPrompt(
         'Hold the card against your phone to install',
         async (sessionId, setStateContent) => {
-          hello = await installMonoidApplets(sessionId, update => {
+          await installMonoidApplets(sessionId, update => {
             if (!mounted.current) {
               return;
             }
@@ -81,30 +77,11 @@ export const InstallAppletView = ({
         },
       );
 
-      if (
-        !mounted.current ||
-        view.$leaving ||
-        !view.$match.$exact.$active ||
-        !hello
-      ) {
+      if (!mounted.current || view.$leaving || !view.$match.$exact.$active) {
         return;
       }
 
-      if (hello.pin === false) {
-        router.safe
-          .setupCard({
-            id: uint8ArrayToHex(hello.id),
-            pin: false,
-            safe: {
-              id: uint8ArrayToHex(hello.safe.id),
-              pin: hello.safe.pin !== false,
-              unlocked: hello.safe.unlocked,
-            },
-          })
-          .$replace();
-      } else {
-        router.safe.scanCard.$replace();
-      }
+      router.safe.scanCard.$replace();
     } catch (error) {
       if (!mounted.current) {
         return;

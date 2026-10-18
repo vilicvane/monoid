@@ -80,6 +80,47 @@ function createStorage(walletKeys = []) {
   };
 }
 
+for (const alias of [undefined, '']) {
+  test(`a ${alias === undefined ? 'missing' : 'empty'} card alias preserves the local alias while other metadata can still update`, async context => {
+    context.mock.method(console, 'info', () => {});
+
+    const saved = getCardKeyData(scannedKey(EVM_REF));
+    saved.alias = 'Local name';
+    const storage = createStorage([saved]);
+    const service = await WalletStorageService.create(storage);
+    const existing = service.keys[0];
+    const incoming = getCardKeyData({...scannedKey(EVM_REF), alias});
+
+    assert.equal(isWalletKeyUpToDate(incoming, existing), true);
+
+    const updated = getCardKeyData({...scannedKey(TAPROOT_REF), alias});
+    assert.equal(isWalletKeyUpToDate(updated, existing), false);
+
+    importCardKey(service, updated);
+
+    assert.equal(existing.alias, 'Local name');
+    assert.equal(existing.taprootOutputKey, TAPROOT_REF.publicKey);
+    assert.equal(isWalletKeyUpToDate(updated, existing), true);
+
+    const reloaded = await WalletStorageService.create(storage);
+    assert.equal(reloaded.keys[0].alias, 'Local name');
+  });
+}
+
+test('a nonempty changed card alias is an update and replaces the local alias', async context => {
+  context.mock.method(console, 'info', () => {});
+
+  const saved = getCardKeyData(scannedKey(EVM_REF));
+  saved.alias = 'Local name';
+  const service = await WalletStorageService.create(createStorage([saved]));
+  const incoming = getCardKeyData(scannedKey(EVM_REF));
+
+  assert.equal(isWalletKeyUpToDate(incoming, service.keys[0]), false);
+  importCardKey(service, incoming);
+  assert.equal(service.keys[0].alias, 'Test key');
+  assert.equal(isWalletKeyUpToDate(incoming, service.keys[0]), true);
+});
+
 test('ordinary raw secp256k1 imports store one public key and compute both address views', () => {
   for (const ref of [EVM_REF, SEGWIT_REF]) {
     const key = getCardKeyData(scannedKey(ref));

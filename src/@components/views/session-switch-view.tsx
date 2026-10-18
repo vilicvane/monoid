@@ -13,7 +13,6 @@ import {
 } from '../../@services/index.js';
 import {WalletAccountList} from '../@key/wallet-account-list.js';
 import {AsyncButton} from '../@ui/button.js';
-import {InfoSectionItemLabel} from '../@ui/info-section.js';
 import {
   View,
   ViewContent,
@@ -132,8 +131,8 @@ export const SessionSwitchView = observer(
             metadata={session.peer.metadata}
             verified={record.verified}
           />
-          <InfoSectionItemLabel>Choose accounts</InfoSectionItemLabel>
           <WalletAccountList
+            selectionLabel="Choose accounts"
             keys={walletStorageService.keys}
             addressType={addressTypes}
             additionalAddresses={Array.from(initialAddresses)}

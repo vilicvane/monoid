@@ -11,6 +11,7 @@ import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
 import type {FeatureRoute} from '../../@features.js';
+import {hasBitcoinWallet} from '../../@lib/bitcoin-wallet.js';
 import {
   type PendingAction,
   getPendingActions,
@@ -66,13 +67,22 @@ const DefaultIcon = styled(AppIcon)`
 
 export const FeaturesView = observer(
   ({view, transition}: RouteComponentProps<Router['features']>): ReactNode => {
-    const {router, appPreferencesService, errorService, walletKitService} =
-      useEntrances();
+    const {
+      router,
+      appPreferencesService,
+      errorService,
+      walletKitService,
+      walletStorageService,
+    } = useEntrances();
     const [openFeature, setOpenFeature] = useState<FeatureRoute>();
     const [saving, setSaving] = useState(false);
     const active = !view.$leaving && view.$match.$exact.$active;
     const actions = getPendingActions(walletKitService);
     const nextAction = actions[0];
+    const features = FEATURES.filter(
+      ({route}) =>
+        route !== 'bitcoin' || hasBitcoinWallet(walletStorageService.keys),
+    );
 
     const openAction = (action: PendingAction): void => {
       router.sessions.request({id: action.request.id}).$push();
@@ -100,7 +110,7 @@ export const FeaturesView = observer(
         <ViewContent>
           <InfoSection as="section" aria-label="Features">
             <FeatureList>
-              {FEATURES.map(({route, name, description, icon, color}) => {
+              {features.map(({route, name, description, icon, color}) => {
                 const isDefault =
                   appPreferencesService.defaultFeature === route;
 

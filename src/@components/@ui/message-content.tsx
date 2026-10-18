@@ -21,6 +21,13 @@ export const MessageContent = styled.pre`
   font-size: 13px;
 `;
 
+export const InfoMessage = styled(InfoSection).attrs({role: 'status'})`
+  ${messageBlockCSS}
+  background: var(--color-message-background, var(--ion-color-light));
+  color: var(--color-text-secondary);
+  font-size: 14px;
+`;
+
 export const ErrorMessage = styled(InfoSection).attrs({role: 'status'})`
   ${messageBlockCSS}
   background: var(--ion-color-danger);

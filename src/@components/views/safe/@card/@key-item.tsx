@@ -1,5 +1,6 @@
 import {
   ArrowLeftRight as arrowLeftRight,
+  ArrowUpToLine as arrowUpToLine,
   RefreshCw as refreshCw,
   SaveCheck as saveCheck,
 } from 'lucide-react';
@@ -73,6 +74,14 @@ const KeySavedTag = styled(KeyTag)`
   color: var(--ion-color-medium-tint);
 `;
 
+const KeyWriteTag = styled(KeyTag)`
+  width: 22px;
+  padding: 0;
+  background-color: rgba(var(--ion-color-primary-rgb), 0.1);
+  border-color: rgba(var(--ion-color-primary-rgb), 0.28);
+  color: var(--ion-color-primary);
+`;
+
 export type KeyItemState = 'new' | 'outdated' | 'up-to-date';
 
 export const KeyItem = observer(
@@ -81,6 +90,7 @@ export const KeyItem = observer(
     addressType,
     address,
     state,
+    canWriteAlias,
     selected,
     disabled,
     onSelect,
@@ -90,6 +100,7 @@ export const KeyItem = observer(
     addressType: AddressType;
     address: string | undefined;
     state: KeyItemState;
+    canWriteAlias: boolean;
     selected: boolean;
     disabled: boolean;
     onSelect: (selected: boolean) => void;
@@ -151,11 +162,24 @@ export const KeyItem = observer(
               </AddressTypeSwitch>
             )}
             {state === 'outdated' && (
-              <KeyUpdateTag role="img" aria-label="Update available">
+              <KeyUpdateTag
+                role="img"
+                aria-label="App update available"
+                title="Update app from card"
+              >
                 <AppIcon icon={refreshCw} aria-hidden="true" />
               </KeyUpdateTag>
             )}
-            {state === 'up-to-date' && (
+            {canWriteAlias && (
+              <KeyWriteTag
+                role="img"
+                aria-label="Card alias update available"
+                title="Write app alias to card"
+              >
+                <AppIcon icon={arrowUpToLine} aria-hidden="true" />
+              </KeyWriteTag>
+            )}
+            {state === 'up-to-date' && !canWriteAlias && (
               <KeySavedTag role="img" aria-label="Saved">
                 <AppIcon icon={saveCheck} aria-hidden="true" />
               </KeySavedTag>

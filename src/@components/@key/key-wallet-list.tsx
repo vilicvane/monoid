@@ -158,6 +158,7 @@ export const KeyWalletList = observer(
                           : undefined
                       }
                       $revealing={revealing && wallet !== representative}
+                      disabled={collapsed || collapsing}
                       open={openWallet === id}
                       onOpenChange={open =>
                         setOpenWallet(open ? id : undefined)

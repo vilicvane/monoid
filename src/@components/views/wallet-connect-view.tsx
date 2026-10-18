@@ -12,7 +12,7 @@ import {
 import type {Router} from '../../@routes.js';
 import {WalletAccountList} from '../@key/wallet-account-list.js';
 import {AsyncButton, Button} from '../@ui/button.js';
-import {InfoSectionItemLabel} from '../@ui/info-section.js';
+import {ErrorMessage} from '../@ui/message-content.js';
 import {
   View,
   ViewContent,
@@ -130,8 +130,8 @@ export const WalletConnectView = observer(
           )}
           {available ? (
             <>
-              <InfoSectionItemLabel>Choose accounts</InfoSectionItemLabel>
               <WalletAccountList
+                selectionLabel="Choose accounts"
                 keys={walletStorageService.keys}
                 addressType={addressTypes}
                 selectedAddresses={selectedAddresses}
@@ -146,9 +146,7 @@ export const WalletConnectView = observer(
                 }}
               />
               {authentication.error && (
-                <InfoSectionItemLabel role="alert">
-                  {authentication.error}
-                </InfoSectionItemLabel>
+                <ErrorMessage role="alert">{authentication.error}</ErrorMessage>
               )}
             </>
           ) : (

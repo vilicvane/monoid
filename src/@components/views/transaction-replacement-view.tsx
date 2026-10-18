@@ -41,12 +41,8 @@ import {AsyncButton, Button} from '../@ui/button.js';
 import {ChainTag} from '../@ui/chain-name.js';
 import {EvmTransactionReview} from '../@ui/evm-transaction-review.js';
 import {IconTagSection} from '../@ui/icon-tag.js';
-import {
-  InfoFieldset,
-  InfoLegend,
-  InfoSection,
-  InfoSectionItemLabel,
-} from '../@ui/info-section.js';
+import {InfoFieldset, InfoLegend} from '../@ui/info-section.js';
+import {InfoMessage} from '../@ui/message-content.js';
 import {
   View,
   ViewContent,
@@ -279,7 +275,7 @@ const TransactionReplacementContent = observer(
 
     const openTransaction = (hash: string): void => {
       router.transactions
-        .wallet({address: original.from!})
+        .wallet({address: original.from!, addressType: 'evm'})
         .transaction({chainId: view.chainId, hash})
         .$replace();
     };
@@ -409,19 +405,17 @@ const TransactionReplacementContent = observer(
           <IconTagSection>
             <ChainTag chainId={view.chainId} />
           </IconTagSection>
-          <InfoSection>
-            <InfoSectionItemLabel>
-              {!available
-                ? pending
-                  ? 'This nonce has already been used. Waiting for the transaction result.'
-                  : 'This transaction is no longer pending.'
-                : submission
-                  ? 'Retry submits the same signed transaction.'
-                  : cancelling
-                    ? 'Send a zero-value transaction to yourself with the same nonce. The original may still confirm first. A network fee applies.'
-                    : 'Keep the same transaction and increase its network fee.'}
-            </InfoSectionItemLabel>
-          </InfoSection>
+          <InfoMessage>
+            {!available
+              ? pending
+                ? 'This nonce has already been used. Waiting for the transaction result.'
+                : 'This transaction is no longer pending.'
+              : submission
+                ? 'Retry submits the same signed transaction.'
+                : cancelling
+                  ? 'Send a zero-value transaction to yourself with the same nonce. The original may still confirm first. A network fee applies.'
+                  : 'Keep the same transaction and increase its network fee.'}
+          </InfoMessage>
           <InfoFieldset>
             <InfoLegend>From</InfoLegend>
             <WalletAccountList

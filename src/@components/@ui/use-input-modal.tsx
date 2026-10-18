@@ -41,10 +41,22 @@ const InputContainer = styled.div`
   }
 `;
 
-const Input = styled.input`
-  box-sizing: border-box;
+const InputField = styled.div`
+  position: relative;
   width: 100%;
   max-width: 420px;
+  min-width: 0;
+
+  &.center {
+    text-align: center;
+  }
+`;
+
+const Input = styled.input`
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  width: 100%;
   min-width: 0;
   padding: 12px 0;
   border: none;
@@ -55,6 +67,7 @@ const Input = styled.input`
   font-size: 28px;
   outline: none;
   pointer-events: auto;
+  text-align: inherit;
 
   &::placeholder {
     color: rgba(255, 255, 255, 0.7);
@@ -62,9 +75,22 @@ const Input = styled.input`
     opacity: 1;
   }
 
-  &.center {
-    text-align: center;
+  &.rich-placeholder::placeholder {
+    color: transparent;
   }
+`;
+
+const Placeholder = styled.div`
+  position: absolute;
+  inset: 0;
+  padding: 12px 0;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 18px;
+  line-height: 36px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
 `;
 
 const Description = styled.div`
@@ -83,6 +109,7 @@ export type InputModalOptions = {
   type?: 'text' | 'password';
   center?: boolean;
   placeholder?: string;
+  placeholderContent?: ReactNode;
   description?: ReactNode;
   defaultValue?: string;
   maxLength?: number;
@@ -122,6 +149,7 @@ export function useInputModal(): [
       options: {
         type = 'text',
         placeholder,
+        placeholderContent,
         description,
         center = false,
         maxLength,
@@ -150,26 +178,37 @@ export function useInputModal(): [
               resolve(completion.value);
             }}
           >
-            <Input
-              className={classNames({center})}
-              type={type}
-              placeholder={placeholder}
-              aria-label={placeholder}
-              aria-describedby={description != null ? descriptionId : undefined}
-              value={value}
-              maxLength={maxLength}
-              readOnly={!!completion}
-              autoFocus
-              onChange={event => setValue(event.target.value)}
-              onKeyDown={event => {
-                if (event.key !== 'Enter') {
-                  return;
+            <InputField className={classNames({center})}>
+              <Input
+                className={classNames({
+                  'rich-placeholder': placeholderContent != null,
+                })}
+                type={type}
+                placeholder={placeholder}
+                aria-label={placeholder}
+                aria-describedby={
+                  description != null ? descriptionId : undefined
                 }
+                value={value}
+                maxLength={maxLength}
+                readOnly={!!completion}
+                autoFocus
+                onChange={event => setValue(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key !== 'Enter') {
+                    return;
+                  }
 
-                complete(value);
-              }}
-              onBlur={() => complete(undefined)}
-            />
+                  complete(value);
+                }}
+                onBlur={() => complete(undefined)}
+              />
+              {placeholderContent != null && !value && (
+                <Placeholder aria-hidden="true">
+                  {placeholderContent}
+                </Placeholder>
+              )}
+            </InputField>
             {description != null && (
               <Description id={descriptionId} className={classNames({center})}>
                 {description}

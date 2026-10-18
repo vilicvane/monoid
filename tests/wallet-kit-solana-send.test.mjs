@@ -4,11 +4,14 @@ import {EventEmitter} from 'node:events';
 import {test} from 'node:test';
 
 import {base58} from '@scure/base';
+import {reaction} from 'mobx';
 
 // eslint-disable-next-line @mufan/scoped-modules -- Verify the exact compiled transaction bytes.
 import {parseSolanaTransaction} from '../.bld/app/@lib/solana-transaction.js';
 // eslint-disable-next-line @mufan/scoped-modules -- Exercise production request authorization.
 import {parseWalletConnectRequest} from '../.bld/app/@lib/wallet-connect-request.js';
+// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Avoid starting platform services.
+import {SolanaTransactionHistoryService} from '../.bld/app/@services/solana-transaction-history-service.js';
 // eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Avoid starting platform services.
 import {WalletKitService} from '../.bld/app/@services/wallet-kit-service.js';
 
@@ -156,12 +159,14 @@ function setup(context, options) {
   const addressBook = {rememberSigned: context.mock.fn(async () => {})};
   const callHistory = {rememberSigned: context.mock.fn(async () => {})};
   const history = {rememberSubmitted: context.mock.fn(async () => {})};
+  const solanaHistory = {rememberSubmitted: context.mock.fn(async () => {})};
   const service = new WalletKitService(
     kit,
     storage,
     addressBook,
     callHistory,
     history,
+    solanaHistory,
   );
   const reviewed = parseWalletConnectRequest(incoming, approved);
   const rpc = context.mock.fn(async method => {
@@ -181,6 +186,7 @@ function setup(context, options) {
     storage,
     kit,
     service,
+    solanaHistory,
     reviewed,
     rpc,
     approve: () =>
@@ -192,7 +198,14 @@ function setup(context, options) {
         rpc,
       ),
     reload: () =>
-      WalletKitService.create(kit, storage, addressBook, callHistory, history),
+      WalletKitService.create(
+        kit,
+        storage,
+        addressBook,
+        callHistory,
+        history,
+        solanaHistory,
+      ),
   };
 }
 
@@ -204,6 +217,8 @@ function broadcasts(state) {
 
 test('saves exact original and signed bytes before RPC, returning the fee payer signature', async context => {
   const state = setup(context);
+  const timestamp = Date.now();
+  context.mock.method(Date, 'now', () => timestamp);
   const {fixture, rpc, values, kit} = state;
   rpc.mock.mockImplementation(async (method, params) => {
     const saved = values.get(STORAGE)['1'];
@@ -211,6 +226,8 @@ test('saves exact original and signed bytes before RPC, returning the fee payer 
     assert.equal(saved.signedTransaction, fixture.signedTransaction);
     assert.equal(saved.address, signer.address);
     assert.equal(saved.broadcast, false);
+    assert.equal(saved.timestamp, timestamp);
+    assert.equal(state.solanaHistory.rememberSubmitted.mock.callCount(), 0);
     assert.deepEqual(saved.sendOptions, {
       skipPreflight: false,
       preflightCommitment: 'confirmed',
@@ -230,6 +247,13 @@ test('saves exact original and signed bytes before RPC, returning the fee payer 
     );
     assert.equal(params[1].encoding, 'base64');
     return fixture.signature;
+  });
+  kit.respondSessionRequest.mock.mockImplementation(async () => {
+    assert.deepEqual(
+      state.solanaHistory.rememberSubmitted.mock.calls[0].arguments,
+      [CHAIN, signer.address, fixture.signedTransaction, timestamp],
+    );
+    state.requests.length = 0;
   });
 
   assert.equal(await state.approve(), true);
@@ -270,6 +294,65 @@ test('duplicate approval and rejection share one broadcast and success reply', a
     state.kit.respondSessionRequest.mock.calls[0].arguments[0].response.error,
     undefined,
   );
+});
+
+test('broadcast observers can confirm history while the accepted submission is still being saved', async context => {
+  const state = setup(context);
+  const history = await SolanaTransactionHistoryService.create(state.storage);
+  state.solanaHistory.rememberSubmitted.mock.mockImplementation((...args) =>
+    history.rememberSubmitted(...args),
+  );
+  const saving = Promise.withResolvers();
+  const finish = Promise.withResolvers();
+  state.storage.set.mock.mockImplementation(async (key, value) => {
+    const snapshot = structuredClone(value);
+    if (key === STORAGE && snapshot['1']?.broadcast) {
+      saving.resolve();
+      await finish.promise;
+    }
+    state.values.set(key, snapshot);
+  });
+  const observed = Promise.withResolvers();
+  const confirmation = {status: 'confirmed', slot: 99, fee: 5000n};
+  let confirmed = Promise.resolve();
+  const dispose = reaction(
+    () => state.service.getSolanaTransactionSubmission(1)?.broadcast,
+    broadcast => {
+      if (!broadcast) return;
+      observed.resolve(history.getBySignature(CHAIN, state.fixture.signature));
+      confirmed = history.rememberConfirmation(
+        CHAIN,
+        state.fixture.signature,
+        confirmation,
+      );
+    },
+  );
+  const approval = state.approve();
+  try {
+    await saving.promise;
+    assert.equal((await observed.promise)?.transaction.status, 'pending');
+    await confirmed;
+    assert.equal(state.kit.respondSessionRequest.mock.callCount(), 0);
+    finish.resolve();
+    assert.equal(await approval, true);
+    const restored = await SolanaTransactionHistoryService.create(
+      state.storage,
+    );
+    assert.deepEqual(restored.getConfirmation(CHAIN, state.fixture.signature), {
+      ...confirmation,
+      balances: undefined,
+      executionError: undefined,
+    });
+    assert.equal(
+      restored.getBySignature(CHAIN, state.fixture.signature).transaction
+        .status,
+      'confirmed',
+    );
+  } finally {
+    finish.resolve();
+    await approval;
+    dispose();
+  }
 });
 
 test('Relay retry restores persisted bytes after reload and does not broadcast again', async context => {
@@ -314,6 +397,7 @@ test('RPC rejection preserves the signed attempt, blocks Reject, and retries exa
   await assert.rejects(state.approve(), /Insufficient funds for fee/);
   const saved = structuredClone(state.values.get(STORAGE)['1']);
   assert.equal(saved.broadcast, false);
+  assert.equal(state.solanaHistory.rememberSubmitted.mock.callCount(), 0);
   await state.service.rejectRequest(1);
   assert.equal(state.kit.respondSessionRequest.mock.callCount(), 0);
 
@@ -338,6 +422,66 @@ test('storage failure prevents any RPC call and publication', async context => {
   });
   await assert.rejects(state.approve(), /Storage unavailable/);
   assert.equal(state.rpc.mock.callCount(), 0);
+  assert.equal(state.kit.respondSessionRequest.mock.callCount(), 0);
+});
+
+test('a failed history write retries after reload without rebroadcasting or changing submission time', async context => {
+  const state = setup(context);
+  let timestamp = Date.now();
+  context.mock.method(Date, 'now', () => timestamp);
+  const firstTimestamp = timestamp;
+  state.solanaHistory.rememberSubmitted.mock.mockImplementationOnce(
+    async () => {
+      throw new Error('History storage unavailable');
+    },
+  );
+  await assert.rejects(state.approve(), /History storage unavailable/);
+  assert.equal(state.values.get(STORAGE)['1'].broadcast, true);
+  assert.equal(state.kit.respondSessionRequest.mock.callCount(), 0);
+  timestamp += 1000;
+  const restored = await state.reload();
+  assert.equal(await restored.resumeSolanaTransactionRequest(1, TOPIC), true);
+  assert.equal(broadcasts(state).length, 1);
+  assert.ok(
+    state.solanaHistory.rememberSubmitted.mock.calls.every(
+      ({arguments: args}) =>
+        args[0] === CHAIN &&
+        args[1] === signer.address &&
+        args[2] === state.fixture.signedTransaction &&
+        args[3] === firstTimestamp,
+    ),
+  );
+});
+
+test('accepted history is restored before expired request cleanup, without RPC or replying', async context => {
+  const state = setup(context);
+  state.solanaHistory.rememberSubmitted.mock.mockImplementationOnce(
+    async () => {
+      throw new Error('History storage unavailable');
+    },
+  );
+  await assert.rejects(state.approve(), /History storage unavailable/);
+  const saved = structuredClone(state.values.get(STORAGE)['1']);
+  state.requests.length = 0;
+  state.kit.emit('session_request_expire', {id: 1});
+  assert.equal(state.service.getSolanaTransactionSubmission(1).broadcast, true);
+  assert.deepEqual(state.values.get(STORAGE)['1'], saved);
+
+  state.solanaHistory.rememberSubmitted.mock.mockImplementationOnce(
+    async () => {
+      throw new Error('Still cannot save history');
+    },
+  );
+  await assert.rejects(state.reload(), /Still cannot save history/);
+  assert.deepEqual(state.values.get(STORAGE)['1'], saved);
+
+  const restored = await state.reload();
+  assert.equal(restored.getSolanaTransactionSubmission(1), undefined);
+  assert.deepEqual(
+    state.solanaHistory.rememberSubmitted.mock.calls.at(-1).arguments,
+    [CHAIN, signer.address, saved.signedTransaction, saved.timestamp],
+  );
+  assert.equal(broadcasts(state).length, 1);
   assert.equal(state.kit.respondSessionRequest.mock.callCount(), 0);
 });
 
