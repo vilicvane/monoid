@@ -5,23 +5,23 @@ buildscript {
     }
 
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.7.2'
+        classpath 'com.android.tools.build:gradle:8.13.0'
     }
 }
 
 apply plugin: 'com.android.library'
 
 android {
-    namespace 'app.monoid.plugins.isodepnfc'
-    compileSdk 35
+    namespace = 'app.monoid.plugins.isodepnfc'
+    compileSdk = 36
 
     defaultConfig {
-        minSdk 23
+        minSdk = 24
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_21
-        targetCompatibility JavaVersion.VERSION_21
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 }
 
@@ -32,7 +32,7 @@ repositories {
 
 dependencies {
     implementation project(':capacitor-android')
-    implementation 'androidx.appcompat:appcompat:1.7.0'
-    implementation 'androidx.core:core:1.15.0'
+    implementation 'androidx.appcompat:appcompat:1.7.1'
+    implementation 'androidx.core:core:1.17.0'
     testImplementation 'junit:junit:4.13.2'
 }

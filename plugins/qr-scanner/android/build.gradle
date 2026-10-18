@@ -5,23 +5,23 @@ buildscript {
     }
 
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.7.2'
+        classpath 'com.android.tools.build:gradle:8.13.0'
     }
 }
 
 apply plugin: 'com.android.library'
 
 android {
-    namespace 'app.monoid.plugins.qrscanner'
-    compileSdk 35
+    namespace = 'app.monoid.plugins.qrscanner'
+    compileSdk = 36
 
     defaultConfig {
-        minSdk 23
+        minSdk = 24
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_21
-        targetCompatibility JavaVersion.VERSION_21
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 }
 

@@ -5,6 +5,10 @@ Vendored from `@capacitor/keyboard@7.0.1` (MIT). The native sources and
 The upstream repository is https://github.com/ionic-team/capacitor-plugins,
 at commit `927f549a995118acd8e5735835300c4c3cbf3de7`.
 
+The local package is versioned `8.0.0` for Capacitor 8 compatibility, with iOS 15+
+and Android API 24+ targets. It retains the vendored native implementation and
+Monoid's custom Android keyboard events.
+
 The app depends on this directory through `file:plugins/keyboard`. Edit the
 files here, then run `npx cap update android` and rebuild the Android app.
 There is no separate JavaScript build step for this local copy. JavaScript

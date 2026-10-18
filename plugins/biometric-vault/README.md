@@ -1,6 +1,6 @@
 # capacitor-biometric-vault
 
-Private Capacitor 7 plugin for storing small secret text values. Authenticated
+Private Capacitor 8 plugin for storing small secret text values. Authenticated
 access requires Android 11 (API 30) or later. There is no web or iOS implementation.
 The plugin registers as `BiometricVault`; application schemas and credential
 workflows remain outside the plugin.
@@ -186,7 +186,7 @@ node --test tests/biometric-vault-access.test.mjs
 
 The build writes JavaScript and declarations to ignored `dist/esm/`. It does not
 install the app or run Capacitor sync. For standalone Android checks, use JDK 21
-and an Android SDK with API 35 installed:
+and an Android SDK with API 36 installed:
 
 ```powershell
 .\android\gradlew.bat -p plugins/biometric-vault/android testDebugUnitTest assembleDebug lintDebug --console=plain

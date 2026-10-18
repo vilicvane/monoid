@@ -1,8 +1,8 @@
 # capacitor-isodep-nfc
 
-Private Capacitor 7 plugin for raw ISO-DEP communication on Android, used by the
-Monoid application through a local package dependency. There is no web or iOS
-implementation.
+Private Capacitor 8 plugin for raw ISO-DEP communication on Android API 24+, used
+by the Monoid application through a local package dependency. There is no web or
+iOS implementation.
 
 The native plugin is registered as `IsoDepNfc`. APDU encoding, status words, applet
 selection, authentication, response chaining and retry decisions belong to the
@@ -223,7 +223,7 @@ Once invoked, a failure reports `unknown`: the card might have executed the
 command even if the response was lost. Cancellation and timeout do not roll back
 card operations. Let the protocol decide whether another attempt is valid.
 
-The plugin does not log APDU payloads. Capacitor 7's debug bridge can log
+The plugin does not log APDU payloads. Capacitor's debug bridge can log
 `call.data`; production integration must also configure the host's
 `loggingBehavior` appropriately.
 
@@ -243,7 +243,7 @@ Building this package does not install it into the application or run Capacitor
 sync.
 
 For the standalone Android build, use JDK 21 and set `ANDROID_HOME` to an Android
-SDK with API 35 installed. From the repository root in PowerShell:
+SDK with API 36 installed. From the repository root in PowerShell:
 
 ```powershell
 .\android\gradlew.bat -p plugins/isodep-nfc/android testDebugUnitTest assembleDebug lintDebug --console=plain

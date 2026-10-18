@@ -8,3 +8,8 @@ boilerplate.schema.json
 plugins/keyboard/android/
 plugins/keyboard/ios/
 plugins/keyboard/dist/
+
+# Generated iOS web assets and configuration
+ios/App/App/public/
+ios/App/App/capacitor.config.json
+ios/App/App/config.xml

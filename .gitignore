@@ -3,6 +3,10 @@
 *.tgz
 node_modules/
 
+# Swift package build and local IDE state
+.build/
+.swiftpm/
+
 # Android
 .idea/
 .settings/

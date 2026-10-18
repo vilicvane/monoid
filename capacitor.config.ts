@@ -13,5 +13,10 @@ export default {
     StatusBar: {
       style: 'LIGHT',
     },
+    SystemBars: {
+      // Monoid handles safe areas and IME insets in its own layout.
+      insetsHandling: 'disable',
+      style: 'LIGHT',
+    },
   },
 } satisfies CapacitorConfig;

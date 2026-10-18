@@ -4,7 +4,7 @@ This local Capacitor plugin provides an Android camera preview and continuous QR
 detection. Its web fallback rejects scanner calls with `UNSUPPORTED`; no iOS
 implementation is provided. The plugin uses CameraX 1.4.2 and the bundled ML Kit
 Barcode Scanning 17.3.0 model, configured for QR codes, with the project's existing
-Android API 35 build toolchain.
+Android API 36 build toolchain (minimum supported device API 24).
 
 ## Preview
 
@@ -80,7 +80,7 @@ Startup observes `PreviewView` stream state; in `COMPATIBLE` mode, `STREAMING`
 means a TextureView frame has arrived. The observer is removed during rebind and
 close, so cancelling before the first frame follows the same pending-start path.
 
-With JDK 21 and `ANDROID_HOME` set to an SDK containing API 35, run from the
+With JDK 21 and `ANDROID_HOME` set to an SDK containing API 36, run from the
 repository root:
 
 ```powershell
