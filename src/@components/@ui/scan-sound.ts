@@ -1,5 +1,4 @@
-const FADE_IN_SECONDS = 0.18;
-const FADE_OUT_SECONDS = 0.24;
+const FADE_OUT_SECONDS = 1;
 
 let encodedSound: Promise<ArrayBuffer> | undefined;
 
@@ -34,8 +33,8 @@ export function createScanSound(
   const source = context.createBufferSource();
   const now = context.currentTime;
 
-  output.gain.setValueAtTime(0, now);
-  output.gain.linearRampToValueAtTime(1, now + FADE_IN_SECONDS);
+  // The recording includes its own attack; fading again masks the opening cue.
+  output.gain.setValueAtTime(1, now);
   output.connect(context.destination);
   source.buffer = buffer;
   source.connect(output);
@@ -64,9 +63,9 @@ export function createScanSound(
       const now = context.currentTime;
       const end = now + FADE_OUT_SECONDS;
 
-      // Preserve the current level even if a quick read ends during fade-in.
+      // Start the release from the current playback level.
       output.gain.cancelAndHoldAtTime(now);
-      // Anchor release here; a completed attack is otherwise the last ramp point.
+      // Anchor release here so it does not ramp from the playback start time.
       output.gain.setValueAtTime(output.gain.value, now);
       output.gain.linearRampToValueAtTime(0, end);
 

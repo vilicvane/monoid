@@ -6,6 +6,7 @@ import {observable, reaction, runInAction} from 'mobx';
 // eslint-disable-next-line @mufan/scoped-modules -- Exercise the pending list without initializing platform services.
 import {
   getPendingActionExpiry,
+  getPendingActionTitle,
   getPendingActions,
 } from '../.bld/app/@lib/pending-action.js';
 
@@ -28,6 +29,19 @@ function fixture() {
 function request(id, topic = 'session', method = 'personal_sign') {
   return {id, topic, params: {request: {method, params: []}}};
 }
+
+test('pending titles distinguish signing a transaction from sending one', () => {
+  for (const [method, title] of [
+    ['solana_signTransaction', 'Sign transaction'],
+    ['solana_signAllTransactions', 'Sign transactions'],
+    ['solana_signAndSendTransaction', 'Send transaction'],
+  ]) {
+    assert.equal(
+      getPendingActionTitle({request: request(1, 'session', method)}),
+      title,
+    );
+  }
+});
 
 test('the displayed deadline uses the earlier request or session expiry in milliseconds', () => {
   const action = {

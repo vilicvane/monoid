@@ -1,18 +1,39 @@
 import type {WalletKitTypes} from '@reown/walletkit';
+import {base58} from '@scure/base';
 import {getAddress, getBytes, hashMessage} from 'ethers';
 
 import type {WalletKitSession} from '../@services/index.js';
 
 import {parseEvmTransaction} from './evm-transaction.js';
 import {type EvmTypedData, parseEvmTypedData} from './evm-typed-data.js';
+import type {SolanaSendOptions} from './send-solana-transaction.js';
+import {assertSolanaMessage} from './solana-message.js';
+import {
+  type SolanaTransaction,
+  parseSolanaTransaction,
+} from './solana-transaction.js';
+import {normalizeWalletAddress} from './wallet-address.js';
+import {
+  WALLET_CONNECT_SOLANA_CHAINS,
+  getWalletConnectAddressType,
+} from './wallet-connect.js';
 
 export type WalletConnectSignRequest = {
   address: string;
   chainId: string;
-  digest: string;
 } & (
-  | {method: 'personal_sign'; message: Uint8Array; text: string | undefined}
-  | {method: 'eth_signTypedData_v4'; typedData: EvmTypedData}
+  | {
+      method: 'personal_sign';
+      digest: string;
+      message: Uint8Array;
+      text: string | undefined;
+    }
+  | {method: 'eth_signTypedData_v4'; digest: string; typedData: EvmTypedData}
+  | {
+      method: 'solana_signMessage';
+      message: Uint8Array;
+      text: string | undefined;
+    }
 );
 
 export type WalletConnectTransactionRequest = {
@@ -28,13 +49,38 @@ export type WalletConnectPreparedTransaction =
     digest: string;
   };
 
+export type WalletConnectSolanaTransactionRequest = {
+  chainId: string;
+  transactions: {
+    transaction: SolanaTransaction;
+    addresses: string[];
+  }[];
+} & (
+  | {method: 'solana_signTransaction' | 'solana_signAllTransactions'}
+  | {method: 'solana_signAndSendTransaction'; sendOptions: SolanaSendOptions}
+);
+
 export function parseWalletConnectRequest(
   request: WalletKitTypes.SessionRequest,
   session: WalletKitSession,
-): WalletConnectSignRequest | WalletConnectTransactionRequest {
-  return request.params.request.method === 'eth_sendTransaction'
-    ? parseWalletConnectTransactionRequest(request, session)
-    : parseWalletConnectSignRequest(request, session);
+):
+  | WalletConnectSignRequest
+  | WalletConnectTransactionRequest
+  | WalletConnectSolanaTransactionRequest {
+  const {method} = request.params.request;
+
+  if (method === 'eth_sendTransaction') {
+    return parseWalletConnectTransactionRequest(request, session);
+  }
+  if (
+    method === 'solana_signTransaction' ||
+    method === 'solana_signAllTransactions' ||
+    method === 'solana_signAndSendTransaction'
+  ) {
+    return parseWalletConnectSolanaTransactionRequest(request, session);
+  }
+
+  return parseWalletConnectSignRequest(request, session);
 }
 
 export class WalletConnectRequestError extends Error {
@@ -51,6 +97,52 @@ export function parseWalletConnectSignRequest(
   session: WalletKitSession,
 ): WalletConnectSignRequest {
   const {chainId, request: payload} = request.params;
+
+  if (payload.method === 'solana_signMessage') {
+    const {params} = payload;
+    if (
+      typeof params !== 'object' ||
+      params === null ||
+      Array.isArray(params)
+    ) {
+      throw new WalletConnectRequestError(
+        'Invalid message signing request.',
+        -32602,
+      );
+    }
+
+    const {pubkey, message: encoded} = params as Record<string, unknown>;
+    const address = authorizeWalletConnectRequest(
+      request,
+      session,
+      pubkey,
+      'solana',
+    );
+    let message: Uint8Array;
+    try {
+      if (typeof encoded !== 'string') throw new Error('Invalid message.');
+      message = base58.decode(encoded);
+    } catch {
+      throw new WalletConnectRequestError(
+        'Invalid message signing request.',
+        -32602,
+      );
+    }
+
+    try {
+      assertSolanaMessage(message);
+    } catch (error) {
+      throw new WalletConnectRequestError((error as Error).message, -32602);
+    }
+
+    return {
+      method: payload.method,
+      address,
+      chainId,
+      message,
+      text: getMessageText(message),
+    };
+  }
 
   if (
     payload.method !== 'personal_sign' &&
@@ -113,6 +205,18 @@ export function parseWalletConnectSignRequest(
   }
 
   const message = getBytes(params[0]);
+
+  return {
+    method: payload.method,
+    address,
+    chainId,
+    digest: hashMessage(message),
+    message,
+    text: getMessageText(message),
+  };
+}
+
+function getMessageText(message: Uint8Array): string | undefined {
   let text: string | undefined;
 
   try {
@@ -130,14 +234,7 @@ export function parseWalletConnectSignRequest(
     text = undefined;
   }
 
-  return {
-    method: payload.method,
-    address,
-    chainId,
-    digest: hashMessage(message),
-    message,
-    text,
-  };
+  return text;
 }
 
 export function parseWalletConnectTransactionRequest(
@@ -173,11 +270,183 @@ export function parseWalletConnectTransactionRequest(
   return {method: payload.method, address, chainId, transaction};
 }
 
+export function parseWalletConnectSolanaTransactionRequest(
+  request: WalletKitTypes.SessionRequest,
+  session: WalletKitSession,
+): WalletConnectSolanaTransactionRequest {
+  const {chainId, request: payload} = request.params;
+
+  if (
+    payload.method !== 'solana_signTransaction' &&
+    payload.method !== 'solana_signAllTransactions' &&
+    payload.method !== 'solana_signAndSendTransaction'
+  ) {
+    throw new WalletConnectRequestError('This method is not supported.', 4200);
+  }
+
+  if (
+    typeof payload.params !== 'object' ||
+    payload.params === null ||
+    Array.isArray(payload.params)
+  ) {
+    throw new WalletConnectRequestError('Invalid transaction request.', -32602);
+  }
+
+  const params = payload.params as Record<string, unknown>;
+  const encoded =
+    payload.method === 'solana_signAllTransactions'
+      ? params.transactions
+      : [params.transaction];
+
+  if (
+    !Array.isArray(encoded) ||
+    encoded.length === 0 ||
+    encoded.some(value => typeof value !== 'string')
+  ) {
+    throw new WalletConnectRequestError('Invalid transaction request.', -32602);
+  }
+
+  const accounts = getAuthorizedWalletConnectAccounts(
+    request,
+    session,
+    'solana',
+  );
+  const specifiedAddress =
+    payload.method !== 'solana_signAllTransactions' &&
+    params.pubkey !== undefined
+      ? authorizeWalletConnectRequest(request, session, params.pubkey, 'solana')
+      : undefined;
+  const transactions = encoded.map(value => {
+    let transaction: SolanaTransaction;
+
+    try {
+      transaction = parseSolanaTransaction(value as string);
+    } catch (error) {
+      throw new WalletConnectRequestError((error as Error).message, -32602);
+    }
+
+    const addresses = transaction.signerAddresses.filter(address =>
+      specifiedAddress
+        ? address === specifiedAddress
+        : accounts.includes(`${chainId}:${address}`),
+    );
+
+    if (!addresses.length) {
+      throw new WalletConnectRequestError(
+        'No authorized account can sign this transaction.',
+        4100,
+      );
+    }
+
+    return {transaction, addresses};
+  });
+
+  return payload.method === 'solana_signAndSendTransaction'
+    ? {
+        method: payload.method,
+        chainId,
+        transactions,
+        sendOptions: parseSolanaSendOptions(params.sendOptions),
+      }
+    : {method: payload.method, chainId, transactions};
+}
+
+function parseSolanaSendOptions(value: unknown): SolanaSendOptions {
+  const options: SolanaSendOptions = {
+    skipPreflight: false,
+    preflightCommitment: 'confirmed',
+  };
+
+  if (value === undefined) return options;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new WalletConnectRequestError(
+      'Invalid transaction send options.',
+      -32602,
+    );
+  }
+
+  const {skipPreflight, preflightCommitment, maxRetries, minContextSlot} =
+    value as Record<string, unknown>;
+
+  if (skipPreflight !== undefined) {
+    if (typeof skipPreflight !== 'boolean') {
+      throw new WalletConnectRequestError('Invalid preflight option.', -32602);
+    }
+    options.skipPreflight = skipPreflight;
+  }
+  if (preflightCommitment !== undefined) {
+    if (
+      preflightCommitment !== 'processed' &&
+      preflightCommitment !== 'confirmed' &&
+      preflightCommitment !== 'finalized'
+    ) {
+      throw new WalletConnectRequestError(
+        'Invalid preflight commitment.',
+        -32602,
+      );
+    }
+    options.preflightCommitment = preflightCommitment;
+  }
+  for (const [name, number] of [
+    ['maxRetries', maxRetries],
+    ['minContextSlot', minContextSlot],
+  ] as const) {
+    if (number === undefined) continue;
+    if (
+      typeof number !== 'number' ||
+      !Number.isSafeInteger(number) ||
+      number < 0
+    ) {
+      throw new WalletConnectRequestError(`Invalid ${name} option.`, -32602);
+    }
+    options[name] = number;
+  }
+
+  return options;
+}
+
 function authorizeWalletConnectRequest(
   request: WalletKitTypes.SessionRequest,
   session: WalletKitSession,
   value: unknown,
+  namespace: 'eip155' | 'solana' = 'eip155',
 ): string {
+  const accounts = getAuthorizedWalletConnectAccounts(
+    request,
+    session,
+    namespace,
+  );
+  let address: string;
+
+  try {
+    if (
+      typeof value !== 'string' ||
+      getWalletConnectAddressType(value) !==
+        (namespace === 'solana' ? 'solana' : 'evm')
+    ) {
+      throw new Error('Invalid account.');
+    }
+    address = namespace === 'solana' ? value : getAddress(value);
+  } catch {
+    throw new WalletConnectRequestError('Invalid signing account.', -32602);
+  }
+
+  const account = `${request.params.chainId}:${normalizeWalletAddress(address)}`;
+  if (!accounts.includes(account)) {
+    throw new WalletConnectRequestError(
+      'This account or network is not authorized.',
+      4100,
+    );
+  }
+
+  return address;
+}
+
+function getAuthorizedWalletConnectAccounts(
+  request: WalletKitTypes.SessionRequest,
+  session: WalletKitSession,
+  namespace: 'eip155' | 'solana',
+): string[] {
   if (request.topic !== session.topic) {
     throw new WalletConnectRequestError(
       'This session is not authorized.',
@@ -186,34 +455,21 @@ function authorizeWalletConnectRequest(
   }
 
   const {chainId, request: payload} = request.params;
-  if (!/^eip155:[1-9]\d*$/.test(chainId)) {
+  if (
+    !(namespace === 'solana'
+      ? WALLET_CONNECT_SOLANA_CHAINS.has(chainId)
+      : /^eip155:[1-9]\d*$/.test(chainId))
+  ) {
     throw new WalletConnectRequestError('This network is not supported.', 4200);
   }
 
-  let address: string;
-  try {
-    if (typeof value !== 'string' || !/^0x[\da-fA-F]{40}$/.test(value)) {
-      throw new Error('Invalid account.');
-    }
-    address = getAddress(value);
-  } catch {
-    throw new WalletConnectRequestError('Invalid signing account.', -32602);
-  }
-
-  const account = `${chainId}:${address}`.toLowerCase();
-  const authorized = Object.entries(session.namespaces).some(
-    ([name, namespace]) =>
-      (name === 'eip155' || name === chainId) &&
-      (!namespace.chains || namespace.chains.includes(chainId)) &&
-      namespace.methods.includes(payload.method) &&
-      namespace.accounts.some(value => value.toLowerCase() === account),
+  return Object.entries(session.namespaces).flatMap(([name, permissions]) =>
+    (name === namespace || name === chainId) &&
+    (!permissions.chains || permissions.chains.includes(chainId)) &&
+    permissions.methods.includes(payload.method)
+      ? permissions.accounts.map(value =>
+          namespace === 'eip155' ? value.toLowerCase() : value,
+        )
+      : [],
   );
-  if (!authorized) {
-    throw new WalletConnectRequestError(
-      'This account or network is not authorized.',
-      4100,
-    );
-  }
-
-  return address;
 }

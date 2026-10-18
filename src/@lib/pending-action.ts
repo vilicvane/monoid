@@ -12,11 +12,17 @@ export type PendingAction = {
 export function getPendingActionTitle(action: PendingAction): string {
   switch (action.request.params.request.method) {
     case 'personal_sign':
+    case 'solana_signMessage':
       return 'Sign message';
     case 'eth_signTypedData_v4':
       return 'Sign typed data';
     case 'eth_sendTransaction':
+    case 'solana_signAndSendTransaction':
       return 'Send transaction';
+    case 'solana_signTransaction':
+      return 'Sign transaction';
+    case 'solana_signAllTransactions':
+      return 'Sign transactions';
     default:
       return 'Review request';
   }

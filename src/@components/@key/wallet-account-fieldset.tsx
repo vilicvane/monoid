@@ -3,6 +3,10 @@ import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import {
+  type AddressType,
+  normalizeWalletAddress,
+} from '../../@lib/wallet-address.js';
+import {
   type WalletKeyData,
   type WalletKeyWalletData,
   getKeyWallets,
@@ -36,20 +40,22 @@ const HeaderTags = styled(KeyTags)`
 export const WalletAccountFieldset = observer(function WalletAccountFieldset({
   keys,
   address,
+  addressType = 'evm',
   label,
 }: {
   keys: readonly WalletKeyData[];
   address: string;
+  addressType?: AddressType;
   label: ReactNode;
 }): ReactNode {
   let account: {key: WalletKeyData; wallet: WalletKeyWalletData} | undefined;
-  const normalizedAddress = address.toLowerCase();
+  const normalizedAddress = normalizeWalletAddress(address);
 
   for (const key of keys) {
     const wallet = getKeyWallets(key).find(
       wallet =>
-        wallet.addressType === 'evm' &&
-        wallet.address.toLowerCase() === normalizedAddress,
+        wallet.addressType === addressType &&
+        normalizeWalletAddress(wallet.address) === normalizedAddress,
     );
     if (wallet) {
       account = {key, wallet};

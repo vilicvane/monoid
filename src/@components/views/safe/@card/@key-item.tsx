@@ -1,20 +1,18 @@
-import {IonIcon} from '@ionic/react';
-import classNames from 'classNames';
-import arrowLeftRight from 'lucide-static/icons/arrow-left-right.svg';
-import check from 'lucide-static/icons/check.svg';
-import refreshCw from 'lucide-static/icons/refresh-cw.svg';
-import saveCheck from 'lucide-static/icons/save-check.svg';
+import {
+  ArrowLeftRight as arrowLeftRight,
+  RefreshCw as refreshCw,
+  SaveCheck as saveCheck,
+} from 'lucide-react';
 import {observer} from 'mobx-react-lite';
 import type {ButtonHTMLAttributes, ReactNode} from 'react';
 import {css, styled} from 'styled-components';
 
-import type {SafeIndexHex} from '../../../../@atomics.js';
 import type {AddressType} from '../../../../@lib/wallet-address.js';
 import {
   ADDRESS_TYPES,
   ADDRESS_TYPE_LABELS,
 } from '../../../../@lib/wallet-address.js';
-import {KeySelection} from '../../../@key/key-checkbox.js';
+import {KeyCheckbox} from '../../../@key/key-checkbox.js';
 import {
   KeyListAddress,
   KeyListAddressPlaceholder,
@@ -29,6 +27,7 @@ import {
   KeyTags,
   KeyTypeTag,
 } from '../../../@key/key-tags.js';
+import {AppIcon} from '../../../@ui/app-icon.js';
 import {RippleEffect} from '../../../@ui/ripple-effect.js';
 import {getCardKeyAddressTypes} from '../card-address.js';
 import type {ScannedCardKeyData} from '../common.js';
@@ -68,6 +67,12 @@ const KeyUpdateTag = styled(KeyTag)`
   color: #b87316;
 `;
 
+const KeySavedTag = styled(KeyTag)`
+  width: 22px;
+  padding: 0;
+  color: var(--ion-color-medium-tint);
+`;
+
 export type KeyItemState = 'new' | 'outdated' | 'up-to-date';
 
 export const KeyItem = observer(
@@ -76,26 +81,25 @@ export const KeyItem = observer(
     addressType,
     address,
     state,
-    selectedIndexSet,
+    selected,
     disabled,
+    onSelect,
     onChangeAddressType,
   }: {
-    data: ScannedCardKeyData;
+    data: Pick<ScannedCardKeyData, 'type' | 'index' | 'alias'>;
     addressType: AddressType;
     address: string | undefined;
     state: KeyItemState;
-    selectedIndexSet: Set<SafeIndexHex>;
+    selected: boolean;
     disabled: boolean;
+    onSelect: (selected: boolean) => void;
     onChangeAddressType: () => void;
   }): ReactNode => {
     const path =
       type === 'seed' || type === 'master'
         ? ADDRESS_TYPES[addressType].path(0)
         : undefined;
-    const checkable = state !== 'up-to-date';
     const canChangeAddressType = getCardKeyAddressTypes(type).length > 1;
-
-    const checked = checkable && selectedIndexSet.has(index);
 
     const addressTypeButtonProps: ButtonHTMLAttributes<HTMLButtonElement> = {
       type: 'button',
@@ -108,41 +112,18 @@ export const KeyItem = observer(
       },
     };
 
-    let icon: ReactNode | undefined;
-
-    switch (state) {
-      case 'new':
-      case 'outdated':
-        icon = checked ? <IonIcon icon={check} /> : undefined;
-        break;
-      case 'up-to-date':
-        icon = <IonIcon icon={saveCheck} />;
-        break;
-    }
-
     return (
       <KeyListItem
         className="ion-activatable"
-        onClick={
-          checkable && !disabled
-            ? () => {
-                if (checked) {
-                  selectedIndexSet.delete(index);
-                } else {
-                  selectedIndexSet.add(index);
-                }
-              }
-            : undefined
-        }
+        onClick={disabled ? undefined : () => onSelect(!selected)}
       >
-        <KeySelection
-          className={classNames({
-            checked,
-            [state]: true,
-          })}
-        >
-          {icon}
-        </KeySelection>
+        <KeyCheckbox
+          checked={selected}
+          disabled={disabled}
+          onClick={event => event.stopPropagation()}
+          onChange={event => onSelect(event.currentTarget.checked)}
+          aria-label={`Select ${alias || index}`}
+        />
         <KeyListItemContent>
           <KeyTags>
             <KeyTypeTag className={type}>{type}</KeyTypeTag>
@@ -166,13 +147,18 @@ export const KeyItem = observer(
                 {...addressTypeButtonProps}
                 aria-label="Change address type"
               >
-                <IonIcon icon={arrowLeftRight} aria-hidden="true" />
+                <AppIcon icon={arrowLeftRight} aria-hidden="true" />
               </AddressTypeSwitch>
             )}
             {state === 'outdated' && (
               <KeyUpdateTag role="img" aria-label="Update available">
-                <IonIcon icon={refreshCw} aria-hidden="true" />
+                <AppIcon icon={refreshCw} aria-hidden="true" />
               </KeyUpdateTag>
+            )}
+            {state === 'up-to-date' && (
+              <KeySavedTag role="img" aria-label="Saved">
+                <AppIcon icon={saveCheck} aria-hidden="true" />
+              </KeySavedTag>
             )}
           </KeyTags>
           {address ? (
@@ -185,7 +171,7 @@ export const KeyItem = observer(
             />
           )}
         </KeyListItemContent>
-        {checkable && <RippleEffect />}
+        {!disabled && <RippleEffect />}
       </KeyListItem>
     );
   },

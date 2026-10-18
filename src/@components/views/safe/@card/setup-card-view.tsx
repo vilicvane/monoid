@@ -1,9 +1,10 @@
-import x from 'lucide-static/icons/x.svg';
+import {X as x} from 'lucide-react';
 import {type ReactNode, useMemo, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
 import {MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
+import {renderIcon} from '../../../../@lib/render-icon.js';
 import type {Router} from '../../../../@routes.js';
 import {
   MonoidScanStatePromptContentHighlight,
@@ -56,7 +57,10 @@ export const SetupCardView = ({
     async (): Promise<void> => {
       const safePIN = await showSafePINInput({
         type: 'password',
-        placeholder: 'Enter safe PIN',
+        placeholder: 'Enter Safe PIN',
+        description: view.pin
+          ? undefined
+          : 'Will be used as initial Access PIN',
         center: true,
       });
 
@@ -64,7 +68,7 @@ export const SetupCardView = ({
         toast({
           message: 'Incorrect PIN format, expected 6 to 16 characters.',
           color: 'danger',
-          icon: x,
+          icon: renderIcon(x),
           position: 'top',
         });
         return;
@@ -79,7 +83,7 @@ export const SetupCardView = ({
         </>,
         async (applet, setStateContent) => {
           setStateContent(
-            toUnlockSafe ? 'Unlocking safe...' : 'Setting safe PIN...',
+            toUnlockSafe ? 'Unlocking safe...' : 'Setting Safe PIN...',
           );
 
           if (toUnlockSafe) {
@@ -117,14 +121,14 @@ export const SetupCardView = ({
           footer={
             step === 1 && (
               <Button onClick={onSetSafePINScanButtonClick}>
-                {toUnlockSafe ? 'Unlock safe' : 'Set safe pin'}
+                {toUnlockSafe ? 'Unlock safe' : 'Set Safe PIN'}
               </Button>
             )
           }
         >
           <Steps>
             <Step
-              title={toUnlockSafe ? 'Unlock safe' : 'Set safe pin'}
+              title={toUnlockSafe ? 'Unlock safe' : 'Set Safe PIN'}
               numero={1}
               activeNumero={step}
             />

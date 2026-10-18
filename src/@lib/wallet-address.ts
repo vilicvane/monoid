@@ -11,6 +11,10 @@ export type AddressType =
 
 export type AddressChain = 'evm' | 'solana' | 'bitcoin';
 
+export function normalizeWalletAddress(address: string): string {
+  return /^0x[0-9a-f]{40}$/i.test(address) ? address.toLowerCase() : address;
+}
+
 export const ADDRESS_TYPE_LABELS: Record<AddressType, string> = {
   evm: 'EVM',
   solana: 'Solana',

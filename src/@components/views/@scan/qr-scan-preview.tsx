@@ -57,7 +57,7 @@ const CIRCLE = {
 };
 const FRAME = {
   inset: '0%',
-  borderRadius: `${(20 / 430) * 100}%`,
+  borderRadius: '20px',
 };
 
 const BREATH_DURATION = 2080;
@@ -174,15 +174,16 @@ export function QrScanPreview({
       } else if (phase === 'scanned') {
         if (!disposed) callbacksRef.current.onSettled(phase);
       } else {
-        // Keep the mask opaque while the opening closes, including camera errors.
+        // Keep a full placeholder frame when the camera is unavailable.
         await Promise.all([
           move(cover, {opacity: '0'}, 160),
-          move(aperture, {backgroundColor: '#f0f0f0'}, 160),
+          move(
+            aperture,
+            {...FRAME, backgroundColor: '#f0f0f0'},
+            SCAN_REVEAL_DURATION,
+          ),
           move(spinner, {opacity: '0'}, 160),
         ]);
-        if (disposed) return;
-
-        await move(aperture, {...CIRCLE, inset: '50%'}, 280);
         if (!disposed) callbacksRef.current.onSettled(phase);
       }
     })().catch(error => {

@@ -3,7 +3,12 @@ import {type ReactNode, useMemo, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
 import {useEntrances} from '../../@entrances.js';
+import {normalizeWalletAddress} from '../../@lib/wallet-address.js';
 import {buildWalletConnectAuthentication} from '../../@lib/wallet-connect-authentication.js';
+import {
+  buildWalletConnectNamespaces,
+  getWalletConnectProposalAddressTypes,
+} from '../../@lib/wallet-connect.js';
 import type {Router} from '../../@routes.js';
 import {WalletAccountList} from '../@key/wallet-account-list.js';
 import {AsyncButton, Button} from '../@ui/button.js';
@@ -31,14 +36,24 @@ export const WalletConnectView = observer(
     );
     const signIn = !!proposal?.params.requests?.authentication?.length;
     const {addresses} = view;
-    const selectedAddresses = useMemo(() => new Set(addresses), [addresses]);
+    const addressTypes = proposal
+      ? getWalletConnectProposalAddressTypes(proposal)
+      : [];
+    const selectedAddresses = useMemo(
+      () => new Set(addresses.map(normalizeWalletAddress)),
+      [addresses],
+    );
     const authentication = useMemo(() => {
       try {
+        if (available && proposal && addresses.length) {
+          buildWalletConnectNamespaces(proposal, addresses);
+          return {
+            messages: buildWalletConnectAuthentication(proposal, addresses),
+          };
+        }
+
         return {
-          messages:
-            available && proposal && addresses.length
-              ? buildWalletConnectAuthentication(proposal, addresses)
-              : [],
+          messages: [],
         };
       } catch (error) {
         return {messages: [], error: (error as Error).message};
@@ -118,14 +133,16 @@ export const WalletConnectView = observer(
               <InfoSectionItemLabel>Choose accounts</InfoSectionItemLabel>
               <WalletAccountList
                 keys={walletStorageService.keys}
-                addressType="evm"
+                addressType={addressTypes}
                 selectedAddresses={selectedAddresses}
                 disabled={connecting}
                 onToggle={address => {
-                  const next = new Set(selectedAddresses);
-                  if (next.has(address)) next.delete(address);
-                  else next.add(address);
-                  view.addresses = Array.from(next);
+                  const identity = normalizeWalletAddress(address);
+                  view.addresses = selectedAddresses.has(identity)
+                    ? addresses.filter(
+                        item => normalizeWalletAddress(item) !== identity,
+                      )
+                    : [...addresses, address];
                 }}
               />
               {authentication.error && (

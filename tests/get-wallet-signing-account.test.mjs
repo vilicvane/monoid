@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {mock, test} from 'node:test';
 
 import {getBytes} from 'ethers';
+import {base58} from '@scure/base';
 
 import {parseDerivationPath} from '../.bld/app/@lib/bip39.js';
 import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
@@ -94,4 +95,50 @@ test('applet references never reinterpret a raw curve or omit a derived path', (
     () => getAppletKey({type: 'seed', index: '02400000000000000001'}, 'evm'),
     /requires a derivation path/,
   );
+});
+
+test('Solana signing preserves raw keys, SLIP-0010 paths, and address case', () => {
+  const address = `Ab${'1'.repeat(41)}`;
+  const publicKey = Buffer.from(base58.decode(address)).toString('hex');
+  const path = "m/44'/501'/7'/0'";
+  for (const type of ['ed25519', 'seed', 'master']) {
+    const key = {
+      type,
+      index: '05010000000000000001',
+      alias: undefined,
+      publicKey: type === 'ed25519' ? publicKey : undefined,
+      wallets:
+        type === 'ed25519'
+          ? []
+          : [
+              {
+                addressType: 'solana',
+                curve: 'ed25519',
+                seed: 'ed25519 seed',
+                path,
+                publicKey,
+              },
+            ],
+    };
+    const account = getWalletSigningAccount([key], address, 'solana');
+    assert.equal(account.wallet.address, address);
+    assert.deepEqual(account.reference, {
+      type,
+      index: getBytes(`0x${key.index}`),
+      ...(type === 'ed25519'
+        ? {}
+        : {
+            derivation: {
+              type: 'slip10',
+              curve: 'ed25519',
+              path: parseDerivationPath(path),
+            },
+          }),
+    });
+    assert.equal(
+      getWalletSigningAccount([key], `AB${'1'.repeat(41)}`, 'solana'),
+      undefined,
+    );
+    assert.equal(getWalletSigningAccount([key], address), undefined);
+  }
 });

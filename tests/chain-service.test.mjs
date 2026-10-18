@@ -30,6 +30,26 @@ const DIRECTORY = [
   },
 ];
 
+test('Solana transaction explorers select the exact authorized cluster', () => {
+  const service = new ChainService({});
+  const signature = 'test-signature';
+
+  for (const [chainId, suffix] of [
+    ['solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', ''],
+    ['solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1', '?cluster=devnet'],
+    ['solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z', '?cluster=testnet'],
+  ]) {
+    assert.equal(
+      service.getTransactionExplorerURL(chainId, signature),
+      `https://explorer.solana.com/tx/${signature}${suffix}`,
+    );
+  }
+  assert.equal(
+    service.getTransactionExplorerURL('solana:unknown', signature),
+    undefined,
+  );
+});
+
 function createStorage(context, cache) {
   let saved = cache;
 

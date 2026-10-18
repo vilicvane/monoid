@@ -16,14 +16,36 @@ export function WalletConnectRequests(): null {
         requests.filter(request => presented.has(request.id)).map(({id}) => id),
       );
 
+      // The leaving request still matches during the transition to its result.
+      if (
+        [
+          router.features,
+          router.sessions,
+          router.transactions,
+          router.scan,
+          router.safe,
+        ].some(route => route.$transition || route.$switching)
+      ) {
+        return;
+      }
+
       // Requests received while reviewing one stay in the manual queue on exit.
       if (
         router.sessions.request.$matched ||
-        router.sessions.transaction.$matched ||
-        router.transactions.$matched
+        router.transactions.wallet.transaction.replace.$matched
       ) {
         requests.forEach(({id}) => presented.add(id));
         return;
+      }
+
+      // A submitted transaction may still be waiting to notify the website.
+      for (const route of [
+        router.sessions.transaction,
+        router.sessions.solanaTransaction,
+      ]) {
+        for (const view of route.$view({parallel: true}).$entries) {
+          presented.add(view.id);
+        }
       }
 
       const first = requests.find(
@@ -36,14 +58,7 @@ export function WalletConnectRequests(): null {
         !router.$path ||
         router.scan.connection.$matched ||
         monoidScanPromptPresenter.current ||
-        keyboard.shown ||
-        [
-          router.features,
-          router.sessions,
-          router.transactions,
-          router.scan,
-          router.safe,
-        ].some(route => route.$transition || route.$switching)
+        keyboard.shown
       ) {
         return;
       }

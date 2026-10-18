@@ -1,5 +1,4 @@
-import {IonIcon} from '@ionic/react';
-import signature from 'lucide-static/icons/signature.svg';
+import {Signature as signature} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
@@ -8,6 +7,7 @@ import {
   getPendingActionExpiry,
   getPendingActionTitle,
 } from '../../../@lib/pending-action.js';
+import {AppIcon} from '../../@ui/app-icon.js';
 import {InfoSection, InfoSectionHeader} from '../../@ui/info-section.js';
 import {ListSectionCount} from '../../@ui/list-section.js';
 import {
@@ -19,7 +19,7 @@ import {
 import {RemainingTime} from '../../@ui/remaining-time.js';
 import {RippleEffect} from '../../@ui/ripple-effect.js';
 
-const RequestIcon = styled(IonIcon)`
+const RequestIcon = styled(AppIcon)`
   flex-shrink: 0;
   font-size: 18px;
   color: var(--ion-color-primary);

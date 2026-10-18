@@ -88,6 +88,29 @@ test('ordinary proposals require no authentication results', () => {
   assert.equal(getWalletConnectRequestExpiry(request), 2_000_000);
 });
 
+test('mixed sessions authenticate only requested EVM accounts and reject Solana sign-in', () => {
+  const chain = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
+  const address = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+  const request = proposal();
+  request.params.optionalNamespaces.solana = {
+    chains: [chain],
+    methods: [],
+    events: [],
+  };
+  const messages = buildWalletConnectAuthentication(request, [
+    ...addresses,
+    address,
+  ]);
+  assert.equal(messages.length, 4);
+  assert.ok(messages.every(message => addresses.includes(message.address)));
+
+  request.params.requests.authentication = [authentication({chains: [chain]})];
+  assert.throws(
+    () => buildWalletConnectAuthentication(request, [address]),
+    /unsupported network/,
+  );
+});
+
 test('rejects unsupported authentication formats and signature constraints', () => {
   for (const overrides of [
     {type: 'unsupported'},

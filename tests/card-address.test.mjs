@@ -8,7 +8,8 @@ import {
   getLocalCardKeyAddress,
   readCardKeyAddress,
 } from '../.bld/app/@components/views/safe/card-address.js';
-import {scanCardKeys} from '../.bld/app/@components/views/safe/scan-card.js';
+import {isCardKeyItem} from '../.bld/app/@components/views/safe/common.js';
+import {scanCardItems} from '../.bld/app/@components/views/safe/scan-card.js';
 import {parseDerivationPath} from '../.bld/app/@lib/bip39.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {createMonoidApplet} from '../.bld/app/@lib/monoid/monoid-applet.js';
@@ -194,13 +195,39 @@ test('local conversion reuses ordinary raw public keys and never reinterprets a 
   }
 });
 
-test('initial card scanning includes raw Ed25519 and reports progress only for supported key types', async () => {
-  const types = ['seed', 'master', 'secp256k1', 'ed25519', 'unknown', 123];
-  const items = types.map((type, index) => ({
+test('card scans retain every resource and exact metadata while reading addresses only for supported wallet keys', async () => {
+  const walletTypes = ['seed', 'master', 'secp256k1', 'ed25519'];
+  const items = walletTypes.map((type, index) => ({
     type,
     index: new Uint8Array([index + 1]),
     alias: `Key ${index}`,
+    secret: index % 2 === 0,
   }));
+  items.push(
+    {
+      type: 'entropy',
+      index: new Uint8Array([5]),
+      key: new Uint8Array(),
+      alias: '',
+      secret: true,
+    },
+    {
+      type: 'secp256r1',
+      index: new Uint8Array([6]),
+      key: bytes('abcd'),
+      secret: false,
+    },
+    {
+      type: 'note',
+      index: new Uint8Array([7]),
+      key: new Uint8Array(),
+      alias: '',
+      secret: false,
+    },
+    {type: 'unknown', index: new Uint8Array([8]), secret: true},
+    {type: 123, index: new Uint8Array([9]), key: bytes('00'), secret: false},
+    {index: new Uint8Array([10]), secret: true},
+  );
   const requests = [];
   const progress = [];
   const applet = {
@@ -216,7 +243,9 @@ test('initial card scanning includes raw Ed25519 and reports progress only for s
     },
   };
 
-  const keys = await scanCardKeys(applet, (...value) => progress.push(value));
+  const scanned = await scanCardItems(applet, (...value) =>
+    progress.push(value),
+  );
 
   assert.deepEqual(progress, [
     [0, 4],
@@ -224,18 +253,29 @@ test('initial card scanning includes raw Ed25519 and reports progress only for s
     [2, 4],
     [3, 4],
   ]);
+  assert.equal(scanned.length, items.length);
+  for (const [position, item] of items.entries()) {
+    const {ref, ...metadata} = scanned[position];
+    assert.deepEqual(metadata, {
+      index: Buffer.from(item.index).toString('hex'),
+      ...(item.type !== undefined && {type: item.type}),
+      ...(item.alias !== undefined && {alias: item.alias}),
+      ...(item.key !== undefined && {
+        key: Buffer.from(item.key).toString('hex'),
+      }),
+      secret: item.secret,
+    });
+    if (position >= walletTypes.length) assert.equal(ref, undefined);
+  }
   assert.deepEqual(
-    keys.map(key => key.type),
-    types.slice(0, 4),
-  );
-  assert.deepEqual(
-    keys.map(key => key.ref.addressType),
+    scanned.slice(0, 4).map(key => key.ref.addressType),
     ['evm', 'evm', 'evm', 'solana'],
   );
-  assert.deepEqual(keys[3], {
+  assert.deepEqual(scanned[3], {
     type: 'ed25519',
     index: '04',
     alias: 'Key 3',
+    secret: false,
     ref: {
       addressType: 'solana',
       publicKey: '00'.repeat(32),
@@ -246,12 +286,16 @@ test('initial card scanning includes raw Ed25519 and reports progress only for s
     type: 'ed25519',
     index: new Uint8Array([4]),
   });
+  assert.equal(requests.length, 4);
 });
 
-test('initial scans skip unsupported firmware results but propagate other card errors', async () => {
+test('initial scans retain unsupported wallet keys without an address but propagate other errors', async () => {
   const items = ['seed', 'ed25519'].map((type, index) => ({
     type,
     index: new Uint8Array([index + 1]),
+    key: new Uint8Array(),
+    alias: '',
+    secret: true,
   }));
   const progress = [];
   const applet = {
@@ -266,26 +310,79 @@ test('initial scans skip unsupported firmware results but propagate other card e
     },
   };
 
-  const keys = await scanCardKeys(applet, (...value) => progress.push(value));
-  assert.deepEqual(
-    keys.map(key => key.type),
-    ['ed25519'],
+  const scanned = await scanCardItems(applet, (...value) =>
+    progress.push(value),
   );
+  assert.deepEqual(
+    scanned.map(item => item.type),
+    ['seed', 'ed25519'],
+  );
+  assert.deepEqual(scanned[0], {
+    type: 'seed',
+    index: '01',
+    key: '',
+    alias: '',
+    secret: true,
+  });
+  assert.equal(scanned[1].ref.addressType, 'solana');
   assert.deepEqual(progress, [
     [0, 2],
     [1, 2],
   ]);
 
-  const failure = new CBORAppletError({code: 'NOT_FOUND'});
-  applet.viewKey = async () => {
-    throw failure;
-  };
-  await assert.rejects(
-    scanCardKeys(applet, () => {}),
-    error => error === failure,
+  for (const failure of [
+    new CBORAppletError({code: 'NOT_FOUND'}),
+    new Error('Card disconnected'),
+  ]) {
+    applet.viewKey = async () => {
+      throw failure;
+    };
+    await assert.rejects(
+      scanCardItems(applet, () => {}),
+      error => error === failure,
+    );
+    await assert.rejects(
+      readCardKeyAddress(applet, {type: 'seed', index: INDEX}, 'evm'),
+      error => error === failure,
+    );
+  }
+});
+
+test('all six card key types are classified independently of secrecy or address availability', () => {
+  const ref = {addressType: 'evm', publicKey: PUBLIC_KEY, address: EVM_ADDRESS};
+  for (const type of [
+    'entropy',
+    'seed',
+    'master',
+    'secp256k1',
+    'secp256r1',
+    'ed25519',
+  ]) {
+    for (const secret of [false, true]) {
+      assert.equal(isCardKeyItem({type, index: INDEX, secret}), true);
+      assert.equal(isCardKeyItem({type, index: INDEX, secret, ref}), true);
+    }
+  }
+  for (const type of [undefined, 'note', 'unknown', 123]) {
+    assert.equal(isCardKeyItem({type, index: INDEX, secret: true, ref}), false);
+  }
+});
+
+test('a card containing only non-wallet-address resources needs no viewKey calls or address progress', async () => {
+  const items = ['entropy', 'secp256r1', 'note', undefined].map(
+    (type, position) => ({
+      ...(type !== undefined && {type}),
+      index: new Uint8Array([position + 1]),
+      secret: position % 2 === 0,
+    }),
   );
-  await assert.rejects(
-    readCardKeyAddress(applet, {type: 'seed', index: INDEX}, 'evm'),
-    error => error === failure,
+  const scanned = await scanCardItems(
+    {
+      list: async () => ({items}),
+      viewKey: () => assert.fail('Unexpected address request'),
+    },
+    () => assert.fail('Unexpected address progress'),
   );
+  assert.equal(scanned.length, items.length);
+  assert.ok(scanned.every(item => item.ref === undefined));
 });

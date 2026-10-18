@@ -4,34 +4,36 @@ import type {MonoidApplet} from '../../../@lib/monoid/index.js';
 import {uint8ArrayToHex} from '../../../@utils/index.js';
 
 import {getCardKeyAddressTypes, readCardKeyAddress} from './card-address.js';
-import type {ScannedCardKeyData} from './common.js';
+import type {ScannedCardItemData} from './common.js';
 
-export async function scanCardKeys(
+export async function scanCardItems(
   applet: MonoidApplet,
   onProgress: (index: number, total: number) => void,
-): Promise<ScannedCardKeyData[]> {
-  const keys: ScannedCardKeyData[] = [];
-
-  let {items} = await applet.list({});
-
-  items = items.filter(
+): Promise<ScannedCardItemData[]> {
+  const {items} = await applet.list({});
+  const scannedItems: ScannedCardItemData[] = items.map(
+    ({index, type, alias, key, secret}) => ({
+      index: uint8ArrayToHex(index),
+      ...(type !== undefined && {type}),
+      ...(alias !== undefined && {alias}),
+      ...(key !== undefined && {key: uint8ArrayToHex(key)}),
+      secret,
+    }),
+  );
+  const keys = scannedItems.filter(
     item =>
       typeof item.type === 'string' &&
       getCardKeyAddressTypes(item.type).length > 0,
   );
 
-  for (const [index, item] of items.entries()) {
-    onProgress(index, items.length);
+  for (const [index, item] of keys.entries()) {
+    onProgress(index, keys.length);
 
-    const key = {
-      type: SafeKnownType.satisfies(item.type),
-      index: uint8ArrayToHex(item.index),
-      alias: item.alias,
-    };
+    const type = SafeKnownType.satisfies(item.type);
     const ref = await readCardKeyAddress(
       applet,
-      key,
-      getCardKeyAddressTypes(key.type)[0],
+      {type, index: item.index},
+      getCardKeyAddressTypes(type)[0],
     ).catch(error => {
       if (
         error instanceof CBORAppletError &&
@@ -43,12 +45,10 @@ export async function scanCardKeys(
       throw error;
     });
 
-    if (!ref) {
-      continue;
+    if (ref) {
+      item.ref = ref;
     }
-
-    keys.push({...key, ref});
   }
 
-  return keys;
+  return scannedItems;
 }

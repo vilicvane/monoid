@@ -10,7 +10,10 @@ import {
   type WalletConnectAuthenticationResult,
   getWalletConnectRequestExpiry,
 } from '../../../@lib/wallet-connect-authentication.js';
-import {buildWalletConnectNamespaces} from '../../../@lib/wallet-connect.js';
+import {
+  buildWalletConnectNamespaces,
+  getWalletConnectAddressType,
+} from '../../../@lib/wallet-connect.js';
 import type {Router} from '../../../@routes.js';
 import {uint8ArrayToHex} from '../../../@utils/index.js';
 import {getWalletSigningAccount} from '../../@monoid/get-wallet-signing-account.js';
@@ -62,14 +65,17 @@ export function WalletConnectApproveButton({
         });
       }
     };
-    const selected = addresses.map(address => {
-      const account = getWalletSigningAccount(
-        walletStorageService.keys,
-        address,
-      );
-      if (!account) throw new Error('Selected accounts are no longer in Safe.');
-      return account;
-    });
+    const selected = addresses
+      .filter(address => getWalletConnectAddressType(address) === 'evm')
+      .map(address => {
+        const account = getWalletSigningAccount(
+          walletStorageService.keys,
+          address,
+        );
+        if (!account)
+          throw new Error('Selected accounts are no longer in Safe.');
+        return account;
+      });
     const tasks = authentication.map(auth => {
       const {key, reference} = selected.find(
         ({wallet}) =>
@@ -112,7 +118,7 @@ export function WalletConnectApproveButton({
               task => !signed.has(task.auth) && indices.has(task.index),
             );
             if (!remaining.length)
-              throw new Error('No selected accounts on this card.');
+              throw new Error('No selected accounts on this card');
             completed = [];
 
             for (const {auth, reference} of remaining) {
@@ -172,7 +178,11 @@ export function WalletConnectApproveButton({
 
   return (
     <>
-      <AsyncButton disabled={disabled} handler={connect}>
+      <AsyncButton
+        data-footer-action="sign"
+        disabled={disabled}
+        handler={connect}
+      >
         Sign
       </AsyncButton>
       {scanPromptContent}

@@ -4,11 +4,15 @@ import {test} from 'node:test';
 // eslint-disable-next-line @mufan/scoped-modules -- Exercise the built internal module directly.
 import {
   buildWalletConnectNamespaces,
+  getWalletConnectAddressType,
+  getWalletConnectProposalAddressTypes,
   parseWalletConnectUri,
 } from '../.bld/app/@lib/wallet-connect.js';
 
 const URI = `wc:${'a'.repeat(64)}@2?relay-protocol=irn&symKey=${'b'.repeat(64)}`;
 const ADDRESS = `0x${'ab'.repeat(20)}`;
+const SOLANA_CHAIN = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
+const SOLANA_ADDRESS = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
 function proposal(requiredNamespaces = {}, optionalNamespaces = {}) {
   return {params: {requiredNamespaces, optionalNamespaces}};
@@ -153,7 +157,7 @@ test('deduplicates chains and account identities without changing the proposal',
   assert.deepEqual(request, original);
 });
 
-test('requires selected accounts and requested EVM chains', () => {
+test('requires selected accounts and supported requested chains', () => {
   assert.throws(
     () =>
       buildWalletConnectNamespaces(
@@ -170,6 +174,151 @@ test('requires selected accounts and requested EVM chains', () => {
     assert.throws(() => buildWalletConnectNamespaces(request, [ADDRESS]), {
       message: 'This site requires unsupported wallet features.',
     });
+  }
+});
+
+test('grants Solana message signing, transaction signing and sending', () => {
+  const chains = [
+    SOLANA_CHAIN,
+    'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
+    'solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z',
+  ];
+  const request = proposal(
+    {},
+    {
+      solana: namespace(
+        chains,
+        [
+          'solana_signMessage',
+          'solana_signTransaction',
+          'solana_signAllTransactions',
+          'solana_signAndSendTransaction',
+          'solana_requestAccounts',
+          'solana_getAccounts',
+        ],
+        ['accountsChanged', 'chainChanged'],
+      ),
+    },
+  );
+
+  assert.deepEqual(getWalletConnectProposalAddressTypes(request), ['solana']);
+  assert.deepEqual(buildWalletConnectNamespaces(request, [SOLANA_ADDRESS]), {
+    solana: {
+      chains,
+      methods: [
+        'solana_signMessage',
+        'solana_signTransaction',
+        'solana_signAllTransactions',
+        'solana_signAndSendTransaction',
+      ],
+      events: ['accountsChanged', 'chainChanged'],
+      accounts: chains.map(chain => `${chain}:${SOLANA_ADDRESS}`),
+    },
+  });
+});
+
+test('supports required Solana signing and broadcasting', () => {
+  const request = proposal({
+    solana: namespace([SOLANA_CHAIN], ['solana_signMessage']),
+  });
+  assert.deepEqual(
+    buildWalletConnectNamespaces(request, [SOLANA_ADDRESS]).solana.methods,
+    ['solana_signMessage'],
+  );
+  request.params.requiredNamespaces.solana.methods = ['solana_signTransaction'];
+  assert.deepEqual(
+    buildWalletConnectNamespaces(request, [SOLANA_ADDRESS]).solana.methods,
+    ['solana_signTransaction'],
+  );
+  request.params.requiredNamespaces.solana.methods = [
+    'solana_signAndSendTransaction',
+  ];
+  assert.deepEqual(
+    buildWalletConnectNamespaces(request, [SOLANA_ADDRESS]).solana.methods,
+    ['solana_signAndSendTransaction'],
+  );
+});
+
+test('normalizes chain-scoped Solana requests and preserves case-distinct accounts', () => {
+  const anotherAddress = SOLANA_ADDRESS.slice(0, -1) + 'V';
+  const request = proposal({
+    [SOLANA_CHAIN]: namespace(undefined, [], ['accountsChanged']),
+  });
+  const approved = buildWalletConnectNamespaces(request, [
+    SOLANA_ADDRESS,
+    anotherAddress,
+    SOLANA_ADDRESS,
+  ]);
+
+  assert.deepEqual(approved.solana.accounts, [
+    `${SOLANA_CHAIN}:${SOLANA_ADDRESS}`,
+    `${SOLANA_CHAIN}:${anotherAddress}`,
+  ]);
+});
+
+test('keeps EVM and Solana accounts in their own namespaces', () => {
+  const request = proposal({
+    eip155: namespace(['eip155:1'], ['personal_sign']),
+    solana: namespace([SOLANA_CHAIN]),
+  });
+  assert.deepEqual(getWalletConnectProposalAddressTypes(request), [
+    'evm',
+    'solana',
+  ]);
+  const approved = buildWalletConnectNamespaces(request, [
+    ADDRESS,
+    SOLANA_ADDRESS,
+  ]);
+  assert.deepEqual(approved.eip155.accounts, [`eip155:1:${ADDRESS}`]);
+  assert.deepEqual(approved.solana.accounts, [
+    `${SOLANA_CHAIN}:${SOLANA_ADDRESS}`,
+  ]);
+
+  for (const selected of [[ADDRESS], [SOLANA_ADDRESS]]) {
+    assert.throws(() => buildWalletConnectNamespaces(request, selected), {
+      message: 'This site requires unsupported wallet features.',
+    });
+  }
+});
+
+test('does not approve an optional namespace without matching selected accounts', () => {
+  const request = proposal(
+    {},
+    {
+      eip155: namespace(['eip155:1']),
+      solana: namespace([SOLANA_CHAIN]),
+    },
+  );
+  assert.deepEqual(
+    Object.keys(buildWalletConnectNamespaces(request, [SOLANA_ADDRESS])),
+    ['solana'],
+  );
+  assert.deepEqual(
+    Object.keys(buildWalletConnectNamespaces(request, [ADDRESS])),
+    ['eip155'],
+  );
+});
+
+test('rejects invalid account formats and unsupported Solana cluster identifiers', () => {
+  assert.equal(getWalletConnectAddressType(ADDRESS), 'evm');
+  assert.equal(getWalletConnectAddressType(SOLANA_ADDRESS), 'solana');
+  for (const address of [
+    '',
+    '0xABC',
+    'solana',
+    '0'.repeat(32),
+    '1'.repeat(31),
+    '1'.repeat(33),
+  ]) {
+    assert.equal(getWalletConnectAddressType(address), undefined);
+  }
+
+  for (const chain of ['solana:mainnet', 'solana:unknown']) {
+    const request = proposal({solana: namespace([chain])});
+    assert.deepEqual(getWalletConnectProposalAddressTypes(request), []);
+    assert.throws(() =>
+      buildWalletConnectNamespaces(request, [SOLANA_ADDRESS]),
+    );
   }
 });
 

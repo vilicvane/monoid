@@ -1,3 +1,14 @@
+// Preserve token precision with decimal strings, including decimals above 80.
+export function formatTokenAmount(value: bigint, decimals: number): string {
+  if (!decimals) return value.toString();
+  const sign = value < 0 ? '-' : '';
+  const digits = (value < 0 ? -value : value)
+    .toString()
+    .padStart(decimals + 1, '0');
+  const fraction = digits.slice(-decimals).replace(/0+$/, '');
+  return sign + digits.slice(0, -decimals) + (fraction ? `.${fraction}` : '');
+}
+
 export function formatScientificDecimal(
   value: string,
 ): {coefficient: string; exponent: number} | undefined {

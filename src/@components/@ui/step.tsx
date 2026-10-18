@@ -1,9 +1,9 @@
-import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
-import check from 'lucide-static/icons/check.svg';
+import {Check as check} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
+import {AppIcon} from './app-icon.js';
 import {LoadingSpinner} from './loading-spinner.js';
 
 export const Steps = styled.div`
@@ -19,6 +19,8 @@ const Container = styled.div`
   --indicator-line-width: 1px;
   --indicator-size: 20px;
   --title-height: 20px;
+  --indicator-color: var(--ion-color-primary);
+  --indicator-line-color: var(--ion-color-light-shade);
 
   --indicator-line-left-offset: calc(
     var(--indicator-center-left-offset) - var(--indicator-line-width) / 2
@@ -32,24 +34,41 @@ const Container = styled.div`
 
   position: relative;
 
-  &::after {
+  &.done {
+    --indicator-color: var(--ion-color-safe);
+    --indicator-line-color: var(--ion-color-safe);
+  }
+
+  &.pending {
+    --indicator-color: var(--ion-color-light-shade);
+  }
+
+  &:not(:last-child)::after {
     content: '';
     position: absolute;
 
     left: var(--indicator-line-left-offset);
     top: calc(var(--title-height) / 2);
 
-    border-width: 0;
-    border-right: solid var(--indicator-line-width) var(--ion-color-primary);
+    bottom: calc(-1 * (var(--title-height) / 2 + var(--gap)));
+    width: var(--indicator-line-width);
+    background-color: var(--indicator-line-color);
   }
 
-  &:not(:last-child)::after {
-    bottom: calc(-1 * (var(--title-height) / 2 + var(--gap)));
+  &.done:has(+ .active)::after {
+    background-image: linear-gradient(
+      to bottom,
+      var(--ion-color-safe),
+      var(--ion-color-primary)
+    );
   }
 
   &:has(+ .pending)::after {
-    border-style: dashed;
-    border-color: var(--ion-color-light-shade);
+    mask-image: repeating-linear-gradient(
+      to bottom,
+      black 0 3px,
+      transparent 3px 5px
+    );
   }
 `;
 
@@ -83,7 +102,7 @@ const Indicator = styled.div`
   height: var(--indicator-size);
   border-radius: 50%;
 
-  background-color: var(--ion-color-primary);
+  background-color: var(--indicator-color);
   color: var(--ion-color-primary-contrast);
   font-size: 12px;
 
@@ -94,10 +113,6 @@ const Indicator = styled.div`
   display: flex;
   align-items: center;
   justify-content: center;
-
-  ${Container}.pending & {
-    background-color: var(--ion-color-light-shade);
-  }
 `;
 
 const Spinner = styled(LoadingSpinner)`
@@ -138,7 +153,7 @@ export const Step = ({
         indicator = numero;
         break;
       case 'done':
-        indicator = <IonIcon icon={check} />;
+        indicator = <AppIcon icon={check} />;
         break;
     }
   }

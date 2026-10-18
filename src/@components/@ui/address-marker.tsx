@@ -1,20 +1,23 @@
-import {IonIcon} from '@ionic/react';
-import badgeCheck from 'lucide-static/icons/badge-check.svg';
-import circleHelp from 'lucide-static/icons/circle-help.svg';
-import history from 'lucide-static/icons/history.svg';
-import shieldCheck from 'lucide-static/icons/shield-check.svg';
-import shieldX from 'lucide-static/icons/shield-x.svg';
-import userPen from 'lucide-static/icons/user-pen.svg';
-import user from 'lucide-static/icons/user.svg';
+import type {LucideIcon} from 'lucide-react';
+import {
+  BadgeCheck as badgeCheck,
+  CircleHelp as circleHelp,
+  History as history,
+  ShieldCheck as shieldCheck,
+  ShieldX as shieldX,
+  User as user,
+  UserPen as userPen,
+} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {css, styled} from 'styled-components';
 
 import type {AddressKind} from '../../@lib/address-status.js';
 import type {AddressMark} from '../../@services/index.js';
 
+import {AppIcon} from './app-icon.js';
 import {inlineIconCSS} from './inline-icon.js';
 
-const Marker = styled(IonIcon)<{$color?: string}>`
+const Marker = styled(AppIcon)<{$color?: string}>`
   ${inlineIconCSS}
   ${({$color}) =>
     $color &&
@@ -25,7 +28,7 @@ const Marker = styled(IonIcon)<{$color?: string}>`
 
 const markers: Record<
   AddressKind | AddressMark,
-  {icon: string; color?: string; label: string; description: string}
+  {icon: LucideIcon; color?: string; label: string; description: string}
 > = {
   signer: {
     icon: userPen,

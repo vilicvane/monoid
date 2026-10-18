@@ -1,5 +1,5 @@
-import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
+import type {LucideIcon} from 'lucide-react';
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 import type {RouteClass__} from 'routra';
@@ -7,6 +7,7 @@ import {styled} from 'styled-components';
 
 import {navigationTransition} from '../@animations.js';
 import {useAnimationHint} from '../@hooks/use-animation-hint.js';
+import {AppIcon} from '../@ui/app-icon.js';
 import {IndicatorDot} from '../@ui/indicator-dot.js';
 import {NumberBadge} from '../@ui/number-badge.js';
 import {RippleEffect as RippleEffect_} from '../@ui/ripple-effect.js';
@@ -108,7 +109,7 @@ export const Tab = observer(
     activity,
   }: {
     className?: string;
-    icon: string;
+    icon: LucideIcon;
     label: string;
     badge?: number;
     route: RouteClass__;
@@ -135,7 +136,7 @@ export const Tab = observer(
         onClick={() => route.$reset()}
       >
         <ActiveDot ref={dotRef} />
-        <IonIcon icon={icon} aria-hidden="true" />
+        <AppIcon icon={icon} aria-hidden="true" />
         {badge !== undefined && (
           <Badge $visible={badgeVisible} aria-hidden="true">
             {badge}

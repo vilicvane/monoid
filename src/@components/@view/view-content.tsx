@@ -38,6 +38,7 @@ const Container = styled.div<{$hasFooter: boolean; $sectionGap: number}>`
 export const ViewContent = ({
   footer,
   footerReveal = 'always',
+  footerRevealReady = true,
   footerRef,
   sectionGap = 16,
   children,
@@ -45,6 +46,7 @@ export const ViewContent = ({
 }: HTMLAttributes<HTMLDivElement> & {
   footer?: ReactNode;
   footerReveal?: 'always' | 'end';
+  footerRevealReady?: boolean;
   footerRef?: Ref<HTMLDivElement>;
   sectionGap?: number;
 }): ReactNode => {
@@ -80,7 +82,7 @@ export const ViewContent = ({
       });
 
       const actions = actionsRef.current;
-      if (footerRevealed || !actions) return;
+      if (!footerRevealReady || footerRevealed || !actions) return;
 
       const contentStyle = getComputedStyle(container);
       const footerStyle = getComputedStyle(actions);
@@ -105,7 +107,7 @@ export const ViewContent = ({
 
       if (contentBottom <= visibleHeight) setFooterRevealed(true);
     },
-    [context, footerRevealed],
+    [context, footerRevealReady, footerRevealed],
   );
 
   useLayoutEffect(() => {

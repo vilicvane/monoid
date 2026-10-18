@@ -1,3 +1,4 @@
+import {Clipboard} from '@capacitor/clipboard';
 import {Capacitor, type PluginListenerHandle} from '@capacitor/core';
 import {
   QrScanner,
@@ -5,18 +6,20 @@ import {
   type QrScannerPreviewBounds,
 } from 'capacitor-qr-scanner';
 import {observer} from 'mobx-react-lite';
-import {type ReactNode, useEffect, useRef, useState} from 'react';
+import {type ReactNode, useCallback, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
-import {createGlobalStyle, css, styled} from 'styled-components';
+import {createGlobalStyle, styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
 import {parseWalletConnectUri} from '../../@lib/wallet-connect.js';
 import type {Router} from '../../@routes.js';
+import {Button} from '../@ui/button.js';
 import {
   SCAN_REVEAL_CURVE,
   SCAN_REVEAL_DURATION,
   SCAN_REVEAL_EASING,
 } from '../@ui/scan-motion.js';
+import {useToast} from '../@ui/toast.js';
 import {
   View,
   ViewContent,
@@ -28,7 +31,6 @@ import {QrScanInstructions} from './@scan/qr-scan-instructions.js';
 import {
   QrScanPreview,
   type QrScanPreviewPhase,
-  SCAN_CIRCLE_INSET,
 } from './@scan/qr-scan-preview.js';
 
 const CameraBackground = createGlobalStyle`
@@ -75,7 +77,12 @@ const Content = styled(ViewContent)`
 
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) var(--scan-preview-size) minmax(0, 1fr);
+    // Center the camera and its 40px button together, including the 12px gap.
+    // Reserve the button row while it is hidden so the camera stays in place.
+    grid-template-rows: minmax(0, 1fr) var(--scan-preview-size) 52px minmax(
+        0,
+        1fr
+      );
     justify-items: center;
     gap: 0;
     overflow: hidden;
@@ -87,7 +94,7 @@ const Content = styled(ViewContent)`
       grid-template-columns: var(--scan-preview-size) minmax(0, 320px);
       align-items: center;
       justify-content: center;
-      gap: 24px;
+      gap: 12px;
     }
   }
 `;
@@ -115,61 +122,60 @@ const Preview = styled.div<{$open: boolean}>`
   }
 `;
 
-const Instructions = styled.div<{
-  $visible: boolean;
-  $compact: boolean;
-  $centered: boolean;
-}>`
-  --instructions-offset: ${props =>
-    props.$compact
-      ? `calc(var(--scan-preview-size) * -${SCAN_CIRCLE_INSET / 100})`
-      : '0px'};
+const StatusMessage = styled.p<{$visible: boolean}>`
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 24px;
+  color: var(--color-text-secondary);
+  text-align: center;
+  opacity: ${props => (props.$visible ? 1 : 0)};
+  pointer-events: none;
+  transition: opacity 200ms ease-out;
 
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+`;
+
+const Controls = styled.div<{$visible: boolean}>`
   position: relative;
   z-index: 1;
   grid-row: 3;
   align-self: start;
+  display: flex;
+  flex-direction: column;
   box-sizing: border-box;
   width: min(100%, 320px);
-  padding-top: 24px;
+  padding-top: 12px;
   text-align: center;
   max-height: 144px;
   overflow: auto;
   opacity: ${props => (props.$visible ? 1 : 0)};
-  transform: translateY(
-    calc(
-      var(--instructions-offset) + ${props => (props.$visible ? '0px' : '4px')}
-    )
-  );
+  transform: translateY(${props => (props.$visible ? '0px' : '-6px')})
+    scale(${props => (props.$visible ? 1 : 0.96)});
+  transform-origin: center top;
+  will-change: opacity, transform;
   pointer-events: ${props => (props.$visible ? 'auto' : 'none')};
   transition:
-    opacity 160ms ease-out,
-    transform 160ms ease-out;
+    opacity 200ms ease-out,
+    transform 200ms ease-out;
 
   @media (prefers-reduced-motion: reduce) {
     transition: none;
   }
 
   @media (max-height: 600px) and (orientation: landscape) {
-    --instructions-offset: 0px;
-
     grid-row: 1;
+    align-self: center;
     padding-top: 0;
   }
 
-  ${props =>
-    props.$centered &&
-    css`
-      --instructions-offset: 0px;
-
-      grid-area: 1 / 1 / -1 / -1;
-      align-self: center;
-      padding-top: 0;
-    `}
-
-  p {
+  > button {
+    flex-shrink: 0;
     margin: 0;
-    color: var(--color-text-secondary);
   }
 `;
 
@@ -208,13 +214,17 @@ if (import.meta.hot) {
 export const ScanView = observer(
   ({view}: RouteComponentProps<Router['scan']>): ReactNode => {
     const {router, walletKitService, errorService} = useEntrances();
+    const toast = useToast();
     const previewRef = useRef<HTMLDivElement>(null);
     const revealRef = useRef<(duration: number) => Promise<boolean>>(undefined);
     const completeRef = useRef<() => void>(undefined);
     const scannedUriRef = useRef<{uri: string; consumed: boolean}>(undefined);
+    const pasteRef = useRef<AbortController>(undefined);
+    const [pasting, setPasting] = useState(false);
     const [scanAttempt, setScanAttempt] = useState(0);
     const [status, setStatus] = useState<ScanStatus>('starting');
     const [settledPhase, setSettledPhase] = useState<QrScanPreviewPhase>();
+    const [controlsPhase, setControlsPhase] = useState<QrScanPreviewPhase>();
     const [connectionResult, setConnectionResult] = useState<
       ({proposalId: number} | {error: unknown}) & {signal: AbortSignal}
     >();
@@ -224,10 +234,89 @@ export const ScanView = observer(
       active ||
       (!!view.$leaving && (status === 'scanning' || status === 'completing'));
 
+    const acceptUri = useCallback(
+      (uri: string): void => {
+        if (
+          scannedUriRef.current ||
+          view.$leaving ||
+          !view.$match.$exact.$active
+        )
+          return;
+
+        // Claim the result synchronously so scanning and pasting cannot connect twice.
+        scannedUriRef.current = {uri, consumed: false};
+        setConnectionResult(undefined);
+        setSettledPhase(undefined);
+        setStatus('completing');
+      },
+      [view],
+    );
+
+    useEffect(() => {
+      setPasting(false);
+
+      return () => {
+        pasteRef.current?.abort();
+        pasteRef.current = undefined;
+      };
+    }, [active]);
+
+    const paste = async (): Promise<void> => {
+      if (!active || connecting || pasteRef.current) return;
+
+      const controller = new AbortController();
+      pasteRef.current = controller;
+      setPasting(true);
+
+      try {
+        const {value, type} = await Clipboard.read();
+        if (controller.signal.aborted || scannedUriRef.current) return;
+
+        if (type !== 'text/plain' && type !== 'text/uri-list') {
+          toast({
+            message:
+              'Unsupported clipboard format. Paste a WalletConnect link.',
+          });
+        } else if (!value.trim()) {
+          toast({message: 'Clipboard is empty.'});
+        } else {
+          const uri = parseWalletConnectUri(value);
+          if (uri) {
+            acceptUri(uri);
+          } else {
+            toast({
+              message:
+                'Unsupported or invalid link. Paste a WalletConnect v2 link.',
+            });
+          }
+        }
+      } catch (error) {
+        if (!controller.signal.aborted && !scannedUriRef.current) {
+          toast({
+            message:
+              error instanceof Error &&
+              error.message === 'There is no data on the clipboard'
+                ? 'Clipboard is empty.'
+                : 'Could not read the clipboard. Please try again.',
+          });
+        }
+      } finally {
+        if (pasteRef.current === controller) {
+          pasteRef.current = undefined;
+          setPasting(false);
+        }
+      }
+    };
+
     useEffect(() => {
       if (!cameraVisible) {
         return;
       }
+
+      setStatus('starting');
+      setSettledPhase(undefined);
+      setConnectionResult(undefined);
+      scannedUriRef.current = undefined;
 
       if (
         Capacitor.getPlatform() !== 'android' ||
@@ -250,7 +339,7 @@ export const ScanView = observer(
       const stop = (): Promise<void> =>
         (stopped ??= QrScanner.stopScan({scanId}));
       const fail = (error: unknown): void => {
-        if (!disposed && !finished) {
+        if (!disposed && !finished && !scannedUriRef.current) {
           finished = true;
           const {code} = error as QrScannerError;
           if (code === 'CANCELLED' || code === 'APP_INACTIVE') {
@@ -285,22 +374,30 @@ export const ScanView = observer(
       };
       const observer = new ResizeObserver(resize);
 
-      setStatus('starting');
-      setSettledPhase(undefined);
-      setConnectionResult(undefined);
-      scannedUriRef.current = undefined;
+      completeRef.current = () => {
+        completeRef.current = undefined;
+        if (disposed) return;
+
+        finished = true;
+        // Hide the camera only after the success cover is fully opaque.
+        errorService.catch(
+          stop().finally(() => {
+            if (!disposed) setStatus('scanned');
+          }),
+        );
+      };
 
       void (async () => {
         await scanLifecycle.closing;
-        if (disposed) return;
+        if (disposed || finished || scannedUriRef.current) return;
 
         let permissions = await QrScanner.checkPermissions();
-        if (disposed) return;
+        if (disposed || finished || scannedUriRef.current) return;
 
         if (permissions.camera !== 'granted') {
           permissions = await QrScanner.requestPermissions();
         }
-        if (disposed) return;
+        if (disposed || finished || scannedUriRef.current) return;
 
         if (permissions.camera !== 'granted') {
           setStatus('denied');
@@ -313,6 +410,7 @@ export const ScanView = observer(
               event.scanId !== scanId ||
               disposed ||
               finished ||
+              scannedUriRef.current ||
               view.$leaving ||
               !view.$match.$exact.$active
             )
@@ -323,27 +421,20 @@ export const ScanView = observer(
               .find(value => value !== undefined);
             if (!uri) return;
 
-            scannedUriRef.current = {uri, consumed: false};
-            finished = true;
-            completeRef.current = () => {
-              completeRef.current = undefined;
-              if (disposed) return;
-
-              // Hide the camera only after the success cover is fully opaque.
-              errorService.catch(
-                stop().finally(() => {
-                  if (!disposed) setStatus('scanned');
-                }),
-              );
-            };
-            setStatus('completing');
+            acceptUri(uri);
           }),
         );
-        if (disposed) return;
+        if (disposed || finished || scannedUriRef.current) return;
 
         listeners.push(
           await QrScanner.addListener('scanEnded', event => {
-            if (event.scanId !== scanId || disposed || finished) return;
+            if (
+              event.scanId !== scanId ||
+              disposed ||
+              finished ||
+              scannedUriRef.current
+            )
+              return;
 
             if (event.reason === 'error') {
               fail(new Error(event.message));
@@ -353,12 +444,20 @@ export const ScanView = observer(
             }
           }),
         );
-        if (disposed || view.$leaving || !view.$match.$exact.$active) return;
+        if (
+          disposed ||
+          finished ||
+          scannedUriRef.current ||
+          view.$leaving ||
+          !view.$match.$exact.$active
+        )
+          return;
 
         await QrScanner.startScan({scanId, previewBounds: measure()});
         if (
           disposed ||
           finished ||
+          scannedUriRef.current ||
           view.$leaving ||
           !view.$match.$exact.$active
         )
@@ -406,7 +505,7 @@ export const ScanView = observer(
           stop().catch(error => errorService.catch(Promise.reject(error))),
         ]).then(() => undefined);
       };
-    }, [scanAttempt, cameraVisible, errorService, view]);
+    }, [scanAttempt, cameraVisible, errorService, view, acceptUri]);
 
     useEffect(() => {
       if (!connecting || !active) return;
@@ -464,6 +563,7 @@ export const ScanView = observer(
         return;
 
       if ('error' in connectionResult) {
+        scannedUriRef.current = undefined;
         setStatus('error');
         errorService.catch(Promise.reject(connectionResult.error));
       } else {
@@ -478,6 +578,20 @@ export const ScanView = observer(
       settledPhase === phase && phase !== 'starting' && phase !== 'completing';
     const keywordsVisible = instructionsVisible && phase === 'scanning';
     const statusVisible = instructionsVisible && phase === 'idle';
+    const pasteVisible =
+      controlsPhase === phase && (phase === 'scanning' || phase === 'idle');
+
+    useEffect(() => {
+      setControlsPhase(undefined);
+      if (phase !== 'scanning' && phase !== 'idle') return;
+
+      const delay = window.matchMedia('(prefers-reduced-motion: reduce)')
+        .matches
+        ? 0
+        : SCAN_REVEAL_DURATION - 160;
+      const timer = setTimeout(() => setControlsPhase(phase), delay);
+      return () => clearTimeout(timer);
+    }, [phase]);
 
     return (
       <Container>
@@ -499,22 +613,40 @@ export const ScanView = observer(
               onReveal={duration =>
                 revealRef.current?.(duration) ?? Promise.resolve(false)
               }
-              onCovered={() => completeRef.current?.()}
+              onCovered={() => {
+                if (completeRef.current) {
+                  completeRef.current();
+                } else if (active) {
+                  setStatus('scanned');
+                }
+              }}
               onSettled={setSettledPhase}
             />
+            <StatusMessage
+              $visible={statusVisible}
+              aria-live="polite"
+              aria-hidden={!statusVisible}
+            >
+              {status !== 'scanning' &&
+                status !== 'completing' &&
+                status !== 'scanned' &&
+                STATUS_TEXT[status]}
+            </StatusMessage>
           </Preview>
-          <Instructions
-            $visible={statusVisible}
-            $compact={phase !== 'scanning' && phase !== 'completing'}
-            $centered={phase === 'idle'}
-            aria-live="polite"
-            aria-hidden={!statusVisible}
-            inert={!statusVisible}
+          <Controls
+            $visible={pasteVisible}
+            aria-hidden={!pasteVisible}
+            inert={!pasteVisible}
           >
-            {status !== 'scanning' &&
-              status !== 'completing' &&
-              status !== 'scanned' && <p>{STATUS_TEXT[status]}</p>}
-          </Instructions>
+            <Button
+              color="neutral"
+              disabled={!active || !pasteVisible || connecting}
+              loading={pasting}
+              onClick={() => void paste()}
+            >
+              Clipboard
+            </Button>
+          </Controls>
         </Content>
       </Container>
     );

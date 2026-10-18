@@ -1,7 +1,9 @@
-import {IonFabButton, IonIcon} from '@ionic/react';
-import arrowRight from 'lucide-static/icons/arrow-right.svg';
-import starOff from 'lucide-static/icons/star-off.svg';
-import star from 'lucide-static/icons/star.svg';
+import {IonFabButton} from '@ionic/react';
+import {
+  ArrowRight as arrowRight,
+  Star as star,
+  StarOff as starOff,
+} from 'lucide-react';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
@@ -15,6 +17,7 @@ import {
 } from '../../@lib/pending-action.js';
 import type {Router} from '../../@routes.js';
 import {FEATURES} from '../@features.js';
+import {AppIcon} from '../@ui/app-icon.js';
 import {InfoSection} from '../@ui/info-section.js';
 import {
   List,
@@ -40,7 +43,7 @@ const FeatureList = styled(List)`
   --list-item-content-gap: 5px;
 `;
 
-const FeatureIcon = styled(IonIcon)<{$color: string}>`
+const FeatureIcon = styled(AppIcon)<{$color: string}>`
   flex: 0 0 28px;
   width: 28px;
   height: 28px;
@@ -50,7 +53,9 @@ const FeatureIcon = styled(IonIcon)<{$color: string}>`
   color: var(--ion-color-primary-contrast);
 `;
 
-const DefaultIcon = styled(IonIcon)`
+const DefaultIcon = styled(AppIcon)`
+  --icon-stroke-width: 1;
+
   flex-shrink: 0;
   padding: 3px;
   border-radius: 50%;
@@ -116,7 +121,7 @@ export const FeaturesView = observer(
                         aria-busy={saving && openFeature === route}
                         onClick={() => setDefaultFeature(route)}
                       >
-                        <IonIcon
+                        <AppIcon
                           icon={isDefault ? starOff : star}
                           aria-hidden="true"
                         />
@@ -171,7 +176,7 @@ export const FeaturesView = observer(
               aria-label="View next"
               onClick={() => openAction(nextAction)}
             >
-              <IonIcon icon={arrowRight} />
+              <AppIcon icon={arrowRight} />
             </IonFabButton>
           </ViewFab>
         )}

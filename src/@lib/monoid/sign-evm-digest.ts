@@ -12,7 +12,7 @@ import {CBORAppletError} from '../cbor-applet.js';
 import {MonoidCardError} from './card-error.js';
 import type {MonoidApplet, MonoidAppletSECP256K1Key} from './monoid-applet.js';
 
-const ACCOUNT_NOT_FOUND_MESSAGE = 'Account not on this card.';
+const ACCOUNT_NOT_FOUND_MESSAGE = 'Account not on this card';
 
 export async function signEvmDigest(
   applet: MonoidApplet,

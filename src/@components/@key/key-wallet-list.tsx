@@ -1,8 +1,6 @@
 import {Clipboard} from '@capacitor/clipboard';
-import {IonIcon, useIonAlert} from '@ionic/react';
-import copy from 'lucide-static/icons/copy.svg';
-import star from 'lucide-static/icons/star.svg';
-import trash from 'lucide-static/icons/trash-2.svg';
+import {useIonAlert} from '@ionic/react';
+import {Copy as copy, Star as star, Trash2 as trash} from 'lucide-react';
 import {runInAction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {
@@ -31,6 +29,7 @@ import {
   getKeyWallets,
   getWalletReference,
 } from '../../@services/index.js';
+import {AppIcon} from '../@ui/app-icon.js';
 import {SwipeAction, SwipeableItem} from '../@ui/swipeable-item.js';
 
 import {
@@ -174,7 +173,7 @@ export const KeyWalletList = observer(
                               );
                             })}
                           >
-                            <IonIcon icon={copy} aria-hidden="true" />
+                            <AppIcon icon={copy} aria-hidden="true" />
                             Copy
                           </SwipeAction>
                           {!isDefault && (
@@ -194,7 +193,7 @@ export const KeyWalletList = observer(
                                 setOpenWallet(undefined);
                               }}
                             >
-                              <IonIcon icon={star} aria-hidden="true" />
+                              <AppIcon icon={star} aria-hidden="true" />
                               Default
                             </SwipeAction>
                           )}
@@ -252,7 +251,7 @@ export const KeyWalletList = observer(
                                 },
                               )}
                             >
-                              <IonIcon icon={trash} aria-hidden="true" />
+                              <AppIcon icon={trash} aria-hidden="true" />
                               Delete
                             </SwipeAction>
                           )}
@@ -312,7 +311,7 @@ export const KeyWalletList = observer(
                                 aria-label="Default address"
                                 title="Default address"
                               >
-                                <IonIcon icon={star} aria-hidden="true" />
+                                <AppIcon icon={star} aria-hidden="true" />
                               </KeyDerivationBadge>
                             )}
                             {collapsedRow && (

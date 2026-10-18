@@ -1,6 +1,8 @@
-import {IonFabButton, IonIcon} from '@ionic/react';
-import arrowRightLeft from 'lucide-static/icons/arrow-right-left.svg';
-import ellipsis from 'lucide-static/icons/ellipsis.svg';
+import {IonFabButton} from '@ionic/react';
+import {
+  ArrowRightLeft as arrowRightLeft,
+  Ellipsis as ellipsis,
+} from 'lucide-react';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
@@ -8,8 +10,12 @@ import type {RouteComponentProps} from 'routra-react';
 import {useEntrances} from '../../@entrances.js';
 import {getPendingActions} from '../../@lib/pending-action.js';
 import type {Router} from '../../@routes.js';
-import {getWalletKitSessionAddresses} from '../../@services/index.js';
+import {
+  getWalletKitSessionAddressTypes,
+  getWalletKitSessionAddresses,
+} from '../../@services/index.js';
 import {WalletAccountList} from '../@key/wallet-account-list.js';
+import {AppIcon} from '../@ui/app-icon.js';
 import {AsyncButton} from '../@ui/button.js';
 import {CenteredPopup} from '../@ui/centered-popup.js';
 import {PopupDateTime} from '../@ui/date-time.js';
@@ -73,7 +79,7 @@ export const SessionView = observer(
             disabled={!walletKitService.sessions.has(view.topic) || pending}
             onClick={() => setMenuOpen(true)}
           >
-            <IonIcon icon={ellipsis} />
+            <AppIcon icon={ellipsis} />
           </ViewHeaderButton>
         </ViewHeader>
         <ViewContent>
@@ -94,7 +100,7 @@ export const SessionView = observer(
           <InfoSection>
             <WalletAccountList
               keys={walletStorageService.keys}
-              addressType="evm"
+              addressType={getWalletKitSessionAddressTypes(session)}
               addresses={addresses}
             />
           </InfoSection>
@@ -119,7 +125,7 @@ export const SessionView = observer(
               disabled={pending || !canSwitch}
               onClick={() => view.$match.switchAccounts.$push()}
             >
-              <IonIcon icon={arrowRightLeft} />
+              <AppIcon icon={arrowRightLeft} />
             </IonFabButton>
           </ViewFab>
         )}

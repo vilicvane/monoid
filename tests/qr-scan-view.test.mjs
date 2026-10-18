@@ -18,6 +18,13 @@ mock.module('@capacitor/core', {
     },
   },
 });
+mock.module('@capacitor/clipboard', {
+  namedExports: {
+    Clipboard: {
+      read: async () => assert.fail('Unexpected clipboard read.'),
+    },
+  },
+});
 mock.module('capacitor-qr-scanner', {
   namedExports: {
     QrScanner: Object.fromEntries(
@@ -35,6 +42,21 @@ mock.module('capacitor-qr-scanner', {
 });
 mock.module('react', {
   namedExports: {
+    useCallback: (callback, dependencies) => {
+      const state = rendering;
+      const index = state.callbackIndex++;
+      const previous = state.callbacks[index];
+      if (
+        !previous ||
+        dependencies.some(
+          (dependency, position) =>
+            !Object.is(dependency, previous.dependencies[position]),
+        )
+      ) {
+        state.callbacks[index] = {callback, dependencies};
+      }
+      return state.callbacks[index].callback;
+    },
     useEffect: (effect, dependencies) => {
       const state = rendering;
       const index = state.effectIndex++;
@@ -75,6 +97,7 @@ mock.module('react', {
       return [
         state.values[index],
         value => {
+          if (!state.mounted) return;
           state.values[index] =
             typeof value === 'function' ? value(state.values[index]) : value;
         },
@@ -116,6 +139,9 @@ mock.module('../.bld/app/@entrances.js', {
 mock.module('../.bld/app/@components/@ui/button.js', {
   namedExports: {Button: 'button'},
 });
+mock.module('../.bld/app/@components/@ui/toast.js', {
+  namedExports: {useToast: () => rendering.toast},
+});
 mock.module('../.bld/app/@components/@view/index.js', {
   namedExports: {
     View: 'section',
@@ -143,6 +169,7 @@ const originalGlobals = Object.fromEntries(
 globalThis.window = {
   innerWidth: 400,
   innerHeight: 800,
+  matchMedia: () => ({matches: false}),
   addEventListener() {},
   removeEventListener() {},
 };
@@ -231,18 +258,22 @@ async function loadView() {
 
 function mount(ScanView) {
   const state = {
+    mounted: true,
     values: [],
     get status() {
       return this.values[this.statusIndex];
     },
     refs: [],
+    callbacks: [],
     effects: [],
     errors: [],
+    toasts: [],
     connections: [],
     routes: [],
     rejected: [],
     view: {$leaving: false, $match: {$exact: {$active: true}}},
   };
+  state.toast = options => state.toasts.push(options);
   state.entrances = {
     router: {
       scan: {
@@ -271,6 +302,7 @@ function mount(ScanView) {
     state.view.$match.$exact.$active = active;
     state.stateIndex = 0;
     state.refIndex = 0;
+    state.callbackIndex = 0;
     state.effectIndex = 0;
     state.pendingEffects = [];
     rendering = state;
@@ -296,6 +328,7 @@ function mount(ScanView) {
   };
   state.cover = () => state.find('qr-scan-preview').props.onCovered();
   state.cleanup = () => {
+    state.mounted = false;
     for (const {cleanup} of state.effects.splice(0)) cleanup?.();
   };
   state.rerender();
@@ -606,7 +639,7 @@ test('native reveal waits for the camera frame and the aperture, and cannot run 
   assert.deepEqual(state.errors, []);
 });
 
-test('header keywords wait for the preview transition, then an error is centered without a retry button', async () => {
+test('header keywords wait for the preview transition, then an error appears without a retry button', async () => {
   const ready = deferred();
   const native = resetScanner({
     async startScan(options) {
@@ -626,13 +659,13 @@ test('header keywords wait for the preview transition, then an error is centered
   state.rerender();
   assert.equal(state.find('qr-scan-preview').props.phase, 'scanning');
   assert.equal(instructions().props['aria-hidden'], true);
-  assert.equal(instructions().props.inert, true);
+  assert.equal(instructions().props.$visible, false);
 
   state.find('qr-scan-preview').props.onSettled('scanning');
   state.rerender();
   assert.equal(state.find('qr-scan-instructions').props.active, true);
   assert.equal(instructions().props['aria-hidden'], true);
-  assert.equal(instructions().props.inert, true);
+  assert.equal(instructions().props.$visible, false);
 
   native.listeners
     .find(listener => listener.name === 'scanEnded')
@@ -651,8 +684,15 @@ test('header keywords wait for the preview transition, then an error is centered
   assert.equal(instructions().props['aria-hidden'], false);
   assert.match(state.find('p').props.children, /could not scan/i);
 
-  assert.equal(instructions().props.$centered, true);
-  assert.equal(state.find('button'), undefined);
+  assert.equal(instructions().props.$visible, true);
+  assert.equal(state.find('button').props.children, 'Clipboard');
+  assert.equal(
+    state.find(
+      node =>
+        node.type === 'button' && /retry|scan again/i.test(node.props.children),
+    ),
+    undefined,
+  );
   await setImmediate();
   assert.equal(state.errors[0].message, 'Camera disconnected');
   assert.equal(state.errors.length, 1);
@@ -716,8 +756,14 @@ test('pairing starts during camera contraction and a slow proposal routes after 
   assert.equal(state.connections[0].signal.aborted, false);
   assert.equal(state.status, 'scanned');
   assert.deepEqual(state.routes, []);
-  assert.equal(state.find('p'), undefined);
-  assert.equal(state.find('button'), undefined);
+  assert.equal(state.find('p').props.children, false);
+  assert.equal(state.find('p').props['aria-hidden'], true);
+  assert.equal(state.find('button').props.children, 'Clipboard');
+  assert.equal(state.find('button').props.disabled, true);
+  assert.equal(
+    state.find(node => node.props?.inert !== undefined).props.inert,
+    true,
+  );
   state.connections[0].resolve({id: 42});
   await setImmediate();
   state.rerender();
@@ -777,7 +823,7 @@ test('a fast proposal waits for camera cover, native shutdown and the final anim
   assert.deepEqual(state.rejected, []);
 });
 
-test('leaving cancels pairing and rejects a late proposal without routing on return', async () => {
+test('leaving cancels pairing without rejecting a late proposal or routing on return', async () => {
   const native = resetScanner();
   const state = mount(await loadView());
   await setImmediate();
@@ -789,7 +835,7 @@ test('leaving cancels pairing and rejects a late proposal without routing on ret
   state.connections[0].resolve({id: 42});
   await setImmediate();
   assert.deepEqual(state.routes, []);
-  assert.deepEqual(state.rejected, [42]);
+  assert.deepEqual(state.rejected, []);
 
   state.rerender({leaving: false, active: true});
   await setImmediate();
@@ -801,7 +847,7 @@ test('leaving cancels pairing and rejects a late proposal without routing on ret
 });
 
 for (const departure of ['leave', 'unmount']) {
-  test(`${departure} during contraction rejects a received proposal before the confirmation page can claim it`, async () => {
+  test(`${departure} during contraction dismisses a received proposal without rejecting or routing it`, async () => {
     const native = resetScanner();
     const state = mount(await loadView());
     await setImmediate();
@@ -819,20 +865,20 @@ for (const departure of ['leave', 'unmount']) {
     }
     await setImmediate();
     assert.equal(state.connections[0].signal.aborted, true);
-    assert.deepEqual(state.rejected, [42]);
+    assert.deepEqual(state.rejected, []);
     assert.deepEqual(state.routes, []);
 
     state.cover();
     await setImmediate();
     if (departure === 'leave') state.cleanup();
     await setImmediate();
-    assert.deepEqual(state.rejected, [42]);
+    assert.deepEqual(state.rejected, []);
     assert.deepEqual(state.routes, []);
     assert.deepEqual(native.stops, [native.starts[0].scanId]);
   });
 }
 
-test('a proposal cancelled during contraction cannot reach confirmation after a quick return', async () => {
+test('a proposal dismissed during contraction cannot reach confirmation after a quick return', async () => {
   const native = resetScanner();
   const state = mount(await loadView());
   await setImmediate();
@@ -846,7 +892,7 @@ test('a proposal cancelled during contraction cannot reach confirmation after a 
   state.rerender();
   await setImmediate();
   state.rerender();
-  assert.deepEqual(state.rejected, [42]);
+  assert.deepEqual(state.rejected, []);
   assert.deepEqual(state.routes, []);
   assert.equal(state.status, 'scanning');
   assert.equal(native.starts.length, 2);
@@ -914,7 +960,14 @@ test('a late pairing failure displays the shared error and permits a new Scan vi
   assert.equal(state.status, 'error');
   assert.deepEqual(state.errors, [failure]);
   assert.deepEqual(state.routes, []);
-  assert.equal(state.find('button'), undefined);
+  assert.equal(state.find('button').props.children, 'Clipboard');
+  assert.equal(
+    state.find(
+      node =>
+        node.type === 'button' && /retry|scan again/i.test(node.props.children),
+    ),
+    undefined,
+  );
   state.cleanup();
   const retry = mount(await loadView());
   await setImmediate();

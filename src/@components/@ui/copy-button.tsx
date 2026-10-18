@@ -1,7 +1,5 @@
 import {Clipboard} from '@capacitor/clipboard';
-import {IonIcon} from '@ionic/react';
-import check from 'lucide-static/icons/check.svg';
-import copy from 'lucide-static/icons/copy.svg';
+import {Check as check, Copy as copy} from 'lucide-react';
 import ms from 'ms';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
@@ -9,6 +7,7 @@ import {styled} from 'styled-components';
 import {useEntrances} from '../../@entrances.js';
 import {useTemporaryState} from '../@hooks/interactions.js';
 
+import {AppIcon} from './app-icon.js';
 import {inlineIconCSS, inlineIconRowCSS} from './inline-icon.js';
 
 const Container = styled.button`
@@ -28,7 +27,7 @@ const Container = styled.button`
   }
 `;
 
-const Icon = styled(IonIcon)<{$copied: boolean}>`
+const Icon = styled(AppIcon)<{$copied: boolean}>`
   ${inlineIconCSS}
   ${({$copied}) => $copied && 'color: var(--ion-color-safe);'}
 `;

@@ -19,6 +19,15 @@ export const ROUTE_SCHEMA = {
         signedTransaction: string;
       },
     },
+    solanaTransaction: {
+      $state: undefined! as {
+        id: number;
+        topic: string;
+        chainId: string;
+        address: string;
+        signedTransaction: string;
+      },
+    },
     session: {
       $state: undefined! as {topic: string},
       switchAccounts: true,
@@ -60,6 +69,12 @@ export const ROUTE_SCHEMA = {
       derive: true,
     },
     scanCard: true,
+    backupCard: {
+      $state: undefined! as {
+        sourceCard?: ScannedCardData;
+        sourceIndexes?: SafeIndexHex[];
+      },
+    },
     installApplet: true,
     setupCard: {
       $state: undefined! as {

@@ -1,11 +1,12 @@
-import {IonIcon} from '@ionic/react';
-import globe from 'lucide-static/icons/globe.svg';
+import {Globe as globe} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
 import {getSiteLogoUrls} from '../../@lib/site-logo.js';
+
+import {AppIcon} from './app-icon.js';
 
 const Container = styled.div<{$loaded: boolean; $size: number}>`
   display: grid;
@@ -137,7 +138,7 @@ function SiteLogoImage({
       {!loaded && (
         <span>
           {Array.from(name.trim())[0]?.toUpperCase() || (
-            <IonIcon icon={globe} />
+            <AppIcon icon={globe} />
           )}
         </span>
       )}

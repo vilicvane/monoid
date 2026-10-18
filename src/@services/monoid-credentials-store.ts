@@ -79,6 +79,7 @@ export function isCredentialRequestCancelled(error: unknown): boolean {
 const ENTRY_ID = 'monoid.access-pins';
 // Backend calls are atomic individually; serialize the application's entire read-modify-write.
 let pending = Promise.resolve();
+let revision = 0;
 
 type MutablePINs = Partial<Record<MonoidIdHex, MonoidPIN>>;
 export type MonoidPINs = Readonly<MutablePINs>;
@@ -123,6 +124,12 @@ function throwIfCancelled(signal?: AbortSignal): void {
 }
 
 export class MonoidCredentialsStore {
+  // The caller owns the plaintext lifetime; the store retains only weak metadata.
+  private snapshots = new WeakMap<
+    MonoidPINs,
+    {revision: number; signal: AbortSignal | undefined}
+  >();
+
   constructor(private backend: CredentialsBackend = BiometricVault) {}
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -181,6 +188,8 @@ export class MonoidCredentialsStore {
     signal?.addEventListener('abort', cancel, {once: true});
 
     try {
+      // Invalidate before attempting a mutation, including an uncertain failure.
+      revision++;
       await this.backend.set({
         id: ENTRY_ID,
         value: JSON.stringify(pins),
@@ -198,7 +207,9 @@ export class MonoidCredentialsStore {
   getPINs(signal?: AbortSignal): Promise<MonoidPINs> {
     return this.enqueue(async () => {
       try {
-        return Object.freeze(await this.readPINs(signal));
+        const pins = Object.freeze(await this.readPINs(signal));
+        this.snapshots.set(pins, {revision, signal});
+        return pins;
       } catch (error) {
         const failure = credentialError(error);
 
@@ -211,14 +222,26 @@ export class MonoidCredentialsStore {
     });
   }
 
-  setPIN(id: MonoidIdHex, pin: MonoidPIN, signal?: AbortSignal): Promise<void> {
+  setPIN(
+    id: MonoidIdHex,
+    pin: MonoidPIN,
+    signal?: AbortSignal,
+    snapshot?: MonoidPINs,
+  ): Promise<void> {
     return this.enqueue(async () => {
       if (!isCardId(id) || !MonoidPIN.is(pin)) {
         throw credentialError({code: 'INVALID_ARGUMENT'});
       }
 
-      // Updating requires the complete previous document. Never merge with a fallback empty map.
-      const pins = await this.readPINs(signal);
+      throwIfCancelled(signal);
+
+      // Check inside the queue: another Store may have changed the document while
+      // this request waited. Fallback empty maps are never registered snapshots.
+      const metadata = snapshot && this.snapshots.get(snapshot);
+      const pins =
+        metadata?.revision === revision && !metadata.signal?.aborted
+          ? {...snapshot}
+          : await this.readPINs(signal);
       pins[id] = pin;
       await this.writePINs(pins, signal);
     });
@@ -251,6 +274,7 @@ export class MonoidCredentialsStore {
 
       if (Object.keys(pins).length === 0) {
         // Removal has no request ID and cannot be cancelled after it starts.
+        revision++;
         await this.backend.remove({id: ENTRY_ID});
       } else {
         await this.writePINs(pins, signal);
@@ -260,6 +284,7 @@ export class MonoidCredentialsStore {
 
   clear(): Promise<void> {
     return this.enqueue(async () => {
+      revision++;
       await this.backend.clear();
     });
   }

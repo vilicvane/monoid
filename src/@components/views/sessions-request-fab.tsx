@@ -1,5 +1,5 @@
-import {IonFabButton, IonIcon} from '@ionic/react';
-import pencil from 'lucide-static/icons/pencil.svg';
+import {IonFabButton} from '@ionic/react';
+import {Pencil as pencil} from 'lucide-react';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect} from 'react';
 import {$view, type ViewEntry} from 'routra';
@@ -12,6 +12,7 @@ import {
 } from '../../@lib/pending-action.js';
 import {getWalletConnectRequestExpiry} from '../../@lib/wallet-connect-authentication.js';
 import type {Router} from '../../@routes.js';
+import {AppIcon} from '../@ui/app-icon.js';
 import {ViewFab} from '../@view/index.js';
 
 type SessionRoute = Router['sessions'] | Router['sessions']['session'];
@@ -82,7 +83,7 @@ const RequestFab = observer(
             }
           }}
         >
-          <IonIcon icon={pencil} />
+          <AppIcon icon={pencil} />
         </IonFabButton>
       </ViewFab>
     );

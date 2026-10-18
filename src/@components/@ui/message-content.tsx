@@ -1,6 +1,6 @@
 import {css, styled} from 'styled-components';
 
-import {InfoSection} from './info-section.js';
+import {InfoSection, InfoSectionHeader} from './info-section.js';
 import {Tag, darkTagCSS} from './tag.js';
 
 const messageBlockCSS = css`
@@ -28,6 +28,11 @@ export const ErrorMessage = styled(InfoSection).attrs({role: 'status'})`
   font-size: 14px;
 `;
 
+export const WarningMessage = styled(ErrorMessage)`
+  background: var(--ion-color-warning);
+  color: var(--ion-color-warning-contrast);
+`;
+
 export const MessageSectionTitle = styled(Tag)<{$emphasized?: boolean}>`
   align-self: flex-start;
   max-width: 100%;
@@ -37,6 +42,12 @@ export const MessageSectionTitle = styled(Tag)<{$emphasized?: boolean}>`
   line-height: 20px;
   overflow-wrap: anywhere;
   ${({$emphasized}) => $emphasized && darkTagCSS}
+`;
+
+export const MessageSectionHeader = styled(InfoSectionHeader)`
+  > button:last-child {
+    margin: 0;
+  }
 `;
 
 export const MessageSectionTags = styled.div`

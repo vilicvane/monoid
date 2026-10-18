@@ -1,37 +1,10 @@
 import type {ReactNode} from 'react';
 import {useEffect, useRef} from 'react';
-import {styled} from 'styled-components';
 
-import monoidCardWirelessInterface from '../../@assets/monoid-card-wireless-interface.svg';
-import monoidLogo from '../../@assets/monoid.svg';
 import {animateScanFeedback} from '../@ui/scan-motion.js';
 
 import {MonoidCardWaves} from './monoid-card-waves.js';
-
-const CardFrame = styled.div`
-  position: relative;
-  aspect-ratio: 430 / 270;
-  border-radius: calc(20 / 430 * 100%) / calc(20 / 270 * 100%);
-  background-color: var(--ion-color-dark-contrast);
-`;
-
-const CardWirelessInterface = styled.img`
-  position: absolute;
-  top: calc(43 / 270 * 100%);
-  left: calc(40 / 430 * 100%);
-  width: calc(32 / 430 * 100%);
-`;
-
-const CardLogo = styled.img<{$error: boolean}>`
-  position: absolute;
-  top: calc(170 / 270 * 100%);
-  right: 0;
-  width: calc(60 / 430 * 100%);
-  background-color: var(
-    --ion-color-${props => (props.$error ? 'danger' : 'primary')}
-  );
-  transition: background-color 160ms ease-out;
-`;
+import {MonoidCard} from './monoid-card.js';
 
 export function MonoidScanCard({
   scanning,
@@ -75,10 +48,8 @@ export function MonoidScanCard({
   }, []);
 
   return (
-    <CardFrame ref={frameRef}>
+    <MonoidCard ref={frameRef} error={error}>
       <MonoidCardWaves scanning={scanning} active={wavesActive} />
-      <CardWirelessInterface src={monoidCardWirelessInterface} alt="" />
-      <CardLogo src={monoidLogo} alt="" $error={error} />
-    </CardFrame>
+    </MonoidCard>
   );
 }

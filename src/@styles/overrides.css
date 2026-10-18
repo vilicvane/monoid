@@ -33,6 +33,14 @@ ion-fab-button::part(native) {
   box-shadow: none;
 }
 
+ion-fab-button > .lucide {
+  font-size: 24px;
+}
+
+ion-fab-list > ion-fab-button > .lucide {
+  font-size: 18px;
+}
+
 ion-fab-list > ion-fab-button::part(native) {
   border-color: var(--ion-color-light-shade);
 }

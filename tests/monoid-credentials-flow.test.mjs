@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import {registerHooks} from 'node:module';
 import {afterEach, mock, test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
 
-import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
+import {
+  MonoidCardError,
+  MonoidWrongCardError,
+} from '../.bld/app/@lib/monoid/card-error.js';
 
 // Exercise the built hooks with effect cleanup and state-driven rerenders, without a DOM or sensor.
 let rendering;
@@ -66,13 +68,9 @@ mock.module('react/jsx-runtime', {
 mock.module('styled-components', {
   namedExports: {styled: {span: () => 'span'}},
 });
-const iconURL = import.meta.resolve('lucide-static/icons/x.svg');
-registerHooks({
-  load(url, context, nextLoad) {
-    return url === iconURL
-      ? {format: 'module', source: "export default 'x';", shortCircuit: true}
-      : nextLoad(url, context);
-  },
+mock.module('lucide-react', {namedExports: {X: 'x'}});
+mock.module('../.bld/app/@lib/render-icon.js', {
+  namedExports: {renderIcon: icon => icon},
 });
 mock.module('capacitor-biometric-vault', {namedExports: {BiometricVault: {}}});
 mock.module('../.bld/app/@entrances.js', {
@@ -134,6 +132,7 @@ mock.module('../.bld/app/@lib/isodep.js', {
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
     MonoidCardError,
+    MonoidWrongCardError,
     MonoidAppletInvalidPINError: {is: source => source?.code === 'INVALID_PIN'},
     MonoidAppletHelloWithSafe: {
       satisfies: hello => {
@@ -481,7 +480,7 @@ test('prompt: late connection events cannot restart feedback during exit', async
 });
 
 test('prompt: a known card error stays visible until removal without restarting or a duplicate toast', async () => {
-  const failure = new MonoidCardError('Account not on this card.');
+  const failure = new MonoidCardError('Account not on this card');
   const state = mount({
     auth: false,
     onBusiness: () => {
@@ -518,23 +517,44 @@ test('prompt: a known card error stays visible until removal without restarting 
   assert.deepEqual(state.retryErrors, []);
 });
 
-test('prompt: missing PIN keeps the card visible and defers the input until removal', async () => {
-  const state = mount();
+test('prompt: wrong card highlights the expected card ID', async () => {
+  const state = mount({
+    auth: false,
+    onBusiness: () => {
+      throw new MonoidWrongCardError('1234abcd');
+    },
+  });
   const scan = await state.tap({cleanup: false});
 
   assert.equal(scan.waitingForRemoval, true);
-  assert.equal(state.presenter.current.closing, false);
+  assert.equal(state.presenter.current.error, true);
+  assert.deepEqual(state.presenter.current.content, {
+    type: 'fragment',
+    props: {
+      children: [
+        'Wrong card, scan',
+        ' ',
+        {type: 'span', props: {children: '1234abcd'}},
+      ],
+    },
+  });
+  assert.deepEqual(state.retryErrors, []);
+});
+
+test('prompt: missing PIN exits without waiting for removal and prompts after cleanup', async () => {
+  const state = mount();
+  const scan = await state.tap();
+
+  assert.equal(scan.waitingForRemoval, false);
+  assert.equal(scan.stopRequested, true);
+  assert.equal(state.presenter.current.closing, true);
   assert.equal(state.presenter.current.error, false);
-  assert.match(
-    JSON.stringify(state.presenter.current.content),
-    /Remove card to enter Access PIN/,
-  );
   assert.equal(state.inputs.length, 0);
   assert.equal(state.authenticated.length, 0);
 
-  scan.onCleanup();
-  await state.flush();
-  await state.finishExit();
+  await state.finishStop();
+  assert.equal(state.inputs.length, 0);
+  await state.finishAnimation();
   assert.equal(state.inputs.length, 1);
 });
 
@@ -558,7 +578,7 @@ test('prompt: blocked access PIN has a specific error and waits for removal', as
   const scan = await state.tap({cleanup: false});
 
   assert.equal(scan.waitingForRemoval, true);
-  assert.equal(state.presenter.current.content, 'Access PIN is blocked.');
+  assert.equal(state.presenter.current.content, 'Access PIN blocked');
   assert.equal(state.presenter.current.error, true);
   assert.equal(state.inputs.length, 0);
   assert.equal(state.authenticated.length, 1);
@@ -741,10 +761,7 @@ for (const missingApplet of [false, true]) {
     assert.equal(state.outcome, 'rejected');
     assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
     assert.equal(state.notifications.length, 1);
-    assert.equal(
-      state.notifications[0].message,
-      'Initialize this card from Safe first.',
-    );
+    assert.equal(state.notifications[0].message, 'Initialize card from Safe');
   });
 }
 

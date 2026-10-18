@@ -56,7 +56,11 @@ export const WalletConnectAuthenticationView = observer(
                     onStateChange={setConnectionState}
                   />
                 ) : (
-                  <Button disabled loading={connecting}>
+                  <Button
+                    data-footer-action="sign"
+                    disabled
+                    loading={connecting}
+                  >
                     Sign
                   </Button>
                 )}

@@ -26,6 +26,7 @@
 | [EVM](evm.md)                              | EIP-191/712、SIWE、ABI/代理、Permit2、7702、4337、SDK、执行轨迹与资产解释           |
 | [Bitcoin](bitcoin.md)                      | PSBT v0/v2、UTXO/找零、三代 sighash、Taproot、BIP322、descriptor、Core 模拟与库对比 |
 | [Solana](solana.md)                        | legacy/v0、ALT、Ed25519、program/IDL、标准 RPC、账户变化、顺序模拟、SIWS 与版本演进 |
+| [Solana 服务选型](solana-services.md)      | 连接与四类签名流程、RPC、Jupiter、模拟扩展、IDL 和源码验证、Cloudflare 接入安排     |
 | [方案生态与其他链](ecosystem-solutions.md) | ERC-7730、Rabby、MetaMask Snaps、硬件钱包参考，以及 Cosmos/Sui/Aptos/TRON           |
 | [Megnat 源码参考](megnat-reference.md)     | 已有实现、精确源码定位、可复用流程和不能照搬的假设                                  |
 | [Monoid 接入建议](monoid-integration.md)   | 当前 App/卡能力、源码快照、缺口、职责边界和分阶段研究路径                           |

@@ -4,6 +4,7 @@ import {parseDerivationPath} from '../bip39.js';
 import type {AddressType} from '../wallet-address.js';
 
 import type {
+  MonoidAppletED25519Key,
   MonoidAppletKey,
   MonoidAppletSECP256K1Key,
 } from './monoid-applet.js';
@@ -15,6 +16,11 @@ export function getAppletKey(
   addressType: Exclude<AddressType, 'solana'>,
   path?: BIP39PathString,
 ): MonoidAppletSECP256K1Key;
+export function getAppletKey(
+  key: Key,
+  addressType: 'solana',
+  path?: BIP39PathString,
+): MonoidAppletED25519Key;
 export function getAppletKey(
   key: Key,
   addressType: AddressType,

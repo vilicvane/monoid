@@ -2,6 +2,7 @@ import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 import {UnmountAnimationClone} from 'unmount-animation-clone';
 
+import {normalizeWalletAddress} from '../../@lib/wallet-address.js';
 import type {
   WalletKeyData,
   WalletKeyWalletData,
@@ -34,6 +35,7 @@ type SelectionProps = {
 const WalletAccountGroup = observer(function WalletAccountGroup({
   group: {key, wallets},
   autoExpand,
+  showAddressType,
   selectedAddresses,
   onToggle,
   onOpen,
@@ -42,6 +44,7 @@ const WalletAccountGroup = observer(function WalletAccountGroup({
 }: SelectionProps & {
   group: AccountGroup;
   autoExpand: boolean;
+  showAddressType: boolean;
 }): ReactNode {
   return (
     <ExpandableKeyGroup
@@ -58,12 +61,12 @@ const WalletAccountGroup = observer(function WalletAccountGroup({
                 ? wallets.map(wallet => wallet.address)
                 : [wallet.address],
             );
-            const hasTags = !!(key.alias || wallet.path || onOpen);
+            const hasTags = !!(key.alias || wallet.path || showAddressType);
 
             return (
               <KeyGroupItem
                 as={onToggle ? 'label' : onOpen ? 'button' : 'div'}
-                key={wallet.address.toLowerCase()}
+                key={normalizeWalletAddress(wallet.address)}
                 className={onOpen ? 'ion-activatable' : undefined}
                 $revealing={revealing && index > 0}
                 disabled={collapsed || onOpen ? disabled : undefined}
@@ -81,7 +84,7 @@ const WalletAccountGroup = observer(function WalletAccountGroup({
                     count={collapsed ? wallets.length : undefined}
                     aria-label={`Select ${wallet.address}`}
                     checked={selectedAddresses.has(
-                      wallet.address.toLowerCase(),
+                      normalizeWalletAddress(wallet.address),
                     )}
                     onChange={() => onToggle(wallet.address)}
                     disabled={disabled}
@@ -93,7 +96,7 @@ const WalletAccountGroup = observer(function WalletAccountGroup({
                       <WalletAccountTags
                         alias={key.alias}
                         wallet={wallet}
-                        showAddressType={!!onOpen}
+                        showAddressType={showAddressType}
                       />
                       {onOpen && collapsed && (
                         <UnmountAnimationClone>
@@ -140,7 +143,7 @@ export const WalletAccountList = observer(
     disabled = false,
   }: {
     keys: readonly WalletKeyData[];
-    addressType: 'evm';
+    addressType: 'evm' | 'solana' | readonly ('evm' | 'solana')[];
     addresses?: readonly string[];
     compact?: boolean;
     compactContent?: boolean;
@@ -148,18 +151,20 @@ export const WalletAccountList = observer(
     additionalAddresses?: readonly string[];
   } & Partial<SelectionProps>): ReactNode => {
     const groups = new Map<WalletKeyData['index'], AccountGroup>();
+    const addressTypes =
+      typeof addressType === 'string' ? [addressType] : addressType;
     const included =
-      addresses && new Set(addresses.map(address => address.toLowerCase()));
+      addresses && new Set(addresses.map(normalizeWalletAddress));
     const seen = new Set<string>();
     const selected = new Set(
-      Array.from(selectedAddresses, address => address.toLowerCase()),
+      Array.from(selectedAddresses, normalizeWalletAddress),
     );
 
     for (const key of keys) {
       for (const wallet of getKeyWallets(key)) {
-        if (wallet.addressType !== addressType) continue;
+        if (!addressTypes.some(type => type === wallet.addressType)) continue;
 
-        const address = wallet.address.toLowerCase();
+        const address = normalizeWalletAddress(wallet.address);
         if (seen.has(address) || (included && !included.has(address))) continue;
 
         seen.add(address);
@@ -182,11 +187,12 @@ export const WalletAccountList = observer(
           <WalletAccountGroup
             key={index}
             group={group}
+            showAddressType={!!onOpen || addressTypes.length > 1}
             autoExpand={
               (!onToggle && !onOpen) ||
               groups.size === 1 ||
               group.wallets.some(wallet =>
-                selected.has(wallet.address.toLowerCase()),
+                selected.has(normalizeWalletAddress(wallet.address)),
               )
             }
             selectedAddresses={selected}
@@ -197,11 +203,11 @@ export const WalletAccountList = observer(
           />
         ))}
         {additionalAddresses
-          .filter(address => !seen.has(address.toLowerCase()))
+          .filter(address => !seen.has(normalizeWalletAddress(address)))
           .map(address => (
             <KeyGroupItem
               as={onToggle ? 'label' : onOpen ? 'button' : 'div'}
-              key={address.toLowerCase()}
+              key={normalizeWalletAddress(address)}
               className={!onToggle && onOpen ? 'ion-activatable' : undefined}
               disabled={disabled}
               onClick={!onToggle && onOpen ? () => onOpen(address) : undefined}
@@ -209,7 +215,7 @@ export const WalletAccountList = observer(
               {onToggle && (
                 <KeyCheckbox
                   aria-label={`Select ${address}`}
-                  checked={selected.has(address.toLowerCase())}
+                  checked={selected.has(normalizeWalletAddress(address))}
                   onChange={() => onToggle(address)}
                   disabled={disabled}
                 />
@@ -233,7 +239,11 @@ export const WalletAccountList = observer(
         {!groups.size && !additionalAddresses.length && (
           <KeyListItem>
             <KeyListPlaceholder>
-              {onToggle ? 'No EVM accounts in Safe.' : 'No accounts.'}
+              {onToggle
+                ? addressTypes.length === 1
+                  ? `No ${addressTypes[0] === 'evm' ? 'EVM' : 'Solana'} accounts in Safe.`
+                  : 'No accounts in Safe.'
+                : 'No accounts.'}
             </KeyListPlaceholder>
           </KeyListItem>
         )}

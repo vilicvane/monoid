@@ -12,7 +12,7 @@ export class StorageService {
     key: TKey,
   ): Promise<StorageMapping[TKey] | undefined> {
     const value = await this.storage.get(key);
-    return value;
+    return value ?? undefined;
   }
 
   async set<TKey extends keyof StorageMapping>(
@@ -32,6 +32,9 @@ export class StorageService {
 
     // Retire the development PIN cache. Credentials are re-entered and saved in BiometricVault.
     await storage.remove('monoidPINs');
+
+    // Backup progress now belongs to the open page only.
+    await storage.remove('cardBackup');
 
     return new StorageService(storage);
   }

@@ -13,7 +13,7 @@ import {
 import {View, ViewHeader, ViewHeaderTitle} from '../../@view/index.js';
 
 import type {ScannedCardData} from './common.js';
-import {scanCardKeys} from './scan-card.js';
+import {scanCardItems} from './scan-card.js';
 
 export const ScanCardView = ({
   view,
@@ -40,7 +40,7 @@ export const ScanCardView = ({
             async (applet, setStateContent, hello) => {
               setStateContent('Listing safe items...');
 
-              const keys = await scanCardKeys(applet, (index, total) => {
+              const items = await scanCardItems(applet, (index, total) => {
                 setStateContent(
                   <MonoidScanStatePromptProgress
                     current={index + 1}
@@ -51,7 +51,11 @@ export const ScanCardView = ({
                 );
               });
 
-              scannedCard = {id: uint8ArrayToHex(hello.safe.id), keys};
+              scannedCard = {
+                id: uint8ArrayToHex(hello.safe.id),
+                publicKey: uint8ArrayToHex(hello.safe.publicKey),
+                items,
+              };
             },
           );
 

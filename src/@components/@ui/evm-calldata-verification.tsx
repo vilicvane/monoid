@@ -1,7 +1,8 @@
-import {IonIcon} from '@ionic/react';
-import badgeCheck from 'lucide-static/icons/badge-check.svg';
-import circleHelp from 'lucide-static/icons/circle-help.svg';
-import history from 'lucide-static/icons/history.svg';
+import {
+  BadgeCheck as badgeCheck,
+  CircleHelp as circleHelp,
+  History as history,
+} from 'lucide-react';
 import {type ReactNode, useState} from 'react';
 import {styled} from 'styled-components';
 
@@ -11,6 +12,7 @@ import type {
 } from '../../@lib/evm-calldata.js';
 import {UI_LOCALE} from '../../@lib/locale.js';
 
+import {AppIcon} from './app-icon.js';
 import {
   DetailsPopup,
   DetailsPopupDivider,
@@ -47,7 +49,7 @@ const Signature = styled.span<{$verified: boolean; $seen: boolean}>`
         : 'var(--color-text-warning)'};
 `;
 
-const Icon = styled(IonIcon)<{$verified: boolean; $seen: boolean}>`
+const Icon = styled(AppIcon)<{$verified: boolean; $seen: boolean}>`
   ${inlineIconCSS}
   /* Center on the first text line when the signature wraps. */
   margin-top: calc((1lh - 1em) / 2);

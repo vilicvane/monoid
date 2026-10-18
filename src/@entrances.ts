@@ -23,6 +23,7 @@ import {
   MonoidScanPromptPresenter,
   MonoidStorageService,
   SiteLogoService,
+  SolanaTokenService,
   StorageService,
   TransactionHistoryService,
   WalletKitService,
@@ -193,6 +194,13 @@ export class Entrances {
   get evmTokenService() {
     return Promise.all([this.storageService, this.chainService]).then(
       ([storage, chain]) => EvmTokenService.create(storage, chain),
+    );
+  }
+
+  @entrance
+  get solanaTokenService() {
+    return this.storageService.then(storage =>
+      SolanaTokenService.create(storage),
     );
   }
 

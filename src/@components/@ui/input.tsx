@@ -1,9 +1,10 @@
-import {IonIcon} from '@ionic/react';
-import rotateCcw from 'lucide-static/icons/rotate-ccw.svg';
+import {RotateCcw as rotateCcw} from 'lucide-react';
 import {type InputHTMLAttributes, type ReactNode, useRef} from 'react';
 import {styled} from 'styled-components';
 
 import {selectionTransition} from '../@animations.js';
+
+import {AppIcon} from './app-icon.js';
 
 export const Input = styled.input`
   border: solid 0.5px var(--ion-color-light-shade);
@@ -145,7 +146,7 @@ export const ResettableInput = ({
           inputRef.current?.focus();
         }}
       >
-        <IonIcon icon={rotateCcw} aria-hidden="true" />
+        <AppIcon icon={rotateCcw} aria-hidden="true" />
       </ResetButton>
     </InputContainer>
   );

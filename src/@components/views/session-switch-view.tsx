@@ -3,9 +3,12 @@ import {type ReactNode, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
 import {useEntrances} from '../../@entrances.js';
+import {normalizeWalletAddress} from '../../@lib/wallet-address.js';
+import {getWalletConnectAddressType} from '../../@lib/wallet-connect.js';
 import type {Router} from '../../@routes.js';
 import {
   getKeyWallets,
+  getWalletKitSessionAddressTypes,
   getWalletKitSessionAddresses,
 } from '../../@services/index.js';
 import {WalletAccountList} from '../@key/wallet-account-list.js';
@@ -34,8 +37,8 @@ export const SessionSwitchView = observer(
       () =>
         new Set(
           data
-            ? getWalletKitSessionAddresses(data.session).map(address =>
-                address.toLowerCase(),
+            ? getWalletKitSessionAddresses(data.session, true).map(
+                normalizeWalletAddress,
               )
             : [],
         ),
@@ -57,16 +60,23 @@ export const SessionSwitchView = observer(
     if (!data) return null;
     const {session, record} = data;
     const canSwitch = walletKitService.canSwitchAccount(view.topic);
+    const addressTypes = getWalletKitSessionAddressTypes(session, true);
     const hasAccount = (address: string): boolean =>
       walletStorageService.keys.some(key =>
         getKeyWallets(key).some(
           wallet =>
-            wallet.addressType === 'evm' &&
-            wallet.address.toLowerCase() === address.toLowerCase(),
+            addressTypes.some(type => type === wallet.addressType) &&
+            normalizeWalletAddress(wallet.address) ===
+              normalizeWalletAddress(address),
         ),
       );
     const selectionChanged =
       selectedAddresses.size > 0 &&
+      addressTypes.every(type =>
+        Array.from(selectedAddresses).some(
+          address => getWalletConnectAddressType(address) === type,
+        ),
+      ) &&
       Array.from(selectedAddresses).every(
         address => initialAddresses.has(address) || hasAccount(address),
       ) &&
@@ -125,11 +135,11 @@ export const SessionSwitchView = observer(
           <InfoSectionItemLabel>Choose accounts</InfoSectionItemLabel>
           <WalletAccountList
             keys={walletStorageService.keys}
-            addressType="evm"
+            addressType={addressTypes}
             additionalAddresses={Array.from(initialAddresses)}
             selectedAddresses={selectedAddresses}
             onToggle={address => {
-              const identity = address.toLowerCase();
+              const identity = normalizeWalletAddress(address);
               setSelectedAddresses(previous => {
                 const next = new Set(previous);
                 if (next.has(identity)) next.delete(identity);

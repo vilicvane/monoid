@@ -1,13 +1,13 @@
-import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
-import creditCard from 'lucide-static/icons/credit-card.svg';
-import key from 'lucide-static/icons/key.svg';
+import type {LucideIcon} from 'lucide-react';
+import {CreditCard as creditCard, Key as key} from 'lucide-react';
 import {observer} from 'mobx-react-lite';
 import type {HTMLAttributes, ReactNode} from 'react';
 import {useContext} from 'react';
 import {css, styled} from 'styled-components';
 
 import type {MonoidSafeIdHex, SafeIndexHex} from '../../@atomics.js';
+import {AppIcon} from '../@ui/app-icon.js';
 import {IconButton} from '../@ui/icon-button.js';
 
 import {scrollBorderCSS} from './@scroll-border.js';
@@ -60,6 +60,7 @@ export const ViewHeaderButton = styled(IconButton).attrs({feedback: 'color'})`
 `;
 
 export const viewHeaderTagCSS = css`
+  --icon-stroke-width: 1;
   --view-header-tag-optical-offset: 2px;
 
   justify-self: start;
@@ -91,6 +92,8 @@ const IdentifierContainer = styled.div`
   ${viewHeaderTagCSS}
 
   grid-column: 3;
+  width: max-content;
+  max-width: none;
   background-color: var(--ion-color-light);
   border-radius: 4px;
 
@@ -103,14 +106,13 @@ const IdentifierContainer = styled.div`
   gap: 4px;
 `;
 
-const IdentifierIcon = styled(IonIcon)`
+const IdentifierIcon = styled(AppIcon)`
   flex-shrink: 0;
   color: var(--ion-color-medium-tint);
 `;
 
 const Identifier = styled.span`
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex-shrink: 0;
   white-space: nowrap;
 
   font-size: 14px;
@@ -139,7 +141,7 @@ export const ViewHeaderIdentifier = ({
         index: SafeIndexHex;
       };
 }): ReactNode => {
-  let icon: string;
+  let icon: LucideIcon;
   let children: string;
 
   switch (identifier.type) {

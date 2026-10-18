@@ -58,7 +58,7 @@ const Name = styled.div`
     white-space: nowrap;
   }
 
-  ion-icon {
+  .lucide {
     font-size: 16px;
   }
 `;

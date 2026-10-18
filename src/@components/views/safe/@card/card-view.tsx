@@ -1,25 +1,24 @@
-import {IonIcon} from '@ionic/react';
-import saveCheck from 'lucide-static/icons/save-check.svg';
 import {observable, runInAction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
-import type {SafeIndexHex} from '../../../../@atomics.js';
+import {type SafeIndexHex, SafeKnownType} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import type {AddressType} from '../../../../@lib/wallet-address.js';
 import type {Router} from '../../../../@routes.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {useTemporaryState} from '../../../@hooks/interactions.js';
-import {KeyList} from '../../../@key/key-list.js';
+import {KeyListItem, KeyListPlaceholder} from '../../../@key/key-list.js';
 import {
   MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
-import {Button} from '../../../@ui/button.js';
 import {BUTTON_FEEDBACK_DURATION} from '../../../@ui/constants.js';
+import {SegmentedControl} from '../../../@ui/segmented-control.js';
 import {
   View,
+  ViewActionButton,
   ViewContent,
   ViewHeader,
   ViewHeaderIdentifier,
@@ -35,26 +34,31 @@ import {
   importCardKey,
   isWalletKeyUpToDate,
 } from '../card-key-import.js';
-import type {ScannedCardData, ScannedCardKeyData} from '../common.js';
+import {
+  type ScannedCardData,
+  type ScannedCardKeyData,
+  isCardKeyItem,
+} from '../common.js';
 
 import {AddressTypePicker} from './@address-type-picker.js';
 import type {KeyItemState} from './@key-item.js';
 import {KeyItem} from './@key-item.js';
+import {CardResourceItem, CardResourceList} from './@resource-item.js';
 
 export const CardView = observer(
   ({view}: RouteComponentProps<Router['safe']['card']>): ReactNode => {
+    const {card} = view;
+
     return (
       <View>
         <ViewHeader>
           <ViewHeaderTitle>Card</ViewHeaderTitle>
-          {view.card && (
-            <ViewHeaderIdentifier
-              identifier={{type: 'card', id: view.card.id}}
-            />
+          {card && (
+            <ViewHeaderIdentifier identifier={{type: 'card', id: card.id}} />
           )}
         </ViewHeader>
-        {view.card ? (
-          <CardContent key={view.card.id} card={view.card} view={view} />
+        {card ? (
+          <CardContent key={card.id} card={card} view={view} />
         ) : (
           <ViewContent />
         )}
@@ -64,7 +68,7 @@ export const CardView = observer(
 );
 
 type CardKeySelection = {
-  key: ScannedCardKeyData;
+  key: Pick<ScannedCardKeyData, 'type' | 'index' | 'alias'>;
   addressType: AddressType;
   refs: Partial<Record<AddressType, ScannedCardKeyData['ref']>>;
 };
@@ -77,18 +81,35 @@ const CardContent = observer(
     card: ScannedCardData;
     view: RouteComponentProps<Router['safe']['card']>['view'];
   }): ReactNode => {
-    const {walletStorageService, errorService} = useEntrances();
+    const {walletStorageService, errorService, router} = useEntrances();
     const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
       safe: true,
       auth: 'access',
       retryOnError: true,
     });
     const [items, setItems] = useState<CardKeySelection[]>(() =>
-      card.keys.map(key => ({
-        key,
-        addressType: key.ref.addressType,
-        refs: {[key.ref.addressType]: key.ref},
-      })),
+      card.items.flatMap(item => {
+        if (typeof item.type !== 'string') return [];
+
+        const addressType =
+          item.ref?.addressType ?? getCardKeyAddressTypes(item.type)[0];
+        if (!addressType) return [];
+
+        return [
+          {
+            key: {
+              type: SafeKnownType.satisfies(item.type),
+              index: item.index,
+              alias: item.alias,
+            },
+            addressType,
+            refs: item.ref ? {[item.ref.addressType]: item.ref} : {},
+          },
+        ];
+      }),
+    );
+    const [resourceFilter, setResourceFilter] = useState<'keys' | 'all'>(
+      'keys',
     );
     const [editingIndex, setEditingIndex] = useState<SafeIndexHex>();
     const [deriving, setDeriving] = useState(false);
@@ -119,20 +140,44 @@ const CardContent = observer(
 
       return {item, ref, state};
     });
+    const keyItemMap = new Map(
+      keyItems.map(keyItem => [keyItem.item.key.index, keyItem]),
+    );
+    const keyCount = card.items.filter(isCardKeyItem).length;
+    const visibleItems =
+      resourceFilter === 'all' ? card.items : card.items.filter(isCardKeyItem);
 
     const [selectedIndexSet] = useState(() => observable.set<SafeIndexHex>());
 
-    const selected = keyItems.filter(
-      ({item, state}) =>
-        state !== 'up-to-date' && selectedIndexSet.has(item.key.index),
+    const selectedResources = card.items.filter(item =>
+      selectedIndexSet.has(item.index),
     );
-    const missing = selected.filter(({ref}) => !ref);
+    const selectedKeys = keyItems.filter(({item}) =>
+      selectedIndexSet.has(item.key.index),
+    );
+    const hiddenSelectedCount =
+      resourceFilter === 'keys'
+        ? selectedResources.filter(item => !isCardKeyItem(item)).length
+        : 0;
+    const missing = selectedKeys.filter(({ref}) => !ref);
+    const canImport =
+      selectedResources.length > 0 &&
+      selectedKeys.length === selectedResources.length &&
+      selectedKeys.every(({ref, state}) => ref && state !== 'up-to-date');
     const editing = items.find(item => item.key.index === editingIndex);
 
     const [imported, setImported] = useTemporaryState(
       false,
       BUTTON_FEEDBACK_DURATION,
     );
+
+    const selectItem = (index: SafeIndexHex, selected: boolean): void => {
+      runInAction(() => {
+        if (selected) selectedIndexSet.add(index);
+        else selectedIndexSet.delete(index);
+      });
+      setImported(false);
+    };
 
     const deriveSelected = async (): Promise<void> => {
       if (deriving || missing.length === 0) {
@@ -193,28 +238,26 @@ const CardContent = observer(
     return (
       <>
         <ViewContent
-          footerReveal="end"
           footer={
             <>
-              <Button
-                disabled={missing.length === 0}
+              <ViewActionButton
+                visible={deriving || missing.length > 0}
                 loading={deriving}
                 onClick={errorService.catch(deriveSelected)}
               >
                 Derive
-              </Button>
-              <Button
+              </ViewActionButton>
+              <ViewActionButton
+                visible={canImport || imported}
                 id="import-button"
-                disabled={
-                  deriving || selected.length === 0 || missing.length > 0
-                }
+                disabled={deriving || !canImport}
                 onClick={errorService.catch(async () => {
-                  if (missing.length > 0) {
+                  if (!canImport) {
                     return;
                   }
 
                   runInAction(() => {
-                    for (const {item, ref} of selected) {
+                    for (const {item, ref} of selectedKeys) {
                       if (!ref) continue;
 
                       const key = {...item.key, ref};
@@ -226,34 +269,93 @@ const CardContent = observer(
                   });
 
                   setImported(true);
+
+                  const backToSafe = router.$backTo(router.safe.$exact);
+                  if (backToSafe) {
+                    backToSafe();
+                  } else {
+                    router.safe.$replace();
+                  }
                 })}
               >
-                {imported ? (
-                  <>
-                    <IonIcon icon={saveCheck} />
-                    Import successful
-                  </>
-                ) : (
-                  'Import'
-                )}
-              </Button>
+                {imported ? 'Import successful' : 'Import'}
+              </ViewActionButton>
+              <ViewActionButton
+                visible={selectedResources.length > 0 && missing.length === 0}
+                color="neutral"
+                disabled={deriving}
+                onClick={() => {
+                  router.safe
+                    .backupCard({
+                      sourceCard: card,
+                      sourceIndexes: selectedResources.map(item => item.index),
+                    })
+                    .$push();
+                }}
+              >
+                Copy
+              </ViewActionButton>
             </>
           }
         >
-          <KeyList>
-            {keyItems.map(({item, ref, state}) => (
-              <KeyItem
-                key={item.key.index}
-                data={item.key}
-                addressType={item.addressType}
-                address={ref?.address}
-                state={state}
-                selectedIndexSet={selectedIndexSet}
-                disabled={deriving}
-                onChangeAddressType={() => setEditingIndex(item.key.index)}
-              />
-            ))}
-          </KeyList>
+          {keyCount < card.items.length && (
+            <SegmentedControl
+              aria-label="Card resources"
+              value={resourceFilter}
+              options={[
+                {value: 'keys', label: `Keys · ${keyCount}`},
+                {value: 'all', label: `All · ${card.items.length}`},
+              ]}
+              onChange={setResourceFilter}
+            />
+          )}
+          {hiddenSelectedCount > 0 && (
+            <KeyListPlaceholder role="status">
+              {hiddenSelectedCount} selected{' '}
+              {hiddenSelectedCount === 1 ? 'item is' : 'items are'} hidden by
+              this filter.
+            </KeyListPlaceholder>
+          )}
+          <CardResourceList>
+            {visibleItems.map(resource => {
+              const keyItem = keyItemMap.get(resource.index);
+              if (!keyItem) {
+                return (
+                  <CardResourceItem
+                    key={resource.index}
+                    data={resource}
+                    selected={selectedIndexSet.has(resource.index)}
+                    disabled={deriving}
+                    onSelect={selected => selectItem(resource.index, selected)}
+                  />
+                );
+              }
+
+              const {item, ref, state} = keyItem;
+              return (
+                <KeyItem
+                  key={item.key.index}
+                  data={item.key}
+                  addressType={item.addressType}
+                  address={ref?.address}
+                  state={state}
+                  selected={selectedIndexSet.has(item.key.index)}
+                  disabled={deriving}
+                  onSelect={selected => selectItem(item.key.index, selected)}
+                  onChangeAddressType={() => setEditingIndex(item.key.index)}
+                />
+              );
+            })}
+            {visibleItems.length === 0 && (
+              <KeyListItem>
+                <KeyListPlaceholder>
+                  {card.items.length
+                    ? 'No keys on this card.'
+                    : 'This card has no resources.'}
+                </KeyListPlaceholder>
+              </KeyListItem>
+            )}
+          </CardResourceList>
         </ViewContent>
         {editing && (
           <AddressTypePicker

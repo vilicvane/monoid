@@ -36,14 +36,25 @@ mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
     MonoidScanRedirectError,
     MonoidScanStatePromptProgress: 'span',
-    useMonoidScanPrompt: () => [null, () => fixture.scan],
+    useMonoidScanPrompt: () => [
+      null,
+      (content, onScan) => {
+        fixture.onScan = onScan;
+        return fixture.scan;
+      },
+    ],
   },
 });
 mock.module('../.bld/app/@components/@view/index.js', {
   namedExports: {View: 'div', ViewHeader: 'header', ViewHeaderTitle: 'h1'},
 });
 mock.module('../.bld/app/@components/views/safe/scan-card.js', {
-  namedExports: {scanCardKeys: async () => []},
+  namedExports: {
+    scanCardItems: async applet => {
+      fixture.scannedApplet = applet;
+      return fixture.scannedItems;
+    },
+  },
 });
 
 const {ScanCardView} = await import(
@@ -51,12 +62,18 @@ const {ScanCardView} = await import(
 );
 
 function mount({active = true, leaving = false} = {}) {
-  const state = {replacements: 0, errors: []};
+  const state = {replacements: 0, errors: [], cards: [], scannedItems: []};
   state.scan = new Promise((resolve, reject) => {
+    state.resolveScan = resolve;
     state.rejectScan = reject;
   });
   state.entrances = {
-    router: {safe: {$replace: () => state.replacements++}},
+    router: {
+      safe: {
+        $replace: () => state.replacements++,
+        card: options => ({$push: () => state.cards.push(options)}),
+      },
+    },
     errorService: {
       catch: promise => {
         state.finished = promise.catch(error => state.errors.push(error));
@@ -124,6 +141,38 @@ test('a late failure cannot replace a route that is already leaving', async () =
   );
   await state.finished;
 
+  assert.equal(state.replacements, 0);
+  assert.deepEqual(state.errors, []);
+  state.cleanup();
+});
+
+test('a completed scan opens Card with every scanned item, including resources without an address', async () => {
+  const state = mount();
+  state.scannedItems = [
+    {type: 'seed', index: '00010000000000000001', alias: 'Seed', secret: true},
+    {index: 'ffff0000000000000002', alias: '', key: '', secret: false},
+  ];
+  const applet = {};
+  const publicKey = Uint8Array.from([
+    4,
+    ...Array.from({length: 64}, (_, index) => index),
+  ]);
+  await state.onScan(applet, () => {}, {
+    safe: {id: new Uint8Array([1, 2, 3, 4]), publicKey},
+  });
+  state.resolveScan();
+  await state.finished;
+
+  assert.equal(state.scannedApplet, applet);
+  assert.deepEqual(state.cards, [
+    {
+      card: {
+        id: '01020304',
+        publicKey: Buffer.from(publicKey).toString('hex'),
+        items: state.scannedItems,
+      },
+    },
+  ]);
   assert.equal(state.replacements, 0);
   assert.deepEqual(state.errors, []);
   state.cleanup();

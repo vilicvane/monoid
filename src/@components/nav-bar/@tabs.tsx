@@ -1,7 +1,9 @@
 import classNames from 'classNames';
-import bookKey from 'lucide-static/icons/book-key.svg';
-import layoutGrid from 'lucide-static/icons/layout-grid.svg';
-import scan from 'lucide-static/icons/scan.svg';
+import {
+  BookKey as bookKey,
+  LayoutGrid as layoutGrid,
+  Scan as scan,
+} from 'lucide-react';
 import {observer} from 'mobx-react-lite';
 import {
   type CSSProperties,

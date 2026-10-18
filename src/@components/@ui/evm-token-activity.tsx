@@ -1,5 +1,4 @@
-import {IonIcon} from '@ionic/react';
-import list from 'lucide-static/icons/list.svg';
+import {List as list} from 'lucide-react';
 import {observer} from 'mobx-react-lite';
 import {Fragment, type ReactNode, useEffect, useMemo, useState} from 'react';
 import {styled} from 'styled-components';
@@ -19,6 +18,7 @@ import type {EvmTransactionReceipt} from '../../@lib/evm-transaction.js';
 import {getKeyWallets} from '../../@services/index.js';
 
 import {AddressDetailsContent} from './address-details.js';
+import {AppIcon} from './app-icon.js';
 import {
   DetailsPopup,
   DetailsPopupDivider,
@@ -239,7 +239,7 @@ export const EvmTokenActivity = observer(function EvmTokenActivity({
               aria-haspopup="dialog"
               onClick={() => setDetailsKind('transfers')}
             >
-              <IonIcon icon={list} aria-hidden="true" />
+              <AppIcon icon={list} aria-hidden="true" />
             </DetailsButton>
           </InfoSectionHeader>
           <Changes aria-label="Your ERC-20 net changes">
@@ -284,7 +284,7 @@ export const EvmTokenActivity = observer(function EvmTokenActivity({
               aria-haspopup="dialog"
               onClick={() => setDetailsKind('approvals')}
             >
-              <IonIcon icon={list} aria-hidden="true" />
+              <AppIcon icon={list} aria-hidden="true" />
             </DetailsButton>
           </InfoSectionHeader>
           <Changes aria-label="Your ERC-20 approvals">

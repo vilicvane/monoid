@@ -1,5 +1,5 @@
-import {IonFabButton, IonIcon} from '@ionic/react';
-import creditCard from 'lucide-static/icons/credit-card.svg';
+import {IonFabButton} from '@ionic/react';
+import {CreditCard as creditCard} from 'lucide-react';
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 import type {RouteComponentProps} from 'routra-react';
@@ -12,6 +12,7 @@ import {
   MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
+import {AppIcon} from '../../../@ui/app-icon.js';
 import {
   View,
   ViewContent,
@@ -20,7 +21,7 @@ import {
   ViewHeaderTitle,
 } from '../../../@view/index.js';
 import type {ScannedCardData} from '../common.js';
-import {scanCardKeys} from '../scan-card.js';
+import {scanCardItems} from '../scan-card.js';
 
 import {KeyItem} from './@key-item.js';
 
@@ -43,7 +44,7 @@ export const SafeView = observer(
           async (applet, setStateContent, hello) => {
             setStateContent('Listing safe items...');
 
-            const keys = await scanCardKeys(applet, (index, total) => {
+            const items = await scanCardItems(applet, (index, total) => {
               setStateContent(
                 <MonoidScanStatePromptProgress
                   current={index + 1}
@@ -54,7 +55,11 @@ export const SafeView = observer(
               );
             });
 
-            scannedCard = {id: uint8ArrayToHex(hello.safe.id), keys};
+            scannedCard = {
+              id: uint8ArrayToHex(hello.safe.id),
+              publicKey: uint8ArrayToHex(hello.safe.publicKey),
+              items,
+            };
           },
         ).then(() => {
           if (!view.$leaving && router.safe.$exact.$active) {
@@ -82,7 +87,7 @@ export const SafeView = observer(
               aria-label="Scan card"
               onClick={onScanCardButtonClick}
             >
-              <IonIcon icon={creditCard} />
+              <AppIcon icon={creditCard} />
             </IonFabButton>
           </ViewFab>
         </View>

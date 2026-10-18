@@ -14,9 +14,10 @@ import {
   DetailsPopupTitle,
 } from '../../@ui/details-popup.js';
 import {EvmTokenTag} from '../../@ui/evm-token.js';
-import {InfoSection, InfoSectionHeader} from '../../@ui/info-section.js';
+import {InfoSection} from '../../@ui/info-section.js';
 import {
   MessageContent,
+  MessageSectionHeader,
   MessageSectionTitle,
 } from '../../@ui/message-content.js';
 import {
@@ -26,12 +27,6 @@ import {
 
 import {WalletConnectPermit} from './wallet-connect-permit.js';
 import {WalletConnectPermit2} from './wallet-connect-permit2.js';
-
-const MessageHeader = styled(InfoSectionHeader)`
-  > button:last-child {
-    margin: 0;
-  }
-`;
 
 const DomainContent = styled(MessageContent).attrs({as: 'div'})`
   margin: 0;
@@ -102,7 +97,7 @@ export const WalletConnectTypedData = observer(function WalletConnectTypedData({
             Permit2
           </MessageSectionTitle>
         ) : (
-          <MessageHeader>
+          <MessageSectionHeader>
             <MessageSectionTitle $emphasized={!!permit}>
               {formatSigningJSON(data.primaryType).slice(1, -1)}
             </MessageSectionTitle>
@@ -114,7 +109,7 @@ export const WalletConnectTypedData = observer(function WalletConnectTypedData({
                 onClick={() => setShowDomain(true)}
               />
             )}
-          </MessageHeader>
+          </MessageSectionHeader>
         )}
         {permit ? (
           <WalletConnectPermit

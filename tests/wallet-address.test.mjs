@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
+import {base58} from '@scure/base';
 import {getBytes, SigningKey} from 'ethers';
 
 import {parseDerivationPath} from '../.bld/app/@lib/bip39.js';
@@ -8,9 +9,46 @@ import {
   ADDRESS_TYPES,
   computeWalletAddress,
   getDerivationPathError,
+  normalizeWalletAddress,
 } from '../.bld/app/@lib/wallet-address.js';
 
 const bytes = hex => getBytes(`0x${hex}`);
+
+test('wallet identity normalizes EVM addresses without replacing display values', () => {
+  const address = '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf';
+  const addresses = Object.freeze([address, address.toLowerCase()]);
+
+  assert.deepEqual(addresses.map(normalizeWalletAddress), [
+    address.toLowerCase(),
+    address.toLowerCase(),
+  ]);
+  assert.equal(addresses[0], address);
+});
+
+test('wallet identity keeps case-distinct Solana addresses separate', () => {
+  const addresses = [
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1V',
+  ];
+
+  for (const address of addresses) {
+    assert.equal(base58.decode(address).length, 32);
+    assert.equal(normalizeWalletAddress(address), address);
+  }
+
+  assert.equal(new Set(addresses.map(normalizeWalletAddress)).size, 2);
+  assert.notDeepEqual(base58.decode(addresses[0]), base58.decode(addresses[1]));
+});
+
+test('wallet identity leaves non-EVM values unchanged', () => {
+  for (const address of [
+    '0xABC',
+    '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdg',
+    'BC1P5CYXNUXMEUWUVKWFEM96LQZSZD02N6XDCJRS20CAC6YQJJWUDPXQKEDRCR',
+  ]) {
+    assert.equal(normalizeWalletAddress(address), address);
+  }
+});
 
 // Published vectors: https://github.com/bitcoin/bips/blob/master/bip-0084.mediawiki
 test('Native SegWit matches BIP84 receiving and change address vectors', () => {

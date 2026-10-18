@@ -1,4 +1,4 @@
-import x from 'lucide-static/icons/x.svg';
+import {X as x} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {useCallback, useEffect, useLayoutEffect, useState} from 'react';
 import {styled} from 'styled-components';
@@ -15,8 +15,13 @@ import {
   MonoidAppletHelloWithSafe,
   MonoidAppletInvalidPINError,
   MonoidCardError,
+  MonoidWrongCardError,
 } from '../../@lib/monoid/index.js';
-import {isCredentialRequestCancelled} from '../../@services/index.js';
+import {renderIcon} from '../../@lib/render-icon.js';
+import {
+  type MonoidPINs,
+  isCredentialRequestCancelled,
+} from '../../@services/index.js';
 import {uint8ArrayToHex} from '../../@utils/index.js';
 import {useToast} from '../@ui/toast.js';
 import {useInputModal} from '../@ui/use-input-modal.js';
@@ -29,15 +34,17 @@ export function MonoidScanStatePromptProgress({
   children,
   current,
   total,
+  showCount = total > 1,
 }: {
   children: string;
   current: number;
   total: number;
+  showCount?: boolean;
 }): ReactNode {
   return (
     <>
       {children}, hold tight...
-      {total > 1 && (
+      {showCount && (
         <>
           <br />
           <MonoidScanStatePromptContentHighlight>
@@ -69,7 +76,12 @@ type MonoidScanPromptCallback<TSafe extends boolean> = (
   applet: MonoidApplet,
   setStateContent: MonoidScanPromptSetStateContentCallback,
   hello: MonoidScanPromptHello<TSafe>,
+  signal: AbortSignal,
 ) => Promise<void>;
+
+type MonoidScanPromptValidateCard<TSafe extends boolean> = (
+  hello: MonoidScanPromptHello<TSafe>,
+) => void;
 
 /** The scan ended quietly because another page will handle the card. */
 export class MonoidScanRedirectError extends Error {
@@ -91,6 +103,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
   (
     initialStateContent: ReactNode,
     appletCallback: MonoidScanPromptCallback<TSafe>,
+    validateCard?: MonoidScanPromptValidateCard<TSafe>,
   ) => Promise<void>,
 ] {
   const {
@@ -111,6 +124,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
         ReactNode,
         MonoidScanPromptCallback<TSafe>,
         {resolve: () => void; reject: (error: unknown) => void},
+        MonoidScanPromptValidateCard<TSafe> | undefined,
       ]
     >();
 
@@ -152,8 +166,12 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
       return;
     }
 
-    const [initialStateContent, appletCallback, {resolve, reject}] =
-      appletCallbackAndPromise;
+    const [
+      initialStateContent,
+      appletCallback,
+      {resolve, reject},
+      validateCard,
+    ] = appletCallbackAndPromise;
 
     let retryStateContent = initialStateContent;
     let enteredPIN: {id: MonoidIdHex; pin: MonoidPIN} | undefined;
@@ -172,6 +190,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
     let disposed = false;
     const credentialsRequest = new AbortController();
     let pins: Partial<Record<MonoidIdHex, MonoidPIN>> = {};
+    let unlockedPINs: MonoidPINs | undefined;
     let stop: (() => Promise<void>) | undefined;
 
     const cancelled = (): Error =>
@@ -199,7 +218,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
         toast({
           message: errorMessage,
           color: 'danger',
-          icon: x,
+          icon: renderIcon(x),
           position: 'top',
           waitForKeyboard: false,
         });
@@ -265,6 +284,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
               id,
               pin,
               credentialsRequest.signal,
+              unlockedPINs,
             );
           } else {
             await monoidCredentialsStore.removePIN(
@@ -306,7 +326,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
       } else if (completed.type === 'uninitialized') {
         fail(cancelled());
         toast({
-          message: 'Initialize this card from Safe first.',
+          message: 'Initialize card from Safe',
           color: 'warning',
           position: 'top',
           waitForKeyboard: false,
@@ -348,6 +368,9 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
           if (disposed) {
             return;
           }
+
+          // Verify the intended card before sending any credentials or redirecting.
+          validateCard?.(hello);
 
           const id = uint8ArrayToHex(hello.id);
           const safe = includeSafe ? hello.safe : undefined;
@@ -421,7 +444,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
                 MonoidAppletInvalidPINError.is(error.source)
               ) {
                 if (error.source.tries === 0) {
-                  throw new MonoidCardError('Access PIN is blocked.', {
+                  throw new MonoidCardError('Access PIN blocked', {
                     cause: error,
                   });
                 }
@@ -457,7 +480,12 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
             return;
           }
 
-          await appletCallback(applet, setStateContent, hello);
+          await appletCallback(
+            applet,
+            setStateContent,
+            hello,
+            credentialsRequest.signal,
+          );
 
           if (disposed) {
             return;
@@ -472,6 +500,14 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
 
           if (error instanceof AppletNotFoundError) {
             update = undefined;
+            if (!ensureSetup) {
+              result = {
+                type: 'error',
+                error: new MonoidCardError('Monoid not installed'),
+                retry: false,
+              };
+              return;
+            }
             result = includeSafe
               ? {
                   type: 'redirect',
@@ -514,6 +550,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
             disposed ||
             !result ||
             result.type === 'success' ||
+            result.type === 'input' ||
             (result.type === 'error' &&
               (result.error instanceof IsoDepScanError ||
                 isCredentialRequestCancelled(result.error)))
@@ -522,33 +559,28 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
           }
 
           const failed =
-            result.type === 'error' ||
-            result.type === 'uninitialized' ||
-            (result.type === 'input' && result.message !== undefined);
+            result.type === 'error' || result.type === 'uninitialized';
 
           setState(failed ? 'error' : 'waiting');
 
-          if (result.type === 'input') {
-            setStateContent(
-              <>
-                {result.message && (
-                  <>
-                    {result.message}
-                    <br />
-                  </>
-                )}
-                Remove card to enter Access PIN
-              </>,
-            );
-          } else if (result.type === 'redirect') {
+          if (result.type === 'redirect') {
             setStateContent('Remove card to continue setup');
           } else if (result.type === 'uninitialized') {
-            setStateContent('Initialize this card from Safe first.');
+            setStateContent('Initialize card from Safe');
           } else {
             setStateContent(
-              result.error instanceof Error
-                ? result.error.message
-                : String(result.error),
+              result.error instanceof MonoidWrongCardError ? (
+                <>
+                  Wrong card, scan{' '}
+                  <MonoidScanStatePromptContentHighlight>
+                    {result.error.expectedId}
+                  </MonoidScanStatePromptContentHighlight>
+                </>
+              ) : result.error instanceof Error ? (
+                result.error.message
+              ) : (
+                String(result.error)
+              ),
             );
           }
 
@@ -567,6 +599,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
           return;
         }
 
+        unlockedPINs = saved;
         pins = {...saved};
       }
 
@@ -579,6 +612,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
       disposed = true;
       credentialsRequest.abort();
       pins = {};
+      unlockedPINs = undefined;
       enteredPIN = undefined;
       update = undefined;
       result = undefined;
@@ -607,7 +641,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
   return [
     pinInput,
     useCallback(
-      (initialStateContent, appletCallback) =>
+      (initialStateContent, appletCallback, validateCard) =>
         new Promise((resolve, reject) => {
           setState('hidden');
           setStateContent(initialStateContent);
@@ -616,6 +650,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
             initialStateContent,
             appletCallback,
             {resolve, reject},
+            validateCard,
           ]);
         }),
       [],

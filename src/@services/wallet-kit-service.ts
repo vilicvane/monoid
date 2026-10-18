@@ -1,7 +1,13 @@
 import type {IWalletKit, WalletKitTypes} from '@reown/walletkit';
+import {base58, base64} from '@scure/base';
 import {PAIRING_EVENTS} from '@walletconnect/core';
-import {getSdkError, parseUri} from '@walletconnect/utils';
-import {type Provider, Transaction, recoverAddress} from 'ethers';
+import {
+  getAccountsChains,
+  getSdkError,
+  parseAccountId,
+  parseUri,
+} from '@walletconnect/utils';
+import {type Provider, Transaction, hexlify, recoverAddress} from 'ethers';
 import {observable, reaction, runInAction} from 'mobx';
 import ms from 'ms';
 
@@ -10,7 +16,19 @@ import {
   getEvmCalldataAddresses,
   getEvmCalldataCalls,
 } from '../@lib/evm-calldata.js';
+import {
+  type SolanaSendOptions,
+  getSignedSolanaTransactionSignature,
+  sendSolanaTransaction,
+} from '../@lib/send-solana-transaction.js';
+import {verifySolanaSignature} from '../@lib/solana-signature.js';
+import type {SolanaRPCRequest} from '../@lib/solana-transaction-review.js';
+import {
+  addSolanaTransactionSignature,
+  parseSolanaTransaction,
+} from '../@lib/solana-transaction.js';
 import {getTypedDataAddresses} from '../@lib/typed-data-fields.js';
+import {normalizeWalletAddress} from '../@lib/wallet-address.js';
 import {
   type WalletConnectAuthenticationResult,
   buildWalletConnectAuthentication,
@@ -19,7 +37,9 @@ import {
 } from '../@lib/wallet-connect-authentication.js';
 import {
   WalletConnectRequestError,
+  type WalletConnectSolanaTransactionRequest,
   parseWalletConnectSignRequest,
+  parseWalletConnectSolanaTransactionRequest,
   parseWalletConnectTransactionRequest,
 } from '../@lib/wallet-connect-request.js';
 import {
@@ -27,9 +47,13 @@ import {
   getEvmTransactionAddresses,
 } from '../@lib/wallet-connect-transaction.js';
 import {
+  WALLET_CONNECT_ADDRESS_TYPES,
+  type WalletConnectAddressType,
   buildWalletConnectNamespaces,
+  getWalletConnectAddressType,
   parseWalletConnectUri,
 } from '../@lib/wallet-connect.js';
+import {getSolanaSignatureStatus} from '../@lib/watch-solana-transaction.js';
 
 import type {AddressBookService} from './address-book-service.js';
 import type {EvmCallHistoryService} from './evm-call-history-service.js';
@@ -44,18 +68,54 @@ export type WalletKitSession = Awaited<
 
 export function getWalletKitSessionAddresses(
   session: WalletKitSession,
+  switchable = false,
 ): string[] {
   const addresses = new Map<string, string>();
 
-  for (const namespace of Object.values(session.namespaces)) {
+  for (const [, namespace] of getSessionNamespaces(session, switchable)) {
     for (const account of namespace.accounts) {
-      const address = account.split(':')[2]!;
-      const identity = address.toLowerCase();
+      const {namespace: name, address} = parseAccountId(account);
+      const identity = `${name}:${name === 'eip155' ? normalizeWalletAddress(address) : address}`;
       if (!addresses.has(identity)) addresses.set(identity, address);
     }
   }
 
   return Array.from(addresses.values());
+}
+
+export function getWalletKitSessionAddressTypes(
+  session: WalletKitSession,
+  switchable = false,
+): WalletConnectAddressType[] {
+  return Array.from(
+    new Set(
+      getSessionNamespaces(session, switchable).flatMap(([name]) => {
+        const type = getNamespaceAddressType(name);
+        return type ? [type] : [];
+      }),
+    ),
+  );
+}
+
+function getSessionNamespaces(
+  session: WalletKitSession,
+  switchable: boolean,
+): [string, WalletKitSession['namespaces'][string]][] {
+  return Object.entries(session.namespaces).filter(
+    ([name, namespace]) =>
+      !switchable ||
+      (getNamespaceAddressType(name) !== undefined &&
+        namespace.accounts.length > 0 &&
+        namespace.events.includes('accountsChanged')),
+  );
+}
+
+function getNamespaceAddressType(
+  name: string,
+): WalletConnectAddressType | undefined {
+  return Object.entries(WALLET_CONNECT_ADDRESS_TYPES).find(
+    ([namespace]) => namespace === name.split(':')[0],
+  )?.[1];
 }
 
 export type WalletKitSessionRecord = {
@@ -70,6 +130,16 @@ export type WalletKitTransactionSubmission = {
   broadcast: boolean;
 };
 
+export type WalletKitSolanaTransactionSubmission = {
+  topic: string;
+  chainId: string;
+  address: string;
+  transaction: string;
+  signedTransaction: string;
+  sendOptions: SolanaSendOptions;
+  broadcast: boolean;
+};
+
 declare global {
   // eslint-disable-next-line @typescript-eslint/consistent-type-definitions
   interface StorageMapping {
@@ -77,6 +147,10 @@ declare global {
     walletKitTransactionSubmissions: Record<
       string,
       WalletKitTransactionSubmission
+    >;
+    walletKitSolanaTransactionSubmissions: Record<
+      string,
+      WalletKitSolanaTransactionSubmission
     >;
   }
 }
@@ -112,6 +186,11 @@ export class WalletKitService {
     deep: false,
   });
   private writingSubmissions = Promise.resolve();
+  private solanaTransactionSubmissions = observable.map<
+    number,
+    WalletKitSolanaTransactionSubmission
+  >([], {deep: false});
+  private writingSolanaSubmissions = Promise.resolve();
 
   constructor(
     private kit: IWalletKit,
@@ -121,11 +200,18 @@ export class WalletKitService {
     private transactionHistory: TransactionHistoryService,
     records: Record<string, WalletKitSessionRecord> = {},
     submissions: StorageMapping['walletKitTransactionSubmissions'] = {},
+    solanaSubmissions: StorageMapping['walletKitSolanaTransactionSubmissions'] = {},
   ) {
     runInAction(() => {
       this.sessionRecords.replace(records);
       this.transactionSubmissions.replace(
         Object.entries(submissions).map(([id, submission]) => [
+          Number(id),
+          submission,
+        ]),
+      );
+      this.solanaTransactionSubmissions.replace(
+        Object.entries(solanaSubmissions).map(([id, submission]) => [
           Number(id),
           submission,
         ]),
@@ -203,8 +289,61 @@ export class WalletKitService {
     return this.respondRequest(id, signature);
   }
 
+  approveSolanaTransactionRequest(
+    id: number,
+    topic: string,
+    payload: WalletConnectSolanaTransactionRequest,
+    signed: {address: string; signature: string}[],
+    rpc?: SolanaRPCRequest,
+  ): Promise<boolean> {
+    return this.withRequestResponse(id, () =>
+      this.sendSolanaTransactionResponse(id, topic, payload, signed, rpc),
+    );
+  }
+
+  getSolanaTransactionSubmission(
+    id: number,
+  ): WalletKitSolanaTransactionSubmission | undefined {
+    return this.solanaTransactionSubmissions.get(id);
+  }
+
+  resumeSolanaTransactionRequest(
+    id: number,
+    topic: string,
+    rpc?: SolanaRPCRequest,
+  ): Promise<boolean> {
+    const submission = this.solanaTransactionSubmissions.get(id);
+    if (!submission) throw new Error('No signed transaction is available.');
+    const transaction = parseSolanaTransaction(submission.signedTransaction);
+    const {address, chainId, sendOptions} = submission;
+    const signature = base58.encode(
+      transaction.signatures[transaction.signerAddresses.indexOf(address)],
+    );
+
+    return this.approveSolanaTransactionRequest(
+      id,
+      topic,
+      {
+        method: 'solana_signAndSendTransaction',
+        chainId,
+        sendOptions,
+        transactions: [
+          {
+            transaction: parseSolanaTransaction(submission.transaction),
+            addresses: [address],
+          },
+        ],
+      },
+      [{address, signature}],
+      rpc,
+    );
+  }
+
   async rejectRequest(id: number): Promise<void> {
-    if (this.transactionSubmissions.has(id)) {
+    if (
+      this.transactionSubmissions.has(id) ||
+      this.solanaTransactionSubmissions.has(id)
+    ) {
       await this.responses.get(id);
       return;
     }
@@ -413,6 +552,30 @@ export class WalletKitService {
       }
     });
     if (changed) void this.saveTransactionSubmissions().catch(console.error);
+
+    let solanaChanged = false;
+    runInAction(() => {
+      for (const id of this.solanaTransactionSubmissions.keys()) {
+        if (!this.requests.has(id) && !this.responses.has(id)) {
+          this.solanaTransactionSubmissions.delete(id);
+          solanaChanged = true;
+        }
+      }
+    });
+    if (solanaChanged)
+      void this.saveSolanaTransactionSubmissions().catch(console.error);
+  }
+
+  private saveSolanaTransactionSubmissions(): Promise<void> {
+    this.writingSolanaSubmissions = this.writingSolanaSubmissions
+      .catch(() => {})
+      .then(async () => {
+        await this.storage.set(
+          'walletKitSolanaTransactionSubmissions',
+          Object.fromEntries(this.solanaTransactionSubmissions),
+        );
+      });
+    return this.writingSolanaSubmissions;
   }
 
   private async sendRequestResponse(
@@ -423,17 +586,22 @@ export class WalletKitService {
     const request = this.requests.get(id);
     if (!request) return false;
 
+    let result: string | {signature: string} | undefined = signature;
     if (signature !== undefined) {
       const payload = parseWalletConnectSignRequest(
         request,
         this.sessions.get(request.topic)!,
       );
-      if (
-        recoverAddress(payload.digest, signature).toLowerCase() !==
-        payload.address.toLowerCase()
-      ) {
+      const valid =
+        payload.method === 'solana_signMessage'
+          ? verifySolanaSignature(payload.message, signature, payload.address)
+          : recoverAddress(payload.digest, signature).toLowerCase() ===
+            payload.address.toLowerCase();
+      if (!valid) {
         throw new Error('The signature does not match the requested account.');
       }
+
+      if (payload.method === 'solana_signMessage') result = {signature};
 
       // The signature is complete even if publishing its response needs a retry.
       if (payload.method === 'eth_signTypedData_v4') {
@@ -443,12 +611,168 @@ export class WalletKitService {
       }
     }
 
-    return this.publishRequestResponse(request, signature);
+    return this.publishRequestResponse(request, result);
+  }
+
+  private prepareSolanaTransactionResponse(
+    id: number,
+    topic: string,
+    reviewed: WalletConnectSolanaTransactionRequest,
+    signed: {address: string; signature: string}[],
+  ):
+    | {
+        request: WalletKitTypes.SessionRequest;
+        payload: WalletConnectSolanaTransactionRequest;
+        transactions: string[];
+      }
+    | undefined {
+    this.refreshSessions();
+    const request = this.requests.get(id);
+    if (!request) return undefined;
+    if (request.topic !== topic) {
+      throw new WalletConnectRequestError(
+        'This session is not authorized.',
+        4100,
+      );
+    }
+
+    const payload = parseWalletConnectSolanaTransactionRequest(
+      request,
+      this.sessions.get(request.topic)!,
+    );
+
+    if (
+      payload.method !== reviewed.method ||
+      payload.chainId !== reviewed.chainId ||
+      (payload.method === 'solana_signAndSendTransaction' &&
+        reviewed.method === 'solana_signAndSendTransaction' &&
+        JSON.stringify(payload.sendOptions) !==
+          JSON.stringify(reviewed.sendOptions)) ||
+      payload.transactions.length !== reviewed.transactions.length ||
+      payload.transactions.some(
+        ({transaction}, index) =>
+          hexlify(transaction.bytes) !==
+          hexlify(reviewed.transactions[index].transaction.bytes),
+      )
+    ) {
+      throw new Error('The transaction no longer matches the request.');
+    }
+
+    if (signed.length !== payload.transactions.length) {
+      throw new Error(
+        'The signatures do not match the requested transactions.',
+      );
+    }
+
+    const transactions = payload.transactions.map(
+      ({transaction, addresses}, index) => {
+        const {address, signature} = signed[index];
+
+        if (
+          !addresses.includes(address) ||
+          !reviewed.transactions[index].addresses.includes(address)
+        ) {
+          throw new WalletConnectRequestError(
+            'This transaction signer is not authorized.',
+            4100,
+          );
+        }
+
+        return addSolanaTransactionSignature(transaction, address, signature);
+      },
+    );
+
+    return {request, payload, transactions};
+  }
+
+  private async sendSolanaTransactionResponse(
+    id: number,
+    topic: string,
+    reviewed: WalletConnectSolanaTransactionRequest,
+    signed: {address: string; signature: string}[],
+    rpc?: SolanaRPCRequest,
+  ): Promise<boolean> {
+    const validate = (): ReturnType<
+      WalletKitService['prepareSolanaTransactionResponse']
+    > => this.prepareSolanaTransactionResponse(id, topic, reviewed, signed);
+    const prepared = validate();
+    if (!prepared) return false;
+    const {request, payload, transactions} = prepared;
+
+    if (payload.method === 'solana_signAndSendTransaction') {
+      const signedTransaction = transactions[0];
+      const signature = getSignedSolanaTransactionSignature(signedTransaction);
+      let submission = this.solanaTransactionSubmissions.get(id);
+      if (
+        submission &&
+        (submission.topic !== topic ||
+          submission.chainId !== payload.chainId ||
+          submission.address !== signed[0].address ||
+          submission.signedTransaction !== signedTransaction ||
+          JSON.stringify(submission.sendOptions) !==
+            JSON.stringify(payload.sendOptions))
+      ) {
+        throw new Error('Retry the transaction that was already submitted.');
+      }
+      if (!submission) {
+        submission = {
+          topic,
+          chainId: payload.chainId,
+          address: signed[0].address,
+          transaction: base64.encode(payload.transactions[0].transaction.bytes),
+          signedTransaction,
+          sendOptions: payload.sendOptions,
+          broadcast: false,
+        };
+        runInAction(() =>
+          this.solanaTransactionSubmissions.set(id, submission!),
+        );
+      }
+
+      // Persist the same bytes for retries, including after a lost RPC response.
+      await this.saveSolanaTransactionSubmissions();
+      if (!submission.broadcast) {
+        if (!rpc)
+          throw new Error('Connect to the network to retry this transaction.');
+        const isAccepted = async (): Promise<boolean> =>
+          (await getSolanaSignatureStatus(rpc, signature)) !== null;
+        if (!(await isAccepted())) {
+          if (!validate()) return false;
+          try {
+            await sendSolanaTransaction(
+              signedTransaction,
+              rpc,
+              payload.sendOptions,
+            );
+          } catch (error) {
+            if (!(await isAccepted().catch(() => false))) throw error;
+          }
+        }
+        submission = {...submission, broadcast: true};
+        runInAction(() =>
+          this.solanaTransactionSubmissions.set(id, submission!),
+        );
+        await this.saveSolanaTransactionSubmissions();
+      }
+
+      if (!validate()) return false;
+      return this.publishRequestResponse(request, {signature});
+    }
+
+    return this.publishRequestResponse(
+      request,
+      payload.method === 'solana_signTransaction'
+        ? {signature: signed[0].signature, transaction: transactions[0]}
+        : {transactions},
+    );
   }
 
   private async publishRequestResponse(
     request: WalletKitTypes.SessionRequest,
-    result?: string,
+    result?:
+      | string
+      | {signature: string; transaction?: string}
+      | {transactions: string[]},
   ): Promise<boolean> {
     const {id} = request;
     try {
@@ -585,11 +909,8 @@ export class WalletKitService {
   }
 
   canSwitchAccount(topic: string): boolean {
-    const namespace = this.sessions.get(topic)?.namespaces.eip155;
-    return (
-      !!namespace?.accounts.length &&
-      namespace.events.includes('accountsChanged')
-    );
+    const session = this.sessions.get(topic);
+    return !!session && getSessionNamespaces(session, true).length > 0;
   }
 
   async switchAccounts(
@@ -605,36 +926,49 @@ export class WalletKitService {
     }
 
     const identities = new Set<string>();
+    const types = getWalletKitSessionAddressTypes(session, true);
     const selected = addresses.filter(address => {
-      const identity = address.toLowerCase();
+      const type = getWalletConnectAddressType(address);
+      if (!type || !types.includes(type)) {
+        throw new Error('This account is not supported by the session.');
+      }
+      const identity = normalizeWalletAddress(address);
       if (identities.has(identity)) return false;
       identities.add(identity);
       return true;
     });
     if (!selected.length) throw new Error('Choose at least one account.');
 
-    const namespace = session.namespaces.eip155!;
-    const chainId = namespace.accounts[0]!.split(':').slice(0, 2).join(':');
-    const chains =
-      namespace.chains ??
-      Array.from(
-        new Set(
-          namespace.accounts.map(account =>
-            account.split(':').slice(0, 2).join(':'),
+    const namespaces = {...session.namespaces};
+    const events = getSessionNamespaces(session, true).map(
+      ([name, namespace]) => {
+        const type = getNamespaceAddressType(name)!;
+        const accounts = selected.filter(
+          address => getWalletConnectAddressType(address) === type,
+        );
+        if (!accounts.length) {
+          throw new Error('Choose at least one account for each network.');
+        }
+        const accountChains = Array.from(
+          new Set(getAccountsChains(namespace.accounts)),
+        );
+        const chains = namespace.chains ?? accountChains;
+
+        namespaces[name] = {
+          ...namespace,
+          accounts: chains.flatMap(chain =>
+            accounts.map(address => `${chain}:${address}`),
           ),
-        ),
-      );
-    const accounts = chains.flatMap(chain =>
-      selected.map(address => `${chain}:${address}`),
+        };
+
+        return {chainId: accountChains[0]!, accounts};
+      },
     );
 
     try {
       const {acknowledged} = await this.kit.updateSession({
         topic,
-        namespaces: {
-          ...session.namespaces,
-          eip155: {...namespace, accounts},
-        },
+        namespaces,
       });
       onWaitingForAcknowledgement?.();
       await acknowledged();
@@ -647,11 +981,13 @@ export class WalletKitService {
       throw new Error('Session no longer available.');
     this.recordActivity(topic);
 
-    await this.kit.emitSessionEvent({
-      topic,
-      chainId,
-      event: {name: 'accountsChanged', data: selected},
-    });
+    for (const {chainId, accounts} of events) {
+      await this.kit.emitSessionEvent({
+        topic,
+        chainId,
+        event: {name: 'accountsChanged', data: accounts},
+      });
+    }
   }
 
   private refreshSessions(): void {
@@ -739,9 +1075,10 @@ export class WalletKitService {
     callHistory: EvmCallHistoryService,
     transactionHistory: TransactionHistoryService,
   ): Promise<WalletKitService> {
-    const [records, submissions] = await Promise.all([
+    const [records, submissions, solanaSubmissions] = await Promise.all([
       storage.get('walletKitSessionRecords'),
       storage.get('walletKitTransactionSubmissions'),
+      storage.get('walletKitSolanaTransactionSubmissions'),
     ]);
     return new WalletKitService(
       kit,
@@ -751,6 +1088,7 @@ export class WalletKitService {
       transactionHistory,
       records ?? {},
       submissions ?? {},
+      solanaSubmissions ?? {},
     );
   }
 

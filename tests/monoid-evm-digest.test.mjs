@@ -158,7 +158,7 @@ test('explains a missing card key during lookup or signing and allows another ca
     await assert.rejects(
       signEvmDigest(applet, key, digest, address),
       error =>
-        error.message === 'Account not on this card.' && error.cause === cause,
+        error.message === 'Account not on this card' && error.cause === cause,
     );
 
     applet[operation] = original;

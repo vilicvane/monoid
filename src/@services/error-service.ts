@@ -1,5 +1,7 @@
 import type {UseIonAlertResult, UseIonToastResult} from '@ionic/react';
-import bug from 'lucide-static/icons/bug.svg';
+import {Bug as bug} from 'lucide-react';
+
+import {renderIcon} from '../@lib/render-icon.js';
 
 import {isCredentialRequestCancelled} from './monoid-credentials-store.js';
 
@@ -40,7 +42,7 @@ export class ErrorService {
 
     void this.presentToast?.({
       cssClass: 'error-toast',
-      icon: bug,
+      icon: renderIcon(bug),
       header: message ?? 'An error occurred',
       message: error instanceof Error ? error.message : String(error),
       duration: ERROR_TOAST_DURATION,

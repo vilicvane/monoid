@@ -10,6 +10,7 @@ import {SessionSwitchView} from './views/session-switch-view.js';
 import {SessionView} from './views/session-view.js';
 import {SessionsRequestFab} from './views/sessions-request-fab.js';
 import {SessionsView} from './views/sessions-view.js';
+import {SolanaTransactionView} from './views/solana-transaction-view.js';
 import {TransactionHistoryView} from './views/transaction-history-view.js';
 import {TransactionReplacementView} from './views/transaction-replacement-view.js';
 import {TransactionView} from './views/transaction-view.js';
@@ -56,6 +57,10 @@ export const Views = (): ReactNode => {
       <Route
         view={router.sessions.transaction.$view({parallel: true})}
         component={TransactionView}
+      />
+      <Route
+        view={router.sessions.solanaTransaction.$view({parallel: true})}
+        component={SolanaTransactionView}
       />
       <Route
         view={router.sessions.session.$exact.$view()}

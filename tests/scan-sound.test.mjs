@@ -290,7 +290,7 @@ test('interrupted fade still closes without a source end event', async t => {
   await flush();
 
   stop();
-  t.mock.timers.tick(1000);
+  t.mock.timers.tick(2000);
 
   assert.equal(contexts[0].state, 'closed');
   assert.equal(contexts[0].close.mock.callCount(), 1);

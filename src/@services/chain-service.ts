@@ -71,6 +71,20 @@ export class ChainService {
   }
 
   getTransactionExplorerURL(chainId: string, hash: string): string | undefined {
+    const cluster =
+      chainId === 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
+        ? ''
+        : chainId === 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'
+          ? 'devnet'
+          : chainId === 'solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z'
+            ? 'testnet'
+            : undefined;
+    if (cluster !== undefined) {
+      const url = new URL(`https://explorer.solana.com/tx/${hash}`);
+      if (cluster) url.searchParams.set('cluster', cluster);
+      return url.href;
+    }
+
     const explorer = this.explorers.get(chainId);
     return explorer ? `${explorer}/tx/${hash}` : undefined;
   }

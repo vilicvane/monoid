@@ -1,11 +1,11 @@
-import {IonIcon} from '@ionic/react';
 import classNames from 'classNames';
-import check from 'lucide-static/icons/check.svg';
+import {Check as check} from 'lucide-react';
 import type {InputHTMLAttributes, ReactNode} from 'react';
 import {styled} from 'styled-components';
 import {UnmountAnimationClone} from 'unmount-animation-clone';
 
 import {fadeOutAnimationCSS} from '../@animations.js';
+import {AppIcon} from '../@ui/app-icon.js';
 
 import {KeyTag} from './key-tags.js';
 
@@ -82,7 +82,7 @@ export const KeyCheckbox = ({
     {count === undefined ? (
       <>
         <Input {...props} type="checkbox" checked={checked} />
-        {checked && <IonIcon icon={check} aria-hidden="true" />}
+        {checked && <AppIcon icon={check} aria-hidden="true" />}
       </>
     ) : (
       <UnmountAnimationClone>

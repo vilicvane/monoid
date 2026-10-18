@@ -9,13 +9,14 @@ import {Interface} from 'ethers';
 import {getAddressSeverity} from '../.bld/app/@lib/address-status.js';
 // eslint-disable-next-line @mufan/scoped-modules -- Test token metadata without platform services.
 import {
-  formatTokenAmount,
   getErc20AmountIndex,
   getErc20CallTarget,
   getEvmTokenAddressKind,
   parseEvmTokenList,
   readEvmToken,
 } from '../.bld/app/@lib/evm-token.js';
+// eslint-disable-next-line @mufan/scoped-modules -- Test exact token formatting without platform services.
+import {formatTokenAmount} from '../.bld/app/@lib/format-decimal.js';
 
 const TOKEN = {
   chainId: 1,

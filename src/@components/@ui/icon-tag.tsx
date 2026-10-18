@@ -4,6 +4,8 @@ import {css, styled} from 'styled-components';
 import {TAG_HEIGHT, WhiteTag} from './tag.js';
 
 export const iconTagCSS = css`
+  --icon-stroke-width: 1;
+
   display: inline-flex;
   align-self: flex-start;
   align-items: center;

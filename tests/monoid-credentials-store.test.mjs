@@ -766,12 +766,13 @@ test('clear failure rejects without leaking native details or falling back to ot
   assert.deepEqual(storage.calls, []);
 });
 
-test('storage initialization awaits creation and legacy PIN deletion while preserving other data', async () => {
+test('storage initialization removes legacy PINs and backup progress while preserving other data', async () => {
   const created = deferred();
   const cleaned = deferred();
   const wallets = [{id: 'wallet-fixture'}];
   const monoids = [{id: CARD_ID}];
   storage.values.set('monoidPINs', {[CARD_ID]: PIN});
+  storage.values.set('cardBackup', {items: []});
   storage.values.set('wallets', wallets);
   storage.values.set('monoids', monoids);
   storage.onCreate = () => created.promise;
@@ -792,6 +793,7 @@ test('storage initialization awaits creation and legacy PIN deletion while prese
   cleaned.resolve();
   const service = await initializing;
   assert.equal(storage.values.has('monoidPINs'), false);
+  assert.equal(storage.values.has('cardBackup'), false);
   assert.equal(storage.values.get('wallets'), wallets);
   assert.equal(storage.values.get('monoids'), monoids);
   assert.equal(await service.get('wallets'), wallets);

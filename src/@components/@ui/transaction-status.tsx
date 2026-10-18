@@ -1,13 +1,15 @@
-import {IonIcon} from '@ionic/react';
-import arrowRightLeft from 'lucide-static/icons/arrow-right-left.svg';
-import check from 'lucide-static/icons/check.svg';
-import x from 'lucide-static/icons/x.svg';
+import {
+  ArrowRightLeft as arrowRightLeft,
+  Check as check,
+  X as x,
+} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import type {EvmTransactionConfirmation} from '../../@lib/watch-evm-transaction.js';
 import {popInAnimationCSS} from '../@animations.js';
 
+import {AppIcon} from './app-icon.js';
 import {LoadingSpinner} from './loading-spinner.js';
 
 type Status = EvmTransactionConfirmation['status'];
@@ -62,7 +64,7 @@ export function TransactionStatus({
       {status === 'pending' ? (
         <LoadingSpinner />
       ) : (
-        <IonIcon
+        <AppIcon
           icon={
             status === 'confirmed'
               ? check

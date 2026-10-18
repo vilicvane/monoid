@@ -1,6 +1,5 @@
-import {IonIcon} from '@ionic/react';
 import {formatUnits} from 'ethers';
-import list from 'lucide-static/icons/list.svg';
+import {List as list} from 'lucide-react';
 import {type ReactNode, useEffect, useState} from 'react';
 import {css, styled} from 'styled-components';
 
@@ -19,6 +18,7 @@ import {
   type GasHistory,
 } from '../../@services/index.js';
 
+import {AppIcon} from './app-icon.js';
 import {
   DetailsPopup,
   DetailsPopupDivider,
@@ -199,7 +199,7 @@ export const EvmGasDetails = ({
           aria-haspopup="dialog"
           onClick={() => setShowDetails(true)}
         >
-          <IonIcon icon={list} aria-hidden="true" />
+          <AppIcon icon={list} aria-hidden="true" />
         </DetailsButton>
       </InfoSectionHeader>
       {showFees && (

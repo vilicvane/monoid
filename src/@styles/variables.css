@@ -2,6 +2,8 @@
 http://ionicframework.com/docs/theming/ */
 
 :root {
+  --icon-stroke-width: 1.5;
+
   --view-inset-top: env(safe-area-inset-top);
   --view-inset-bottom: max(3px, env(safe-area-inset-bottom));
   --view-inset-left: env(safe-area-inset-left);

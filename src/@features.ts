@@ -1,7 +1,7 @@
 export const FEATURES = [
   {
     route: 'sessions',
-    name: 'Sessions',
+    name: 'Wallet Connect',
     description: 'Manage connected apps and sites.',
   },
   {

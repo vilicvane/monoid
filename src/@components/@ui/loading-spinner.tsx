@@ -1,9 +1,10 @@
-import {IonIcon} from '@ionic/react';
-import loaderCircle from 'lucide-static/icons/loader-circle.svg';
+import {LoaderCircle as loaderCircle} from 'lucide-react';
 import type {ComponentProps, ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import {spinAnimationCSS} from '../@animations.js';
+
+import {AppIcon} from './app-icon.js';
 
 const Container = styled.span.attrs({
   'aria-hidden': true,
@@ -16,7 +17,7 @@ const Container = styled.span.attrs({
   pointer-events: none;
 `;
 
-const Icon = styled(IonIcon)<{$paused: boolean}>`
+const Icon = styled(AppIcon)<{$paused: boolean}>`
   ${spinAnimationCSS}
   width: 100%;
   height: 100%;

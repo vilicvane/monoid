@@ -123,6 +123,7 @@ const ViewKey = x.union([
 
 export type MonoidAppletKey = x.TypeOf<typeof Key>;
 export type MonoidAppletSECP256K1Key = x.TypeOf<typeof KeySECP256K1>;
+export type MonoidAppletED25519Key = x.TypeOf<typeof KeyED25519>;
 
 export const MonoidAppletInvalidPINError = x.object({
   code: x.literal('INVALID_PIN'),

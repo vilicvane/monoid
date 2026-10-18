@@ -1,6 +1,4 @@
-import {IonIcon} from '@ionic/react';
 import {MaxUint256} from 'ethers';
-import coins from 'lucide-static/icons/coins.svg';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useState} from 'react';
 import {styled} from 'styled-components';
@@ -10,38 +8,21 @@ import {
   type AddressKind,
   getAddressSeverity,
 } from '../../@lib/address-status.js';
-import {
-  type EvmToken,
-  formatTokenAmount,
-  getEvmTokenAddressKind,
-} from '../../@lib/evm-token.js';
+import {type EvmToken, getEvmTokenAddressKind} from '../../@lib/evm-token.js';
+import {formatTokenAmount} from '../../@lib/format-decimal.js';
 
 import {AddressMarkControl} from './address-mark-control.js';
 import {AddressMarker} from './address-marker.js';
 import {
   DetailsPopup,
   DetailsPopupDivider,
-  DetailsPopupHeader,
   DetailsPopupTitle,
-  detailsPopupLogoCSS,
 } from './details-popup.js';
 import {FormattedNumber} from './formatted-number.js';
 import {IconTag, IconTagName} from './icon-tag.js';
 import {InfoSectionItemLabel, InfoSectionRow} from './info-section.js';
 import {CenteredPopupAddress} from './popup-address.js';
-
-const Logo = styled.img`
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  object-fit: contain;
-`;
-
-const DetailsHeader = styled(DetailsPopupHeader)`
-  > ${Logo} {
-    ${detailsPopupLogoCSS}
-  }
-`;
+import {TokenDetailsHeader, TokenLogo} from './token-logo.js';
 
 const Title = styled(DetailsPopupTitle)<{$color?: string}>`
   color: ${({$color}) => $color ?? 'inherit'};
@@ -61,7 +42,7 @@ const Label = styled.span`
   font-size: 16px;
   text-align: left;
 
-  > ${Logo} {
+  > ${TokenLogo} {
     flex-shrink: 0;
     width: 24px;
     height: 24px;
@@ -72,21 +53,6 @@ const LabelName = styled(Title).attrs({as: 'span'})`
   font: inherit;
   text-align: inherit;
 `;
-
-function TokenLogo({token}: {token: EvmToken}): ReactNode {
-  const [failedLogo, setFailedLogo] = useState<string>();
-
-  return token.logoURI && token.logoURI !== failedLogo ? (
-    <Logo
-      src={token.logoURI}
-      alt=""
-      referrerPolicy="no-referrer"
-      onError={() => setFailedLogo(token.logoURI)}
-    />
-  ) : (
-    <Logo as={IonIcon} icon={coins} aria-hidden="true" />
-  );
-}
 
 const TokenIdentity = observer(function TokenIdentity({
   token,
@@ -113,19 +79,19 @@ const TokenIdentity = observer(function TokenIdentity({
 
   return variant === 'label' ? (
     <>
-      <TokenLogo token={token} />
+      <TokenLogo src={token.logoURI} />
       <LabelName $color={color}>{token.name}</LabelName>
       {marker}
     </>
   ) : variant === 'details' ? (
-    <DetailsHeader>
-      <TokenLogo token={token} />
+    <TokenDetailsHeader>
+      <TokenLogo src={token.logoURI} />
       <Title $color={color}>{token.name}</Title>
       {marker}
-    </DetailsHeader>
+    </TokenDetailsHeader>
   ) : (
     <>
-      <TokenLogo token={token} />
+      <TokenLogo src={token.logoURI} />
       <IconTagName suffix={marker} color={color}>
         {token.name}
       </IconTagName>

@@ -1,12 +1,14 @@
-import {IonIcon} from '@ionic/react';
 import type {WalletKitTypes} from '@reown/walletkit';
-import badgeCheck from 'lucide-static/icons/badge-check.svg';
-import shieldAlert from 'lucide-static/icons/shield-alert.svg';
-import shieldQuestion from 'lucide-static/icons/shield-question.svg';
+import {
+  BadgeCheck as badgeCheck,
+  ShieldAlert as shieldAlert,
+  ShieldQuestion as shieldQuestion,
+} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import {parseHttpUrl} from '../../../@lib/site-logo.js';
+import {AppIcon} from '../../@ui/app-icon.js';
 import {IconTag, IconTagName, IconTagSection} from '../../@ui/icon-tag.js';
 import {SiteLogo} from '../../@ui/site-logo.js';
 import {TAG_HEIGHT} from '../../@ui/tag.js';
@@ -48,7 +50,7 @@ const Domain = styled(SiteText)`
   }
 `;
 
-const VerificationIcon = styled(IonIcon)<{
+const VerificationIcon = styled(AppIcon)<{
   $valid: boolean;
   $dangerous: boolean;
 }>`
@@ -75,7 +77,7 @@ const Verification = styled(SiteText)<{$dangerous: boolean}>`
         : 'var(--color-text-secondary)'};
   }
 
-  ion-icon {
+  .lucide {
     flex-shrink: 0;
     font-size: 18px;
   }

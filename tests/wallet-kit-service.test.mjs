@@ -1,20 +1,27 @@
 import assert from 'node:assert/strict';
+import {generateKeyPairSync, sign as signBytes} from 'node:crypto';
 import {EventEmitter, getEventListeners} from 'node:events';
 import {mock, test} from 'node:test';
 
 import {buildAuthObject, formatMessage} from '@walletconnect/utils';
+import {base58} from '@scure/base';
 import {Wallet} from 'ethers';
 import {reaction} from 'mobx';
 
 // eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Import the service without starting platform services.
 import {
   WalletKitService,
+  getWalletKitSessionAddressTypes,
   getWalletKitSessionAddresses,
 } from '../.bld/app/@services/wallet-kit-service.js';
 
 const TOPIC = 'a'.repeat(64);
 const OTHER_TOPIC = 'c'.repeat(64);
 const ADDRESS = `0x${'ab'.repeat(20)}`;
+const SOLANA_CHAIN = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
+const SOLANA_DEVNET = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
+const SOLANA_ADDRESS = `Ab${'1'.repeat(41)}`;
+const OTHER_SOLANA_ADDRESS = `AB${'1'.repeat(41)}`;
 const uri = (topic = TOPIC) =>
   `wc:${topic}@2?relay-protocol=irn&symKey=${'b'.repeat(64)}`;
 const proposal = (topic = TOPIC, id = 1) => ({
@@ -179,6 +186,87 @@ test('session addresses deduplicate chains and namespaces while preserving first
     second,
     third,
   ]);
+});
+
+test('session accounts preserve Solana casing and expose only switchable namespace selections', () => {
+  const session = {
+    namespaces: {
+      eip155: {
+        accounts: [`eip155:1:${ADDRESS}`],
+        methods: [],
+        events: [],
+      },
+      solana: {
+        accounts: [
+          `${SOLANA_CHAIN}:${SOLANA_ADDRESS}`,
+          `${SOLANA_CHAIN}:${OTHER_SOLANA_ADDRESS}`,
+          `${SOLANA_DEVNET}:${SOLANA_ADDRESS}`,
+        ],
+        methods: [],
+        events: ['accountsChanged'],
+      },
+      [SOLANA_DEVNET]: {
+        accounts: [`${SOLANA_DEVNET}:${OTHER_SOLANA_ADDRESS}`],
+        methods: [],
+        events: ['accountsChanged'],
+      },
+      other: {
+        accounts: ['other:chain:Account'],
+        methods: [],
+        events: ['accountsChanged'],
+      },
+    },
+  };
+
+  assert.deepEqual(getWalletKitSessionAddresses(session), [
+    ADDRESS,
+    SOLANA_ADDRESS,
+    OTHER_SOLANA_ADDRESS,
+    'Account',
+  ]);
+  assert.deepEqual(getWalletKitSessionAddresses(session, true), [
+    SOLANA_ADDRESS,
+    OTHER_SOLANA_ADDRESS,
+  ]);
+  assert.deepEqual(getWalletKitSessionAddressTypes(session), ['evm', 'solana']);
+  assert.deepEqual(getWalletKitSessionAddressTypes(session, true), ['solana']);
+});
+
+test('Solana connection approval preserves account spelling and grants only implemented methods', async () => {
+  const state = setup();
+  const request = proposal();
+  request.params.requiredNamespaces = {};
+  request.params.optionalNamespaces = {
+    solana: {
+      chains: [SOLANA_CHAIN, SOLANA_DEVNET],
+      methods: ['solana_signMessage', 'solana_signTransaction'],
+      events: ['accountsChanged', 'chainChanged'],
+    },
+  };
+  await receiveProposal(state, request);
+
+  const session = await state.service.approve(request.id, [
+    SOLANA_ADDRESS,
+    OTHER_SOLANA_ADDRESS,
+  ]);
+
+  assert.deepEqual(session.namespaces, {
+    solana: {
+      chains: [SOLANA_CHAIN, SOLANA_DEVNET],
+      methods: ['solana_signMessage', 'solana_signTransaction'],
+      events: ['accountsChanged', 'chainChanged'],
+      accounts: [SOLANA_CHAIN, SOLANA_DEVNET].flatMap(chain => [
+        `${chain}:${SOLANA_ADDRESS}`,
+        `${chain}:${OTHER_SOLANA_ADDRESS}`,
+      ]),
+    },
+  });
+  assert.deepEqual(getWalletKitSessionAddresses(session), [
+    SOLANA_ADDRESS,
+    OTHER_SOLANA_ADDRESS,
+  ]);
+  assert.equal(state.service.canSwitchAccount(session.topic), true);
+  assert.equal(state.kit.respondSessionRequest.mock.callCount(), 0);
 });
 
 test('subscribes before pairing and accepts only the scanned topic', async () => {
@@ -962,6 +1050,174 @@ test('switch deduplicates selected account casing and removes unchecked accounts
   );
 });
 
+test('switch updates Solana accounts across chains without merging case-distinct addresses', async () => {
+  const namespace = {
+    accounts: [`${SOLANA_CHAIN}:${SOLANA_ADDRESS}`],
+    chains: [SOLANA_CHAIN, SOLANA_DEVNET],
+    events: ['accountsChanged'],
+    methods: [],
+  };
+  const {service, kit} = setup(
+    {[TOPIC]: {topic: TOPIC, namespaces: {solana: namespace}}},
+    {
+      [TOPIC]: {
+        connectedAt: 100_000,
+        lastActivityAt: 200_000,
+        verified: proposal().verifyContext.verified,
+      },
+    },
+  );
+
+  assert.equal(service.canSwitchAccount(TOPIC), true);
+  await service.switchAccounts(TOPIC, [
+    OTHER_SOLANA_ADDRESS,
+    SOLANA_ADDRESS,
+    OTHER_SOLANA_ADDRESS,
+  ]);
+
+  assert.deepEqual(service.sessions.get(TOPIC).namespaces.solana, {
+    ...namespace,
+    accounts: [SOLANA_CHAIN, SOLANA_DEVNET].flatMap(chain => [
+      `${chain}:${OTHER_SOLANA_ADDRESS}`,
+      `${chain}:${SOLANA_ADDRESS}`,
+    ]),
+  });
+  assert.deepEqual(kit.emitSessionEvent.mock.calls[0].arguments, [
+    {
+      topic: TOPIC,
+      chainId: SOLANA_CHAIN,
+      event: {
+        name: 'accountsChanged',
+        data: [OTHER_SOLANA_ADDRESS, SOLANA_ADDRESS],
+      },
+    },
+  ]);
+});
+
+test('mixed account switch preserves unsupported and fixed namespaces and separates account events', async () => {
+  const evm = {
+    accounts: [`eip155:1:${ADDRESS}`],
+    methods: ['personal_sign'],
+    events: ['accountsChanged'],
+  };
+  const solana = {
+    accounts: [`${SOLANA_CHAIN}:${SOLANA_ADDRESS}`],
+    methods: [],
+    events: ['accountsChanged'],
+  };
+  const fixed = {
+    accounts: [`eip155:137:${ADDRESS}`],
+    methods: [],
+    events: ['chainChanged'],
+  };
+  const other = {
+    accounts: ['other:chain:Account'],
+    methods: [],
+    events: ['accountsChanged'],
+  };
+  const {service, kit} = setup(
+    {
+      [TOPIC]: {
+        topic: TOPIC,
+        namespaces: {
+          'eip155:1': evm,
+          [SOLANA_CHAIN]: solana,
+          'eip155:137': fixed,
+          other,
+        },
+      },
+    },
+    {
+      [TOPIC]: {
+        connectedAt: 100_000,
+        lastActivityAt: 200_000,
+        verified: proposal().verifyContext.verified,
+      },
+    },
+  );
+  const chosen = `0x${'Cd'.repeat(20)}`;
+
+  await service.switchAccounts(TOPIC, [
+    chosen,
+    OTHER_SOLANA_ADDRESS,
+    chosen.toLowerCase(),
+  ]);
+
+  assert.equal(kit.updateSession.mock.callCount(), 1);
+  assert.deepEqual(service.sessions.get(TOPIC).namespaces, {
+    'eip155:1': {...evm, accounts: [`eip155:1:${chosen}`]},
+    [SOLANA_CHAIN]: {
+      ...solana,
+      accounts: [`${SOLANA_CHAIN}:${OTHER_SOLANA_ADDRESS}`],
+    },
+    'eip155:137': fixed,
+    other,
+  });
+  assert.deepEqual(
+    kit.emitSessionEvent.mock.calls.map(call => call.arguments[0]),
+    [
+      {
+        topic: TOPIC,
+        chainId: 'eip155:1',
+        event: {name: 'accountsChanged', data: [chosen]},
+      },
+      {
+        topic: TOPIC,
+        chainId: SOLANA_CHAIN,
+        event: {name: 'accountsChanged', data: [OTHER_SOLANA_ADDRESS]},
+      },
+    ],
+  );
+});
+
+test('account switch rejects invalid or unavailable account types and an empty namespace selection', async () => {
+  const solana = {
+    accounts: [`${SOLANA_CHAIN}:${SOLANA_ADDRESS}`],
+    methods: [],
+    events: ['accountsChanged'],
+  };
+  const evm = {
+    accounts: [`eip155:1:${ADDRESS}`],
+    methods: [],
+    events: ['accountsChanged'],
+  };
+  for (const {namespaces, addresses, error} of [
+    {namespaces: {solana}, addresses: [ADDRESS], error: /not supported/},
+    {
+      namespaces: {eip155: evm},
+      addresses: [SOLANA_ADDRESS],
+      error: /not supported/,
+    },
+    {namespaces: {solana}, addresses: ['invalid'], error: /not supported/},
+    {
+      namespaces: {solana, eip155: evm},
+      addresses: [SOLANA_ADDRESS],
+      error: /at least one account for each network/,
+    },
+    {
+      namespaces: {solana, eip155: evm},
+      addresses: [ADDRESS],
+      error: /at least one account for each network/,
+    },
+    {
+      namespaces: {solana, eip155: {...evm, events: []}},
+      addresses: [SOLANA_ADDRESS, ADDRESS],
+      error: /not supported/,
+    },
+  ]) {
+    const {service, kit, sessions} = setup({
+      [TOPIC]: {topic: TOPIC, namespaces},
+    });
+    const original = sessions[TOPIC];
+
+    await assert.rejects(service.switchAccounts(TOPIC, addresses), error);
+
+    assert.equal(kit.updateSession.mock.callCount(), 0);
+    assert.equal(kit.emitSessionEvent.mock.callCount(), 0);
+    assert.equal(service.sessions.get(TOPIC), original);
+  }
+});
+
 test('unsupported and missing sessions cannot send an account switch', async () => {
   for (const namespace of [
     undefined,
@@ -1368,6 +1624,112 @@ function setupSigning(
       data ? signTypedData(wallet, data) : wallet.signMessage(message),
   };
 }
+
+function setupSolanaSigning() {
+  const {privateKey, publicKey} = generateKeyPairSync('ed25519');
+  const address = base58.encode(
+    publicKey.export({format: 'der', type: 'spki'}).subarray(-32),
+  );
+  const message = new TextEncoder().encode('Hello from AppKit');
+  const request = sessionRequest(1, TOPIC, Math.floor(Date.now() / 1000) + 300);
+  request.params.chainId = SOLANA_CHAIN;
+  request.params.request = {
+    ...request.params.request,
+    method: 'solana_signMessage',
+    params: {pubkey: address, message: base58.encode(message)},
+  };
+  const session = {
+    topic: TOPIC,
+    expiry: Math.floor(Date.now() / 1000) + 3600,
+    namespaces: {
+      solana: {
+        chains: [SOLANA_CHAIN],
+        methods: ['solana_signMessage'],
+        events: [],
+        accounts: [`${SOLANA_CHAIN}:${address}`],
+      },
+    },
+  };
+  return {
+    ...setup({[TOPIC]: session}, {}, [request]),
+    request,
+    session,
+    signature: base58.encode(signBytes(null, message, privateKey)),
+    wrongSignature: base58.encode(
+      signBytes(null, new TextEncoder().encode('Other bytes'), privateKey),
+    ),
+  };
+}
+
+test('Solana responds with a verified signature object and retains the next queued request', async () => {
+  const {service, kit, requests, request, signature} = setupSolanaSigning();
+  const next = structuredClone(request);
+  next.id = 2;
+  requests.push(next);
+  kit.emit('session_request', next);
+  assert.equal(await service.approveRequest(request.id, signature), true);
+  assert.deepEqual(kit.respondSessionRequest.mock.calls[0].arguments[0], {
+    topic: TOPIC,
+    response: {id: request.id, jsonrpc: '2.0', result: {signature}},
+  });
+  assert.deepEqual(Array.from(service.requests.values()), [next]);
+});
+
+test('Solana rejects invalid signatures without publishing or consuming the request', async () => {
+  const {service, kit, signature, wrongSignature} = setupSolanaSigning();
+  for (const invalid of [
+    wrongSignature,
+    'not base58',
+    signature.slice(1),
+    base58.encode(new Uint8Array(64)),
+  ]) {
+    await assert.rejects(
+      service.approveRequest(1, invalid),
+      /signature does not match/,
+    );
+  }
+  assert.equal(kit.respondSessionRequest.mock.callCount(), 0);
+  assert.equal(service.requests.has(1), true);
+});
+
+test('Solana response retries revalidate the exact message and approved permissions', async () => {
+  for (const change of ['message', 'permission']) {
+    const {service, kit, request, session, signature} = setupSolanaSigning();
+    const failure = new Error('Relay unavailable.');
+    kit.respondSessionRequest.mock.mockImplementationOnce(async () => {
+      throw failure;
+    });
+    await assert.rejects(service.approveRequest(1, signature), failure);
+    if (change === 'message')
+      request.params.request.params.message = base58.encode(
+        new TextEncoder().encode('Changed message'),
+      );
+    else session.namespaces.solana.methods = [];
+    await assert.rejects(
+      service.approveRequest(1, signature),
+      change === 'message' ? /signature does not match/ : {code: 4100},
+    );
+    assert.equal(kit.respondSessionRequest.mock.callCount(), 1);
+    assert.equal(service.requests.has(1), true);
+  }
+});
+
+test('Solana requests support explicit rejection and stop responding after expiry', async () => {
+  const rejected = setupSolanaSigning();
+  await rejected.service.rejectRequest(1);
+  assert.equal(
+    rejected.kit.respondSessionRequest.mock.calls[0].arguments[0].response.error
+      .code,
+    5000,
+  );
+  for (const target of ['request', 'session']) {
+    const {service, kit, request, session, signature} = setupSolanaSigning();
+    if (target === 'request') request.params.request.expiryTimestamp = 1;
+    else session.expiry = 1;
+    assert.equal(await service.approveRequest(1, signature), false);
+    assert.equal(kit.respondSessionRequest.mock.callCount(), 0);
+  }
+});
 
 test('receiving or rejecting typed data does not record its addresses as signed', async () => {
   const {service, kit, request, addressBook} = setupSigning(

@@ -21,6 +21,11 @@ import {getEvmPermit2} from '../../@lib/evm-permit2.js';
 import {getEvmTokenAddressKind} from '../../@lib/evm-token.js';
 import {formatEvmTransactionError} from '../../@lib/evm-transaction-error.js';
 import {prepareEvmTransaction} from '../../@lib/prepare-evm-transaction.js';
+import {createSolanaRPC} from '../../@lib/solana-rpc.js';
+import {
+  type SolanaTransactionReview,
+  loadSolanaTransactionReviews,
+} from '../../@lib/solana-transaction-review.js';
 import {getTypedDataAddresses} from '../../@lib/typed-data-fields.js';
 import {
   type WalletConnectPreparedTransaction,
@@ -32,6 +37,7 @@ import {
 } from '../../@lib/wallet-connect-transaction.js';
 import type {Router} from '../../@routes.js';
 import {type AddressMark, getKeyWallets} from '../../@services/index.js';
+import {useSolanaTransactionSimulations} from '../@hooks/use-solana-transaction-simulations.js';
 import {getWalletSigningAccount} from '../@monoid/get-wallet-signing-account.js';
 import {AddressDetails} from '../@ui/address-details.js';
 import {AsyncButton, Button} from '../@ui/button.js';
@@ -40,7 +46,8 @@ import {
   EvmTransactionReview,
   TRANSACTION_TYPE_LABELS,
 } from '../@ui/evm-transaction-review.js';
-import {MessageContent} from '../@ui/message-content.js';
+import {LoadingSpinner} from '../@ui/loading-spinner.js';
+import {ErrorMessage, MessageContent} from '../@ui/message-content.js';
 import {
   View,
   ViewContent,
@@ -55,6 +62,7 @@ import {
   WalletConnectSignButton,
   type WalletConnectSigningState,
 } from './@sessions/wallet-connect-sign-button.js';
+import {WalletConnectSolanaTransactions} from './@sessions/wallet-connect-solana-transactions.js';
 import {WalletConnectTypedData} from './@sessions/wallet-connect-typed-data.js';
 
 const TransactionTypeLabel = styled.span`
@@ -69,6 +77,7 @@ export const WalletConnectRequestView = observer(
   ({view}: RouteComponentProps<Router['sessions']['request']>): ReactNode => {
     const {
       router,
+      walletKit,
       walletKitService,
       walletStorageService,
       addressBookService,
@@ -108,7 +117,30 @@ export const WalletConnectRequestView = observer(
         return {error: (error as Error).message};
       }
     });
-    const payload = review?.payload;
+    const parsedPayload = review?.payload;
+    const solanaPayload =
+      parsedPayload && 'transactions' in parsedPayload
+        ? parsedPayload
+        : undefined;
+    const payload =
+      parsedPayload && !('transactions' in parsedPayload)
+        ? parsedPayload
+        : undefined;
+    const [solanaAddresses, setSolanaAddresses] = useState(() => {
+      const submission = walletKitService.getSolanaTransactionSubmission(
+        view.id,
+      );
+      return submission
+        ? [submission.address]
+        : (solanaPayload?.transactions.map(({addresses}) =>
+            addresses.length === 1 ? addresses[0] : undefined,
+          ) ?? []);
+    });
+    const [solanaReview, setSolanaReview] = useState<{
+      reviews?: SolanaTransactionReview[];
+      error?: string;
+    }>();
+    const [solanaReviewAttempt, setSolanaReviewAttempt] = useState(0);
     const [transactionInput, setTransactionInput] = useState(() =>
       payload?.method === 'eth_sendTransaction'
         ? payload.transaction
@@ -136,8 +168,14 @@ export const WalletConnectRequestView = observer(
         session?.expiry ?? Infinity,
       ) * 1000;
     const available = !ended;
+    const solanaSimulations = useSolanaTransactionSimulations(
+      solanaPayload,
+      available && active,
+    );
     const retainTransaction =
-      !available && payload?.method === 'eth_sendTransaction';
+      !available &&
+      (payload?.method === 'eth_sendTransaction' ||
+        solanaPayload?.method === 'solana_signAndSendTransaction');
     const busy = state !== undefined;
     const currentPreparation =
       preparation?.input === transactionInput ? preparation : undefined;
@@ -152,7 +190,7 @@ export const WalletConnectRequestView = observer(
       payload?.method === 'eth_signTypedData_v4' &&
       payload.typedData.domain.chainId !== undefined
         ? `eip155:${BigInt(payload.typedData.domain.chainId)}`
-        : transactionChainId;
+        : (transactionChainId ?? solanaPayload?.chainId);
     const transactionTarget = transaction?.to ?? undefined;
     const transactionData =
       transaction?.data ?? (transaction ? '0x' : undefined);
@@ -169,6 +207,9 @@ export const WalletConnectRequestView = observer(
       ]),
     ];
     const submission = walletKitService.getTransactionSubmission(view.id);
+    const solanaSubmission = walletKitService.getSolanaTransactionSubmission(
+      view.id,
+    );
     const ownAddresses = new Set(
       walletStorageService.keys
         .flatMap(getKeyWallets)
@@ -211,12 +252,77 @@ export const WalletConnectRequestView = observer(
         : 'primary';
     const account =
       payload &&
-      getWalletSigningAccount(walletStorageService.keys, payload.address);
+      getWalletSigningAccount(
+        walletStorageService.keys,
+        payload.address,
+        payload.method === 'solana_signMessage' ? 'solana' : 'evm',
+      );
+    const signDisabled =
+      busy ||
+      (!account && !submission) ||
+      (payload?.method === 'eth_sendTransaction' && !decodedData);
     const nextId = Array.from(walletKitService.requests.values()).find(
       request =>
         request.id !== view.id &&
         !walletKitService.isRespondingToRequest(request.id),
     )?.id;
+
+    const missingSolanaSignature =
+      solanaPayload?.method === 'solana_signAndSendTransaction' &&
+      !!solanaAddresses[0] &&
+      solanaPayload.transactions[0].transaction.signerAddresses.some(
+        (address, index) =>
+          address !== solanaAddresses[0] &&
+          !solanaPayload.transactions[0].transaction.signatures[index].some(
+            Boolean,
+          ),
+      );
+    const solanaSignDisabled =
+      busy ||
+      missingSolanaSignature ||
+      solanaSimulations.pending ||
+      !solanaReview?.reviews ||
+      solanaAddresses.some(
+        address =>
+          !address ||
+          !getWalletSigningAccount(
+            walletStorageService.keys,
+            address,
+            'solana',
+          ),
+      );
+    const solanaSignColor =
+      solanaSimulations.results.some(
+        result => result?.status !== 'succeeded' || result.fee === undefined,
+      ) ||
+      solanaReview?.reviews?.some(review =>
+        review.instructions.some(
+          instruction =>
+            instruction.decoded.kind === 'unknown' ||
+            !!instruction.token?.warning,
+        ),
+      )
+        ? 'warning'
+        : 'primary';
+
+    useEffect(() => {
+      if (!solanaPayload || !available) return;
+      const controller = new AbortController();
+      setSolanaReview(undefined);
+      void loadSolanaTransactionReviews(
+        solanaPayload.transactions.map(item => item.transaction),
+        createSolanaRPC(solanaPayload.chainId, walletKit.core.projectId!),
+        controller.signal,
+      )
+        .then(reviews => {
+          if (!controller.signal.aborted) setSolanaReview({reviews});
+        })
+        .catch((error: unknown) => {
+          if (!controller.signal.aborted)
+            setSolanaReview({error: (error as Error).message});
+        });
+      return () => controller.abort();
+    }, [solanaPayload, available, solanaReviewAttempt, walletKit]);
 
     useEffect(() => {
       if (!transactionChainId || transactionData === undefined || !available)
@@ -349,6 +455,32 @@ export const WalletConnectRequestView = observer(
       [router, walletKitService, view],
     );
 
+    useEffect(
+      () =>
+        reaction(
+          () => walletKitService.getSolanaTransactionSubmission(view.id),
+          submission => {
+            if (
+              submission?.broadcast &&
+              !view.$leaving &&
+              view.$match.$exact.$active
+            ) {
+              router.sessions
+                .solanaTransaction({
+                  id: view.id,
+                  topic: submission.topic,
+                  chainId: submission.chainId,
+                  address: submission.address,
+                  signedTransaction: submission.signedTransaction,
+                })
+                .$replace();
+            }
+          },
+          {fireImmediately: true},
+        ),
+      [router, walletKitService, view],
+    );
+
     const complete = async (): Promise<void> => {
       if (view.$leaving || !view.$match.$exact.$active) return;
 
@@ -410,15 +542,25 @@ export const WalletConnectRequestView = observer(
       <View inert={!active}>
         <ViewHeader>
           <ViewHeaderTitle>
-            {request?.params.request.method === 'eth_sendTransaction'
+            {request?.params.request.method === 'eth_sendTransaction' ||
+            request?.params.request.method === 'solana_signAndSendTransaction'
               ? 'Send transaction'
-              : request?.params.request.method === 'eth_signTypedData_v4'
-                ? 'Sign typed data'
-                : 'Sign message'}
+              : request?.params.request.method === 'solana_signTransaction'
+                ? 'Sign transaction'
+                : request?.params.request.method ===
+                    'solana_signAllTransactions'
+                  ? 'Sign transactions'
+                  : request?.params.request.method === 'eth_signTypedData_v4'
+                    ? 'Sign typed data'
+                    : 'Sign message'}
           </ViewHeaderTitle>
         </ViewHeader>
         <ViewContent
           footerReveal="end"
+          footerRevealReady={
+            !solanaPayload ||
+            (!!solanaReview?.reviews && !solanaSimulations.pending)
+          }
           footer={
             (available || retainTransaction) && (
               <>
@@ -430,26 +572,64 @@ export const WalletConnectRequestView = observer(
                   </Button>
                 )}
                 {available &&
+                  solanaPayload &&
+                  (active ? (
+                    <WalletConnectSignButton
+                      key={solanaAddresses.join(':')}
+                      view={view}
+                      topic={request!.topic}
+                      payload={solanaPayload}
+                      selectedAddresses={solanaAddresses}
+                      disabled={solanaSignDisabled}
+                      color={solanaSignColor}
+                      onStateChange={setState}
+                      onComplete={complete}
+                    />
+                  ) : (
+                    <Button
+                      data-footer-action="sign"
+                      disabled={solanaSignDisabled}
+                      loading={busy}
+                      color={solanaSignColor}
+                    >
+                      {solanaPayload.method === 'solana_signAndSendTransaction'
+                        ? 'Send'
+                        : 'Sign'}
+                    </Button>
+                  ))}
+                {available && solanaReview?.error && (
+                  <Button
+                    footerReveal="always"
+                    onClick={() => setSolanaReviewAttempt(value => value + 1)}
+                  >
+                    Retry
+                  </Button>
+                )}
+                {available &&
                   signingPayload &&
                   (active ? (
                     <WalletConnectSignButton
-                      key={signingPayload.digest}
+                      key={
+                        signingPayload.method === 'solana_signMessage'
+                          ? hexlify(signingPayload.message)
+                          : signingPayload.digest
+                      }
                       view={view}
                       topic={request!.topic}
                       payload={signingPayload}
                       decodedData={decodedData}
-                      disabled={
-                        busy ||
-                        (!account && !submission) ||
-                        (payload?.method === 'eth_sendTransaction' &&
-                          !decodedData)
-                      }
+                      disabled={signDisabled}
                       color={signColor}
                       onStateChange={setState}
                       onComplete={complete}
                     />
                   ) : (
-                    <Button disabled loading={busy} color={signColor}>
+                    <Button
+                      data-footer-action="sign"
+                      disabled={signDisabled}
+                      loading={busy}
+                      color={signColor}
+                    >
                       {payload?.method === 'eth_sendTransaction'
                         ? 'Send'
                         : 'Sign'}
@@ -465,7 +645,7 @@ export const WalletConnectRequestView = observer(
                     Retry
                   </Button>
                 )}
-                {available && !submission && (
+                {available && !submission && !solanaSubmission && (
                   <AsyncButton
                     footerReveal="always"
                     color="neutral"
@@ -497,10 +677,47 @@ export const WalletConnectRequestView = observer(
             <ViewPlaceholder role="status">
               Request no longer available
             </ViewPlaceholder>
+          ) : solanaPayload ? (
+            <>
+              <WalletConnectSolanaTransactions
+                payload={solanaPayload}
+                reviews={solanaReview?.reviews}
+                simulations={solanaSimulations.results}
+                showSimulation={available}
+                onRefreshSimulation={solanaSimulations.refresh}
+                selectedAddresses={solanaAddresses}
+                onSelect={(index, address) =>
+                  setSolanaAddresses(values =>
+                    values.map((value, i) => (i === index ? address : value)),
+                  )
+                }
+                disabled={!available || busy || !!solanaSubmission}
+              />
+              {missingSolanaSignature && (
+                <ErrorMessage>
+                  Other required signatures are missing.
+                </ErrorMessage>
+              )}
+              {solanaReview?.error ? (
+                <ErrorMessage>{solanaReview.error}</ErrorMessage>
+              ) : (
+                !solanaReview?.reviews && (
+                  <ViewPlaceholder
+                    role="status"
+                    aria-label="Loading transaction"
+                  >
+                    <LoadingSpinner />
+                  </ViewPlaceholder>
+                )
+              )}
+            </>
           ) : payload ? (
             <>
               <WalletConnectMessage
                 address={payload.address}
+                addressType={
+                  payload.method === 'solana_signMessage' ? 'solana' : 'evm'
+                }
                 accountLabel={
                   payload.method === 'eth_sendTransaction' ? 'From' : undefined
                 }

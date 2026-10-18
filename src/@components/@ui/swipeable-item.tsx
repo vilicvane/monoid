@@ -102,7 +102,7 @@ export const SwipeAction = styled.button<{$color?: string}>`
   justify-content: center;
   gap: 4px;
 
-  ion-icon {
+  .lucide {
     flex-shrink: 0;
     width: 18px;
     height: 18px;

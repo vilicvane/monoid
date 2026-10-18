@@ -24,5 +24,31 @@ export type ScannedCardKeyData = {
 
 export type ScannedCardData = {
   id: MonoidSafeIdHex;
-  keys: ScannedCardKeyData[];
+  publicKey: PublicKeyHex;
+  items: ScannedCardItemData[];
 };
+
+export type ScannedCardItemData = {
+  index: SafeIndexHex;
+  type?: string | number;
+  alias?: string;
+  key?: string;
+  secret: boolean;
+  ref?: ScannedCardKeyData['ref'];
+};
+
+export function isCardKeyItem(
+  item: Pick<ScannedCardItemData, 'type'>,
+): boolean {
+  switch (item.type) {
+    case 'entropy':
+    case 'seed':
+    case 'master':
+    case 'secp256k1':
+    case 'secp256r1':
+    case 'ed25519':
+      return true;
+    default:
+      return false;
+  }
+}

@@ -46,7 +46,7 @@ const Source = styled.span`
   gap: 3px;
   min-width: 0;
 
-  ion-icon {
+  .lucide {
     font-size: 16px;
   }
 `;

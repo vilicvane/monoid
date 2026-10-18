@@ -1,11 +1,12 @@
-import {IonIcon} from '@ionic/react';
 import {networks} from '@web3icons/common/metadata/networks';
-import info from 'lucide-static/icons/info.svg';
+import {Info as info} from 'lucide-react';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useState} from 'react';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
+
+import {AppIcon} from './app-icon.js';
 
 // Include only network icons in the requested background variant.
 const icons = import.meta.glob<string>(
@@ -40,7 +41,11 @@ export const ChainIcon = observer(
   ({chainId, className}: {chainId: string; className?: string}): ReactNode => {
     const {chainService} = useEntrances();
     const icon =
-      iconsByChainId.get(chainId) ?? chainService.getChainIcon(chainId);
+      iconsByChainId.get(chainId) ??
+      (chainId.startsWith('solana:')
+        ? iconsByChainId.get('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp')
+        : undefined) ??
+      chainService.getChainIcon(chainId);
     const [failedIcon, setFailedIcon] = useState<string>();
 
     return icon && icon !== failedIcon ? (
@@ -52,7 +57,7 @@ export const ChainIcon = observer(
         onError={() => setFailedIcon(icon)}
       />
     ) : (
-      <Icon as={IonIcon} className={className} icon={info} aria-hidden="true" />
+      <Icon as={AppIcon} className={className} icon={info} aria-hidden="true" />
     );
   },
 );

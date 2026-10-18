@@ -1,6 +1,6 @@
 import classNames from 'classNames';
 import type {ReactNode} from 'react';
-import {useCallback, useState} from 'react';
+import {useCallback, useId, useState} from 'react';
 import {createPortal} from 'react-dom';
 import {styled} from 'styled-components';
 
@@ -23,6 +23,7 @@ const InputContainer = styled.div`
   pointer-events: none;
 
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
 
@@ -66,10 +67,23 @@ const Input = styled.input`
   }
 `;
 
+const Description = styled.div`
+  width: 100%;
+  max-width: 420px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  line-height: 20px;
+
+  &.center {
+    text-align: center;
+  }
+`;
+
 export type InputModalOptions = {
   type?: 'text' | 'password';
   center?: boolean;
   placeholder?: string;
+  description?: ReactNode;
   defaultValue?: string;
   maxLength?: number;
 };
@@ -83,6 +97,7 @@ export function useInputModal(): [
   } = useEntrances();
 
   const [value, setValue] = useState('');
+  const descriptionId = useId();
   const [completion, setCompletion] = useState<{
     value: string | undefined;
   }>();
@@ -104,7 +119,13 @@ export function useInputModal(): [
 
   if (instance) {
     const {
-      options: {type = 'text', placeholder, center = false, maxLength},
+      options: {
+        type = 'text',
+        placeholder,
+        description,
+        center = false,
+        maxLength,
+      },
       resolve,
     } = instance;
 
@@ -134,6 +155,7 @@ export function useInputModal(): [
               type={type}
               placeholder={placeholder}
               aria-label={placeholder}
+              aria-describedby={description != null ? descriptionId : undefined}
               value={value}
               maxLength={maxLength}
               readOnly={!!completion}
@@ -148,6 +170,11 @@ export function useInputModal(): [
               }}
               onBlur={() => complete(undefined)}
             />
+            {description != null && (
+              <Description id={descriptionId} className={classNames({center})}>
+                {description}
+              </Description>
+            )}
           </InputContainer>,
           popup,
         )}

@@ -9,6 +9,8 @@ export const darkTagCSS = css`
 `;
 
 export const Tag = styled.div`
+  --icon-stroke-width: 1;
+
   flex-shrink: 0;
   margin: 0 var(--tag-inline-margin);
 

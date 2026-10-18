@@ -1,6 +1,9 @@
 // Common offline names from https://chainlist.org/rpcs.json, checked 2026-10-16.
 // These labels describe networks; they do not verify a chain's identity.
 export const BUILTIN_CHAIN_NAMES: Readonly<Record<string, string>> = {
+  'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp': 'Solana',
+  'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1': 'Solana Devnet',
+  'solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z': 'Solana Testnet',
   'eip155:1': 'Ethereum Mainnet',
   'eip155:10': 'OP Mainnet',
   'eip155:56': 'BNB Smart Chain Mainnet',
@@ -58,6 +61,9 @@ export type NativeCurrency = {
 export const BUILTIN_CHAIN_CURRENCIES: Readonly<
   Record<string, NativeCurrency>
 > = {
+  'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp': {symbol: 'SOL', decimals: 9},
+  'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1': {symbol: 'SOL', decimals: 9},
+  'solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z': {symbol: 'SOL', decimals: 9},
   'eip155:1': {symbol: 'ETH', decimals: 18},
   'eip155:10': {symbol: 'ETH', decimals: 18},
   'eip155:56': {symbol: 'BNB', decimals: 18},
