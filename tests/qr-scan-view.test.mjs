@@ -7,13 +7,14 @@ import {setImmediate} from 'node:timers/promises';
 let rendering;
 let scanner;
 let moduleVersion = 0;
+let platform = 'android';
 
 const WALLET_CONNECT_URI = `wc:${'a'.repeat(64)}@2?relay-protocol=irn&symKey=${'b'.repeat(64)}`;
 
 mock.module('@capacitor/core', {
   namedExports: {
     Capacitor: {
-      getPlatform: () => 'android',
+      getPlatform: () => platform,
       isPluginAvailable: () => true,
     },
   },
@@ -333,6 +334,46 @@ function mount(ScanView) {
   };
   state.rerender();
   return state;
+}
+
+test('iOS starts and releases its native QR camera', async () => {
+  platform = 'ios';
+  const native = resetScanner();
+  const state = mount(await loadView());
+  try {
+    await setImmediate();
+    assert.equal(native.starts.length, 1);
+    assert.equal(state.values[state.statusIndex], 'scanning');
+  } finally {
+    state.cleanup();
+    platform = 'android';
+  }
+  await setImmediate();
+  assert.equal(native.stops.length, 1);
+});
+
+for (const [code, status] of [
+  ['NO_CAMERA', 'unsupported'],
+  ['UNSUPPORTED', 'unsupported'],
+  ['PERMISSION_DENIED', 'denied'],
+]) {
+  test(`native ${code} displays its actionable state without an error toast`, async () => {
+    const native = resetScanner({
+      startScan: async () => {
+        throw Object.assign(new Error(code), {code});
+      },
+    });
+    const state = mount(await loadView());
+    try {
+      await setImmediate();
+      assert.equal(state.status, status);
+      assert.deepEqual(state.errors, []);
+      assert.equal(native.stops.length, 1);
+    } finally {
+      state.cleanup();
+    }
+    await setImmediate();
+  });
 }
 
 test('consecutive hot updates wait for the original camera to stop, including an intermediate page that never started', async () => {

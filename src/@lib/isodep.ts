@@ -1,15 +1,28 @@
 import {App} from '@capacitor/app';
-import type {PluginListenerHandle} from '@capacitor/core';
+import {Capacitor, type PluginListenerHandle} from '@capacitor/core';
 import type {IsoDepNfcError, ScanEndedEvent} from 'capacitor-isodep-nfc';
 import {IsoDepNfc} from 'capacitor-isodep-nfc';
 
 let previousScan: Promise<void> = Promise.resolve();
 
+function canResumeScan(reason: ScanEndedEvent['reason']): boolean {
+  return (
+    Capacitor.getPlatform() !== 'ios' &&
+    (reason === 'app-paused' || reason === 'nfc-disabled')
+  );
+}
+
 /** The whole scan has stopped, rather than just one card connection. */
 export class IsoDepScanError extends Error {
+  readonly code: unknown;
+
   constructor(cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause), {cause});
     this.name = new.target.name;
+    this.code =
+      cause !== null && typeof cause === 'object' && 'code' in cause
+        ? cause.code
+        : undefined;
   }
 }
 
@@ -108,7 +121,7 @@ export function standbyIsoDep(
       if (
         !disposed &&
         scanFailure === undefined &&
-        scanEnded?.reason !== 'io-error'
+        (!scanEnded || canResumeScan(scanEnded.reason))
       ) {
         onCleanup?.();
       }
@@ -217,12 +230,17 @@ export function standbyIsoDep(
         });
 
         try {
-          await IsoDepNfc.startScan({scanId});
+          // Core NFC can wait for its system sheet to become active. A dismissal
+          // must still reach stopScan while native startup is pending.
+          await Promise.race([IsoDepNfc.startScan({scanId}), stopped]);
           await Promise.race([ended, stopped]);
         } catch (error) {
           const {code} = error as IsoDepNfcError;
 
-          if (code !== 'APP_INACTIVE' && code !== 'NFC_DISABLED') {
+          if (
+            Capacitor.getPlatform() === 'ios' ||
+            (code !== 'APP_INACTIVE' && code !== 'NFC_DISABLED')
+          ) {
             scanFailure = error;
           } else {
             await Promise.race([changed, stopped]);
@@ -249,11 +267,29 @@ export function standbyIsoDep(
 
         const reason = (scanEnded as ScanEndedEvent | undefined)?.reason;
 
-        if (
-          reason !== undefined &&
-          reason !== 'app-paused' &&
-          reason !== 'nfc-disabled'
-        ) {
+        if (reason !== undefined && !canResumeScan(reason)) {
+          if (reason === 'app-paused') {
+            throw Object.assign(
+              new Error(
+                'Card scanning ended when the app left the foreground.',
+              ),
+              {
+                code: 'APP_INACTIVE',
+              },
+            );
+          }
+
+          if (reason === 'cancelled' || reason === 'timeout') {
+            throw Object.assign(
+              new Error(
+                reason === 'cancelled'
+                  ? 'Card scanning was cancelled.'
+                  : 'Card scanning timed out. Please scan the card again.',
+              ),
+              {code: reason === 'cancelled' ? 'CANCELLED' : 'TIMEOUT'},
+            );
+          }
+
           throw new Error(`NFC scanning ended: ${reason}.`);
         }
       }

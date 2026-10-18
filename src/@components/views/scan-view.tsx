@@ -309,7 +309,7 @@ export const ScanView = observer(
       scannedUriRef.current = undefined;
 
       if (
-        Capacitor.getPlatform() !== 'android' ||
+        Capacitor.getPlatform() === 'web' ||
         !Capacitor.isPluginAvailable('QrScanner')
       ) {
         setStatus('unsupported');
@@ -334,6 +334,10 @@ export const ScanView = observer(
           const {code} = error as QrScannerError;
           if (code === 'CANCELLED' || code === 'APP_INACTIVE') {
             setStatus('paused');
+          } else if (code === 'NO_CAMERA' || code === 'UNSUPPORTED') {
+            setStatus('unsupported');
+          } else if (code === 'PERMISSION_DENIED') {
+            setStatus('denied');
           } else {
             setStatus('error');
             errorService.catch(Promise.reject(error));
@@ -427,7 +431,7 @@ export const ScanView = observer(
               return;
 
             if (event.reason === 'error') {
-              fail(new Error(event.message));
+              fail(Object.assign(new Error(event.message), {code: event.code}));
             } else {
               finished = true;
               setStatus('paused');

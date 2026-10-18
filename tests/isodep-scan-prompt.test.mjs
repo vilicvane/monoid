@@ -4,7 +4,12 @@ import {setImmediate} from 'node:timers/promises';
 
 let fixture;
 let rendering;
+let platform = 'android';
 const owners = [];
+
+mock.module('@capacitor/core', {
+  namedExports: {Capacitor: {getPlatform: () => platform}},
+});
 
 mock.module('react/jsx-runtime', {
   namedExports: {
@@ -138,6 +143,24 @@ function hide(presenter, completed = true) {
 
 afterEach(() => {
   owners.splice(0).forEach(owner => owner.unmount());
+  platform = 'android';
+});
+
+test('iOS closes the native sheet before returning an operation error', async () => {
+  platform = 'ios';
+  const {presenter, start} = setup();
+  const failure = new Error('Could not install applet');
+  const run = start(async () => {
+    throw failure;
+  });
+  await connect(run.scan);
+  assert.equal(run.scan.waitingForRemoval, false);
+  assert.equal(run.scan.stopCalls, 1);
+  assert.equal(run.settled, false);
+  hide(presenter);
+  assert.equal(run.settled, false);
+  run.scan.stopped.resolve();
+  assert.equal((await run.promise).error, failure);
 });
 
 test('failure is displayed while waiting for removal and can be cancelled', async () => {

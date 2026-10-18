@@ -1,3 +1,4 @@
+import {Capacitor} from '@capacitor/core';
 import {X as x} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {useCallback, useEffect, useLayoutEffect, useState} from 'react';
@@ -653,6 +654,8 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
             error: tagLost ? cancelled() : error,
             retry:
               retryOnError &&
+              // Leave the NFC sheet closed so the user can read the error.
+              Capacitor.getPlatform() !== 'ios' &&
               !tagLost &&
               !(error instanceof IsoDepScanError) &&
               !isCredentialRequestCancelled(error),
@@ -667,6 +670,9 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
           }
         },
         () => {
+          // Core NFC covers the WebView. Close its sheet before presenting errors.
+          if (Capacitor.getPlatform() === 'ios') return false;
+
           if (
             disposed ||
             !result ||

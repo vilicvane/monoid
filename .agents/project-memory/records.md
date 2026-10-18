@@ -29,3 +29,11 @@
 ## d0ac890
 
 26. [user] use the roomy wallet-list layout on the Transactions wallet selection page; roomy spacing should be the default when a wallet list is the main content of a page. wallet list density, shared layout.
+
+## e5116ec
+
+27. [user] implement comprehensive iOS support for this app, including the missing native functionality; updating Capacitor as needed is allowed, and the Java Card firmware is available in sibling `../monoid-javacard`. iOS integration.
+28. [agent] use Capacitor 8.5.3 with Swift Package Manager and iOS 15 minimum; Node 22.12+ is required. Xcode 27 uses Device Hub, so `npm run ios` syncs and opens Xcode instead of relying on native-run's obsolete Simulator.app path. development environment.
+29. [agent] iOS NFC uses foreground Core NFC sessions and an explicit ISO7816 AID allowlist; close its system sheet before web PIN/error UI, and return errors instead of automatic iOS retaps. Preserve cancellation/timeout and uncertain APDU outcomes; do not replay mutations. Core tradeoffs and device checks: [29.md](29.md).
+30. [agent] iOS vault scopes authenticate once for up to 60 seconds using Keychain `biometryCurrentSet` and `whenPasscodeSetThisDeviceOnly`, revoke on background/lock/close, and offer no passcode fallback; invalidated items may appear missing and Keychain may survive uninstall. See [29.md](29.md). credential protection.
+31. [agent] records 19–24 describe an obsolete WIP: current code has `useMonoidScanPrompt`, biometric Access PIN scopes, explicit Safe PIN flows, persisted card management, aligned hello curve/cipher schemas and multipart APDUs. Stored Access PINs preload before NFC; modal input and deferred saves wait for reader cleanup, every retap reauthenticates, and Safe PINs are never persisted. The old 14-error lint baseline in record 25 is historical. card session snapshot correction.

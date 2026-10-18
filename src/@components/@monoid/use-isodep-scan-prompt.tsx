@@ -1,3 +1,4 @@
+import {Capacitor} from '@capacitor/core';
 import type {ReactNode} from 'react';
 import {useCallback, useLayoutEffect, useRef} from 'react';
 
@@ -173,6 +174,9 @@ export function useIsoDepScanPrompt(): (
             }
           },
           () => {
+            // Core NFC covers the WebView. Return the error after closing its sheet.
+            if (Capacitor.getPlatform() === 'ios') return false;
+
             if (
               finishing ||
               !result ||

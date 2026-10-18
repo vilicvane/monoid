@@ -17,7 +17,10 @@ let package = Package(
         .package(name: "CapacitorDialog", path: "../../../node_modules/@capacitor/dialog"),
         .package(name: "CapacitorHaptics", path: "../../../node_modules/@capacitor/haptics"),
         .package(name: "CapacitorKeyboard", path: "../../../plugins/keyboard"),
-        .package(name: "CapacitorStatusBar", path: "../../../node_modules/@capacitor/status-bar")
+        .package(name: "CapacitorStatusBar", path: "../../../node_modules/@capacitor/status-bar"),
+        .package(name: "CapacitorBiometricVault", path: "../../../node_modules/capacitor-biometric-vault"),
+        .package(name: "CapacitorIsodepNfc", path: "../../../node_modules/capacitor-isodep-nfc"),
+        .package(name: "CapacitorQrScanner", path: "../../../node_modules/capacitor-qr-scanner")
     ],
     targets: [
         .target(
@@ -30,7 +33,10 @@ let package = Package(
                 .product(name: "CapacitorDialog", package: "CapacitorDialog"),
                 .product(name: "CapacitorHaptics", package: "CapacitorHaptics"),
                 .product(name: "CapacitorKeyboard", package: "CapacitorKeyboard"),
-                .product(name: "CapacitorStatusBar", package: "CapacitorStatusBar")
+                .product(name: "CapacitorStatusBar", package: "CapacitorStatusBar"),
+                .product(name: "CapacitorBiometricVault", package: "CapacitorBiometricVault"),
+                .product(name: "CapacitorIsodepNfc", package: "CapacitorIsodepNfc"),
+                .product(name: "CapacitorQrScanner", package: "CapacitorQrScanner")
             ]
         )
     ]

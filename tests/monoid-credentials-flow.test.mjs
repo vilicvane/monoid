@@ -10,7 +10,11 @@ import {
 // Exercise the built hooks with effect cleanup and state-driven rerenders, without a DOM or sensor.
 let rendering;
 let fixture;
+let platform = 'android';
 const mounted = [];
+mock.module('@capacitor/core', {
+  namedExports: {Capacitor: {getPlatform: () => platform}},
+});
 const sameDependencies = (left, right) =>
   left?.length === right?.length &&
   left.every((value, index) => Object.is(value, right[index]));
@@ -213,6 +217,7 @@ class HookOwner {
 }
 
 afterEach(() => {
+  platform = 'android';
   mounted.splice(0).forEach(owner => owner.unmount());
 });
 
@@ -633,6 +638,37 @@ test('prompt: wrong card highlights the expected card ID', async () => {
     },
   });
   assert.deepEqual(state.retryErrors, []);
+});
+
+test('prompt: iOS returns errors after closing the sheet without silently reopening it', async () => {
+  platform = 'ios';
+  const error = new Error('Wrong card');
+  const state = mount({
+    auth: false,
+    onBusiness: () => {
+      throw error;
+    },
+  });
+  const scan = await state.tap();
+  assert.equal(scan.waitingForRemoval, false);
+  assert.equal(scan.stopRequested, true);
+  assert.deepEqual(state.presentedErrors, []);
+  assert.equal(state.outcome, undefined);
+  await state.finishExit();
+  assert.equal(state.scans.length, 1);
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.errors[0], error);
+});
+
+test('prompt: iOS dismisses the reader before asking for a missing PIN', async () => {
+  platform = 'ios';
+  const state = mount();
+  await state.tap();
+  assert.equal(state.inputs.length, 0);
+  await state.finishAnimation();
+  assert.equal(state.inputs.length, 0);
+  await state.finishStop();
+  assert.equal(state.inputs.length, 1);
 });
 
 test('prompt: missing PIN exits without waiting for removal and prompts after cleanup', async () => {

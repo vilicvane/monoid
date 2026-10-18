@@ -34,7 +34,10 @@ const environment = registerHooks({
     if (!url.startsWith(`${moduleUrl.href}?`)) return loaded;
 
     const development = new URL(url).search === '?development';
-    const source = String(loaded.source);
+    const source =
+      typeof loaded.source === 'string'
+        ? loaded.source
+        : new TextDecoder().decode(loaded.source);
     assert.ok(source.includes('import.meta.env.DEV'));
     return {
       ...loaded,

@@ -50,12 +50,39 @@ Mode on the device. `npm run ios` builds and syncs the web app, then opens Xcode
 Use Xcode to launch the simulator: Capacitor's current `native-run` dependency
 still expects the older `Simulator.app` path.
 
-The initial project provides the iOS app shell. The local NFC, biometric vault and
-QR scanner plugins still need iOS native implementations; the keyboard plugin
-already includes one. NFC testing requires a physical iPhone. Add the NFC
-capability, ISO7816 AID list and relevant NFC, camera and Face ID usage descriptions
-alongside those implementations. The QR scan view also currently restricts native
-scanning to Android.
+The local plugins implement NFC with Core NFC, credential storage with Keychain
+and Face ID/Touch ID, and QR scanning with AVFoundation. Both QR entry points use
+the native camera. The project includes NFC tag-reading entitlements, the bundled
+applet and card-manager AIDs, and NFC, camera and Face ID usage descriptions.
+
+Core NFC presents a system sheet with a limited session lifetime. Credentials are
+unlocked before scanning; manual PIN entry and credential saving wait until the
+reader closes. On iOS, card errors close the sheet and return to the caller so the
+message remains visible; start the action again to retry. Updating bundled applet
+AIDs also requires updating `Info.plist`.
+
+The vault requires enrolled biometrics and a device passcode. Each explicit access
+scope authenticates once and lasts at most 60 seconds; backgrounding or closing it
+revokes access. Keychain items stay on this device and are bound to the current
+biometric enrollment. Missing or invalidated credentials fall back to manual PIN
+entry. See the [vault details](plugins/biometric-vault/README.md).
+
+Simulator builds cover app startup, bridge registration and native unit tests.
+NFC requires a physical iPhone and a signing profile with NFC Tag Reading enabled.
+Before shipping, verify card installation and signing, Face ID/Touch ID enrollment
+changes, and camera permission/cropping/rotation on device. Core NFC timeouts must
+not trigger an automatic replay of a card mutation.
+
+Run application regression tests after compiling:
+
+```sh
+npm run build
+node --experimental-test-module-mocks --test tests/*.test.mjs
+```
+
+Each native plugin is also an independent Swift package with an XCTest target.
+Run its tests from Xcode or `xcodebuild test` with an available iPhone simulator;
+see the plugin READMEs for the package schemes.
 
 See the [Capacitor environment requirements](https://capacitorjs.com/docs/getting-started/environment-setup),
 [Swift Package Manager setup](https://capacitorjs.com/docs/ios/spm) and

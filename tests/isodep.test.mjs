@@ -3,6 +3,11 @@ import {afterEach, beforeEach, mock, test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
 
 let device;
+let platform = 'android';
+
+mock.module('@capacitor/core', {
+  namedExports: {Capacitor: {getPlatform: () => platform}},
+});
 
 mock.module('@capacitor/app', {
   namedExports: {
@@ -71,6 +76,7 @@ class TestApplet extends Applet {
 }
 
 beforeEach(() => {
+  platform = 'android';
   const listeners = new Map();
 
   device = {
@@ -124,6 +130,7 @@ beforeEach(() => {
 
       this.scanId = scanId;
       this.starts.push(scanId);
+      await this.onStart?.();
     },
     async stopScan({scanId}) {
       this.stops.push(scanId);
@@ -596,6 +603,32 @@ for (const [reason, code] of [
   });
 }
 
+test('cancel reaches native stop while iOS reader activation is still pending', async () => {
+  const activation = deferred();
+  const stopped = deferred();
+  device.onStart = () => activation.promise;
+  device.onStop = () => {
+    activation.reject(
+      Object.assign(new Error('Cancelled'), {code: 'CANCELLED'}),
+    );
+    return stopped.promise;
+  };
+  const dispose = device.standby(async () =>
+    assert.fail('Cancelled startup must not connect'),
+  );
+  await until(() => device.starts.length === 1);
+  let completed = false;
+  const closing = dispose().then(() => {
+    completed = true;
+  });
+  await until(() => device.stops.length === 1);
+  assert.equal(completed, false);
+  stopped.resolve();
+  await closing;
+  assert.equal(completed, true);
+  assert.deepEqual(device.errors, []);
+});
+
 test('cancel is immediate while completion and reopening wait for native stop, close, and listener cleanup', async () => {
   const stopped = deferred();
   const exchange = deferred();
@@ -915,6 +948,66 @@ for (const [reason, state, event] of [
     assert.equal(device.starts.length, 1);
   });
 }
+
+for (const [reason, code] of [
+  ['cancelled', 'CANCELLED'],
+  ['timeout', 'TIMEOUT'],
+]) {
+  test(`iOS ${reason} stops scanning without retry and preserves its public code`, async () => {
+    device.standby(async () => assert.fail('No card was connected'));
+    await until(() => device.starts.length === 1);
+    device.emit('scanEnded', {scanId: device.scanId, reason});
+    await until(() => device.errors.length === 1);
+    await until(() => device.listenerRemovals.length === 5);
+
+    assert.ok(device.errors[0] instanceof IsoDepScanError);
+    assert.equal(device.errors[0].code, code);
+    assert.equal(device.starts.length, 1);
+    assert.equal(device.cleanupCount, 1);
+  });
+
+  test(`iOS ${reason} during a card operation reports the scan failure before cleanup`, async () => {
+    const operation = deferred();
+    device.standby(() => operation.promise);
+    await until(() => device.starts.length === 1);
+    device.tap('active');
+    device.emit('scanEnded', {scanId: device.scanId, reason});
+    operation.resolve();
+    await until(() => device.errors.length === 1);
+    await until(() => device.listenerRemovals.length === 5);
+    assert.equal(device.errors[0].code, code);
+    assert.equal(device.cleanupCount, 1);
+    assert.equal(device.starts.length, 1);
+  });
+}
+
+test('iOS backgrounding terminates a pending operation instead of replaying it on foreground', async () => {
+  platform = 'ios';
+  const operation = deferred();
+  let callbacks = 0;
+  device.standby(() => {
+    callbacks++;
+    return operation.promise;
+  });
+  await until(() => device.starts.length === 1);
+  device.tap('active');
+  device.isActive = false;
+  device.emit('scanEnded', {scanId: device.scanId, reason: 'app-paused'});
+  operation.reject(
+    Object.assign(new Error('The old session closed'), {
+      code: 'SESSION_CLOSED',
+    }),
+  );
+  await until(() => device.errors.length === 1);
+  await until(() => device.listenerRemovals.length === 5);
+  device.isActive = true;
+  device.emit('appStateChange', {isActive: true});
+  await setImmediate();
+  assert.equal(device.errors[0].code, 'APP_INACTIVE');
+  assert.equal(device.cleanupCount, 1);
+  assert.equal(callbacks, 1);
+  assert.equal(device.starts.length, 1);
+});
 
 test('fatal scan termination reports one scan error and releases every listener', async () => {
   device.standby(async () => {});

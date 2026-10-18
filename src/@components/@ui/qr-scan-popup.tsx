@@ -200,7 +200,7 @@ export function QrScanPopup({
     setClosing(false);
 
     if (
-      Capacitor.getPlatform() !== 'android' ||
+      Capacitor.getPlatform() === 'web' ||
       !Capacitor.isPluginAvailable('QrScanner')
     ) {
       setStatus('unsupported');
@@ -260,9 +260,17 @@ export function QrScanPopup({
           ? 'paused'
           : code === 'PERMISSION_DENIED'
             ? 'denied'
-            : 'error',
+            : code === 'NO_CAMERA' || code === 'UNSUPPORTED'
+              ? 'unsupported'
+              : 'error',
       );
-      if (code !== 'CANCELLED' && code !== 'APP_INACTIVE') {
+      if (
+        code !== 'CANCELLED' &&
+        code !== 'APP_INACTIVE' &&
+        code !== 'NO_CAMERA' &&
+        code !== 'UNSUPPORTED' &&
+        code !== 'PERMISSION_DENIED'
+      ) {
         errorService.catch(Promise.reject(error));
       }
       errorService.catch(stop());
@@ -354,13 +362,6 @@ export function QrScanPopup({
         return;
       }
 
-      listeners.push(
-        await App.addListener('appStateChange', ({isActive}) => {
-          if (!isActive) pause();
-        }),
-      );
-      if (disposed || finished) return;
-
       let permissions = await QrScanner.checkPermissions();
       if (disposed || finished) return;
       if (permissions.camera !== 'granted') {
@@ -372,6 +373,15 @@ export function QrScanPopup({
         setStatus('denied');
         return;
       }
+
+      // iOS permission sheets temporarily deactivate the app. Observe pauses
+      // after permission returns so accepting the first prompt can start scanning.
+      listeners.push(
+        await App.addListener('appStateChange', ({isActive}) => {
+          if (!isActive) pause();
+        }),
+      );
+      if (disposed || finished) return;
 
       listeners.push(
         await QrScanner.addListener('codesScanned', event => {
