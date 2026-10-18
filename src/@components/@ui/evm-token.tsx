@@ -177,7 +177,9 @@ export const EvmTokenDetailsContent = observer(function EvmTokenDetailsContent({
   return (
     <>
       <TokenIdentity token={token} kind={kind} variant="details" />
-      <CenteredPopupAddress>{token.address}</CenteredPopupAddress>
+      <CenteredPopupAddress highlightEdges>
+        {token.address}
+      </CenteredPopupAddress>
       <DetailsPopupDivider />
       <InfoSectionRow>
         <InfoSectionItemLabel>Symbol</InfoSectionItemLabel>

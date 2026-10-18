@@ -24,24 +24,47 @@ export function WalletConnectSolanaToken({
   chainId: string;
   keys: readonly WalletKeyData[];
 }): ReactNode {
+  const sourceOwner = token?.source?.associated
+    ? token.source.owner
+    : undefined;
+  const destinationOwner = token?.destination?.associated
+    ? token.destination.owner
+    : undefined;
+
   return (
     <>
-      <InfoFieldset>
-        <InfoLegend>
-          {decoded.kind === 'token-transfer' ? 'From account' : 'Token account'}
-        </InfoLegend>
-        <ExpandableAddress>
-          {decoded.kind === 'token-account-create'
-            ? decoded.account
-            : decoded.source}
-        </ExpandableAddress>
-      </InfoFieldset>
-      {decoded.kind === 'token-transfer' && (
-        <InfoFieldset>
-          <InfoLegend>To account</InfoLegend>
-          <ExpandableAddress>{decoded.destination}</ExpandableAddress>
-        </InfoFieldset>
-      )}
+      {decoded.kind !== 'token-account-create' &&
+        (sourceOwner ? (
+          <WalletAddressFieldset
+            keys={keys}
+            addressType="solana"
+            address={sourceOwner}
+            label={decoded.kind === 'token-transfer' ? 'From' : 'Owner'}
+          />
+        ) : (
+          <InfoFieldset>
+            <InfoLegend>
+              {decoded.kind === 'token-transfer'
+                ? 'From account'
+                : 'Token account'}
+            </InfoLegend>
+            <ExpandableAddress>{decoded.source}</ExpandableAddress>
+          </InfoFieldset>
+        ))}
+      {decoded.kind === 'token-transfer' &&
+        (destinationOwner ? (
+          <WalletAddressFieldset
+            keys={keys}
+            addressType="solana"
+            address={destinationOwner}
+            label="To"
+          />
+        ) : (
+          <InfoFieldset>
+            <InfoLegend>To account</InfoLegend>
+            <ExpandableAddress>{decoded.destination}</ExpandableAddress>
+          </InfoFieldset>
+        ))}
       {decoded.kind === 'token-approve' && (
         <WalletAddressFieldset
           keys={keys}
@@ -50,16 +73,21 @@ export function WalletConnectSolanaToken({
           label="Delegate"
         />
       )}
-      <WalletAddressFieldset
-        keys={keys}
-        addressType="solana"
-        address={
-          decoded.kind === 'token-account-create'
-            ? decoded.owner
-            : decoded.authority
-        }
-        label={decoded.kind === 'token-account-create' ? 'Owner' : 'Authority'}
-      />
+      {(decoded.kind === 'token-account-create' ||
+        decoded.authority !== sourceOwner) && (
+        <WalletAddressFieldset
+          keys={keys}
+          addressType="solana"
+          address={
+            decoded.kind === 'token-account-create'
+              ? decoded.owner
+              : decoded.authority
+          }
+          label={
+            decoded.kind === 'token-account-create' ? 'Owner' : 'Authority'
+          }
+        />
+      )}
       {decoded.kind === 'token-account-create' ? (
         <WalletAddressFieldset
           keys={keys}

@@ -21,6 +21,7 @@ import {
   getSignedSolanaTransactionSignature,
   sendSolanaTransaction,
 } from '../@lib/send-solana-transaction.js';
+import {SolanaRPCError} from '../@lib/solana-rpc.js';
 import {verifySolanaSignature} from '../@lib/solana-signature.js';
 import type {SolanaRPCRequest} from '../@lib/solana-transaction-review.js';
 import {
@@ -716,6 +717,7 @@ export class WalletKitService {
       const signedTransaction = transactions[0];
       const signature = getSignedSolanaTransactionSignature(signedTransaction);
       let submission = this.solanaTransactionSubmissions.get(id);
+      const resuming = submission !== undefined;
       if (
         submission &&
         (submission.topic !== topic ||
@@ -759,7 +761,19 @@ export class WalletKitService {
               payload.sendOptions,
             );
           } catch (error) {
-            if (!(await isAccepted().catch(() => false))) throw error;
+            if (!(await isAccepted().catch(() => false))) {
+              // A preflight refusal never broadcasts this attempt. A retry may
+              // still follow an earlier broadcast whose response was lost.
+              if (
+                !resuming &&
+                error instanceof SolanaRPCError &&
+                error.code === -32002
+              ) {
+                runInAction(() => this.solanaTransactionSubmissions.delete(id));
+                await this.saveSolanaTransactionSubmissions();
+              }
+              throw error;
+            }
           }
         }
         submission = {...submission, broadcast: true};

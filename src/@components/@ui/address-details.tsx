@@ -47,7 +47,9 @@ export const AddressDetailsContent = observer(function AddressDetailsContent({
       <DetailsPopupHeader>
         <KeyDerivationTag chain="evm">EVM</KeyDerivationTag>
       </DetailsPopupHeader>
-      <CenteredPopupAddress>{getAddress(address)}</CenteredPopupAddress>
+      <CenteredPopupAddress highlightEdges>
+        {getAddress(address)}
+      </CenteredPopupAddress>
       <DetailsPopupDivider />
       <DetailsPopupSection>
         <InfoSectionRow>

@@ -46,13 +46,13 @@ import {
   EvmTransactionReview,
   TRANSACTION_TYPE_LABELS,
 } from '../@ui/evm-transaction-review.js';
-import {LoadingSpinner} from '../@ui/loading-spinner.js';
 import {ErrorMessage, MessageContent} from '../@ui/message-content.js';
 import {
   View,
   ViewContent,
   ViewHeader,
   ViewHeaderTitle,
+  ViewLoading,
   ViewPlaceholder,
 } from '../@view/index.js';
 
@@ -724,12 +724,7 @@ export const WalletConnectRequestView = observer(
                 <ErrorMessage>{solanaReview.error}</ErrorMessage>
               ) : (
                 !solanaReview?.reviews && (
-                  <ViewPlaceholder
-                    role="status"
-                    aria-label="Loading transaction"
-                  >
-                    <LoadingSpinner />
-                  </ViewPlaceholder>
+                  <ViewLoading aria-label="Loading transaction" />
                 )
               )}
             </>

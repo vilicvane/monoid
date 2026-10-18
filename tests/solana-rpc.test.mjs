@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-const {createSolanaRPC} = await import('../.bld/app/@lib/solana-rpc.js');
+const {createSolanaRPC, SolanaRPCError} = await import(
+  '../.bld/app/@lib/solana-rpc.js'
+);
 
 const chainId = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
 const genesisHash = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
@@ -89,6 +91,68 @@ test('preserves RPC error messages and reports HTTP and malformed responses', as
   ]) {
     const rpc = createSolanaRPC(chainId, 'project-id', async () => response);
     await assert.rejects(rpc('getMultipleAccounts', [[]]), expected);
+  }
+});
+
+test('preserves the code and data of a matching RPC error', async () => {
+  const data = {err: 'BlockhashNotFound', logs: []};
+  const rpc = createSolanaRPC(chainId, 'project-id', async (_url, init) => {
+    const {id, method} = JSON.parse(init.body);
+
+    return method === 'getGenesisHash'
+      ? result(init, genesisHash)
+      : new Response(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id,
+            error: {
+              code: -32002,
+              message: 'Transaction simulation failed: Blockhash not found',
+              data,
+            },
+          }),
+        );
+  });
+
+  await assert.rejects(
+    rpc('sendTransaction', ['signed-transaction']),
+    error => {
+      assert.ok(error instanceof SolanaRPCError);
+      assert.equal(error.code, -32002);
+      assert.deepEqual(error.data, data);
+      assert.equal(
+        error.message,
+        'Solana RPC: Transaction simulation failed: Blockhash not found',
+      );
+      return true;
+    },
+  );
+});
+
+test('does not classify unrelated or malformed error responses as RPC rejections', async () => {
+  const error = {code: -32002, message: 'Blockhash not found'};
+
+  for (const body of [
+    {jsonrpc: '2.0', id: 999, error},
+    {jsonrpc: '1.0', id: 2, error},
+    {error},
+    {jsonrpc: '2.0', id: 2, error: {...error, code: '-32002'}},
+    {jsonrpc: '2.0', id: 2, result: null, error},
+  ]) {
+    const rpc = createSolanaRPC(chainId, 'project-id', async (_url, init) => {
+      return JSON.parse(init.body).method === 'getGenesisHash'
+        ? result(init, genesisHash)
+        : new Response(JSON.stringify(body));
+    });
+
+    await assert.rejects(
+      rpc('sendTransaction', ['signed-transaction']),
+      error => {
+        assert.ok(!(error instanceof SolanaRPCError));
+        assert.equal(error.message, 'Solana RPC: Blockhash not found');
+        return true;
+      },
+    );
   }
 });
 

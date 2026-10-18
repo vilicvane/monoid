@@ -6,8 +6,20 @@ type RPCResponse = {
   jsonrpc: string;
   id: number;
   result?: unknown;
-  error?: {code: number; message: string};
+  error?: {code: number; message: string; data?: unknown};
 };
+
+export class SolanaRPCError extends Error {
+  readonly code: number;
+  readonly data: unknown;
+
+  constructor(error: {code: number; message: string; data?: unknown}) {
+    super(`Solana RPC: ${error.message}`);
+    this.name = 'SolanaRPCError';
+    this.code = error.code;
+    this.data = error.data;
+  }
+}
 
 export function createSolanaRPC(
   chainId: string,
@@ -48,6 +60,15 @@ export function createSolanaRPC(
       controller.signal.throwIfAborted();
 
       if (body?.error && typeof body.error.message === 'string') {
+        if (
+          body.jsonrpc === '2.0' &&
+          body.id === id &&
+          Number.isInteger(body.error.code) &&
+          !('result' in body)
+        ) {
+          throw new SolanaRPCError(body.error);
+        }
+
         throw new Error(`Solana RPC: ${body.error.message}`);
       }
       if (!response.ok) {
@@ -55,6 +76,7 @@ export function createSolanaRPC(
       }
       if (
         !body ||
+        typeof body !== 'object' ||
         body.jsonrpc !== '2.0' ||
         body.id !== id ||
         !('result' in body)

@@ -56,7 +56,7 @@ export const ReceiveAddressPopup = ({
         marginSize={2}
         title="Receive address QR code"
       />
-      <Address>{wallet.address}</Address>
+      <Address highlightEdges>{wallet.address}</Address>
       <Button
         aria-live="polite"
         onClick={errorService.catch(async () => {

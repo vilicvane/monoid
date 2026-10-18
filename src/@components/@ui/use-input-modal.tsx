@@ -8,6 +8,7 @@ import {useEntrances} from '../../@entrances.js';
 import {fadeInAnimationCSS, fadeOutAnimationCSS} from '../@animations.js';
 
 import {PopupBackdrop} from './popup-backdrop.js';
+import {popupContentPaddingCSS} from './popup-layout.js';
 
 const InputContainer = styled.div`
   box-sizing: border-box;
@@ -17,9 +18,7 @@ const InputContainer = styled.div`
   right: 0;
   bottom: 0;
   z-index: calc(var(--popup-z-index) + 1);
-  padding: calc(var(--view-inset-top) + 24px)
-    calc(var(--view-inset-right) + 24px) calc(var(--view-inset-bottom) + 24px)
-    calc(var(--view-inset-left) + 24px);
+  ${popupContentPaddingCSS};
   pointer-events: none;
 
   display: flex;

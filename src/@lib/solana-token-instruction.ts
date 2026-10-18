@@ -192,7 +192,7 @@ function decodeAssociatedTokenInstruction(
   };
 }
 
-function isAssociatedTokenAddress(
+export function isAssociatedTokenAddress(
   account: string,
   owner: string,
   mint: string,

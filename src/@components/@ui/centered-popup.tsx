@@ -14,15 +14,14 @@ import {useEntrances} from '../../@entrances.js';
 import {popupContentAnimation} from '../@animations.js';
 
 import {PopupBackdrop} from './popup-backdrop.js';
+import {popupContentPaddingCSS} from './popup-layout.js';
 
 const Layer = styled.div`
   box-sizing: border-box;
   position: absolute;
   inset: 0;
   z-index: calc(var(--popup-z-index) + 1);
-  padding: calc(var(--view-inset-top) + 24px)
-    calc(var(--view-inset-right) + 24px) calc(var(--view-inset-bottom) + 24px)
-    calc(var(--view-inset-left) + 24px);
+  ${popupContentPaddingCSS};
   overflow-y: auto;
   overscroll-behavior: contain;
   pointer-events: auto;

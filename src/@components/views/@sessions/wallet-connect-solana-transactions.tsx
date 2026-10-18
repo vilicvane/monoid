@@ -1,11 +1,10 @@
 import {hexlify} from 'ethers';
 import {List as list} from 'lucide-react';
 import {observer} from 'mobx-react-lite';
-import {type ReactNode, useEffect, useState} from 'react';
+import {Fragment, type ReactNode, useEffect, useState} from 'react';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../../@entrances.js';
-import {UI_LOCALE} from '../../../@lib/locale.js';
 import type {SolanaTransactionSimulation} from '../../../@lib/simulate-solana-transaction.js';
 import {isSolanaTokenInstruction} from '../../../@lib/solana-token-instruction.js';
 import type {
@@ -25,7 +24,7 @@ import {
   DetailsPopupTitle,
 } from '../../@ui/details-popup.js';
 import {ExpandableAddress} from '../../@ui/expandable-address.js';
-import {FormattedNumber} from '../../@ui/formatted-number.js';
+import {ExpandableText} from '../../@ui/expandable-text.js';
 import {IconButton} from '../../@ui/icon-button.js';
 import {
   InfoFieldset,
@@ -33,6 +32,7 @@ import {
   InfoLegend,
   InfoPanel,
   InfoSection,
+  InfoSectionDivider,
   InfoSectionHeader,
   InfoSectionItem,
   InfoSectionItemLabel,
@@ -53,6 +53,11 @@ import {SolanaTransactionSimulationSection} from '../../@ui/solana-transaction-s
 import {WhiteTag} from '../../@ui/tag.js';
 import {TypedDataFields} from '../../@ui/typed-data-fields.js';
 
+import {
+  SolanaInstructionAccounts,
+  SolanaInstructionDetails,
+  getSolanaInstructionName,
+} from './solana-instruction-details.js';
 import {WalletConnectSolanaToken} from './wallet-connect-solana-token.js';
 
 const DetailsButton = styled(IconButton)`
@@ -63,18 +68,7 @@ const UnknownLabel = styled(InfoSectionItemLabel)`
   color: var(--color-text-caution);
 `;
 
-const AccountRole = styled.span`
-  flex-shrink: 0;
-  color: var(--color-text-secondary);
-  font-size: 12px;
-`;
-
-const AccountName = styled(InfoSectionItemLabel)`
-  min-width: 0;
-  overflow-wrap: anywhere;
-`;
-
-const Identifier = styled.span`
+const Identifier = styled(ExpandableText)`
   max-width: 100%;
   overflow-wrap: anywhere;
   font-family:
@@ -99,20 +93,7 @@ function SolanaInstruction({
 }): ReactNode {
   const {decoded, idl} = instruction;
   const tokenInstruction = isSolanaTokenInstruction(decoded);
-  const name =
-    decoded.kind === 'token-approve'
-      ? 'Token approval'
-      : decoded.kind === 'token-revoke'
-        ? 'Revoke approval'
-        : decoded.kind === 'token-account-create'
-          ? 'Create token account'
-          : decoded.kind === 'token-transfer'
-            ? 'Token transfer'
-            : decoded.kind === 'transfer'
-              ? 'Transfer'
-              : decoded.kind === 'unknown'
-                ? (idl?.name ?? 'Instruction')
-                : 'Compute budget';
+  const name = getSolanaInstructionName(instruction);
   const dataContent = (
     <>
       <InfoSectionHeader>
@@ -214,46 +195,12 @@ function SolanaInstruction({
           {idl && dataContent}
           {!!instruction.accounts.length && (
             <InfoPanel aria-label="Instruction accounts">
-              {instruction.accounts.map((account, accountIndex) => (
-                <InfoSectionItem key={accountIndex}>
-                  <InfoSectionHeader>
-                    <AccountName>
-                      {idl?.accountNames[accountIndex] ??
-                        `Account ${accountIndex + 1}`}
-                    </AccountName>
-                    <AccountRole>
-                      {account.isSigner && 'Signer · '}
-                      {account.isWritable ? 'Writable' : 'Read-only'}
-                    </AccountRole>
-                  </InfoSectionHeader>
-                  <ExpandableAddress>{account.address}</ExpandableAddress>
-                </InfoSectionItem>
-              ))}
+              <SolanaInstructionAccounts instruction={instruction} />
             </InfoPanel>
           )}
           {!idl && dataContent}
         </>
-      ) : (
-        <InfoPanel>
-          <InfoSectionRow>
-            <InfoSectionItemLabel>
-              {decoded.kind === 'compute-unit-limit'
-                ? 'Compute unit limit'
-                : 'Compute unit price'}
-            </InfoSectionItemLabel>
-            <span>
-              {decoded.kind === 'compute-unit-limit' ? (
-                decoded.units.toLocaleString(UI_LOCALE)
-              ) : (
-                <FormattedNumber
-                  value={decoded.microLamports.toString()}
-                  unit="µlamports / CU"
-                />
-              )}
-            </span>
-          </InfoSectionRow>
-        </InfoPanel>
-      )}
+      ) : null}
     </InfoSection>
   );
 }
@@ -310,6 +257,17 @@ export const WalletConnectSolanaTransactions = observer(
         {payload.transactions.map(({transaction, addresses}, index) => {
           const review = reviews?.[index];
           const selectedAddress = selectedAddresses[index];
+          const instructions = review?.instructions.filter(
+            ({decoded, token}) =>
+              decoded.kind !== 'compute-unit-limit' &&
+              decoded.kind !== 'compute-unit-price' &&
+              !(
+                decoded.kind === 'token-account-create' &&
+                decoded.idempotent &&
+                token?.accountExists &&
+                !token.warning
+              ),
+          );
 
           return (
             <InfoSection key={index}>
@@ -323,7 +281,6 @@ export const WalletConnectSolanaTransactions = observer(
                   aria-label={`Transaction ${index + 1} details`}
                   aria-haspopup="dialog"
                   onClick={() => setDetailsIndex(index)}
-                  disabled={disabled}
                 >
                   <AppIcon icon={list} aria-hidden="true" />
                 </DetailsButton>
@@ -361,12 +318,12 @@ export const WalletConnectSolanaTransactions = observer(
                   label="Fee payer"
                 />
               )}
-              {review?.instructions.map((instruction, instructionIndex) => (
+              {instructions?.map((instruction, instructionIndex) => (
                 <SolanaInstruction
                   key={instructionIndex}
                   instruction={instruction}
                   index={instructionIndex}
-                  count={review.instructions.length}
+                  count={instructions.length}
                   keys={walletStorageService.keys}
                   chainId={payload.chainId}
                   decoding={decoding && instruction.decoded.kind === 'unknown'}
@@ -375,6 +332,7 @@ export const WalletConnectSolanaTransactions = observer(
               {review && showSimulation && (
                 <SolanaTransactionSimulationSection
                   result={simulations[index]}
+                  instructions={review.instructions}
                   onRefresh={onRefreshSimulation}
                   disabled={disabled}
                 />
@@ -385,6 +343,7 @@ export const WalletConnectSolanaTransactions = observer(
         {details && (
           <DetailsPopup
             aria-label="Transaction details"
+            initialFocus="dialog"
             onDismiss={() => setDetailsIndex(undefined)}
           >
             <DetailsPopupTitle>Transaction details</DetailsPopupTitle>
@@ -401,8 +360,21 @@ export const WalletConnectSolanaTransactions = observer(
             </InfoSectionRow>
             <InfoSectionItem>
               <InfoSectionItemLabel>Blockhash / nonce</InfoSectionItemLabel>
-              <Identifier>{details.compiled.lifetimeToken}</Identifier>
+              <Identifier ellipsis="middle">
+                {details.compiled.lifetimeToken}
+              </Identifier>
             </InfoSectionItem>
+            {reviews?.[detailsIndex!]?.instructions.map(
+              (instruction, index) => (
+                <Fragment key={index}>
+                  <InfoSectionDivider />
+                  <SolanaInstructionDetails
+                    instruction={instruction}
+                    index={index}
+                  />
+                </Fragment>
+              ),
+            )}
           </DetailsPopup>
         )}
       </>

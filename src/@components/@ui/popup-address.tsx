@@ -10,17 +10,22 @@ import type {AddressMark} from '../../@services/index.js';
 import {ExpandableAddress} from './expandable-address.js';
 import {MessageContent} from './message-content.js';
 
-const Address = styled(MessageContent)<{$severity?: 'warning' | 'danger'}>`
+const Address = styled(MessageContent)<{
+  $severity?: 'warning' | 'danger';
+  $highlightEdges: boolean;
+}>`
   --color-text-emphasis: ${({$severity}) =>
     $severity ? `var(--color-address-${$severity})` : 'white'};
 
   margin: 0;
   padding: 0;
   background: transparent;
-  color: ${({$severity}) =>
+  color: ${({$severity, $highlightEdges}) =>
     $severity
       ? `var(--color-address-${$severity})`
-      : 'rgba(255, 255, 255, 0.65)'};
+      : $highlightEdges
+        ? 'rgba(255, 255, 255, 0.65)'
+        : 'white'};
 
   &[aria-expanded='true'] {
     color: var(--color-text-emphasis);
@@ -33,17 +38,20 @@ export function PopupAddress({
   onClick,
   kind,
   mark,
+  highlightEdges = false,
 }: {
   children: string;
   className?: string;
   onClick?: () => void;
   kind?: AddressKind;
   mark?: AddressMark;
+  highlightEdges?: boolean;
 }): ReactNode {
   return (
     <Address
       as={ExpandableAddress}
-      highlightEdges
+      highlightEdges={highlightEdges}
+      $highlightEdges={highlightEdges}
       className={className}
       onClick={onClick}
       kind={kind}

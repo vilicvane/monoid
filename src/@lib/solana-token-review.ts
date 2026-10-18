@@ -2,7 +2,10 @@ import {
   type SolanaTokenAccountData,
   loadSolanaTokenAccounts,
 } from './solana-token-account.js';
-import {isSolanaTokenInstruction} from './solana-token-instruction.js';
+import {
+  isAssociatedTokenAddress,
+  isSolanaTokenInstruction,
+} from './solana-token-instruction.js';
 import type {
   SolanaRPCRequest,
   SolanaTransactionReview,
@@ -12,7 +15,12 @@ export type SolanaTokenReview = {
   mint?: string;
   decimals?: number;
   warning?: string;
+  source?: SolanaTokenAccountReview;
+  destination?: SolanaTokenAccountReview;
+  accountExists?: boolean;
 };
+
+type SolanaTokenAccountReview = {owner: string; associated: boolean};
 
 export async function loadSolanaTokenReviews(
   reviews: readonly SolanaTransactionReview[],
@@ -31,6 +39,9 @@ export async function loadSolanaTokenReviews(
         if ('source' in decoded) addresses.add(decoded.source);
         if ('destination' in decoded) addresses.add(decoded.destination);
         if ('mint' in decoded && decoded.mint) addresses.add(decoded.mint);
+        if (decoded.kind === 'token-account-create') {
+          addresses.add(decoded.account);
+        }
       } else if (decoded.kind === 'unknown') {
         // RPC describes current state. Unknown CPI/authority changes can make it
         // stale, and a signAllTransactions request promises no execution order.
@@ -111,20 +122,59 @@ export async function loadSolanaTokenReviews(
           warning = 'Token decimals do not match the mint.';
         }
 
+        const token: SolanaTokenReview = {mint, decimals, warning};
+
+        if ('source' in decoded) {
+          token.source = reviewTokenAccount(decoded.source, source, mint);
+        }
+        if (decoded.kind === 'token-transfer') {
+          token.destination = reviewTokenAccount(
+            decoded.destination,
+            current.get(decoded.destination),
+            mint,
+          );
+        }
         if (decoded.kind === 'token-account-create') {
           // The decoder verifies the associated account's PDA and programs.
           // This describes only later instructions in this same transaction.
           if (!changedAccounts.has(decoded.account)) {
-            current.set(decoded.account, {
-              kind: 'account',
-              mint: decoded.mint,
-              owner: decoded.owner,
-            });
+            const account = accounts.get(decoded.account);
+
+            if (account?.kind === 'account') {
+              if (account.mint !== decoded.mint) {
+                token.warning = 'Token mint does not match the account.';
+              } else if (account.owner !== decoded.owner) {
+                token.warning = 'Token owner does not match the account.';
+              } else {
+                token.accountExists = true;
+              }
+            } else {
+              current.set(decoded.account, {
+                kind: 'account',
+                mint: decoded.mint,
+                owner: decoded.owner,
+              });
+            }
           }
         }
 
-        return {...instruction, token: {mint, decimals, warning}};
+        return {...instruction, token};
       }),
     };
   });
+}
+
+function reviewTokenAccount(
+  address: string,
+  account: SolanaTokenAccountData | undefined,
+  mint: string | undefined,
+): SolanaTokenAccountReview | undefined {
+  if (account?.kind !== 'account' || !mint || account.mint !== mint) {
+    return undefined;
+  }
+
+  return {
+    owner: account.owner,
+    associated: isAssociatedTokenAddress(address, account.owner, mint),
+  };
 }

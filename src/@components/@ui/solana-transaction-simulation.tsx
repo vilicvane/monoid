@@ -5,6 +5,7 @@ import {styled} from 'styled-components';
 import {formatTokenAmount} from '../../@lib/format-decimal.js';
 import {UI_LOCALE} from '../../@lib/locale.js';
 import type {SolanaTransactionSimulation} from '../../@lib/simulate-solana-transaction.js';
+import type {SolanaInstructionReview} from '../../@lib/solana-transaction-review.js';
 
 import {AppIcon} from './app-icon.js';
 import {Button} from './button.js';
@@ -67,15 +68,23 @@ const STATUS_LABELS = {
 
 export function SolanaTransactionSimulationSection({
   result,
+  instructions = [],
   onRefresh,
   disabled,
 }: {
   result?: SolanaTransactionSimulation;
+  instructions?: readonly SolanaInstructionReview[];
   onRefresh: () => void;
   disabled: boolean;
 }): ReactNode {
   const [showDetails, setShowDetails] = useState(false);
   const pending = !result;
+  const computeBudget = instructions.flatMap(({decoded}) =>
+    decoded.kind === 'compute-unit-limit' ||
+    decoded.kind === 'compute-unit-price'
+      ? [decoded]
+      : [],
+  );
   const errors = result
     ? [
         result.status === 'failed'
@@ -92,44 +101,46 @@ export function SolanaTransactionSimulationSection({
 
   return (
     <>
-      <InfoTableSection>
-        <InfoSectionHeader>
-          <Heading
-            type="button"
-            aria-label="View transaction simulation"
-            aria-haspopup="dialog"
-            disabled={pending || disabled}
-            onClick={() => setShowDetails(true)}
-          >
-            Fee
-          </Heading>
-          {pending ? (
-            <InfoSectionLoadingSpinner aria-label="Estimating transaction fee" />
-          ) : (
-            <DetailsButton
-              aria-label="Transaction simulation details"
+      {(pending || result.fee !== undefined || !disabled) && (
+        <InfoTableSection>
+          <InfoSectionHeader>
+            <Heading
+              type="button"
+              aria-label="View transaction simulation"
               aria-haspopup="dialog"
-              disabled={disabled}
+              disabled={pending || disabled}
               onClick={() => setShowDetails(true)}
             >
-              <AppIcon icon={list} aria-hidden="true" />
-            </DetailsButton>
+              Fee
+            </Heading>
+            {pending ? (
+              <InfoSectionLoadingSpinner aria-label="Estimating transaction fee" />
+            ) : (
+              <DetailsButton
+                aria-label="Transaction simulation details"
+                aria-haspopup="dialog"
+                disabled={disabled}
+                onClick={() => setShowDetails(true)}
+              >
+                <AppIcon icon={list} aria-hidden="true" />
+              </DetailsButton>
+            )}
+          </InfoSectionHeader>
+          {result?.fee !== undefined && (
+            <InfoPanel role="group" aria-label="Transaction fee">
+              <InfoSummaryRow>
+                <InfoSectionItemLabel>Expected fee</InfoSectionItemLabel>
+                <span>
+                  <NativeAmount
+                    value={result.fee}
+                    currency={{symbol: 'SOL', decimals: 9}}
+                  />
+                </span>
+              </InfoSummaryRow>
+            </InfoPanel>
           )}
-        </InfoSectionHeader>
-        {result?.fee !== undefined && (
-          <InfoPanel role="group" aria-label="Transaction fee">
-            <InfoSummaryRow>
-              <InfoSectionItemLabel>Expected fee</InfoSectionItemLabel>
-              <span>
-                <NativeAmount
-                  value={result.fee}
-                  currency={{symbol: 'SOL', decimals: 9}}
-                />
-              </span>
-            </InfoSummaryRow>
-          </InfoPanel>
-        )}
-      </InfoTableSection>
+        </InfoTableSection>
+      )}
       {error && <WarningMessage>{error}</WarningMessage>}
       {showDetails && (
         <DetailsPopup
@@ -155,6 +166,20 @@ export function SolanaTransactionSimulationSection({
               <span>{formatTokenAmount(result.fee, 9)} SOL</span>
             </InfoSectionRow>
           )}
+          {computeBudget.map((instruction, index) => (
+            <InfoSectionRow key={index}>
+              <InfoSectionItemLabel>
+                {instruction.kind === 'compute-unit-limit'
+                  ? 'Compute unit limit'
+                  : 'Compute unit price'}
+              </InfoSectionItemLabel>
+              <span>
+                {instruction.kind === 'compute-unit-limit'
+                  ? instruction.units.toLocaleString(UI_LOCALE)
+                  : `${instruction.microLamports.toLocaleString(UI_LOCALE)} µlamports / CU`}
+              </span>
+            </InfoSectionRow>
+          ))}
           {result?.unitsConsumed !== undefined && (
             <InfoSectionRow>
               <InfoSectionItemLabel>Compute units</InfoSectionItemLabel>

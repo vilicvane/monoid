@@ -159,6 +159,10 @@ export const SolanaTokenActivity = observer(function SolanaTokenActivity({
         : addressBookService.hasSigned('solana', address)
           ? 'seen'
           : 'unknown';
+  const shouldHighlightAddress = (address: string, label: string): boolean =>
+    label === 'Mint' ||
+    label === 'Owner' ||
+    (label === 'Account' && (address === signer || ownAddresses.has(address)));
   const openDetail = (detail: Detail): void =>
     setDetails(previous => [...previous, detail]);
 
@@ -330,7 +334,14 @@ export const SolanaTokenActivity = observer(function SolanaTokenActivity({
               <DetailsPopupHeader>
                 <KeyDerivationTag chain="solana">Solana</KeyDerivationTag>
               </DetailsPopupHeader>
-              <CenteredPopupAddress>{selected.address}</CenteredPopupAddress>
+              <CenteredPopupAddress
+                highlightEdges={shouldHighlightAddress(
+                  selected.address,
+                  selected.label,
+                )}
+              >
+                {selected.address}
+              </CenteredPopupAddress>
               <DetailsPopupDivider />
               <InfoSectionRow>
                 <InfoSectionItemLabel>Account type</InfoSectionItemLabel>
@@ -375,6 +386,10 @@ export const SolanaTokenActivity = observer(function SolanaTokenActivity({
                           {change.label}
                         </InfoSectionItemLabel>
                         <PopupAddress
+                          highlightEdges={shouldHighlightAddress(
+                            change.address,
+                            change.label,
+                          )}
                           kind={addressKind(change.address)}
                           mark={addressBookService.getMark(
                             'solana',

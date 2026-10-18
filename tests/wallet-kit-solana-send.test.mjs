@@ -6,6 +6,8 @@ import {test} from 'node:test';
 import {base58} from '@scure/base';
 import {reaction} from 'mobx';
 
+// eslint-disable-next-line @mufan/scoped-modules -- Distinguish definitive preflight refusals from lost responses.
+import {SolanaRPCError} from '../.bld/app/@lib/solana-rpc.js';
 // eslint-disable-next-line @mufan/scoped-modules -- Verify the exact compiled transaction bytes.
 import {parseSolanaTransaction} from '../.bld/app/@lib/solana-transaction.js';
 // eslint-disable-next-line @mufan/scoped-modules -- Exercise production request authorization.
@@ -388,7 +390,66 @@ test('lost RPC response recovers observed acceptance without a second broadcast'
   assert.equal(state.kit.respondSessionRequest.mock.callCount(), 1);
 });
 
-test('RPC rejection preserves the signed attempt, blocks Reject, and retries exact bytes after reload', async context => {
+for (const error of [
+  'BlockhashNotFound',
+  {InstructionError: [0, {Custom: 1}]},
+]) {
+  test(`first preflight refusal ${JSON.stringify(error)} restores Reject after reload`, async context => {
+    const state = setup(context);
+    const failure = new SolanaRPCError({
+      code: -32002,
+      message: 'Transaction simulation failed',
+      data: {err: error, logs: []},
+    });
+    state.rpc.mock.mockImplementation(async method => {
+      if (method === 'getSignatureStatuses') return status();
+      throw failure;
+    });
+
+    await assert.rejects(state.approve(), failure);
+    assert.equal(state.service.getSolanaTransactionSubmission(1), undefined);
+    assert.deepEqual(state.values.get(STORAGE), {});
+    assert.equal(state.solanaHistory.rememberSubmitted.mock.callCount(), 0);
+    assert.equal(state.kit.respondSessionRequest.mock.callCount(), 0);
+    assert.equal(state.requests.length, 1);
+
+    const restored = await state.reload();
+    assert.equal(restored.getSolanaTransactionSubmission(1), undefined);
+    await restored.rejectRequest(1);
+    assert.equal(state.kit.respondSessionRequest.mock.callCount(), 1);
+    assert.equal(
+      state.kit.respondSessionRequest.mock.calls[0].arguments[0].response.error
+        .code,
+      5000,
+    );
+    assert.equal(state.requests.length, 0);
+    assert.equal(broadcasts(state).length, 1);
+  });
+}
+
+test('preflight refusal does not discard a signature observed on chain', async context => {
+  const state = setup(context);
+  let accepted = false;
+  state.rpc.mock.mockImplementation(async method => {
+    if (method === 'getSignatureStatuses') return status(accepted);
+    accepted = true;
+    throw new SolanaRPCError({
+      code: -32002,
+      message: 'Transaction simulation failed',
+      data: {err: 'BlockhashNotFound'},
+    });
+  });
+
+  assert.equal(await state.approve(), true);
+  assert.equal(state.solanaHistory.rememberSubmitted.mock.callCount(), 1);
+  assert.equal(
+    state.kit.respondSessionRequest.mock.calls[0].arguments[0].response.result
+      .signature,
+    state.fixture.signature,
+  );
+});
+
+test('unclassified RPC failure preserves the signed attempt, blocks Reject, and retries exact bytes after reload', async context => {
   const state = setup(context);
   state.rpc.mock.mockImplementation(async method => {
     if (method === 'getSignatureStatuses') return status();
@@ -409,6 +470,38 @@ test('RPC rejection preserves the signed attempt, blocks Reject, and retries exa
     await restored.resumeSolanaTransactionRequest(1, TOPIC, state.rpc),
     true,
   );
+  assert.deepEqual(
+    broadcasts(state).map(call => call.arguments[1][0]),
+    [saved.signedTransaction, saved.signedTransaction],
+  );
+});
+
+test('preflight refusal on retry preserves an earlier attempt with unknown outcome', async context => {
+  const state = setup(context);
+  state.rpc.mock.mockImplementation(async method => {
+    if (method === 'getSignatureStatuses') return status();
+    throw new Error('Connection closed after sending');
+  });
+  await assert.rejects(state.approve(), /Connection closed/);
+  const saved = structuredClone(state.values.get(STORAGE)['1']);
+  const restored = await state.reload();
+  state.rpc.mock.mockImplementation(async method => {
+    if (method === 'getSignatureStatuses') return status();
+    throw new SolanaRPCError({
+      code: -32002,
+      message: 'Transaction simulation failed: Blockhash not found',
+      data: {err: 'BlockhashNotFound'},
+    });
+  });
+
+  await assert.rejects(
+    restored.resumeSolanaTransactionRequest(1, TOPIC, state.rpc),
+    /Blockhash not found/,
+  );
+  assert.deepEqual(restored.getSolanaTransactionSubmission(1), saved);
+  assert.deepEqual(state.values.get(STORAGE)['1'], saved);
+  await restored.rejectRequest(1);
+  assert.equal(state.kit.respondSessionRequest.mock.callCount(), 0);
   assert.deepEqual(
     broadcasts(state).map(call => call.arguments[1][0]),
     [saved.signedTransaction, saved.signedTransaction],

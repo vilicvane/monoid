@@ -107,7 +107,7 @@ export const SolanaTokenDetailsContent = observer(
           <TokenLogo src={metadata?.logoURI} />
           <DetailsPopupTitle>{metadata?.name ?? 'SPL Token'}</DetailsPopupTitle>
         </TokenDetailsHeader>
-        <CenteredPopupAddress onClick={onAddressClick}>
+        <CenteredPopupAddress highlightEdges onClick={onAddressClick}>
           {token.mint}
         </CenteredPopupAddress>
         <DetailsPopupDivider />

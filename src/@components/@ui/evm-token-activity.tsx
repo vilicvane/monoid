@@ -380,6 +380,7 @@ export const EvmTokenActivity = observer(function EvmTokenActivity({
                                 {label}
                               </InfoSectionItemLabel>
                               <PopupAddress
+                                highlightEdges
                                 kind={addressKind(address)}
                                 mark={addressBookService.getMark(
                                   'evm',

@@ -13,8 +13,8 @@ export const ViewPlaceholder = styled(InfoSectionItemLabel)`
 `;
 
 const Spinner = styled(LoadingSpinner)`
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
 `;
 
 export const ViewLoading = (

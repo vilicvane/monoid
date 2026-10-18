@@ -203,6 +203,8 @@ test('hydrates an actual parsed checked transaction without changing any signed 
     mint,
     decimals: 6,
     warning: undefined,
+    source: {owner, associated: false},
+    destination: {owner, associated: false},
   });
   assert.deepEqual(transaction.bytes, original);
   assert.deepEqual(result.instructions[0].data, data);
@@ -216,7 +218,15 @@ test('hydrates unchecked transfer, approval, and revoke from the source token ac
   const [result] = await loadSolanaTokenReviews([review(...items)], request);
 
   for (const item of result.instructions) {
-    assert.deepEqual(item.token, {mint, decimals: 6, warning: undefined});
+    assert.deepEqual(item.token, {
+      mint,
+      decimals: 6,
+      warning: undefined,
+      source: {owner, associated: false},
+      ...(item.decoded.kind === 'token-transfer'
+        ? {destination: {owner, associated: false}}
+        : {}),
+    });
   }
   assert.deepEqual(items, original);
   assert.equal(calls.length, 2);
@@ -255,6 +265,7 @@ test('flags on-chain source mint mismatches without replacing the signed mint', 
   assert.equal(result.instructions[0].token.decimals, 6);
   assert.equal(result.instructions[0].decoded.mint, mint);
   assert.match(result.instructions[0].token.warning, /mint does not match/);
+  assert.equal(result.instructions[0].token.source, undefined);
 });
 
 test('flags destination mint mismatches instead of presenting a normal transfer', async () => {
@@ -273,6 +284,7 @@ test('flags destination mint mismatches instead of presenting a normal transfer'
 
   assert.equal(result.instructions[0].token.mint, mint);
   assert.match(result.instructions[0].token.warning, /different tokens/);
+  assert.equal(result.instructions[0].token.destination, undefined);
 });
 
 test('unavailable RPC preserves checked fields and leaves unchecked values in base units', async () => {
@@ -289,6 +301,8 @@ test('unavailable RPC preserves checked fields and leaves unchecked values in ba
   result.instructions.forEach((item, index) => {
     assert.deepEqual(item.decoded, items[index].decoded);
     assert.match(item.token.warning, /unavailable/);
+    assert.equal(item.token.source, undefined);
+    assert.equal(item.token.destination, undefined);
   });
 });
 
@@ -352,7 +366,10 @@ test('ATA creation establishes only later instructions within the same transacti
     mint,
     decimals: 6,
     warning: undefined,
+    source: {owner, associated: true},
+    destination: {owner, associated: false},
   });
+  assert.equal(result.instructions[1].token.accountExists, undefined);
 });
 
 test('separate batch transactions never inherit an ATA creation execution order', async () => {
@@ -374,6 +391,7 @@ test('separate batch transactions never inherit an ATA creation execution order'
     assert.equal(token.mint, undefined);
     assert.equal(token.decimals, undefined);
     assert.match(token.warning, /unavailable/);
+    assert.equal(token.source, undefined);
   }
 });
 
@@ -391,6 +409,7 @@ test('unknown writable instructions prevent inference from potentially stale sou
     assert.equal(token.mint, undefined);
     assert.equal(token.decimals, undefined);
     assert.match(token.warning, /unavailable/);
+    assert.equal(token.source, undefined);
   }
 });
 
@@ -431,6 +450,135 @@ test('unknown writable account prevents ATA assumptions from hiding mutations', 
 
   assert.equal(result.instructions[2].token.mint, undefined);
   assert.equal(result.instructions[2].token.decimals, undefined);
+  assert.match(result.instructions[2].token.warning, /unavailable/);
+  assert.equal(result.instructions[2].token.source, undefined);
+  assert.equal(result.instructions[0].token.accountExists, undefined);
+});
+
+test('identifies associated token accounts by their owner rather than signing authority', async () => {
+  const {request} = rpc(
+    new Map([
+      [associatedAccount, tokenAccount()],
+      [mint, tokenMint()],
+    ]),
+  );
+  const [result] = await loadSolanaTokenReviews(
+    [
+      review(
+        instruction(12, {
+          source: associatedAccount,
+          destination: associatedAccount,
+        }),
+      ),
+    ],
+    request,
+  );
+  const item = result.instructions[0];
+
+  assert.equal(item.decoded.authority, authority);
+  assert.notEqual(authority, owner);
+  assert.deepEqual(item.token.source, {owner, associated: true});
+  assert.deepEqual(item.token.destination, {owner, associated: true});
+});
+
+test('only a matching on-chain account proves an idempotent create is already satisfied', async () => {
+  for (const [existing, accountExists] of [
+    [undefined, undefined],
+    [tokenAccount(otherMint), undefined],
+    [tokenAccount(mint, authority), undefined],
+    [tokenAccount(), true],
+  ]) {
+    const {request, calls} = rpc(
+      new Map([
+        [associatedAccount, existing],
+        [mint, tokenMint()],
+      ]),
+    );
+    const [result] = await loadSolanaTokenReviews(
+      [review(createInstruction())],
+      request,
+    );
+    const token = result.instructions[0].token;
+
+    assert.ok(calls[0].params[0].includes(associatedAccount));
+    assert.equal(token.accountExists, accountExists);
+  }
+});
+
+test('ATA creation never replaces an on-chain owner or mint mismatch', async () => {
+  for (const existing of [
+    tokenAccount(otherMint),
+    tokenAccount(mint, authority),
+  ]) {
+    const {request} = rpc(
+      new Map([
+        [associatedAccount, existing],
+        [mint, tokenMint()],
+        [otherMint, tokenMint()],
+      ]),
+    );
+    const [result] = await loadSolanaTokenReviews(
+      [
+        review(
+          createInstruction(),
+          instruction(13, {source: associatedAccount}),
+        ),
+      ],
+      request,
+    );
+    const [create, approval] = result.instructions;
+
+    assert.equal(create.token.accountExists, undefined);
+    assert.match(create.token.warning, /does not match/);
+    assert.notDeepEqual(approval.token.source, {owner, associated: true});
+  }
+});
+
+test('same-transaction creation resolves later destinations without inventing prior existence', async () => {
+  const {request} = rpc(new Map([[mint, tokenMint()]]));
+  const [result] = await loadSolanaTokenReviews(
+    [
+      review(
+        createInstruction(),
+        createInstruction(),
+        instruction(12, {
+          source: associatedAccount,
+          destination: associatedAccount,
+        }),
+      ),
+    ],
+    request,
+  );
+
+  assert.equal(result.instructions[0].token.accountExists, undefined);
+  assert.equal(result.instructions[1].token.accountExists, undefined);
+  assert.deepEqual(result.instructions[2].token.destination, {
+    owner,
+    associated: true,
+  });
+});
+
+test('unknown writable accounts invalidate on-chain existence and destination ownership', async () => {
+  const {request} = rpc(
+    new Map([
+      [associatedAccount, tokenAccount()],
+      [source, tokenAccount()],
+      [mint, tokenMint()],
+    ]),
+  );
+  const [result] = await loadSolanaTokenReviews(
+    [
+      review(
+        createInstruction(),
+        unknownInstruction(associatedAccount),
+        instruction(12, {destination: associatedAccount}),
+      ),
+    ],
+    request,
+  );
+
+  assert.equal(result.instructions[0].token.accountExists, undefined);
+  assert.equal(result.instructions[2].token.destination, undefined);
   assert.match(result.instructions[2].token.warning, /unavailable/);
 });
 
