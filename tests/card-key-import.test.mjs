@@ -325,3 +325,37 @@ test('raw Ed25519 stores its public key and computes one Solana address after re
   );
   assert.equal(getDefaultWallet(reloaded.keys[0]).address, SOLANA_REF.address);
 });
+
+test('card derivation sync imports every path, merges local wallets, and preserves the local default', async context => {
+  context.mock.method(console, 'info', () => {});
+
+  const wallet = path => ({
+    addressType: 'evm',
+    seed: 'Bitcoin seed',
+    curve: 'secp256k1',
+    path,
+    publicKey: PUBLIC_KEY,
+  });
+  const first = wallet("m/44'/60'/0'/0/3");
+  const second = wallet("m/44'/60'/0'/0/7");
+  const local = wallet("m/44'/60'/0'/0/9");
+  const ref = {...first, address: EVM_REF.address};
+  const source = scannedKey(ref, 'seed');
+  const existing = getCardKeyData({
+    ...source,
+    ref: {...local, address: EVM_REF.address},
+  });
+  const service = await WalletStorageService.create(createStorage([existing]));
+  const incoming = getCardKeyData(source, [ref], [first, second]);
+
+  assert.deepEqual(incoming.wallets, [first, second]);
+  assert.equal(isWalletKeyUpToDate(incoming, service.keys[0]), false);
+  importCardKey(service, incoming);
+
+  assert.deepEqual(toJS(service.keys[0].wallets), [local, first, second]);
+  assert.equal(service.keys[0].defaultWallet.path, local.path);
+  assert.equal(isWalletKeyUpToDate(incoming, service.keys[0]), true);
+  importCardKey(service, incoming);
+  assert.equal(service.keys[0].wallets.length, 3);
+  assertNoAddressCache(toJS(service.keys[0]));
+});

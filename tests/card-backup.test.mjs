@@ -10,6 +10,11 @@ import {
   getBackupCardIdentity,
   initializeBackupTarget,
 } from '../.bld/app/@components/views/safe/@card/card-backup-session.js';
+import {
+  encodeCardDerivationRecord,
+  getCardDerivationItemIndex,
+} from '../.bld/app/@components/views/safe/card-derivations.js';
+import {ADDRESS_TYPES} from '../.bld/app/@lib/wallet-address.js';
 
 const PIN = 'Safe-42';
 const signal = () => new AbortController().signal;
@@ -144,6 +149,9 @@ function cardSnapshot(source, items) {
       ...(item.type !== undefined && {type: item.type}),
       ...(item.alias !== undefined && {alias: item.alias}),
       ...(item.key !== undefined && {key: hex(item.key)}),
+      ...(item.derivationRecord !== undefined && {
+        derivationRecord: structuredClone(item.derivationRecord),
+      }),
       secret: item.secret,
     })),
   };
@@ -181,7 +189,7 @@ test('copy selection and the scanned Card snapshot do not share mutable item sta
   const session = new CardBackupSession(snapshot, [hex(index(1))]);
   await session.reset(snapshot, [hex(index(2))]);
   assert.deepEqual(snapshot, original);
-  assert.equal(Object.hasOwn(session.backup.items[0], 'key'), false);
+  assert.equal(session.backup.items[0].key, 'abcd');
   assert.equal(Object.hasOwn(session.backup.items[0], 'ref'), false);
   const copy = structuredClone(session.backup);
   snapshot.id = 'ffffffff';
@@ -191,6 +199,194 @@ test('copy selection and the scanned Card snapshot do not share mutable item sta
   snapshot.items[0].index = hex(index(4));
   snapshot.items.push({index: hex(index(5)), secret: true});
   assert.deepEqual(session.backup, copy);
+});
+
+function groupedFixture() {
+  const state = fixture();
+  const rootIndex = '02400000000000000001';
+  const orphanRootIndex = '02400000000000000002';
+  const wallet = {
+    addressType: 'evm',
+    seed: ADDRESS_TYPES.evm.seed,
+    curve: ADDRESS_TYPES.evm.curve,
+    path: ADDRESS_TYPES.evm.path(0),
+  };
+  const record = index => ({index, wallets: [{...wallet}]});
+  const attachment = sourceIndex => ({
+    index: bytes(getCardDerivationItemIndex(sourceIndex)),
+    key: bytes(sourceIndex),
+    secret: false,
+    derivationRecord: record(sourceIndex),
+  });
+  const root = {index: bytes(rootIndex), type: 'seed', secret: true};
+  const companion = attachment(rootIndex);
+  const orphan = attachment(orphanRootIndex);
+  // Deliberately list the companion first: transfer must still import its root
+  // before the attached record, while the orphan remains a standalone item.
+  state.items.splice(0, state.items.length, companion, root, orphan);
+  const records = new Map(
+    [companion, orphan].map(item => [
+      hex(item.index),
+      encodeCardDerivationRecord(item.derivationRecord),
+    ]),
+  );
+  state.source.get = async function (request) {
+    this.calls.push(['get', structuredClone(request)]);
+    await this.onGet?.(request);
+    return {data: records.get(hex(request.index))};
+  };
+  state.source.exportItem = async function (request) {
+    this.calls.push(['exportItem', structuredClone(request)]);
+    await this.onExport?.(request);
+    const item = state.items.find(
+      item => hex(item.index) === hex(request.index),
+    );
+    const data = new Uint8Array(160);
+    data[0] = request.recipientPublicKey[1];
+    data.set(item.index, 1);
+    return {...(item.key !== undefined && {key: item.key}), data};
+  };
+  return {...state, root, companion, orphan, records};
+}
+
+for (const selection of ['root', 'companion']) {
+  test(`a scanned Card ${selection} selection includes the complete linked group without sharing metadata state`, () => {
+    const {source, items, root, companion, orphan} = groupedFixture();
+    const snapshot = cardSnapshot(source, items);
+    const selectedIndex = hex(
+      selection === 'root' ? root.index : companion.index,
+    );
+    const session = new CardBackupSession(snapshot, [selectedIndex]);
+    assert.deepEqual(
+      session.backup.items
+        .filter(item => item.selected)
+        .map(item => item.index),
+      [hex(root.index), hex(companion.index)],
+    );
+    assert.equal(
+      session.backup.items.find(item => item.index === hex(orphan.index))
+        .selected,
+      false,
+    );
+    const before = structuredClone(session.backup);
+    snapshot.items[0].derivationRecord.wallets[0].path =
+      ADDRESS_TYPES.evm.path(9);
+    assert.deepEqual(session.backup, before);
+    assert.deepEqual(source.calls, []);
+  });
+}
+
+test('direct Copy validates linked records with Get and transfers both physical items root first', async () => {
+  const {source, target, root, companion, orphan} = groupedFixture();
+  const session = new CardBackupSession();
+  await session.readSource(source, source.hello, signal(), [hex(root.index)]);
+  assert.deepEqual(
+    source.calls.map(([method]) => method),
+    ['list', 'get', 'get'],
+  );
+  assert.deepEqual(
+    source.calls
+      .filter(([method]) => method === 'get')
+      .map(([, request]) => hex(request.index)),
+    [hex(companion.index), hex(orphan.index)],
+  );
+  assert.deepEqual(
+    session.backup.items.find(item => item.index === hex(companion.index))
+      .derivationRecord,
+    companion.derivationRecord,
+  );
+  await session.addTarget(target.hello);
+  await session.confirmTargets();
+  assert.deepEqual(
+    session.backup.targets[0].items.map(item => item.index),
+    [hex(root.index), hex(companion.index)],
+  );
+  await session.exportItems(source, source.hello, PIN, signal(), progress);
+  await session.importItems(target, target.hello, signal(), progress);
+  assert.deepEqual(
+    source.calls
+      .filter(([method]) => method === 'exportItem')
+      .map(([, request]) => hex(request.index)),
+    [hex(root.index), hex(companion.index)],
+  );
+  assert.deepEqual(
+    [...target.records.keys()],
+    [hex(root.index), hex(companion.index)],
+  );
+  assert.deepEqual(target.records.get(hex(companion.index)).key, root.index);
+  assert.equal(session.backup.complete, true);
+});
+
+test('an orphan derivation record can be selected and copied on its own', async () => {
+  const {source, target, orphan} = groupedFixture();
+  const session = new CardBackupSession();
+  await session.readSource(source, source.hello, signal(), [hex(orphan.index)]);
+  assert.deepEqual(
+    session.backup.items.filter(item => item.selected).map(item => item.index),
+    [hex(orphan.index)],
+  );
+  await session.addTarget(target.hello);
+  await session.confirmTargets();
+  await session.exportItems(source, source.hello, PIN, signal(), progress);
+  await session.importItems(target, target.hello, signal(), progress);
+  assert.deepEqual([...target.records.keys()], [hex(orphan.index)]);
+  assert.equal(session.backup.complete, true);
+});
+
+test('invalid companion linkage rejects the entire Copy scan before a transfer is created', async () => {
+  const {source, companion, orphan, records} = groupedFixture();
+  records.set(
+    hex(companion.index),
+    encodeCardDerivationRecord(orphan.derivationRecord),
+  );
+  const session = new CardBackupSession();
+  await assert.rejects(
+    session.readSource(source, source.hello, signal()),
+    /source does not match/i,
+  );
+  assert.equal(session.backup, undefined);
+  assert.equal(session.busy, false);
+  assert.deepEqual(
+    source.calls.map(([method]) => method),
+    ['list', 'get'],
+  );
+});
+
+test('a companion import with a lost response retries only that physical record and retains the acknowledged root', async () => {
+  const {source, target, root, companion} = groupedFixture();
+  const session = new CardBackupSession();
+  await session.readSource(source, source.hello, signal(), [hex(root.index)]);
+  await session.addTarget(target.hello);
+  await session.confirmTargets();
+  await session.exportItems(source, source.hello, PIN, signal(), progress);
+  target.afterImport = request => {
+    if (hex(request.index) === hex(companion.index))
+      throw new Error('Response lost');
+  };
+  await assert.rejects(
+    session.importItems(target, target.hello, signal(), progress),
+    /Response lost/,
+  );
+  assert.deepEqual(
+    session.backup.targets[0].items.map(item => item.imported),
+    [true, false],
+  );
+  assert.equal(session.backup.complete, false);
+  assert.deepEqual(
+    [...target.records.keys()],
+    [hex(root.index), hex(companion.index)],
+  );
+  const sourceCalls = source.calls.length;
+  target.afterImport = undefined;
+  await session.importItems(target, target.hello, signal(), progress);
+  assert.equal(source.calls.length, sourceCalls);
+  assert.deepEqual(
+    target.calls
+      .filter(([method]) => method === 'importItem')
+      .map(([, request]) => hex(request.index)),
+    [hex(root.index), hex(companion.index), hex(companion.index)],
+  );
+  assert.equal(session.backup.complete, true);
 });
 
 test('snapshot identity is checked with the full public key before the first source authentication', async () => {

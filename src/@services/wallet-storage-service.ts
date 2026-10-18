@@ -136,7 +136,7 @@ export type WalletKeyData = {
   defaultWallet?: WalletKeyWalletParameters;
 };
 
-type WalletKeyWalletParameters = {
+export type WalletKeyWalletParameters = {
   addressType: AddressType;
   seed: string | undefined;
   curve: CurveName | undefined;
@@ -160,7 +160,7 @@ export function getWalletReference({
   return {addressType, seed, curve, path};
 }
 
-function matchesWalletReference(
+export function matchesWalletReference(
   wallet: WalletKeyWalletParameters,
   reference: WalletKeyWalletParameters,
 ): boolean {

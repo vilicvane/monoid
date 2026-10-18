@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
 import {
-  assertCardForAliasUpdate,
+  assertCardForUpdate,
   writeCardAliases,
 } from '../.bld/app/@components/views/safe/card-alias-update.js';
 import {MonoidWrongCardError} from '../.bld/app/@lib/monoid/index.js';
@@ -38,7 +38,7 @@ test('writes selected aliases in order, including an explicit empty alias', asyn
     assert.equal(applet.requests.length, updates.length + 1);
   });
 
-  assertCardForAliasUpdate(hello(), CARD);
+  assertCardForUpdate(hello(), CARD);
   await writeCardAliases(applet, pending, controller.signal, (index, alias) =>
     updates.push([index, alias]),
   );
@@ -68,7 +68,7 @@ for (const [description, otherCard] of [
     const updates = [];
 
     await assert.rejects(async () => {
-      assertCardForAliasUpdate(hello(otherCard), CARD);
+      assertCardForUpdate(hello(otherCard), CARD);
       await writeCardAliases(applet, pending, controller.signal, (...update) =>
         updates.push(update),
       );

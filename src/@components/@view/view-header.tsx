@@ -9,43 +9,10 @@ import {css, styled} from 'styled-components';
 import type {MonoidSafeIdHex, SafeIndexHex} from '../../@atomics.js';
 import {AppIcon} from '../@ui/app-icon.js';
 import {IconButton} from '../@ui/icon-button.js';
+import {WhiteTag, leadingIconTagCSS} from '../@ui/tag.js';
 
 import {scrollBorderCSS} from './@scroll-border.js';
 import {ViewContext} from './@view-context.js';
-
-const ViewHeaderContainer = styled.div`
-  /* Match the visible text edge below the current title font's baseline. */
-  --view-header-text-edge-offset: 1px;
-
-  flex: 0;
-
-  box-sizing: content-box;
-  padding: var(--view-padding-top) var(--view-padding) 8px;
-  height: 50px;
-
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-content: center;
-  align-items: baseline;
-  gap: 8px;
-
-  border-bottom: solid 0.5px transparent;
-
-  ${scrollBorderCSS}
-`;
-
-export const ViewHeader = observer(
-  ({className, ...props}: HTMLAttributes<HTMLDivElement>): ReactNode => {
-    const {scrolled} = useContext(ViewContext);
-
-    return (
-      <ViewHeaderContainer
-        className={classNames(className, {scrolled})}
-        {...props}
-      />
-    );
-  },
-);
 
 export const ViewHeaderTitle = styled.h1`
   margin: 0;
@@ -68,12 +35,6 @@ export const viewHeaderTagCSS = css`
   max-width: 100%;
   margin: 0;
 
-  &:last-child {
-    grid-column: 3;
-    justify-self: end;
-    margin-right: var(--tag-inline-margin);
-  }
-
   /* Align the border to the text edge, then apply the tag's optical offset. */
   contain: layout;
   transform: translateY(
@@ -88,23 +49,61 @@ export const viewHeaderTagCSS = css`
   }
 `;
 
-const IdentifierContainer = styled.div`
+const IdentifierContainer = styled(WhiteTag)`
   ${viewHeaderTagCSS}
+  ${leadingIconTagCSS}
 
-  grid-column: 3;
+  grid-column: 2;
   width: max-content;
   max-width: none;
-  background-color: var(--ion-color-light);
+  z-index: 1;
   border-radius: 4px;
-
-  height: 24px;
-  padding: 0 6px 0 4px;
-  border: solid 0.5px var(--ion-color-light-shade);
-
-  display: flex;
-  align-items: center;
-  gap: 4px;
 `;
+
+const ViewHeaderContainer = styled.div`
+  /* Match the visible text edge below the current title font's baseline. */
+  --view-header-text-edge-offset: 1px;
+  --view-header-gap: 8px;
+
+  flex: 0;
+
+  box-sizing: content-box;
+  padding: var(--view-padding-top) var(--view-padding) 8px;
+  height: 50px;
+
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  /* Keep optional 32px header buttons from changing the content position. */
+  grid-template-rows: minmax(32px, auto);
+  align-content: center;
+  align-items: baseline;
+  gap: var(--view-header-gap);
+
+  &:has(> ${IdentifierContainer}) {
+    grid-template-columns: auto auto minmax(0, 1fr);
+  }
+
+  > ${IdentifierContainer} + :not(${ViewHeaderButton}) {
+    margin-left: calc(-1 * var(--view-header-gap) - var(--tag-overlap));
+  }
+
+  border-bottom: solid 0.5px transparent;
+
+  ${scrollBorderCSS}
+`;
+
+export const ViewHeader = observer(
+  ({className, ...props}: HTMLAttributes<HTMLDivElement>): ReactNode => {
+    const {scrolled} = useContext(ViewContext);
+
+    return (
+      <ViewHeaderContainer
+        className={classNames(className, {scrolled})}
+        {...props}
+      />
+    );
+  },
+);
 
 const IdentifierIcon = styled(AppIcon)`
   flex-shrink: 0;
@@ -115,7 +114,6 @@ const Identifier = styled.span`
   flex-shrink: 0;
   white-space: nowrap;
 
-  font-size: 14px;
   color: var(--ion-color-medium);
 `;
 

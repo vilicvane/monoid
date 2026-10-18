@@ -2,6 +2,11 @@ import {css, styled} from 'styled-components';
 
 export const TAG_HEIGHT = 22;
 
+export const leadingIconTagCSS = css`
+  gap: 2px;
+  padding-left: 3px;
+`;
+
 export const darkTagCSS = css`
   background-color: var(--ion-color-dark);
   border-color: var(--ion-color-dark-shade);

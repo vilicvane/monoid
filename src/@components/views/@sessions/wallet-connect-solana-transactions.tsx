@@ -36,6 +36,7 @@ import {
   InfoSectionHeader,
   InfoSectionItem,
   InfoSectionItemLabel,
+  InfoSectionLoadingSpinner,
   InfoSectionRow,
 } from '../../@ui/info-section.js';
 import {inlineIconCSS} from '../../@ui/inline-icon.js';
@@ -50,6 +51,7 @@ import {NativeAmount} from '../../@ui/native-amount.js';
 import {SolanaTokenTag} from '../../@ui/solana-token.js';
 import {SolanaTransactionSimulationSection} from '../../@ui/solana-transaction-simulation.js';
 import {WhiteTag} from '../../@ui/tag.js';
+import {TypedDataFields} from '../../@ui/typed-data-fields.js';
 
 import {WalletConnectSolanaToken} from './wallet-connect-solana-token.js';
 
@@ -62,8 +64,14 @@ const UnknownLabel = styled(InfoSectionItemLabel)`
 `;
 
 const AccountRole = styled.span`
+  flex-shrink: 0;
   color: var(--color-text-secondary);
   font-size: 12px;
+`;
+
+const AccountName = styled(InfoSectionItemLabel)`
+  min-width: 0;
+  overflow-wrap: anywhere;
 `;
 
 const Identifier = styled.span`
@@ -80,14 +88,16 @@ function SolanaInstruction({
   count,
   keys,
   chainId,
+  decoding,
 }: {
   instruction: SolanaInstructionReview;
   index: number;
   count: number;
   keys: readonly WalletKeyData[];
   chainId: string;
+  decoding: boolean;
 }): ReactNode {
-  const {decoded} = instruction;
+  const {decoded, idl} = instruction;
   const tokenInstruction = isSolanaTokenInstruction(decoded);
   const name =
     decoded.kind === 'token-approve'
@@ -101,8 +111,47 @@ function SolanaInstruction({
             : decoded.kind === 'transfer'
               ? 'Transfer'
               : decoded.kind === 'unknown'
-                ? 'Instruction'
+                ? (idl?.name ?? 'Instruction')
                 : 'Compute budget';
+  const dataContent = (
+    <>
+      <InfoSectionHeader>
+        <InfoSectionItemLabel>Data</InfoSectionItemLabel>
+        {decoding ? (
+          <InfoSectionLoadingSpinner aria-label="Decoding instruction" />
+        ) : (
+          <CopyButton
+            value={hexlify(instruction.data)}
+            label="Copy instruction data"
+          >
+            {instruction.data.length} bytes
+          </CopyButton>
+        )}
+      </InfoSectionHeader>
+      {idl ? (
+        <TypedDataFields
+          fields={idl.fields}
+          label={`${idl.name} arguments`}
+          renderValue={field =>
+            field.kind === 'value' && field.type === 'pubkey'
+              ? {
+                  block: true,
+                  content: (
+                    <ExpandableAddress>
+                      {field.value as string}
+                    </ExpandableAddress>
+                  ),
+                }
+              : undefined
+          }
+        />
+      ) : (
+        <MessageContent aria-label="Instruction data (hex)">
+          {hexlify(instruction.data)}
+        </MessageContent>
+      )}
+    </>
+  );
 
   return (
     <InfoSection>
@@ -117,9 +166,10 @@ function SolanaInstruction({
             token={{...instruction.token, mint: instruction.token.mint}}
           />
         )}
-        {decoded.kind === 'unknown' && (
+        {decoded.kind === 'unknown' && !idl && !decoding && (
           <UnknownLabel>Unrecognized instruction</UnknownLabel>
         )}
+        {idl && <InfoSectionItemLabel>IDL</InfoSectionItemLabel>}
       </MessageSectionHeader>
       {instruction.token?.warning && (
         <WarningMessage>{instruction.token.warning}</WarningMessage>
@@ -161,14 +211,16 @@ function SolanaInstruction({
             <InfoLegend>Program</InfoLegend>
             <ExpandableAddress>{instruction.programAddress}</ExpandableAddress>
           </InfoFieldset>
+          {idl && dataContent}
           {!!instruction.accounts.length && (
             <InfoPanel aria-label="Instruction accounts">
               {instruction.accounts.map((account, accountIndex) => (
                 <InfoSectionItem key={accountIndex}>
                   <InfoSectionHeader>
-                    <InfoSectionItemLabel>
-                      Account {accountIndex + 1}
-                    </InfoSectionItemLabel>
+                    <AccountName>
+                      {idl?.accountNames[accountIndex] ??
+                        `Account ${accountIndex + 1}`}
+                    </AccountName>
                     <AccountRole>
                       {account.isSigner && 'Signer · '}
                       {account.isWritable ? 'Writable' : 'Read-only'}
@@ -179,18 +231,7 @@ function SolanaInstruction({
               ))}
             </InfoPanel>
           )}
-          <InfoSectionHeader>
-            <InfoSectionItemLabel>Data</InfoSectionItemLabel>
-            <CopyButton
-              value={hexlify(instruction.data)}
-              label="Copy instruction data"
-            >
-              {instruction.data.length} bytes
-            </CopyButton>
-          </InfoSectionHeader>
-          <MessageContent aria-label="Instruction data (hex)">
-            {hexlify(instruction.data)}
-          </MessageContent>
+          {!idl && dataContent}
         </>
       ) : (
         <InfoPanel>
@@ -221,6 +262,7 @@ export const WalletConnectSolanaTransactions = observer(
   ({
     payload,
     reviews,
+    decoding = false,
     simulations,
     showSimulation,
     onRefreshSimulation,
@@ -230,6 +272,7 @@ export const WalletConnectSolanaTransactions = observer(
   }: {
     payload: WalletConnectSolanaTransactionRequest;
     reviews?: readonly SolanaTransactionReview[];
+    decoding?: boolean;
     simulations: readonly (SolanaTransactionSimulation | undefined)[];
     showSimulation: boolean;
     onRefreshSimulation: () => void;
@@ -326,6 +369,7 @@ export const WalletConnectSolanaTransactions = observer(
                   count={review.instructions.length}
                   keys={walletStorageService.keys}
                   chainId={payload.chainId}
+                  decoding={decoding && instruction.decoded.kind === 'unknown'}
                 />
               ))}
               {review && showSimulation && (

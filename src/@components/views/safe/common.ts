@@ -7,6 +7,9 @@ import type {
   SafeKnownType,
 } from '../../../@atomics.js';
 import type {AddressType} from '../../../@lib/wallet-address.js';
+import type {WalletKeyPublicKeyData} from '../../../@services/index.js';
+
+import type {CardDerivationRecord} from './card-derivations.js';
 
 export type ScannedCardKeyData = {
   type: SafeKnownType;
@@ -35,6 +38,8 @@ export type ScannedCardItemData = {
   key?: string;
   secret: boolean;
   ref?: ScannedCardKeyData['ref'];
+  derivations?: WalletKeyPublicKeyData[];
+  derivationRecord?: CardDerivationRecord;
 };
 
 export function isCardKeyItem(

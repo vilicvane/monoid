@@ -11,6 +11,7 @@ export * from './monoid-credentials-store.js';
 export * from './monoid-scan-prompt-presenter.js';
 export * from './monoid-storage-service.js';
 export * from './site-logo-service.js';
+export * from './solana-idl-service.js';
 export * from './solana-token-service.js';
 export * from './solana-transaction-history-service.js';
 export * from './storage-service.js';

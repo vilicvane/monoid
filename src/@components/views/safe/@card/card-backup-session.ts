@@ -12,6 +12,11 @@ import {
   initializeMonoidCard,
 } from '../../../../@lib/monoid/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
+import {
+  isCardDerivationItem,
+  readCardDerivationRecord,
+} from '../card-derivations.js';
+import {getCardResourceGroups} from '../card-resource-groups.js';
 import type {ScannedCardData, ScannedCardItemData} from '../common.js';
 
 export type CardBackupIdentity = {
@@ -21,7 +26,7 @@ export type CardBackupIdentity = {
 
 export type CardBackupItem = Pick<
   ScannedCardItemData,
-  'index' | 'type' | 'alias' | 'secret'
+  'index' | 'type' | 'alias' | 'secret' | 'key' | 'derivationRecord'
 > & {
   selected: boolean;
 };
@@ -63,19 +68,28 @@ function createBackup(
 
   const selectedIndexes =
     sourceIndexes === undefined ? undefined : new Set(sourceIndexes);
-  const backupItems = items.map(({index, type, alias, secret}) => {
-    if (!/^[0-9a-f]{20}$/i.test(index)) {
-      throw new MonoidCardError('The card returned an invalid item index.');
-    }
+  const backupItems = items.map(
+    ({index, type, alias, secret, key, derivationRecord}) => {
+      if (!/^[0-9a-f]{20}$/i.test(index)) {
+        throw new MonoidCardError('The card returned an invalid item index.');
+      }
 
-    return {
-      index,
-      ...(type !== undefined && {type}),
-      ...(alias !== undefined && {alias}),
-      secret,
-      selected: selectedIndexes?.has(index) ?? true,
-    };
-  });
+      return {
+        index,
+        ...(type !== undefined && {type}),
+        ...(alias !== undefined && {alias}),
+        ...(key !== undefined && {key}),
+        ...(derivationRecord !== undefined && {
+          derivationRecord: {
+            index: derivationRecord.index,
+            wallets: derivationRecord.wallets.map(wallet => ({...wallet})),
+          },
+        }),
+        secret,
+        selected: selectedIndexes?.has(index) ?? true,
+      };
+    },
+  );
 
   if (selectedIndexes) {
     const availableIndexes = new Set<string>(
@@ -89,12 +103,18 @@ function createBackup(
     }
   }
 
+  const groupedItems = getCardResourceGroups(backupItems).flatMap(group => {
+    const selected = group.items.some(item => item.selected);
+
+    return group.items.map(item => ({...item, selected}));
+  });
+
   return {
     source: {
       id: source.id.toLowerCase(),
       publicKey: source.publicKey.toLowerCase(),
     },
-    items: backupItems,
+    items: groupedItems,
     targets: [],
     targetsConfirmed: false,
     importStarted: false,
@@ -330,19 +350,26 @@ export class CardBackupSession {
       throwIfCancelled(signal);
       const {items} = await applet.list({});
       throwIfCancelled(signal);
+      const scannedItems: ScannedCardItemData[] = [];
 
-      this.setBackup(
-        createBackup(
-          source,
-          items.map(({index, type, alias, secret}) => ({
-            index: uint8ArrayToHex(index),
-            ...(type !== undefined && {type}),
-            ...(alias !== undefined && {alias}),
-            secret,
-          })),
-          indexes,
-        ),
-      );
+      for (const {index, type, alias, secret, key} of items) {
+        const item: ScannedCardItemData = {
+          index: uint8ArrayToHex(index),
+          ...(type !== undefined && {type}),
+          ...(alias !== undefined && {alias}),
+          ...(key !== undefined && {key: uint8ArrayToHex(key)}),
+          secret,
+        };
+
+        if (isCardDerivationItem(item)) {
+          item.derivationRecord = await readCardDerivationRecord(applet, item);
+          throwIfCancelled(signal);
+        }
+
+        scannedItems.push(item);
+      }
+
+      this.setBackup(createBackup(source, scannedItems, indexes));
     });
   }
 

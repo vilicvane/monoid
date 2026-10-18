@@ -8,6 +8,7 @@ import {observer} from 'mobx-react-lite';
 import type {ButtonHTMLAttributes, ReactNode} from 'react';
 import {css, styled} from 'styled-components';
 
+import type {BIP39PathString} from '../../../../@atomics.js';
 import type {AddressType} from '../../../../@lib/wallet-address.js';
 import {
   ADDRESS_TYPES,
@@ -89,8 +90,9 @@ export const KeyItem = observer(
     data: {type, index, alias},
     addressType,
     address,
+    path: derivedPath,
     state,
-    canWriteAlias,
+    canWrite,
     selected,
     disabled,
     onSelect,
@@ -99,8 +101,9 @@ export const KeyItem = observer(
     data: Pick<ScannedCardKeyData, 'type' | 'index' | 'alias'>;
     addressType: AddressType;
     address: string | undefined;
+    path?: BIP39PathString;
     state: KeyItemState;
-    canWriteAlias: boolean;
+    canWrite: boolean;
     selected: boolean;
     disabled: boolean;
     onSelect: (selected: boolean) => void;
@@ -108,7 +111,7 @@ export const KeyItem = observer(
   }): ReactNode => {
     const path =
       type === 'seed' || type === 'master'
-        ? ADDRESS_TYPES[addressType].path(0)
+        ? (derivedPath ?? ADDRESS_TYPES[addressType].path(0))
         : undefined;
     const canChangeAddressType = getCardKeyAddressTypes(type).length > 1;
 
@@ -170,16 +173,16 @@ export const KeyItem = observer(
                 <AppIcon icon={refreshCw} aria-hidden="true" />
               </KeyUpdateTag>
             )}
-            {canWriteAlias && (
+            {canWrite && (
               <KeyWriteTag
                 role="img"
-                aria-label="Card alias update available"
-                title="Write app alias to card"
+                aria-label="Card update available"
+                title="Update card from app"
               >
                 <AppIcon icon={arrowUpToLine} aria-hidden="true" />
               </KeyWriteTag>
             )}
-            {state === 'up-to-date' && !canWriteAlias && (
+            {state === 'up-to-date' && !canWrite && (
               <KeySavedTag role="img" aria-label="Saved">
                 <AppIcon icon={saveCheck} aria-hidden="true" />
               </KeySavedTag>

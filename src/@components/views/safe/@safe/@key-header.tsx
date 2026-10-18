@@ -83,6 +83,11 @@ export const KeyHeader = observer(
           <ViewHeaderTitle>
             <KeyType type={data.type} />
           </ViewHeaderTitle>
+          <ViewHeaderIdentifier
+            identifier={{type: 'safe-item', index: data.index}}
+            onClick={onClick}
+            aria-label="Edit key alias"
+          />
           {data.alias && (
             <KeyAliasTag
               as={AliasTag}
@@ -93,11 +98,6 @@ export const KeyHeader = observer(
               {data.alias}
             </KeyAliasTag>
           )}
-          <ViewHeaderIdentifier
-            identifier={{type: 'safe-item', index: data.index}}
-            onClick={onClick}
-            aria-label="Edit key alias"
-          />
         </ViewHeader>
         {aliasInput}
         {scanPromptContent}

@@ -3,7 +3,7 @@ import {css, styled} from 'styled-components';
 
 import type {AddressChain} from '../../@lib/wallet-address.js';
 import {collapseOutAnimationCSS, popInAnimationCSS} from '../@animations.js';
-import {PrimaryTag, Tag} from '../@ui/tag.js';
+import {PrimaryTag, Tag, leadingIconTagCSS} from '../@ui/tag.js';
 
 import {AddressChainIcon} from './address-chain-icon.js';
 
@@ -55,8 +55,7 @@ export const KeyAliasTag = styled(PrimaryTag)`
 `;
 
 const KeyDerivationTagContainer = styled(KeyTag)`
-  gap: 2px;
-  padding-left: 3px;
+  ${leadingIconTagCSS}
 
   background-color: var(
     --color-address-tag-background,

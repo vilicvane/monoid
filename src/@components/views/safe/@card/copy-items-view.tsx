@@ -25,7 +25,6 @@ import {fadeInAnimationCSS, popInAnimationCSS} from '../../../@animations.js';
 import {MonoidCard, MonoidCardFrame} from '../../../@monoid/monoid-card.js';
 import {
   MonoidScanStatePromptContentHighlight,
-  MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
 import {
@@ -58,6 +57,11 @@ import {
   ViewHeaderTitle,
   ViewPlaceholder,
 } from '../../../@view/index.js';
+import {
+  type CardResourceGroup,
+  formatCardResourceCount,
+  getCardResourceGroups,
+} from '../card-resource-groups.js';
 
 import {CardResourceItem, CardResourceList} from './@resource-item.js';
 import {
@@ -223,17 +227,55 @@ const StatusIcon = styled(AppIcon)<{$done: boolean; $conflict: boolean}>`
         : 'var(--ion-color-primary)'};
 `;
 
+function getCopyProgress(
+  groups: readonly CardResourceGroup<CardBackupItem>[],
+  targets: readonly CardBackupTarget[],
+  phase: 'exported' | 'imported',
+): string {
+  return formatCardResourceCount(
+    groups,
+    item =>
+      targets.length > 0 &&
+      targets.every(target =>
+        target.items.some(
+          transfer => transfer.index === item.index && transfer[phase],
+        ),
+      ),
+  );
+}
+
+const CopyProgress = ({
+  children,
+  value,
+}: {
+  children: string;
+  value: string;
+}): ReactNode => (
+  <>
+    {children}, hold tight...
+    <br />
+    <MonoidScanStatePromptContentHighlight>
+      {value}
+    </MonoidScanStatePromptContentHighlight>
+  </>
+);
+
 const DestinationCards = ({
   targets,
-  items,
+  groups,
 }: {
   targets: CardBackupTarget[];
-  items: CardBackupItem[];
+  groups: CardResourceGroup<CardBackupItem>[];
 }): ReactNode => (
   <Items>
     {targets.map(target => {
-      const copied = target.items.filter(item => item.imported).length;
-      const conflicts = target.items.filter(item => item.conflict);
+      const conflicts = groups.filter(group =>
+        group.items.some(item =>
+          target.items.some(
+            transfer => transfer.index === item.index && transfer.conflict,
+          ),
+        ),
+      );
       const done = target.complete;
       return (
         <ListItem key={target.publicKey}>
@@ -246,18 +288,15 @@ const DestinationCards = ({
           <ListItemContent>
             <ListItemName>{target.id}</ListItemName>
             <ListItemDescription>
-              {copied}/{target.items.length} items
+              Items · {getCopyProgress(groups, [target], 'imported')}
             </ListItemDescription>
             {conflicts.length > 0 && (
               <ConflictDescription>
                 Conflicts:{' '}
                 {conflicts
-                  .map(transfer => {
-                    const item = items.find(
-                      item => item.index === transfer.index,
-                    )!;
-                    return item.alias || `Item ${item.index.slice(4, 12)}`;
-                  })
+                  .map(
+                    ({item}) => item.alias || `Item ${item.index.slice(4, 12)}`,
+                  )
                   .join(', ')}
               </ConflictDescription>
             )}
@@ -330,19 +369,11 @@ export const CopyItemsView = observer(
     }, [backup?.complete, working, pinSession]);
 
     const selected = backup?.items.filter(item => item.selected) ?? [];
-    const itemCountLabel = `${selected.length} ${selected.length === 1 ? 'item' : 'items'}`;
+    const selectedGroups = getCardResourceGroups(selected);
+    const itemCountLabel = `Items · ${formatCardResourceCount(selectedGroups)}`;
     const targets = backup?.targets ?? [];
     const transfers = targets.flatMap(target => target.items);
     const exported = transfers.filter(item => item.exported).length;
-    const exportedItems = selected.filter(
-      item =>
-        targets.length > 0 &&
-        targets.every(target =>
-          target.items.some(
-            transfer => transfer.index === item.index && transfer.exported,
-          ),
-        ),
-    ).length;
     const conflicts = transfers.filter(item => item.conflict).length;
     const completedCards = targets.filter(target => target.complete).length;
     const sourceId = backup?.source.id;
@@ -601,23 +632,19 @@ export const CopyItemsView = observer(
             </>,
             async (applet, setState, hello, signal) => {
               setState('Authenticating with Safe PIN...');
-              await session.exportItems(
-                applet,
-                hello,
-                pin!,
-                signal,
-                (current, total) => {
-                  setState(
-                    <MonoidScanStatePromptProgress
-                      current={current}
-                      total={total}
-                      showCount
-                    >
-                      Exporting items
-                    </MonoidScanStatePromptProgress>,
-                  );
-                },
-              );
+              await session.exportItems(applet, hello, pin!, signal, () => {
+                setState(
+                  <CopyProgress
+                    value={getCopyProgress(
+                      selectedGroups,
+                      session.backup!.targets,
+                      'exported',
+                    )}
+                  >
+                    Exporting items
+                  </CopyProgress>,
+                );
+              });
             },
             hello => assertBackupCard(hello, backup.source),
           );
@@ -643,22 +670,21 @@ export const CopyItemsView = observer(
               setStartedImports(current =>
                 new Set(current).add(target!.publicKey),
               );
-              await session.importItems(
-                applet,
-                hello,
-                signal,
-                (current, total) => {
-                  setState(
-                    <MonoidScanStatePromptProgress
-                      current={current}
-                      total={total}
-                      showCount
-                    >
-                      Importing items
-                    </MonoidScanStatePromptProgress>,
-                  );
-                },
-              );
+              await session.importItems(applet, hello, signal, () => {
+                setState(
+                  <CopyProgress
+                    value={getCopyProgress(
+                      selectedGroups,
+                      session.backup!.targets.filter(
+                        card => card.publicKey === target!.publicKey,
+                      ),
+                      'imported',
+                    )}
+                  >
+                    Importing items
+                  </CopyProgress>,
+                );
+              });
             },
             hello => {
               if (target) {
@@ -715,7 +741,7 @@ export const CopyItemsView = observer(
               id={sourceId}
               description={
                 step === 3
-                  ? `${exportedItems}/${selected.length} items`
+                  ? `Items · ${getCopyProgress(selectedGroups, targets, 'exported')}`
                   : itemCountLabel
               }
               $interrupted={interruptedCards.has(backup!.source.publicKey)}
@@ -744,7 +770,7 @@ export const CopyItemsView = observer(
               id={target.id}
               description={
                 step === 4 && startedImports.has(target.publicKey)
-                  ? `${target.items.filter(item => item.imported).length}/${target.items.length} items`
+                  ? `Items · ${getCopyProgress(selectedGroups, [target], 'imported')}`
                   : undefined
               }
               $interrupted={interruptedCards.has(target.publicKey)}
@@ -880,7 +906,9 @@ export const CopyItemsView = observer(
             onDismiss={() => setDetails(undefined)}
           >
             <DetailsPopupTitle>
-              {details === 'items' ? 'Selected items' : 'Import progress'}
+              {details === 'items'
+                ? `Selected items · ${formatCardResourceCount(selectedGroups)}`
+                : 'Import progress'}
             </DetailsPopupTitle>
             <DetailsPopupDivider />
             {details === 'items' ? (
@@ -888,8 +916,12 @@ export const CopyItemsView = observer(
                 {selected.length === 0 && (
                   <ListItemDescription>No items selected.</ListItemDescription>
                 )}
-                {selected.map(item => (
-                  <CardResourceItem key={item.index} data={item} />
+                {selectedGroups.map(({item}) => (
+                  <CardResourceItem
+                    key={item.index}
+                    data={item}
+                    resources={view.sourceCard?.items ?? backup?.items}
+                  />
                 ))}
               </CardResourceList>
             ) : (
@@ -897,7 +929,7 @@ export const CopyItemsView = observer(
                 targets={targets.filter(
                   target => target.publicKey === details.publicKey,
                 )}
-                items={selected}
+                groups={selectedGroups}
               />
             )}
             {details !== 'items' && (

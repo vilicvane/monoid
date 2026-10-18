@@ -25,6 +25,7 @@ import {
   KeyTags,
   KeyTypeTag,
 } from '../../../@key/key-tags.js';
+import {isCardDerivationItem} from '../card-derivations.js';
 import type {ScannedCardItemData} from '../common.js';
 
 export const CardResourceList = styled(KeyList)`
@@ -44,14 +45,43 @@ const DerivationTag = styled(KeyDerivationTag)<{$hasPath: boolean}>`
   min-width: 0;
 `;
 
+const ResourceRelation = styled(KeyListPlaceholder)`
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+
+  > span {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+`;
+
+const RelatedAlias = styled.span`
+  && {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+`;
+
 export const CardResourceItem = observer(
   ({
     data: item,
+    resources,
     selected = false,
     disabled = false,
     onSelect,
   }: {
-    data: Pick<ScannedCardItemData, 'index' | 'type' | 'alias'>;
+    data: Pick<
+      ScannedCardItemData,
+      'index' | 'type' | 'alias' | 'derivationRecord'
+    >;
+    resources?: readonly Pick<
+      ScannedCardItemData,
+      'index' | 'type' | 'alias' | 'derivationRecord'
+    >[];
     selected?: boolean;
     disabled?: boolean;
     onSelect?: (selected: boolean) => void;
@@ -66,12 +96,23 @@ export const CardResourceItem = observer(
       typeof item.type === 'number'
         ? item.type
         : parseInt(item.index.slice(0, 4), 16);
-    const type =
-      typeof item.type === 'string'
+    const type = isCardDerivationItem(item)
+      ? 'derivations'
+      : typeof item.type === 'string'
         ? item.type
         : typeCode === 0x0fff
           ? 'generic'
           : `0x${typeCode.toString(16).padStart(4, '0')}`;
+    const sourceIndex = (
+      item.derivationRecord ??
+      resources?.find(resource => resource.index === item.index)
+        ?.derivationRecord
+    )?.index;
+    const source = sourceIndex
+      ? (resources?.find(resource => resource.index === sourceIndex) ??
+        walletStorageService.indexToKeyMap.get(sourceIndex))
+      : undefined;
+    const sourceType = sourceIndex?.startsWith('02') ? 'seed' : 'master';
 
     return (
       <KeyListItem as={onSelect ? 'label' : 'div'}>
@@ -96,7 +137,18 @@ export const CardResourceItem = observer(
               </DerivationTag>
             )}
           </KeyTags>
-          {wallet ? (
+          {sourceIndex ? (
+            <ResourceRelation title={`Source: ${sourceIndex}`}>
+              <span>For {sourceType}</span>
+              {source?.alias && (
+                <>
+                  <span>·</span>
+                  <RelatedAlias>{source.alias}</RelatedAlias>
+                </>
+              )}
+              <span>· {sourceIndex.slice(2, 10)}</span>
+            </ResourceRelation>
+          ) : wallet ? (
             <KeyListAddress>{wallet.address}</KeyListAddress>
           ) : (
             <KeyListPlaceholder>

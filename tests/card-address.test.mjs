@@ -6,7 +6,9 @@ import {getBytes} from 'ethers';
 import {
   getCardKeyAddressTypes,
   getLocalCardKeyAddress,
+  getLocalCardWalletDerivation,
   readCardKeyAddress,
+  readCardWalletDerivations,
 } from '../.bld/app/@components/views/safe/card-address.js';
 import {isCardKeyItem} from '../.bld/app/@components/views/safe/common.js';
 import {scanCardItems} from '../.bld/app/@components/views/safe/scan-card.js';
@@ -255,7 +257,11 @@ test('card scans retain every resource and exact metadata while reading addresse
   ]);
   assert.equal(scanned.length, items.length);
   for (const [position, item] of items.entries()) {
-    const {ref, ...metadata} = scanned[position];
+    const {ref, derivations, ...metadata} = scanned[position];
+    assert.deepEqual(
+      derivations,
+      item.type === 'seed' || item.type === 'master' ? [] : undefined,
+    );
     assert.deepEqual(metadata, {
       index: Buffer.from(item.index).toString('hex'),
       ...(item.type !== undefined && {type: item.type}),
@@ -323,6 +329,7 @@ test('initial scans retain unsupported wallet keys without an address but propag
     key: '',
     alias: '',
     secret: true,
+    derivations: [],
   });
   assert.equal(scanned[1].ref.addressType, 'solana');
   assert.deepEqual(progress, [
@@ -385,4 +392,139 @@ test('a card containing only non-wallet-address resources needs no viewKey calls
   );
   assert.equal(scanned.length, items.length);
   assert.ok(scanned.every(item => item.ref === undefined));
+});
+
+test('equivalent derivation requests share one read while preserving their separate address records', async () => {
+  const path = "m/44'/60'/0'/0/7";
+  const wallets = ['evm', 'bitcoin-segwit', 'evm'].map(addressType => ({
+    addressType,
+    seed: 'Bitcoin seed',
+    curve: 'secp256k1',
+    path,
+  }));
+  const requests = [];
+  const applet = {
+    async viewKey(request) {
+      requests.push(request);
+      return {publicKey: bytes(PUBLIC_KEY)};
+    },
+  };
+
+  const derived = await readCardWalletDerivations(
+    applet,
+    {type: 'seed', index: INDEX},
+    wallets,
+  );
+
+  assert.equal(requests.length, 1);
+  assert.deepEqual(
+    derived,
+    wallets.map(wallet => ({...wallet, publicKey: PUBLIC_KEY})),
+  );
+
+  await readCardWalletDerivations(
+    applet,
+    {type: 'seed', index: '00000002'},
+    wallets,
+  );
+  assert.equal(requests.length, 2, 'reads are never reused across roots');
+});
+
+test('Taproot output, path, and derivation curve stay separate despite equal-looking public keys', async () => {
+  const path = "m/44'/60'/0'/0'/7'";
+  const base = {
+    addressType: 'evm',
+    seed: 'Bitcoin seed',
+    curve: 'secp256k1',
+    path,
+  };
+  const wallets = [
+    base,
+    {...base, addressType: 'bitcoin-taproot'},
+    {...base, path: "m/44'/60'/0'/0'/8'"},
+    {
+      ...base,
+      addressType: 'solana',
+      seed: 'ed25519 seed',
+      curve: 'ed25519',
+    },
+  ];
+  const requests = [];
+  const derived = await readCardWalletDerivations(
+    {
+      async viewKey(request) {
+        requests.push(request);
+        return {
+          publicKey: bytes(
+            request.taproot || request.derivation.type === 'slip10'
+              ? TAPROOT_KEY
+              : PUBLIC_KEY,
+          ),
+        };
+      },
+    },
+    {type: 'seed', index: INDEX},
+    wallets,
+  );
+
+  assert.equal(requests.length, 4);
+  assert.equal(requests[0].taproot, undefined);
+  assert.equal(requests[1].taproot, true);
+  assert.deepEqual(
+    derived.map(({publicKey, ...wallet}) => wallet),
+    wallets,
+  );
+});
+
+test('local reuse preserves the target address type and requires equivalent seed, curve, path, and output', () => {
+  const source = {
+    addressType: 'evm',
+    seed: 'Bitcoin seed',
+    curve: 'secp256k1',
+    path: "m/44'/60'/0'/0/7",
+    publicKey: PUBLIC_KEY,
+  };
+  const {publicKey, ...parameters} = source;
+  const target = {...parameters, addressType: 'bitcoin-segwit'};
+
+  assert.deepEqual(getLocalCardWalletDerivation([source], target), {
+    ...target,
+    publicKey,
+  });
+  for (const different of [
+    {...target, seed: 'ed25519 seed'},
+    {...target, curve: 'ed25519'},
+    {...target, path: "m/44'/60'/0'/0/8"},
+    {...target, addressType: 'bitcoin-taproot'},
+  ]) {
+    assert.equal(getLocalCardWalletDerivation([source], different), undefined);
+  }
+});
+
+test('derivation request reuse still observes cancellation before a cached result', async () => {
+  const controller = new AbortController();
+  const wallet = {
+    addressType: 'evm',
+    seed: 'Bitcoin seed',
+    curve: 'secp256k1',
+    path: "m/44'/60'/0'/0/7",
+  };
+  let reads = 0;
+
+  await assert.rejects(
+    readCardWalletDerivations(
+      {
+        async viewKey() {
+          reads++;
+          controller.abort();
+          return {publicKey: bytes(PUBLIC_KEY)};
+        },
+      },
+      {type: 'seed', index: INDEX},
+      [wallet, {...wallet, addressType: 'bitcoin-segwit'}],
+      controller.signal,
+    ),
+    {code: 'CANCELLED'},
+  );
+  assert.equal(reads, 1);
 });

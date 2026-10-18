@@ -1,5 +1,6 @@
 import {base58, base64} from '@scure/base';
 
+import type {SolanaIdlInstruction} from './solana-idl.js';
 import {
   type SolanaTokenInstruction,
   decodeSolanaTokenInstruction,
@@ -35,6 +36,7 @@ export type SolanaInstructionReview = {
   data: Uint8Array;
   decoded: SolanaInstructionData;
   token?: SolanaTokenReview;
+  idl?: SolanaIdlInstruction;
 };
 
 export type SolanaTransactionReview = {

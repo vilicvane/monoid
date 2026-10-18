@@ -2,12 +2,14 @@ import {runInAction} from 'mobx';
 
 import type {
   WalletKeyData,
+  WalletKeyPublicKeyData,
   WalletStorageService,
 } from '../../../@services/index.js';
 // eslint-disable-next-line @mufan/import -- Keep key import logic independent of UI services.
 import {
   WalletKeyKnownType,
   getWalletReference,
+  matchesWalletReference,
 } from '../../../@services/wallet-storage-service.js';
 
 import type {ScannedCardKeyData} from './common.js';
@@ -15,6 +17,7 @@ import type {ScannedCardKeyData} from './common.js';
 export function getCardKeyData(
   key: ScannedCardKeyData,
   refs: readonly ScannedCardKeyData['ref'][] = [key.ref],
+  derivations: readonly WalletKeyPublicKeyData[] = [],
 ): WalletKeyData {
   const {addressType, seed, curve, path, publicKey} = key.ref;
   const source = {addressType, seed, curve, path, publicKey};
@@ -27,7 +30,10 @@ export function getCardKeyData(
   };
 
   if (key.type === 'seed' || key.type === 'master') {
-    data.wallets.push(source);
+    data.wallets.push(...derivations);
+    if (!data.wallets.some(wallet => matchesWalletReference(wallet, source))) {
+      data.wallets.push(source);
+    }
   } else if (key.type === 'secp256k1') {
     const ordinary = refs.find(
       ref => ref.addressType === 'evm' || ref.addressType === 'bitcoin-segwit',

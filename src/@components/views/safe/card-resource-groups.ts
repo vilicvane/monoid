@@ -1,0 +1,56 @@
+import type {ScannedCardItemData} from './common.js';
+
+type CardResourceData = Pick<
+  ScannedCardItemData,
+  'index' | 'type' | 'derivationRecord'
+>;
+
+export type CardResourceGroup<T> = {
+  item: T;
+  items: T[];
+};
+
+export function getCardResourceGroups<T extends CardResourceData>(
+  items: readonly T[],
+): CardResourceGroup<T>[] {
+  const roots = new Map<string, CardResourceGroup<T>>();
+
+  for (const item of items) {
+    if (item.type === 'seed' || item.type === 'master') {
+      roots.set(item.index, {item, items: [item]});
+    }
+  }
+
+  const groups: CardResourceGroup<T>[] = [];
+
+  for (const item of items) {
+    const source = item.derivationRecord
+      ? roots.get(item.derivationRecord.index)
+      : undefined;
+
+    if (source) {
+      source.items.push(item);
+    } else {
+      groups.push(roots.get(item.index) ?? {item, items: [item]});
+    }
+  }
+
+  return groups;
+}
+
+export function formatCardResourceCount<T>(
+  groups: readonly CardResourceGroup<T>[],
+  isComplete?: (item: T) => boolean,
+): string {
+  const attached = groups.flatMap(group => group.items.slice(1));
+
+  if (!isComplete) {
+    return attached.length
+      ? `${groups.length}+${attached.length}`
+      : `${groups.length}`;
+  }
+
+  const items = groups.flatMap(group => group.items);
+
+  return `${items.filter(isComplete).length}/${items.length}`;
+}

@@ -84,6 +84,7 @@ export const WalletConnectRequestView = observer(
       chainService,
       evmCalldataService,
       evmTokenService,
+      solanaIdlService,
     } = useEntrances();
 
     // Keep the reviewed request and site stable through replies and transitions.
@@ -139,6 +140,7 @@ export const WalletConnectRequestView = observer(
     const [solanaReview, setSolanaReview] = useState<{
       reviews?: SolanaTransactionReview[];
       error?: string;
+      decoding?: boolean;
     }>();
     const [solanaReviewAttempt, setSolanaReviewAttempt] = useState(0);
     const [transactionInput, setTransactionInput] = useState(() =>
@@ -282,6 +284,7 @@ export const WalletConnectRequestView = observer(
       missingSolanaSignature ||
       solanaSimulations.pending ||
       !solanaReview?.reviews ||
+      !!solanaReview.decoding ||
       solanaAddresses.some(
         address =>
           !address ||
@@ -314,15 +317,33 @@ export const WalletConnectRequestView = observer(
         createSolanaRPC(solanaPayload.chainId, walletKit.core.projectId!),
         controller.signal,
       )
-        .then(reviews => {
-          if (!controller.signal.aborted) setSolanaReview({reviews});
+        .then(async reviews => {
+          if (controller.signal.aborted) return;
+          setSolanaReview({
+            reviews,
+            decoding: reviews.some(review =>
+              review.instructions.some(item => item.decoded.kind === 'unknown'),
+            ),
+          });
+          const decoded = await solanaIdlService.decode(
+            solanaPayload.chainId,
+            reviews,
+            controller.signal,
+          );
+          if (!controller.signal.aborted) setSolanaReview({reviews: decoded});
         })
         .catch((error: unknown) => {
           if (!controller.signal.aborted)
             setSolanaReview({error: (error as Error).message});
         });
       return () => controller.abort();
-    }, [solanaPayload, available, solanaReviewAttempt, walletKit]);
+    }, [
+      solanaPayload,
+      available,
+      solanaReviewAttempt,
+      walletKit,
+      solanaIdlService,
+    ]);
 
     useEffect(() => {
       if (!transactionChainId || transactionData === undefined || !available)
@@ -682,6 +703,7 @@ export const WalletConnectRequestView = observer(
               <WalletConnectSolanaTransactions
                 payload={solanaPayload}
                 reviews={solanaReview?.reviews}
+                decoding={solanaReview?.decoding}
                 simulations={solanaSimulations.results}
                 showSimulation={available}
                 onRefreshSimulation={solanaSimulations.refresh}

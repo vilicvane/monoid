@@ -8,7 +8,7 @@ import {hexToUint8Array, uint8ArrayToHex} from '../../../@utils/index.js';
 
 import type {ScannedCardData} from './common.js';
 
-export function assertCardForAliasUpdate(
+export function assertCardForUpdate(
   hello: MonoidAppletHelloWithSafe,
   card: Pick<ScannedCardData, 'id' | 'publicKey'>,
 ): void {

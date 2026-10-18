@@ -25,6 +25,7 @@ import {
   MonoidScanPromptPresenter,
   MonoidStorageService,
   SiteLogoService,
+  SolanaIdlService,
   SolanaTokenService,
   SolanaTransactionHistoryService,
   StorageService,
@@ -230,6 +231,11 @@ export class Entrances {
     return this.storageService.then(storage =>
       SolanaTokenService.create(storage),
     );
+  }
+
+  @entrance
+  get solanaIdlService() {
+    return new SolanaIdlService();
   }
 
   @entrance

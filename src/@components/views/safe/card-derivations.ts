@@ -1,0 +1,358 @@
+import {sha256} from 'ethers';
+import * as x from 'x-value';
+
+import {
+  BIP39PathString,
+  PublicKey,
+  SafeIndex,
+  SafeIndexHex,
+  type SafeKnownType,
+  SafeUnknownType,
+} from '../../../@atomics.js';
+import {parseDerivationPath} from '../../../@lib/bip39.js';
+import {
+  type MonoidApplet,
+  monoidCommandDefinitions,
+} from '../../../@lib/monoid/index.js';
+import {
+  ADDRESS_TYPES,
+  getDerivationPathError,
+} from '../../../@lib/wallet-address.js';
+import {
+  type WalletKeyPublicKeyData,
+  type WalletKeyWalletParameters,
+  getWalletReference,
+  matchesWalletReference,
+} from '../../../@services/index.js';
+import {hexToUint8Array, uint8ArrayToHex} from '../../../@utils/index.js';
+import {XUint8Array, xCBOR} from '../../../@x-value/index.js';
+
+import {readCardWalletDerivations} from './card-address.js';
+import type {ScannedCardItemData} from './common.js';
+
+// App-owned, non-secret metadata. The stable resource index hashes the complete
+// source index, while both its immutable lookup key and payload retain that index.
+// Groups describe derivation requests only; public keys come from the card and
+// default-wallet preferences remain local to each phone.
+export const CARD_DERIVATIONS_TYPE = 0x0f01;
+
+export type CardDerivationRecord = {
+  index: SafeIndexHex;
+  wallets: WalletKeyWalletParameters[];
+};
+
+// [version, source index, [[algorithm, address type, binary paths], ...]]
+const CardDerivationGroup = x.tuple([
+  x.union([x.literal('bip32'), x.literal('slip10-ed25519')]),
+  x.union([
+    x.literal('evm'),
+    x.literal('solana'),
+    x.literal('bitcoin-segwit'),
+    x.literal('bitcoin-taproot'),
+  ]),
+  x.array(XUint8Array),
+]);
+
+const CardDerivationPayload = x.tuple([
+  x.literal(1),
+  XUint8Array,
+  x.array(CardDerivationGroup),
+]);
+
+function getRootType(index: SafeIndexHex): 'seed' | 'master' {
+  if (!/^(02|03)[0-9a-f]{18}$/.test(index)) {
+    throw new Error('Invalid derivation source');
+  }
+
+  return index.startsWith('02') ? 'seed' : 'master';
+}
+
+export function getCardDerivationItemIndex(index: SafeIndexHex): SafeIndexHex {
+  getRootType(index);
+
+  return SafeIndexHex.satisfies(
+    `${CARD_DERIVATIONS_TYPE.toString(16).padStart(4, '0')}${sha256(hexToUint8Array(index)).slice(2, 18)}`,
+  );
+}
+
+export function isCardDerivationItem(
+  item: Pick<ScannedCardItemData, 'index' | 'type'>,
+): boolean {
+  return (
+    item.type === CARD_DERIVATIONS_TYPE ||
+    item.index.slice(0, 4) ===
+      CARD_DERIVATIONS_TYPE.toString(16).padStart(4, '0')
+  );
+}
+
+export function mergeCardDerivationWallets(
+  ...groups: readonly (readonly WalletKeyWalletParameters[])[]
+): WalletKeyWalletParameters[] {
+  const wallets: WalletKeyWalletParameters[] = [];
+
+  for (const group of groups) {
+    for (const wallet of group) {
+      if (!wallets.some(existing => matchesWalletReference(existing, wallet))) {
+        wallets.push(getWalletReference(wallet));
+      }
+    }
+  }
+
+  return wallets;
+}
+
+export function decodeCardDerivationRecord(
+  data: Uint8Array,
+): CardDerivationRecord {
+  const [, sourceIndex, groups] = CardDerivationPayload.decode(xCBOR, data);
+  const index = SafeIndexHex.satisfies(uint8ArrayToHex(sourceIndex));
+  const rootType = getRootType(index);
+  const wallets = groups.flatMap(([type, addressType, paths]) => {
+    const options = ADDRESS_TYPES[addressType];
+
+    if (type !== (addressType === 'solana' ? 'slip10-ed25519' : 'bip32')) {
+      throw new Error('Invalid derivation parameters');
+    }
+
+    return paths.map(pathBytes => {
+      if (!pathBytes.length || pathBytes.length % 4 !== 0) {
+        throw new Error('Invalid derivation parameters');
+      }
+
+      const pathView = new DataView(
+        pathBytes.buffer,
+        pathBytes.byteOffset,
+        pathBytes.byteLength,
+      );
+      let path = 'm';
+
+      for (let offset = 0; offset < pathView.byteLength; offset += 4) {
+        const component = pathView.getUint32(offset);
+        path += `/${component & 0x7fffffff}${component >= 0x80000000 ? "'" : ''}`;
+      }
+
+      const error = getDerivationPathError(addressType, path);
+
+      if (error) {
+        throw new Error(error);
+      }
+
+      return {
+        addressType,
+        seed: rootType === 'seed' ? options.seed : undefined,
+        curve: options.curve,
+        path: BIP39PathString.satisfies(path),
+      };
+    });
+  });
+
+  return {index, wallets: mergeCardDerivationWallets(wallets)};
+}
+
+export function encodeCardDerivationRecord({
+  index,
+  wallets,
+}: CardDerivationRecord): Uint8Array {
+  const rootType = getRootType(index);
+  const groups: x.TypeOf<typeof CardDerivationGroup>[] = [];
+
+  for (const wallet of mergeCardDerivationWallets(wallets)) {
+    const {addressType, path, seed, curve} = wallet;
+    const options = ADDRESS_TYPES[addressType];
+
+    if (
+      !options ||
+      path === undefined ||
+      seed !== (rootType === 'seed' ? options.seed : undefined) ||
+      curve !== options.curve
+    ) {
+      throw new Error('Invalid derivation parameters');
+    }
+
+    const error = getDerivationPathError(addressType, path);
+
+    if (error) {
+      throw new Error(error);
+    }
+
+    const type = addressType === 'solana' ? 'slip10-ed25519' : 'bip32';
+    let group = groups.find(
+      ([algorithm, address]) => algorithm === type && address === addressType,
+    );
+
+    if (!group) {
+      group = [type, addressType, []];
+      groups.push(group);
+    }
+
+    group[2].push(parseDerivationPath(path));
+  }
+
+  return CardDerivationPayload.encode(xCBOR, [
+    1,
+    hexToUint8Array(index),
+    groups,
+  ]);
+}
+
+export async function readCardDerivationRecord(
+  applet: MonoidApplet,
+  item: ScannedCardItemData,
+): Promise<CardDerivationRecord> {
+  if (
+    !isCardDerivationItem(item) ||
+    item.secret ||
+    !item.key ||
+    item.index !== getCardDerivationItemIndex(SafeIndexHex.satisfies(item.key))
+  ) {
+    throw new Error('Invalid derivation record');
+  }
+
+  const {data} = await applet.get({index: hexToUint8Array(item.index)});
+  let record: CardDerivationRecord;
+
+  try {
+    record = decodeCardDerivationRecord(data);
+  } catch (error) {
+    throw new Error('Invalid derivation record', {cause: error});
+  }
+
+  if (record.index !== item.key) {
+    throw new Error('Derivation source does not match');
+  }
+
+  return record;
+}
+
+function throwIfCancelled(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw Object.assign(new Error('Updating card was cancelled.'), {
+      code: 'CANCELLED',
+    });
+  }
+}
+
+export async function writeCardDerivations(
+  applet: MonoidApplet,
+  root: {index: SafeIndexHex; type: SafeKnownType},
+  wallets: readonly WalletKeyWalletParameters[],
+  signal: AbortSignal,
+): Promise<
+  ScannedCardItemData & {
+    derivationRecord: CardDerivationRecord;
+    derivations: WalletKeyPublicKeyData[];
+  }
+> {
+  if (getRootType(root.index) !== root.type) {
+    throw new Error('Derivation source does not match');
+  }
+
+  const index = getCardDerivationItemIndex(root.index);
+  const sourceIndex = hexToUint8Array(root.index);
+  const requested = {
+    index: root.index,
+    wallets: mergeCardDerivationWallets(wallets),
+  };
+  encodeCardDerivationRecord(requested);
+  throwIfCancelled(signal);
+
+  // Verify that the referenced key still exists before creating its metadata.
+  await applet.view({index: sourceIndex});
+  throwIfCancelled(signal);
+
+  // Re-read on each attempt: a failed response can follow a committed create/set.
+  const {items} = await applet.list({
+    type: SafeUnknownType.satisfies(CARD_DERIVATIONS_TYPE),
+    keyPrefix: sourceIndex,
+  });
+  throwIfCancelled(signal);
+
+  if (items.length > 1) {
+    throw new Error('Duplicate derivation records');
+  }
+
+  const source = items[0];
+  const existing: ScannedCardItemData | undefined = source && {
+    ...source,
+    index: uint8ArrayToHex(source.index),
+    key: source.key !== undefined ? uint8ArrayToHex(source.key) : undefined,
+  };
+
+  if (existing && existing.key !== root.index) {
+    throw new Error('Derivation source does not match');
+  }
+
+  const previous = existing
+    ? await readCardDerivationRecord(applet, existing)
+    : undefined;
+  throwIfCancelled(signal);
+
+  const derivationRecord = {
+    index: root.index,
+    wallets: mergeCardDerivationWallets(
+      previous?.wallets ?? [],
+      requested.wallets,
+    ),
+  };
+  const data = encodeCardDerivationRecord(derivationRecord);
+  const item = {
+    ...existing,
+    index,
+    type: CARD_DERIVATIONS_TYPE,
+    key: root.index,
+    secret: false,
+    derivationRecord,
+  };
+
+  if (previous && previous.wallets.length === derivationRecord.wallets.length) {
+    const derivations = await readCardWalletDerivations(
+      applet,
+      root,
+      derivationRecord.wallets,
+      signal,
+    );
+    throwIfCancelled(signal);
+
+    return {...item, derivations};
+  }
+
+  const request = {index: hexToUint8Array(index), data};
+  const createRequest = {...request, key: sourceIndex, secret: false};
+  const encodedRequest = existing
+    ? monoidCommandDefinitions.set.request.encode(xCBOR, request)
+    : monoidCommandDefinitions.create.request.encode(xCBOR, createRequest);
+  // Keep the resulting resource transferable through the existing Copy flow.
+  const encodedImport = monoidCommandDefinitions.importItem.request.encode(
+    xCBOR,
+    {
+      index: SafeIndex.satisfies(request.index),
+      senderPublicKey: PublicKey.satisfies(new Uint8Array(65)),
+      key: sourceIndex,
+      ...(item.alias !== undefined && {alias: item.alias}),
+      data: new Uint8Array(data.length + 144),
+    },
+  );
+
+  if (encodedRequest.length > 8192 || encodedImport.length > 8192) {
+    throw new Error('Too many derivation records');
+  }
+
+  // Resolve every public key before mutation, so the caller can publish an
+  // acknowledged write without another NFC command that could fail or cancel.
+  const derivations = await readCardWalletDerivations(
+    applet,
+    root,
+    derivationRecord.wallets,
+    signal,
+  );
+  throwIfCancelled(signal);
+
+  if (existing) {
+    await applet.set(request);
+  } else {
+    await applet.create(createRequest);
+  }
+
+  // Return acknowledged writes even if cancellation arrived during the command.
+  return {...item, derivations};
+}
