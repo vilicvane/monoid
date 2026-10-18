@@ -19,6 +19,7 @@ import {
 } from '../../@lib/monoid/index.js';
 import {renderIcon} from '../../@lib/render-icon.js';
 import {
+  type MonoidPINSession,
   type MonoidPINs,
   isCredentialRequestCancelled,
 } from '../../@services/index.js';
@@ -66,6 +67,7 @@ export type MonoidScanPromptOptions<TSafe extends boolean = boolean> = {
   ensureSetup?: boolean;
   auth?: 'access' | false;
   retryOnError?: boolean;
+  pinSession?: MonoidPINSession;
 };
 
 type MonoidScanPromptHello<TSafe extends boolean> = TSafe extends true
@@ -98,6 +100,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
   ensureSetup = true,
   auth = false,
   retryOnError = false,
+  pinSession,
 }: MonoidScanPromptOptions<TSafe> = {}): [
   ReactNode,
   (
@@ -280,12 +283,18 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
           const {type, id, pin} = pendingUpdate;
 
           if (type === 'set') {
-            await monoidCredentialsStore.setPIN(
-              id,
-              pin,
-              credentialsRequest.signal,
-              unlockedPINs,
-            );
+            if (pinSession) {
+              await pinSession.setPIN(id, pin, credentialsRequest.signal);
+            } else {
+              await monoidCredentialsStore.setPIN(
+                id,
+                pin,
+                credentialsRequest.signal,
+                unlockedPINs,
+              );
+            }
+          } else if (pinSession) {
+            await pinSession.removePIN(id, pin, credentialsRequest.signal);
           } else {
             await monoidCredentialsStore.removePIN(
               id,
@@ -451,6 +460,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
 
                 if (entered === undefined) {
                   delete pins[id];
+                  pinSession?.forgetPIN(id, pin);
                   update = {type: 'remove', id, pin};
                 }
 
@@ -472,7 +482,11 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
 
             if (entered !== undefined) {
               pins[id] = entered;
-              update = {type: 'set', id, pin: entered};
+              pinSession?.rememberPIN(id, entered);
+            }
+
+            if (entered !== undefined || pinSession?.hasUnsavedPIN(id, pin)) {
+              update = {type: 'set', id, pin};
             }
           }
 
@@ -591,7 +605,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
 
     const start = async (): Promise<void> => {
       if (auth === 'access') {
-        const saved = await monoidCredentialsStore.getPINs(
+        const saved = await (pinSession ?? monoidCredentialsStore).getPINs(
           credentialsRequest.signal,
         );
 
@@ -625,6 +639,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
   }, [
     monoidApplet,
     monoidCredentialsStore,
+    pinSession,
     monoidScanPromptPresenter,
     owner,
     errorService,

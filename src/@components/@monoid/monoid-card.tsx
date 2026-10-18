@@ -24,18 +24,24 @@ const CardWirelessInterface = styled.img`
 const CardLogo = styled.img<{$error: boolean}>`
   position: absolute;
   top: calc(170 / 270 * 100%);
-  right: 0;
+  right: var(--monoid-card-logo-right, 0);
   width: var(--monoid-card-logo-width, calc(60 / 430 * 100%));
-  background-color: var(
-    --ion-color-${props => (props.$error ? 'danger' : 'primary')}
-  );
+  background-color: ${props =>
+    props.$error
+      ? 'var(--ion-color-danger)'
+      : 'var(--monoid-card-logo-background, var(--ion-color-primary))'};
   transition: background-color 160ms ease-out;
 `;
 
-const CardId = styled.span`
+const CardLabel = styled.span`
   position: absolute;
   top: calc(43 / 270 * 100%);
   left: calc(40 / 430 * 100%);
+  right: calc(40 / 430 * 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
   color: var(--ion-color-medium);
   font-size: 12px;
   font-weight: 400;
@@ -45,24 +51,34 @@ const CardId = styled.span`
   pointer-events: none;
 `;
 
+const CardDescription = styled.span`
+  color: var(--monoid-card-description-color, var(--ion-color-primary));
+  letter-spacing: normal;
+`;
+
 export function MonoidCard({
   className,
   children,
   error = false,
   id,
+  description,
   ref,
 }: {
   className?: string;
   children?: ReactNode;
   error?: boolean;
   id?: string;
+  description?: string;
   ref?: Ref<HTMLDivElement>;
 }): ReactNode {
   return (
     <MonoidCardFrame className={className} ref={ref}>
       {children}
       {id ? (
-        <CardId>{id}</CardId>
+        <CardLabel>
+          {id}
+          {description && <CardDescription>{description}</CardDescription>}
+        </CardLabel>
       ) : (
         <CardWirelessInterface src={monoidCardWirelessInterface} alt="" />
       )}

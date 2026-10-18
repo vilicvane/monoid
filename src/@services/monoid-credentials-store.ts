@@ -132,6 +132,29 @@ export class MonoidCredentialsStore {
 
   constructor(private backend: CredentialsBackend = BiometricVault) {}
 
+  createPINSession(): MonoidPINSession {
+    return new MonoidPINSession(this);
+  }
+
+  private snapshot(pins: MutablePINs, signal?: AbortSignal): MonoidPINs {
+    const snapshot = Object.freeze(pins);
+    this.snapshots.set(snapshot, {revision, signal});
+    return snapshot;
+  }
+
+  private async pinsForUpdate(
+    signal?: AbortSignal,
+    snapshot?: MonoidPINs,
+  ): Promise<MutablePINs> {
+    throwIfCancelled(signal);
+
+    // Check inside the queue, including updates made through another Store.
+    const metadata = snapshot && this.snapshots.get(snapshot);
+    return metadata?.revision === revision && !metadata.signal?.aborted
+      ? {...snapshot}
+      : this.readPINs(signal);
+  }
+
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
     const result = pending.then(operation).catch(error => {
       throw credentialError(error);
@@ -207,9 +230,7 @@ export class MonoidCredentialsStore {
   getPINs(signal?: AbortSignal): Promise<MonoidPINs> {
     return this.enqueue(async () => {
       try {
-        const pins = Object.freeze(await this.readPINs(signal));
-        this.snapshots.set(pins, {revision, signal});
-        return pins;
+        return this.snapshot(await this.readPINs(signal), signal);
       } catch (error) {
         const failure = credentialError(error);
 
@@ -227,23 +248,16 @@ export class MonoidCredentialsStore {
     pin: MonoidPIN,
     signal?: AbortSignal,
     snapshot?: MonoidPINs,
-  ): Promise<void> {
+  ): Promise<MonoidPINs> {
     return this.enqueue(async () => {
       if (!isCardId(id) || !MonoidPIN.is(pin)) {
         throw credentialError({code: 'INVALID_ARGUMENT'});
       }
 
-      throwIfCancelled(signal);
-
-      // Check inside the queue: another Store may have changed the document while
-      // this request waited. Fallback empty maps are never registered snapshots.
-      const metadata = snapshot && this.snapshots.get(snapshot);
-      const pins =
-        metadata?.revision === revision && !metadata.signal?.aborted
-          ? {...snapshot}
-          : await this.readPINs(signal);
+      const pins = await this.pinsForUpdate(signal, snapshot);
       pins[id] = pin;
       await this.writePINs(pins, signal);
+      return this.snapshot(pins, signal);
     });
   }
 
@@ -251,7 +265,8 @@ export class MonoidCredentialsStore {
     id: MonoidIdHex,
     expectedPIN?: MonoidPIN,
     signal?: AbortSignal,
-  ): Promise<void> {
+    snapshot?: MonoidPINs,
+  ): Promise<MonoidPINs> {
     return this.enqueue(async () => {
       if (
         !isCardId(id) ||
@@ -260,14 +275,14 @@ export class MonoidCredentialsStore {
         throw credentialError({code: 'INVALID_ARGUMENT'});
       }
 
-      const pins = await this.readPINs(signal);
+      const pins = await this.pinsForUpdate(signal, snapshot);
       throwIfCancelled(signal);
 
       if (
         !Object.hasOwn(pins, id) ||
         (expectedPIN !== undefined && pins[id] !== expectedPIN)
       ) {
-        return;
+        return this.snapshot(pins, signal);
       }
 
       delete pins[id];
@@ -279,6 +294,8 @@ export class MonoidCredentialsStore {
       } else {
         await this.writePINs(pins, signal);
       }
+
+      return this.snapshot(pins, signal);
     });
   }
 
@@ -312,5 +329,103 @@ export class MonoidCredentialsStore {
     }
 
     return new MonoidCredentialsStore();
+  }
+}
+
+/** Plaintext credentials owned by one page flow, never persisted outside the vault. */
+export class MonoidPINSession {
+  private owner = new AbortController();
+  private unlocked: MonoidPINs | undefined;
+  private pins: MutablePINs | undefined;
+  private loading: Promise<void> | undefined;
+
+  constructor(private store: MonoidCredentialsStore) {}
+
+  clear(): void {
+    this.owner.abort();
+    this.owner = new AbortController();
+    this.unlocked = undefined;
+    this.pins = undefined;
+    this.loading = undefined;
+  }
+
+  private async request<T>(
+    signal: AbortSignal | undefined,
+    operation: (owner: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    throwIfCancelled(signal);
+
+    const owner = this.owner;
+    const cancel = (): void => {
+      if (this.owner === owner) this.clear();
+    };
+
+    signal?.addEventListener('abort', cancel, {once: true});
+
+    try {
+      const result = await operation(owner.signal);
+      throwIfCancelled(owner.signal);
+      return result;
+    } finally {
+      signal?.removeEventListener('abort', cancel);
+    }
+  }
+
+  getPINs(signal?: AbortSignal): Promise<MonoidPINs> {
+    return this.request(signal, async owner => {
+      if (!this.pins) {
+        this.loading ??= this.store
+          .getPINs(owner)
+          .then(snapshot => {
+            throwIfCancelled(owner);
+            this.unlocked = snapshot;
+            this.pins = {...snapshot};
+          })
+          .finally(() => {
+            if (!owner.aborted) this.loading = undefined;
+          });
+
+        await this.loading;
+      }
+
+      return Object.freeze({...this.pins});
+    });
+  }
+
+  rememberPIN(id: MonoidIdHex, pin: MonoidPIN): void {
+    if (this.pins) this.pins[id] = pin;
+  }
+
+  hasUnsavedPIN(id: MonoidIdHex, pin: MonoidPIN): boolean {
+    return this.pins?.[id] === pin && this.unlocked?.[id] !== pin;
+  }
+
+  forgetPIN(id: MonoidIdHex, expectedPIN: MonoidPIN): void {
+    if (this.pins?.[id] === expectedPIN) delete this.pins[id];
+  }
+
+  setPIN(id: MonoidIdHex, pin: MonoidPIN, signal?: AbortSignal): Promise<void> {
+    return this.request(signal, async owner => {
+      const snapshot = await this.store.setPIN(id, pin, owner, this.unlocked);
+      throwIfCancelled(owner);
+      this.unlocked = snapshot;
+    });
+  }
+
+  removePIN(
+    id: MonoidIdHex,
+    expectedPIN: MonoidPIN,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    return this.request(signal, async owner => {
+      const snapshot = await this.store.removePIN(
+        id,
+        expectedPIN,
+        owner,
+        this.unlocked,
+      );
+      throwIfCancelled(owner);
+      this.unlocked = snapshot;
+    });
   }
 }

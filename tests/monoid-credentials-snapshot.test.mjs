@@ -225,3 +225,163 @@ for (const kind of ['foreign', 'cloned', 'forged']) {
     assertSaved(state, {[CARD]: PIN, [OTHER_CARD]: OTHER_PIN});
   });
 }
+
+test('a page PIN session reuses one unlock across cards and scan cleanup', async () => {
+  const state = fixture({[CARD]: PIN, [OTHER_CARD]: OTHER_PIN});
+  const session = state.store.createPINSession();
+
+  for (const id of [CARD, OTHER_CARD, CARD]) {
+    const scan = new AbortController();
+    const pins = await session.getPINs(scan.signal);
+    assert.ok(pins[id] !== undefined);
+    scan.abort();
+  }
+
+  assert.deepEqual(state.calls, ['get']);
+  session.clear();
+  session.clear();
+  await session.getPINs();
+  assert.deepEqual(state.calls, ['get', 'get']);
+});
+
+test('manual PIN saves refresh the page snapshot without another unlock', async () => {
+  const state = fixture({[CARD]: PIN});
+  const session = state.store.createPINSession();
+  const firstScan = new AbortController();
+  await session.getPINs(firstScan.signal);
+  firstScan.abort();
+
+  for (const id of [OTHER_CARD, THIRD_CARD]) {
+    const scan = new AbortController();
+    await session.getPINs(scan.signal);
+    session.rememberPIN(id, OTHER_PIN);
+    await session.setPIN(id, OTHER_PIN, scan.signal);
+    scan.abort();
+  }
+
+  assert.deepEqual(state.calls, ['get', 'set', 'set']);
+  assertSaved(state, {
+    [CARD]: PIN,
+    [OTHER_CARD]: OTHER_PIN,
+    [THIRD_CARD]: OTHER_PIN,
+  });
+  session.clear();
+});
+
+test('a rejected PIN stays excluded from the page after its storage removal fails', async () => {
+  const state = fixture({[CARD]: PIN, [OTHER_CARD]: OTHER_PIN});
+  const session = state.store.createPINSession();
+  await session.getPINs();
+  session.forgetPIN(CARD, PIN);
+  state.onSet = () => {
+    throw {code: 'IO_ERROR'};
+  };
+
+  await assert.rejects(session.removePIN(CARD, PIN), {code: 'IO_ERROR'});
+  assert.equal((await session.getPINs())[CARD], undefined);
+  assert.ok((await session.getPINs())[OTHER_CARD] === OTHER_PIN);
+  assert.deepEqual(state.calls, ['get', 'set']);
+  session.clear();
+});
+
+test('a page PIN session preserves unrelated concurrent changes on its next save', async () => {
+  const state = fixture({[CARD]: PIN});
+  const session = state.store.createPINSession();
+  await session.getPINs();
+  await new MonoidCredentialsStore(state.backend).setPIN(OTHER_CARD, OTHER_PIN);
+  session.rememberPIN(THIRD_CARD, PIN);
+  await session.setPIN(THIRD_CARD, PIN);
+
+  assert.deepEqual(state.calls, ['get', 'get', 'set', 'get', 'set']);
+  assertSaved(state, {[CARD]: PIN, [OTHER_CARD]: OTHER_PIN, [THIRD_CARD]: PIN});
+  session.clear();
+});
+
+test('a failed page unlock can be retried without retaining a rejected promise', async () => {
+  const state = fixture({[CARD]: PIN});
+  const session = state.store.createPINSession();
+  state.onGet = () => {
+    throw {code: 'CANCELLED'};
+  };
+  await assert.rejects(session.getPINs(), {code: 'CANCELLED'});
+  state.onGet = undefined;
+  assert.ok((await session.getPINs())[CARD] === PIN);
+  assert.deepEqual(state.calls, ['get', 'get']);
+  session.clear();
+});
+
+test('clear cancels an in-flight page unlock and a late result cannot refill it', async () => {
+  const state = fixture({[CARD]: PIN});
+  const session = state.store.createPINSession();
+  let release;
+  state.onGet = () =>
+    new Promise(resolve => {
+      release = resolve;
+    });
+  const reading = session.getPINs();
+  const rejected = assert.rejects(reading, {code: 'CANCELLED'});
+  await setImmediate();
+
+  session.clear();
+  state.onGet = undefined;
+  state.value = JSON.stringify({[OTHER_CARD]: OTHER_PIN});
+  const next = session.getPINs();
+  release();
+  await rejected;
+  const pins = await next;
+
+  assert.equal(pins[CARD], undefined);
+  assert.ok(pins[OTHER_CARD] === OTHER_PIN);
+  await session.getPINs();
+  assert.deepEqual(state.calls, ['get', 'cancel', 'get']);
+  session.clear();
+});
+
+test('cancelling a scan during page unlock cancels the request and allows a later scan', async () => {
+  const state = fixture({[CARD]: PIN});
+  const session = state.store.createPINSession();
+  let release;
+  state.onGet = () =>
+    new Promise(resolve => {
+      release = resolve;
+    });
+  const scan = new AbortController();
+  const rejected = assert.rejects(session.getPINs(scan.signal), {
+    code: 'CANCELLED',
+  });
+  await setImmediate();
+  scan.abort();
+  release();
+  await rejected;
+
+  state.onGet = undefined;
+  assert.ok((await session.getPINs())[CARD] === PIN);
+  assert.deepEqual(state.calls, ['get', 'cancel', 'get']);
+  session.clear();
+});
+
+test('a cleared page cannot refill its snapshot when an in-flight write commits late', async () => {
+  const state = fixture({[CARD]: PIN});
+  const session = state.store.createPINSession();
+  await session.getPINs();
+  session.rememberPIN(OTHER_CARD, OTHER_PIN);
+  let release;
+  state.onSet = () =>
+    new Promise(resolve => {
+      release = resolve;
+    });
+  const rejected = assert.rejects(session.setPIN(OTHER_CARD, OTHER_PIN), {
+    code: 'CANCELLED',
+  });
+  await setImmediate();
+
+  session.clear();
+  const next = session.getPINs();
+  release();
+  await rejected;
+  const pins = await next;
+  assert.ok(pins[OTHER_CARD] === OTHER_PIN);
+  await session.getPINs();
+  assert.deepEqual(state.calls, ['get', 'set', 'cancel', 'get']);
+  session.clear();
+});

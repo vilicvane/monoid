@@ -69,7 +69,7 @@ export const ROUTE_SCHEMA = {
       derive: true,
     },
     scanCard: true,
-    backupCard: {
+    copyItems: {
       $state: undefined! as {
         sourceCard?: ScannedCardData;
         sourceIndexes?: SafeIndexHex[];

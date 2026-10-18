@@ -8,13 +8,11 @@ import {useEntrances} from '../../../../@entrances.js';
 import type {AddressType} from '../../../../@lib/wallet-address.js';
 import type {Router} from '../../../../@routes.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
-import {useTemporaryState} from '../../../@hooks/interactions.js';
 import {KeyListItem, KeyListPlaceholder} from '../../../@key/key-list.js';
 import {
   MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
-import {BUTTON_FEEDBACK_DURATION} from '../../../@ui/constants.js';
 import {SegmentedControl} from '../../../@ui/segmented-control.js';
 import {
   View,
@@ -166,10 +164,8 @@ const CardContent = observer(
       selectedKeys.every(({ref, state}) => ref && state !== 'up-to-date');
     const editing = items.find(item => item.key.index === editingIndex);
 
-    const [imported, setImported] = useTemporaryState(
-      false,
-      BUTTON_FEEDBACK_DURATION,
-    );
+    const [imported, setImported] = useState(false);
+    const backToSafe = router.$backTo(router.safe.$exact);
 
     const selectItem = (index: SafeIndexHex, selected: boolean): void => {
       runInAction(() => {
@@ -248,10 +244,16 @@ const CardContent = observer(
                 Derive
               </ViewActionButton>
               <ViewActionButton
-                visible={canImport || imported}
+                visible={imported ? !!backToSafe : canImport}
                 id="import-button"
-                disabled={deriving || !canImport}
+                color={imported ? 'neutral' : 'primary'}
+                disabled={deriving || (!imported && !canImport)}
                 onClick={errorService.catch(async () => {
+                  if (imported) {
+                    backToSafe?.();
+                    return;
+                  }
+
                   if (!canImport) {
                     return;
                   }
@@ -269,24 +271,21 @@ const CardContent = observer(
                   });
 
                   setImported(true);
-
-                  const backToSafe = router.$backTo(router.safe.$exact);
-                  if (backToSafe) {
-                    backToSafe();
-                  } else {
-                    router.safe.$replace();
-                  }
                 })}
               >
-                {imported ? 'Import successful' : 'Import'}
+                {imported ? 'Back to Safe' : 'Import'}
               </ViewActionButton>
               <ViewActionButton
-                visible={selectedResources.length > 0 && missing.length === 0}
+                visible={
+                  !imported &&
+                  selectedResources.length > 0 &&
+                  missing.length === 0
+                }
                 color="neutral"
                 disabled={deriving}
                 onClick={() => {
                   router.safe
-                    .backupCard({
+                    .copyItems({
                       sourceCard: card,
                       sourceIndexes: selectedResources.map(item => item.index),
                     })

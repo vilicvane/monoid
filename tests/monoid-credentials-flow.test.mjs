@@ -142,7 +142,7 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
     },
   },
 });
-const {isCredentialRequestCancelled} = await import(
+const {MonoidPINSession, isCredentialRequestCancelled} = await import(
   '../.bld/app/@services/monoid-credentials-store.js'
 );
 mock.module('../.bld/app/@services/index.js', {
@@ -287,6 +287,7 @@ function mount(overrides = {}) {
         state.writes.push({id, pin, signal});
         await state.onSet?.(signal);
         state.savedPINs[id] = pin;
+        return Object.freeze({...state.savedPINs});
       },
       async removePIN(id, expectedPIN, signal) {
         assertMutationReady();
@@ -295,6 +296,7 @@ function mount(overrides = {}) {
         if (expectedPIN === undefined || state.savedPINs[id] === expectedPIN) {
           delete state.savedPINs[id];
         }
+        return Object.freeze({...state.savedPINs});
       },
     },
     monoidApplet: {
@@ -353,6 +355,11 @@ function mount(overrides = {}) {
       await state.onAuthenticate?.(pin);
     },
   };
+  if (state.pinSession === true) {
+    state.pinSession = new MonoidPINSession(
+      state.entrances.monoidCredentialsStore,
+    );
+  }
   fixture = state;
   state.owner = new HookOwner(() => {
     fixture = state;
@@ -361,20 +368,25 @@ function mount(overrides = {}) {
       ensureSetup: state.ensureSetup,
       auth: state.auth,
       retryOnError: true,
+      pinSession: state.pinSession,
     });
   });
   state.owner.flush();
-  state.operation = state.owner.output[1]('Scan card', state.business);
-  state.operation.then(
-    () => {
-      state.outcome = 'resolved';
-    },
-    error => {
-      state.outcome = 'rejected';
-      state.errors.push(error);
-    },
-  );
-  state.owner.flush();
+  state.start = () => {
+    state.outcome = undefined;
+    state.operation = state.owner.output[1]('Scan card', state.business);
+    state.operation.then(
+      () => {
+        state.outcome = 'resolved';
+      },
+      error => {
+        state.outcome = 'rejected';
+        state.errors.push(error);
+      },
+    );
+    state.owner.flush();
+  };
+  state.start();
   state.flush = async () => {
     await setImmediate();
     state.owner.flush();
@@ -566,6 +578,105 @@ test('prompt: successful operations exit without waiting for removal', async () 
   assert.equal(state.presenter.current.closing, true);
   await state.finishExit();
   assert.equal(state.outcome, 'resolved');
+});
+
+test('prompt: a page PIN session unlocks once for multiple destination scans', async () => {
+  const state = mount({
+    pinSession: true,
+    savedPINs: {[CARD_ID]: PIN, [OTHER_CARD_ID]: OLD_PIN},
+  });
+  await state.tap();
+  await state.finishExit();
+  state.cardId = OTHER_CARD_ID;
+  state.start();
+  await state.tap();
+  await state.finishExit();
+
+  assert.deepEqual(state.authenticated, [PIN, OLD_PIN]);
+  assert.equal(state.gets, 1);
+  assert.equal(state.outcome, 'resolved');
+  state.pinSession.clear();
+});
+
+test('prompt: a verified manual PIN survives tag loss and a new scan on the same page', async () => {
+  const state = mount({
+    pinSession: true,
+    onBusiness: () => {
+      throw tagLost();
+    },
+  });
+  await state.enterManualPIN();
+  await state.tap();
+  await state.finishExit();
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.writes.length, 0);
+
+  state.onBusiness = undefined;
+  state.start();
+  await state.tap();
+  await state.finishExit();
+  assert.equal(state.outcome, 'resolved');
+  assert.deepEqual(state.authenticated, [PIN, PIN]);
+  assert.equal(state.gets, 1);
+  assert.equal(state.inputs.length, 1);
+  assert.equal(state.writes.length, 1);
+  assert.ok(state.savedPINs[CARD_ID] === PIN);
+  assert.equal(state.pinSession.hasUnsavedPIN(CARD_ID, PIN), false);
+  state.pinSession.clear();
+});
+
+test('prompt: an unsaved verified PIN is saved after a later successful scan', async () => {
+  const state = mount({
+    pinSession: true,
+    onSet: () => {
+      throw readFailed();
+    },
+  });
+  await state.enterManualPIN();
+  await state.tap();
+  await state.finishExit();
+  assert.equal(state.outcome, 'resolved');
+  assert.equal(state.writes.length, 1);
+  assert.equal(state.savedPINs[CARD_ID], undefined);
+  assert.equal(state.pinSession.hasUnsavedPIN(CARD_ID, PIN), true);
+
+  state.onSet = undefined;
+  state.start();
+  await state.tap();
+  await state.finishExit();
+  assert.equal(state.outcome, 'resolved');
+  assert.equal(state.writes.length, 2);
+  assert.equal(state.inputs.length, 1);
+  assert.equal(state.gets, 1);
+  assert.ok(state.savedPINs[CARD_ID] === PIN);
+  assert.equal(state.pinSession.hasUnsavedPIN(CARD_ID, PIN), false);
+  state.pinSession.clear();
+});
+
+test('prompt: a bad cached PIN is not retried after removal fails and the user starts another scan', async () => {
+  const state = mount({
+    pinSession: true,
+    savedPINs: {[CARD_ID]: OLD_PIN},
+    onAuthenticate: () => {
+      throw wrongPIN();
+    },
+    onRemove: () => {
+      throw readFailed();
+    },
+  });
+  await state.tap();
+  await state.finishExit();
+  state.inputs.at(-1).resolve(undefined);
+  await state.flush();
+  assert.equal(state.outcome, 'rejected');
+
+  state.start();
+  await state.tap();
+  await state.finishExit();
+  assert.deepEqual(state.authenticated, [OLD_PIN]);
+  assert.equal(state.inputs.length, 2);
+  assert.equal(state.gets, 1);
+  state.pinSession.clear();
 });
 
 test('prompt: blocked access PIN has a specific error and waits for removal', async () => {
