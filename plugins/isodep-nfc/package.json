@@ -2,7 +2,7 @@
   "name": "capacitor-isodep-nfc",
   "version": "0.1.0",
   "private": true,
-  "description": "Raw ISO-DEP transport for Capacitor on Android.",
+  "description": "ISO-DEP APDU transport for Capacitor on Android and iOS.",
   "type": "module",
   "main": "dist/esm/index.js",
   "module": "dist/esm/index.js",
@@ -16,6 +16,10 @@
   "files": [
     "android/src/main/",
     "android/build.gradle",
+    "ios/Sources/",
+    "ios/Tests/",
+    "Package.swift",
+    "CapacitorIsodepNfc.podspec",
     "dist/esm/"
   ],
   "scripts": {
@@ -30,6 +34,9 @@
     "typescript": "^5.8.3"
   },
   "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
     "android": {
       "src": "android"
     }

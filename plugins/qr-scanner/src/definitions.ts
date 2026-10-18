@@ -63,7 +63,7 @@ export type QrScannerScanEndedEvent = QrScannerScanOptions &
       }
   );
 
-/** Android camera preview and continuous QR detection. */
+/** Native iOS and Android camera preview and continuous QR detection. */
 export type QrScannerPlugin = {
   checkPermissions(): Promise<QrScannerPermissions>;
   requestPermissions(): Promise<QrScannerPermissions>;

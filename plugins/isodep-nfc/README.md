@@ -1,13 +1,16 @@
 # capacitor-isodep-nfc
 
-Private Capacitor 8 plugin for raw ISO-DEP communication on Android API 24+, used
-by the Monoid application through a local package dependency. There is no web or
-iOS implementation.
+Private Capacitor 8 plugin for ISO-DEP APDU communication on Android API 24+ and
+iOS 15+, used by the Monoid application through a local package dependency.
+There is no web implementation. iOS simulator builds expose the plugin but
+report NFC as unsupported.
 
 The native plugin is registered as `IsoDepNfc`. APDU encoding, status words, applet
 selection, authentication, response chaining and retry decisions belong to the
-caller. The plugin does not parse APDUs, reconnect, retry commands, or expose
-NFC-V/NDEF operations.
+caller. The plugin does not interpret status words, reconnect, retry commands,
+or expose NFC-V/NDEF operations. iOS validates the encoded command with
+`NFCISO7816APDU(data:)` because Core NFC accepts ISO 7816 commands rather than
+arbitrary ISO-DEP bytes.
 
 ## API
 
@@ -17,11 +20,78 @@ this local package to an application.
 | Method                                       | Result                                                       |
 | -------------------------------------------- | ------------------------------------------------------------ |
 | `getStatus()`                                | `{supported, enabled}`                                       |
-| `openSettings()`                             | Opens Android NFC settings                                   |
+| `openSettings()`                             | Opens Android NFC settings; iOS rejects `UNSUPPORTED`        |
 | `startScan({scanId, transceiveTimeoutMs?})`  | Enables continuous scanning without waiting for a tag        |
 | `stopScan({scanId})`                         | Stops the scan, cancels its pending work and awaits cleanup  |
 | `transceive({sessionId, data, timeoutMs?})`  | `{data}` with the unmodified response bytes                  |
 | `closeSession({sessionId, waitForRemoval?})` | Closes one connection; optionally waits for detected removal |
+
+## iOS integration and differences
+
+The Swift Package Manager product is `CapacitorIsodepNfc`. A CocoaPods spec is
+also included. The host app needs the `TAG` value in
+`com.apple.developer.nfc.readersession.formats`, a nonempty
+`NFCReaderUsageDescription`, and the complete supported AID list in the
+`com.apple.developer.nfc.readersession.iso7816.select-identifiers` Info.plist key.
+Enable Near Field Communication Tag Reading on the app's signed device profile.
+
+Core NFC automatically selects the first matching AID in that list before the
+plugin receives the tag. The app may still send its own SELECT to establish its
+protocol state. Cards with no matching AID are not delivered to the app; include
+the card manager AIDs if the app installs applets onto otherwise blank cards.
+Subsequent SELECT-by-name commands are also checked against this list. Apple
+does not allow payment AIDs in this reader API. The actual target cards, including
+their GlobalPlatform manager AIDs, must be checked on an entitled physical
+iPhone; a simulator cannot establish their acceptance. See Apple's
+[ISO 7816 tag documentation](https://developer.apple.com/documentation/corenfc/nfciso7816tag)
+and [reader session documentation](https://developer.apple.com/documentation/corenfc/nfctagreadersession).
+
+`startScan` resolves when the reader becomes active and presents Apple's system
+NFC sheet. This sheet covers the web UI. Stop the scan and await `stopScan` before
+asking for a PIN or presenting biometrics; initiate another scan after the user
+finishes. The plugin never silently restarts a cancelled or timed-out reader.
+`getStatus` reports `readingAvailable` for both `supported` and `enabled`; iOS has
+no user-facing NFC switch or dedicated NFC settings screen.
+
+The platform imposes its own reader-session time limit, normally 60 seconds.
+Longer `transceiveTimeoutMs` values cannot extend it. A system timeout emits
+`scanEnded` with `reason: 'timeout'` and `code: 'TIMEOUT'`; the open connection
+ends with `scan-timeout`. User cancellation emits `scanEnded` with
+`reason: 'cancelled'` and `code: 'CANCELLED'`. Going into the background ends the
+reader with `app-paused` / `APP_INACTIVE`. Transient inactivity caused by native
+UI does not itself terminate the reader.
+Reloading the WebView revokes the old reader and drops its pending replies;
+new-document calls still wait for native cleanup before opening another reader.
+
+`stopScan` waits for Core NFC's invalidation callback, which is the transport
+cleanup barrier. Core NFC exposes no separate sheet-animation completion
+callback. Closing an idle connection normally calls `restartPolling`, invalidating
+the old tag and allowing discovery in the same system sheet. If a command or
+connect is still in flight, closing it or reaching the plugin deadline must
+invalidate the entire reader; Core NFC cannot cancel one operation independently.
+New commands remain blocked until invalidation completes. No command is retried.
+
+`waitForRemoval` logically closes the connection to the caller but keeps its
+native RF connection while observing `isAvailable` every 250 ms. The gate opens
+only when the connected tag is unavailable while the reader is still ready, or
+the transport has already reported `TAG_LOST`. Then polling restarts. This does
+not send presence-check APDUs; it also does not deselect the applet or clear its
+authentication until the RF link ends. A failed connection cannot establish
+availability, so a removal wait after such a failure rejects `UNSUPPORTED` and
+ends the scan. Cancellation, backgrounding and timeouts reject pending removal
+waits instead of reporting successful removal. As with Android, this is a native
+RF availability signal rather than proof of physical movement.
+
+Core NFC reports response data and SW1/SW2 separately; the plugin returns them
+concatenated in the same `data` array as Android, including unsuccessful status
+words. It does not consume GET RESPONSE, change the caller's command framing or
+interpret authentication. Neither the maximum transport length nor hardware
+extended-APDU support is exposed by Core NFC, so the optional
+`maxTransceiveLength` and `adapterSupportsExtendedLengthApdu` metadata are omitted
+on iOS. `NFCISO7816APDU(data:)` accepts valid short and extended APDUs, but card
+and reader limits still apply.
+
+## Android session behavior
 
 `scanId` is a nonblank caller-generated string. Use a fresh ID for each scan. Only
 one scan and one connecting or connected session can exist at a time. Each newly
@@ -189,17 +259,17 @@ session.
 | `sessionEnded`  | `{scanId, sessionId, reason, code?}`                                                              |
 | `scanEnded`     | `{scanId, reason, code?}`                                                                         |
 
-Session end reasons are `closed`, `connect-timeout`, `transceive-timeout`,
+Session end reasons are `closed`, `connect-timeout`, `transceive-timeout`, `scan-timeout`,
 `tag-lost`, `io-error`, `scan-stopped`, `nfc-disabled`, `app-paused` and `destroyed`.
 Scan end reasons are `stopped`, `nfc-disabled`, `app-paused`, `destroyed` and
-`io-error`. Failures include an `IsoDepNfcErrorCode`; normal `closed`,
+`io-error`, plus `cancelled` and `timeout` on iOS. Failures include an `IsoDepNfcErrorCode`; normal `closed`,
 `scan-stopped` and `stopped` events omit it. A failed connection also emits
 `sessionEnded`, even though it never emitted `sessionOpened`. An end event marks
 its ID invalid while cleanup may still be running; await `closeSession` or
 `stopScan` for the corresponding cleanup to finish. A failure to close the native
 transport stops the scan with `io-error` / `IO_ERROR`.
 
-Android rejections have a `code` from `IsoDepNfcErrorCode` and optional `data`:
+Native rejections have a `code` from `IsoDepNfcErrorCode` and optional `data`:
 
 ```ts
 type IsoDepNfcErrorData = {
@@ -218,7 +288,7 @@ The plugin's own deadline reports `TIMEOUT`. Android may instead report a plain
 `IOException`, which becomes `IO_ERROR`; it cannot always be identified as a
 timeout. Neither case triggers an automatic retry.
 
-For a failed exchange, `not-sent` means native `IsoDep.transceive` was not invoked.
+For a failed exchange, `not-sent` means the native send operation was not invoked.
 Once invoked, a failure reports `unknown`: the card might have executed the
 command even if the response was lost. Cancellation and timeout do not roll back
 card operations. Let the protocol decide whether another attempt is valid.
@@ -253,3 +323,20 @@ If Gradle on Windows fails to create its loopback socket, create a short tempora
 directory such as `C:/Temp/isodep-sockets` and add
 `-Djdk.net.unixdomain.tmpdir=C:/Temp/isodep-sockets` to `JAVA_TOOL_OPTIONS` for that
 shell.
+
+On macOS, build the iOS plugin and run its native lifecycle tests from this
+package directory. Choose an available simulator from `xcrun simctl list devices`:
+
+```sh
+xcodebuild -scheme CapacitorIsodepNfc \
+  -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath /tmp/monoid-nfc-derived-data CODE_SIGNING_ALLOWED=NO build
+xcodebuild -scheme CapacitorIsodepNfc \
+  -destination 'platform=iOS Simulator,id=YOUR_SIMULATOR_UUID' \
+  -derivedDataPath /tmp/monoid-nfc-derived-data CODE_SIGNING_ALLOWED=NO test
+```
+
+These tests exercise serialized exchanges, cancellation and timeout races, stale
+native callbacks, removal gating, scan-ID retirement and strict JS argument
+validation with injected readers and clocks. Real NFC field loss, firmware
+operations and signing entitlements still require an iPhone and target card.

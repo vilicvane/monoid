@@ -19,10 +19,10 @@ export type StopScanOptions = {
 export type IsoDepTag = {
   /** NFC identifier, when available; not an authenticated card identity. */
   identifier?: number[];
-  /** Maximum outbound byte count accepted by the Android adapter. */
-  maxTransceiveLength: number;
-  /** Adapter capability; does not establish the card's APDU support. */
-  adapterSupportsExtendedLengthApdu: boolean;
+  /** Maximum outbound byte count, when reported by the adapter (Android). */
+  maxTransceiveLength?: number;
+  /** Adapter capability, when known. Does not establish the card's APDU support. */
+  adapterSupportsExtendedLengthApdu?: boolean;
 };
 
 export type SessionOpenedEvent = {
@@ -47,7 +47,7 @@ export type TransceiveResult = {
 
 export type CloseSessionOptions = {
   sessionId: string;
-  /** Keep discovery blocked until Android detects removal. Requires API 24+. */
+  /** Keep discovery blocked until native removal detection. See platform notes. */
   waitForRemoval?: boolean;
 };
 
@@ -58,6 +58,7 @@ export type SessionEndedReason =
   | 'tag-lost'
   | 'io-error'
   | 'scan-stopped'
+  | 'scan-timeout'
   | 'nfc-disabled'
   | 'app-paused'
   | 'destroyed';
@@ -72,6 +73,8 @@ export type SessionEndedEvent = {
 
 export type ScanEndedReason =
   | 'stopped'
+  | 'cancelled'
+  | 'timeout'
   | 'nfc-disabled'
   | 'app-paused'
   | 'destroyed'
@@ -106,7 +109,7 @@ export type IsoDepNfcErrorData = {
   outcome?: 'not-sent' | 'unknown';
 };
 
-/** Shape of a rejection from the Android implementation. */
+/** Shape of a rejection from the native implementations. */
 export type IsoDepNfcError = {
   code: IsoDepNfcErrorCode;
   data?: IsoDepNfcErrorData;
@@ -115,10 +118,10 @@ export type IsoDepNfcError = {
 export type IsoDepNfcPlugin = {
   getStatus(): Promise<IsoDepNfcStatus>;
 
-  /** Open Android NFC settings. Does not enable NFC automatically. */
+  /** Open Android NFC settings; iOS rejects with UNSUPPORTED. */
   openSettings(): Promise<void>;
 
-  /** Enable continuous scanning without waiting for a tag to connect. */
+  /** Begin discovery; iOS presents a system sheet with a platform time limit. */
   startScan(options: StartScanOptions): Promise<void>;
 
   /** Retire the scan ID, cancel its pending work and await connection closure. */

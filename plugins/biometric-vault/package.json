@@ -16,6 +16,10 @@
   "files": [
     "android/src/main/",
     "android/build.gradle",
+    "ios/Sources/",
+    "ios/Tests/",
+    "Package.swift",
+    "CapacitorBiometricVault.podspec",
     "dist/esm/"
   ],
   "scripts": {
@@ -30,6 +34,9 @@
     "typescript": "^5.8.3"
   },
   "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
     "android": {
       "src": "android"
     }

@@ -2,7 +2,7 @@
   "name": "capacitor-qr-scanner",
   "version": "0.1.0",
   "private": true,
-  "description": "CameraX and ML Kit QR scanning for Capacitor on Android.",
+  "description": "Native camera previews and continuous QR scanning for Capacitor on iOS and Android.",
   "type": "module",
   "main": "dist/esm/index.js",
   "module": "dist/esm/index.js",
@@ -16,7 +16,11 @@
   "files": [
     "android/src/main/",
     "android/build.gradle",
-    "dist/esm/"
+    "dist/esm/",
+    "ios/Sources/",
+    "ios/Tests/",
+    "CapacitorQrScanner.podspec",
+    "Package.swift"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -30,6 +34,9 @@
     "typescript": "^5.8.3"
   },
   "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
     "android": {
       "src": "android"
     }
