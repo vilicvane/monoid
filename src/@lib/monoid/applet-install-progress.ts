@@ -27,7 +27,7 @@ export function describeAppletInstallProgress(update: AppletInstallProgress): {
     case 'uploading':
       return {
         status: `Uploading ${name}...`,
-        percentage: Math.round(update.progress * 100),
+        percentage: Math.floor(update.progress * 100),
       };
     case 'configuring':
       return {status: `Configuring ${name}...`};

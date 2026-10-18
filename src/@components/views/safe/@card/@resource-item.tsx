@@ -76,7 +76,7 @@ export const CardResourceItem = observer(
   }: {
     data: Pick<
       ScannedCardItemData,
-      'index' | 'type' | 'alias' | 'derivationRecord'
+      'index' | 'type' | 'alias' | 'publicKey' | 'derivationRecord'
     >;
     resources?: readonly Pick<
       ScannedCardItemData,
@@ -97,7 +97,7 @@ export const CardResourceItem = observer(
         ? item.type
         : parseInt(item.index.slice(0, 4), 16);
     const type = isCardDerivationItem(item)
-      ? 'derivations'
+      ? 'addresses'
       : typeof item.type === 'string'
         ? item.type
         : typeCode === 0x0fff
@@ -112,7 +112,15 @@ export const CardResourceItem = observer(
       ? (resources?.find(resource => resource.index === sourceIndex) ??
         walletStorageService.indexToKeyMap.get(sourceIndex))
       : undefined;
-    const sourceType = sourceIndex?.startsWith('02') ? 'seed' : 'master';
+    const sourceType =
+      source?.type ??
+      (sourceIndex?.startsWith('02')
+        ? 'seed'
+        : sourceIndex?.startsWith('03')
+          ? 'master'
+          : sourceIndex?.startsWith('0401')
+            ? 'secp256k1'
+            : 'ed25519');
 
     return (
       <KeyListItem as={onSelect ? 'label' : 'div'}>
@@ -150,6 +158,8 @@ export const CardResourceItem = observer(
             </ResourceRelation>
           ) : wallet ? (
             <KeyListAddress>{wallet.address}</KeyListAddress>
+          ) : item.publicKey ? (
+            <KeyListAddress>{item.publicKey}</KeyListAddress>
           ) : (
             <KeyListPlaceholder>
               {WalletKeyKnownType.is(item.type) && item.alias

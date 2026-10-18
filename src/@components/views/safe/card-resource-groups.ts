@@ -16,7 +16,12 @@ export function getCardResourceGroups<T extends CardResourceData>(
   const roots = new Map<string, CardResourceGroup<T>>();
 
   for (const item of items) {
-    if (item.type === 'seed' || item.type === 'master') {
+    if (
+      item.type === 'seed' ||
+      item.type === 'master' ||
+      item.type === 'secp256k1' ||
+      item.type === 'ed25519'
+    ) {
       roots.set(item.index, {item, items: [item]});
     }
   }

@@ -94,8 +94,9 @@ final class FileVaultStore {
     }
 
     void remove(String name) throws IOException {
-        delete(file(name), presence);
         delete(new File(directory, name + ".new"), presence);
+        // The visible record deletion is the final, irreversible mutation inside CommitGate.
+        delete(file(name), presence);
     }
 
     void clear() throws IOException {

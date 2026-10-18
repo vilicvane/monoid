@@ -339,6 +339,7 @@ export class CardBackupSession {
     hello: MonoidAppletHelloWithSafe,
     signal: AbortSignal,
     sourceIndexes?: readonly string[],
+    onProgress?: (current: number, total: number) => void,
   ): Promise<void> {
     return this.exclusive(async () => {
       if (this.backup) {
@@ -350,25 +351,29 @@ export class CardBackupSession {
       throwIfCancelled(signal);
       const {items} = await applet.list({});
       throwIfCancelled(signal);
-      const scannedItems: ScannedCardItemData[] = [];
-
-      for (const {index, type, alias, secret, key} of items) {
-        const item: ScannedCardItemData = {
+      const scannedItems: ScannedCardItemData[] = items.map(
+        ({index, type, alias, secret, key}) => ({
           index: uint8ArrayToHex(index),
           ...(type !== undefined && {type}),
           ...(alias !== undefined && {alias}),
           ...(key !== undefined && {key: uint8ArrayToHex(key)}),
           secret,
-        };
+        }),
+      );
+      const records = scannedItems.filter(isCardDerivationItem);
 
-        if (isCardDerivationItem(item)) {
-          item.derivationRecord = await readCardDerivationRecord(applet, item);
-          throwIfCancelled(signal);
-        }
-
-        scannedItems.push(item);
+      if (records.length > 0) {
+        onProgress?.(0, records.length);
       }
 
+      for (const [index, item] of records.entries()) {
+        throwIfCancelled(signal);
+        item.derivationRecord = await readCardDerivationRecord(applet, item);
+        throwIfCancelled(signal);
+        onProgress?.(index + 1, records.length);
+      }
+
+      throwIfCancelled(signal);
       this.setBackup(createBackup(source, scannedItems, indexes));
     });
   }
@@ -489,6 +494,7 @@ export class CardBackupSession {
 
       const transfers = backup.targets.flatMap(target => target.items);
       let completed = transfers.filter(item => item.exported).length;
+      throwIfCancelled(signal);
       onProgress(completed, transfers.length);
 
       for (const target of backup.targets) {
@@ -519,6 +525,7 @@ export class CardBackupSession {
               data: uint8ArrayToHex(exported.data),
             },
           });
+          throwIfCancelled(signal);
           onProgress(++completed, transfers.length);
         }
       }
@@ -531,7 +538,11 @@ export class CardBackupSession {
     applet: MonoidApplet,
     hello: MonoidAppletHelloWithSafe,
     signal: AbortSignal,
-    onProgress: (current: number, total: number) => void,
+    onProgress: (
+      current: number,
+      total: number,
+      stage: 'importing' | 'verifying',
+    ) => void,
   ): Promise<void> {
     return this.exclusive(async () => {
       const backup = this.requireBackup();
@@ -564,7 +575,8 @@ export class CardBackupSession {
         hexToUint8Array(backup.source.publicKey),
       );
       let completed = selected.filter(item => item.imported).length;
-      onProgress(completed, selected.length);
+      throwIfCancelled(signal);
+      onProgress(completed, selected.length, 'importing');
 
       for (const item of selected) {
         if (item.imported) {
@@ -595,7 +607,8 @@ export class CardBackupSession {
         } catch (error) {
           if (error instanceof AppletISOError && error.sw === 0x6985) {
             this.updateTransfer(target.publicKey, {...item, conflict: true});
-            onProgress(++completed, selected.length);
+            throwIfCancelled(signal);
+            onProgress(completed, selected.length, 'importing');
             continue;
           }
 
@@ -609,11 +622,15 @@ export class CardBackupSession {
           imported: true,
           conflict: false,
         });
-        onProgress(++completed, selected.length);
+        throwIfCancelled(signal);
+        onProgress(++completed, selected.length, 'importing');
       }
 
       throwIfCancelled(signal);
+      onProgress(completed, selected.length, 'verifying');
+      throwIfCancelled(signal);
       const {items} = await applet.list({});
+      throwIfCancelled(signal);
       const indexes = new Set<string>(
         items.map(item => uint8ArrayToHex(item.index)),
       );

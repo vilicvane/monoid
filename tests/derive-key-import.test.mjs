@@ -5,6 +5,7 @@ import {observable, runInAction, toJS} from 'mobx';
 
 import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
 import {MonoidWrongCardError} from '../.bld/app/@lib/monoid/card-error.js';
+import {CardStore} from '../.bld/app/@services/card-store.js';
 import {
   getWalletData,
   getWalletReference,
@@ -69,6 +70,7 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
+    MonoidScanStatePromptProgress: 'progress',
     useMonoidScanPrompt: options => {
       fixture.scanOptions.push(options);
       return [null, fixture.scan];
@@ -80,6 +82,9 @@ mock.module('../.bld/app/@components/views/safe/card-derivations.js', {
     writeCardDerivations: (...args) => fixture.write(...args),
   },
 });
+const {useViewActive} = await import(
+  '../.bld/app/@components/@view/use-view-active.js'
+);
 for (const [path, exports] of [
   ['@key/address-type-selector', {AddressTypeSelector: 'selector'}],
   ['@ui/button', {Button: 'button'}],
@@ -89,6 +94,7 @@ for (const [path, exports] of [
   [
     '@view/index',
     {
+      useViewActive,
       View: 'view',
       ViewContent: 'content',
       ViewHeader: 'header',
@@ -153,6 +159,7 @@ function mount() {
     authCount: 0,
     clears: 0,
     storage,
+    cardStore: new CardStore(),
     hello: {
       safe: {
         id: bytes('aabbccdd'),
@@ -226,14 +233,22 @@ function mount() {
     if (signal.aborted)
       throw Object.assign(new Error('Cancelled'), {code: 'CANCELLED'});
     return {
+      index: '0f010000000000000001',
+      type: 0x0f01,
+      key: INDEX,
+      secret: false,
+      derivationRecord: {index: INDEX, wallets},
       derivations: wallets.map(wallet => ({
         ...wallet,
-        publicKey: FRESH_PUBLIC_KEY,
+        publicKey:
+          wallet.path === previous.path ? PUBLIC_KEY : FRESH_PUBLIC_KEY,
       })),
     };
   };
   state.pinSession = {clear: () => state.clears++};
+  state.view.$match.$view = () => ({$entries: [state.view]});
   state.entrances = {
+    cardStore: state.cardStore,
     walletStorageService: storage,
     monoidCredentialsStore: {createPINSession: () => state.pinSession},
     router: {$back: () => state.routes.push('back')},
@@ -254,15 +269,16 @@ function mount() {
 }
 
 async function derive(state) {
+  const importedCount = state.storage.keys[0].wallets.length;
   state.click('Scan card');
   await state.tap();
   await state.finish();
-  assert.equal(state.storage.keys[0].wallets.length, 1);
+  assert.equal(state.storage.keys[0].wallets.length, importedCount);
 }
 
 afterEach(() => owners.splice(0).forEach(owner => owner.unmount()));
 
-test('Import scans again, writes all wallet parameters, and commits the freshly read key before leaving', async () => {
+test('Import scans again, appends only the requested address, and commits its fresh public key before leaving', async () => {
   const state = mount();
   await derive(state);
   const originalDefault = toJS(state.storage.keys[0].defaultWallet);
@@ -285,7 +301,7 @@ test('Import scans again, writes all wallet parameters, and commits the freshly 
   assert.equal(state.writes.length, 1);
   assert.deepEqual(
     state.writes[0].wallets.map(wallet => wallet.path),
-    [originalDefault.path, PATH],
+    [PATH],
   );
   assert.equal(state.storage.keys[0].wallets[1].publicKey, FRESH_PUBLIC_KEY);
   assert.deepEqual(toJS(state.storage.keys[0].defaultWallet), originalDefault);
@@ -441,14 +457,14 @@ test('a known equivalent path previews without scanning but Import still verifie
   assert.equal(state.writes.length, 1);
   assert.deepEqual(
     state.writes[0].wallets.map(wallet => wallet.addressType),
-    ['evm', 'bitcoin-segwit'],
+    ['bitcoin-segwit'],
   );
   assert.deepEqual(toJS(state.storage.keys[0].wallets), [
-    {...previous, publicKey: FRESH_PUBLIC_KEY},
+    previous,
     {
       ...previous,
       addressType: 'bitcoin-segwit',
-      publicKey: FRESH_PUBLIC_KEY,
+      publicKey: PUBLIC_KEY,
     },
   ]);
   assert.deepEqual(state.routes, ['back']);
@@ -520,7 +536,7 @@ test('a matching path still scans when its output needs the Taproot tweak', asyn
   assert.equal(state.button('Continue'), undefined);
 });
 
-test('Import merges card-only derivations into the phone, keeps equal-public-key address records separate, and preserves the local default', async () => {
+test('single-address Import preserves card-only records without restoring them to the phone', async () => {
   const state = mount();
   await derive(state);
   const originalDefault = toJS(state.storage.keys[0].defaultWallet);
@@ -534,15 +550,86 @@ test('Import merges card-only derivations into the phone, keeps equal-public-key
   const write = state.write;
   state.write = async (...args) => {
     const result = await write(...args);
-    return {derivations: [...result.derivations, ...cardOnly]};
+    return {...result, derivations: [...result.derivations, ...cardOnly]};
   };
   state.click('Import');
   await state.tap();
   await state.finish();
 
-  assert.equal(state.storage.keys[0].wallets.length, 4);
-  assert.deepEqual(toJS(state.storage.keys[0].wallets.slice(2)), cardOnly);
+  assert.equal(state.storage.keys[0].wallets.length, 2);
+  assert.ok(
+    state.storage.keys[0].wallets.every(
+      wallet => wallet.path !== cardOnly[0].path,
+    ),
+  );
   assert.deepEqual(toJS(state.storage.keys[0].defaultWallet), originalDefault);
   assert.equal(state.view.expandedChain, 'evm');
   assert.deepEqual(state.routes, ['back']);
+});
+
+test('deleting an address then importing another updates the card snapshot without restoring the deleted address', async () => {
+  const state = mount();
+  await derive(state);
+  const deleted = toJS(state.storage.keys[0].wallets[0]);
+  state.storage.deleteWallet(INDEX, deleted);
+  const cached = state.cardStore.set({
+    id: Buffer.from(state.hello.safe.id).toString('hex'),
+    publicKey: Buffer.from(state.hello.safe.publicKey).toString('hex'),
+    items: [{index: INDEX, type: 'seed', secret: true, derivations: [deleted]}],
+  });
+  const write = state.write;
+  state.write = async (...args) => {
+    const result = await write(...args);
+    return {
+      ...result,
+      derivationRecord: {
+        index: INDEX,
+        wallets: [
+          getWalletReference(deleted),
+          ...result.derivationRecord.wallets,
+        ],
+      },
+      derivations: [deleted, ...result.derivations],
+    };
+  };
+  state.click('Import');
+  await state.tap();
+  await state.finish();
+
+  assert.deepEqual(
+    state.storage.keys[0].wallets.map(wallet => wallet.path),
+    [PATH],
+  );
+  assert.equal(state.storage.keys[0].defaultWallet, undefined);
+  assert.deepEqual(
+    cached.items[0].derivations.map(wallet => wallet.path),
+    [deleted.path, PATH],
+  );
+  assert.equal(cached.items[1].derivationRecord.wallets.length, 2);
+});
+
+test('importing after an empty card record refreshes the card address preview', async () => {
+  const state = mount();
+  const previous = toJS(state.storage.keys[0].wallets[0]);
+  state.storage.deleteWallet(INDEX, previous);
+  const cached = state.cardStore.set({
+    id: Buffer.from(state.hello.safe.id).toString('hex'),
+    publicKey: Buffer.from(state.hello.safe.publicKey).toString('hex'),
+    items: [{index: INDEX, type: 'seed', secret: true, derivations: []}],
+  });
+  await derive(state);
+  state.click('Import');
+  await state.tap();
+  await state.finish();
+
+  assert.equal(cached.items[0].ref.path, PATH);
+  assert.equal(cached.items[0].addressType, 'evm');
+  assert.deepEqual(
+    cached.items[0].derivations.map(wallet => wallet.path),
+    [PATH],
+  );
+  assert.deepEqual(
+    state.storage.keys[0].wallets.map(wallet => wallet.path),
+    [PATH],
+  );
 });

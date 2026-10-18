@@ -9,9 +9,10 @@ let releases;
 mock.module('capacitor-biometric-vault', {
   namedExports: {
     BiometricVault: Object.fromEntries(
-      ['get', 'set', 'remove', 'clear', 'getAvailability', 'cancel'].map(
-        method => [method, (...args) => vault[method](...args)],
-      ),
+      ['authenticate', 'clear', 'getAvailability'].map(method => [
+        method,
+        (...args) => vault[method](...args),
+      ]),
     ),
   },
 });
@@ -66,6 +67,22 @@ beforeEach(() => {
   vault = {
     calls: [],
     values: new Map(),
+    authentications: [],
+    disposals: 0,
+    async authenticate(options) {
+      this.authentications.push(options);
+      const cancel = () => this.calls.push(['close']);
+      options.signal?.addEventListener('abort', cancel, {once: true});
+      return {
+        get: options => this.get(options),
+        set: options => this.set(options),
+        remove: options => this.remove(options),
+        [Symbol.asyncDispose]: async () => {
+          options.signal?.removeEventListener('abort', cancel);
+          this.disposals++;
+        },
+      };
+    },
     async get(options) {
       this.calls.push(['get', options]);
       if (this.onGet) {
@@ -94,7 +111,7 @@ beforeEach(() => {
       return {biometrics: 'available'};
     },
     async cancel(options) {
-      this.calls.push(['cancel', options]);
+      this.calls.push(['close', options]);
     },
   };
   storage = {calls: [], values: new Map()};
@@ -175,18 +192,13 @@ test('each bulk read authenticates one fixed entry, awaits completion, and retur
     vault.calls.map(([method]) => method),
     ['get', 'get', 'get'],
   );
-  const requests = vault.calls.map(([, options]) => options);
-  assert.equal(new Set(requests.map(options => options.requestId)).size, 3);
-  for (const options of requests) {
-    assert.equal(options.id, ENTRY_ID);
-    assert.equal(options.reason, 'Unlock saved Access PINs');
-    assert.equal(typeof options.requestId, 'string');
-    assert.ok(options.requestId.length > 0 && options.requestId.length <= 128);
-    assert.deepEqual(Object.keys(options).sort(), [
-      'id',
-      'reason',
-      'requestId',
-    ]);
+  assert.equal(vault.authentications.length, 3);
+  assert.equal(vault.disposals, 3);
+  for (const [, options] of vault.calls) {
+    assert.deepEqual(options, {id: ENTRY_ID});
+  }
+  for (const options of vault.authentications) {
+    assert.equal(options.reason, 'Unlock Access PINs');
   }
   assert.deepEqual(storage.calls, []);
 });
@@ -358,7 +370,7 @@ test('an already aborted or queued aborted read never starts native authenticati
   );
 });
 
-test('aborting an active read cancels its exact request and rejects a late successful result', async () => {
+test('aborting an active read closes its scope and rejects a late successful result', async () => {
   const credentials = new MonoidCredentialsStore();
   const authenticated = deferred();
   const owner = new AbortController();
@@ -369,9 +381,8 @@ test('aborting an active read cancels its exact request and rejects a late succe
     return true;
   });
   await setImmediate();
-  const requestId = vault.calls[0][1].requestId;
   owner.abort(SECRET_MARKER);
-  assert.deepEqual(vault.calls[1], ['cancel', {requestId}]);
+  assert.deepEqual(vault.calls[1], ['close']);
   authenticated.resolve({value: JSON.stringify({[CARD_ID]: PIN})});
   await rejected;
   vault.onGet = undefined;
@@ -380,7 +391,7 @@ test('aborting an active read cancels its exact request and rejects a late succe
   const completedOwner = new AbortController();
   await credentials.getPINs(completedOwner.signal);
   completedOwner.abort();
-  assert.equal(vault.calls.filter(([method]) => method === 'cancel').length, 1);
+  assert.equal(vault.calls.filter(([method]) => method === 'close').length, 1);
 });
 
 test('aborted queued mutations never start a native read, write, or removal', async () => {
@@ -427,14 +438,13 @@ for (const mutation of ['set', 'remove']) {
     });
     const following = credentials.getPINs();
     await setImmediate();
-    const readId = vault.calls[0][1].requestId;
     owner.abort(SECRET_MARKER);
     await setImmediate();
     assert.deepEqual(
       vault.calls.map(([method]) => method),
-      ['get', 'cancel'],
+      ['get', 'close'],
     );
-    assert.deepEqual(vault.calls[1], ['cancel', {requestId: readId}]);
+    assert.deepEqual(vault.calls[1], ['close']);
     vault.onGet = undefined;
     read.resolve({value: JSON.stringify(before)});
     await rejected;
@@ -442,7 +452,7 @@ for (const mutation of ['set', 'remove']) {
     assert.deepEqual(savedPINs(), before);
     assert.deepEqual(
       vault.calls.map(([method]) => method),
-      ['get', 'cancel', 'get'],
+      ['get', 'close', 'get'],
     );
   });
 }
@@ -473,14 +483,14 @@ for (const mutation of ['set', 'remove-one', 'remove-final']) {
     });
     assert.deepEqual(
       vault.calls.map(([method]) => method),
-      ['get'],
+      ['get', 'close'],
     );
     assert.deepEqual(savedPINs(), before);
   });
 }
 
 for (const mutation of ['set', 'remove']) {
-  test(`${mutation}: aborting the write cancels only its request and keeps later work queued until native settles`, async () => {
+  test(`${mutation}: aborting the write closes its scope and keeps later work queued until native settles`, async () => {
     const credentials = new MonoidCredentialsStore();
     const before = {[CARD_ID]: PIN, [OTHER_CARD_ID]: 'Other PIN 2'};
     savePINs(before);
@@ -497,16 +507,14 @@ for (const mutation of ['set', 'remove']) {
     });
     const following = credentials.getPINs();
     await setImmediate();
-    const readId = vault.calls[0][1].requestId;
-    const writeId = vault.calls[1][1].requestId;
-    assert.notEqual(readId, writeId);
+    assert.equal(vault.authentications.length, 1);
     owner.abort(SECRET_MARKER);
     await setImmediate();
     assert.deepEqual(
       vault.calls.map(([method]) => method),
-      ['get', 'set', 'cancel'],
+      ['get', 'set', 'close'],
     );
-    assert.deepEqual(vault.calls[2], ['cancel', {requestId: writeId}]);
+    assert.deepEqual(vault.calls[2], ['close']);
     write.reject(nativeFailure('CANCELLED'));
     await rejected;
     assert.deepEqual(await following, before);
@@ -528,9 +536,8 @@ test('a committed write remains successful after abort and the next queued read 
   const following = credentials.getPINs();
   await setImmediate();
   assert.deepEqual(savedPINs(), {[CARD_ID]: PIN});
-  const writeId = vault.calls[1][1].requestId;
   owner.abort(SECRET_MARKER);
-  assert.deepEqual(vault.calls[2], ['cancel', {requestId: writeId}]);
+  assert.deepEqual(vault.calls[2], ['close']);
   delivered.resolve();
   await saving;
   assert.deepEqual(await following, {[CARD_ID]: PIN});
@@ -539,14 +546,17 @@ test('a committed write remains successful after abort and the next queued read 
   const completedOwner = new AbortController();
   await credentials.setPIN(CARD_ID, PIN, completedOwner.signal);
   completedOwner.abort();
-  assert.equal(vault.calls.filter(([method]) => method === 'cancel').length, 1);
+  assert.equal(vault.calls.filter(([method]) => method === 'close').length, 1);
 });
 
-test('a started final-entry removal is not cancelled or misreported when its owner aborts', async () => {
+test('a committed final-entry removal remains successful when its owner aborts', async () => {
   const credentials = new MonoidCredentialsStore();
   savePINs({[CARD_ID]: PIN});
   const removed = deferred();
-  vault.onRemove = () => removed.promise;
+  vault.onRemove = options => {
+    vault.values.delete(options.id);
+    return removed.promise;
+  };
   const owner = new AbortController();
   const removing = credentials.removePIN(CARD_ID, PIN, owner.signal);
   const following = credentials.getPINs();
@@ -554,14 +564,14 @@ test('a started final-entry removal is not cancelled or misreported when its own
   owner.abort(SECRET_MARKER);
   assert.deepEqual(
     vault.calls.map(([method]) => method),
-    ['get', 'remove'],
+    ['get', 'remove', 'close'],
   );
   removed.resolve();
   await removing;
   assert.deepEqual(await following, {});
   assert.deepEqual(
     vault.calls.map(([method]) => method),
-    ['get', 'remove', 'get'],
+    ['get', 'remove', 'close', 'get'],
   );
 });
 
@@ -591,8 +601,8 @@ test('read-modify-write operations serialize across Store instances and preserve
     vault.calls.map(([method]) => method),
     ['get', 'set', 'get', 'set', 'get', 'set', 'get'],
   );
-  const requests = vault.calls.map(([, options]) => options.requestId);
-  assert.equal(new Set(requests).size, requests.length);
+  assert.equal(vault.authentications.length, 4);
+  assert.equal(vault.disposals, 4);
   assert.deepEqual(storage.calls, []);
 });
 

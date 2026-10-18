@@ -19,6 +19,7 @@ import {
   ViewFab,
   ViewHeader,
   ViewHeaderTitle,
+  useViewActive,
 } from '../../../@view/index.js';
 import type {ScannedCardData} from '../common.js';
 import {scanCardItems} from '../scan-card.js';
@@ -27,7 +28,9 @@ import {KeyItem} from './@key-item.js';
 
 export const SafeView = observer(
   ({view, transition}: RouteComponentProps<Router['safe']>): ReactNode => {
-    const {router, walletStorageService, errorService} = useEntrances();
+    const {router, cardStore, walletStorageService, errorService} =
+      useEntrances();
+    const isViewActive = useViewActive(view);
 
     const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
       safe: true,
@@ -42,19 +45,26 @@ export const SafeView = observer(
       errorService.catch(
         scanPrompt(
           'Scan a monoid card',
-          async (applet, setStateContent, hello) => {
+          async (applet, setStateContent, hello, signal) => {
             setStateContent('Listing safe items...');
 
-            const items = await scanCardItems(applet, (index, total) => {
-              setStateContent(
-                <MonoidScanStatePromptProgress
-                  current={index + 1}
-                  total={total}
-                >
-                  Fetching keys
-                </MonoidScanStatePromptProgress>,
-              );
-            });
+            const items = await scanCardItems(
+              applet,
+              (current, total, stage) => {
+                setStateContent(
+                  <MonoidScanStatePromptProgress
+                    current={current}
+                    total={total}
+                    showCount
+                  >
+                    {stage === 'records'
+                      ? 'Reading address records'
+                      : 'Reading keys'}
+                  </MonoidScanStatePromptProgress>,
+                );
+              },
+              signal,
+            );
 
             scannedCard = {
               id: uint8ArrayToHex(hello.safe.id),
@@ -63,8 +73,10 @@ export const SafeView = observer(
             };
           },
         ).then(() => {
-          if (!view.$leaving && router.safe.$exact.$active) {
-            router.safe.card({card: scannedCard}).$push();
+          if (isViewActive()) {
+            cardStore.set(scannedCard);
+            const {id, publicKey} = scannedCard;
+            router.safe.card({card: {id, publicKey}}).$push();
           }
         }),
       );

@@ -9,17 +9,23 @@ import {type SafeIndexHex, SafeKnownType} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import {
   ADDRESS_TYPES,
+  type AddressChain,
   type AddressType,
 } from '../../../../@lib/wallet-address.js';
 import type {Router} from '../../../../@routes.js';
 import {
+  type CardItem,
+  type CardState,
   type WalletKeyPublicKeyData,
   type WalletKeyWalletParameters,
+  assertWalletPublicKeys,
   getWalletData,
   getWalletReference,
   matchesWalletReference,
 } from '../../../../@services/index.js';
+import {ADDRESS_CHAIN_OPTIONS} from '../../../@key/address-type-selector.js';
 import {KeyListPlaceholder} from '../../../@key/key-list.js';
+import {keyTypeColorsCSS} from '../../../@key/key-tags.js';
 import {
   MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
@@ -27,8 +33,11 @@ import {
 import {PINKind} from '../../../@monoid/pin-input-placeholder.js';
 import {AppIcon} from '../../../@ui/app-icon.js';
 import {Button, Buttons} from '../../../@ui/button.js';
-import {CenteredPopup} from '../../../@ui/centered-popup.js';
-import {DetailsPopupTitle} from '../../../@ui/details-popup.js';
+import {
+  DetailsPopup,
+  DetailsPopupDivider,
+  DetailsPopupTitle,
+} from '../../../@ui/details-popup.js';
 import {SegmentedControl} from '../../../@ui/segmented-control.js';
 import {
   View,
@@ -39,7 +48,9 @@ import {
   ViewHeaderIdentifier,
   ViewHeaderTitle,
   ViewPlaceholder,
+  useViewActive,
 } from '../../../@view/index.js';
+import {CardAddressProgress} from '../card-address-progress.js';
 import {
   getCardKeyAddressTypes,
   getLocalCardKeyAddress,
@@ -49,6 +60,11 @@ import {
 import {assertCardForUpdate, writeCardAliases} from '../card-alias-update.js';
 import {writeCardDerivations} from '../card-derivations.js';
 import {
+  CARD_KEY_TYPES,
+  type CardKeyType,
+  createCardKey,
+} from '../card-key-create.js';
+import {
   getCardKeyData,
   importCardKey,
   isWalletKeyUpToDate,
@@ -56,14 +72,10 @@ import {
 import type {CardPINKind} from '../card-pin-update.js';
 import {deleteCardResources} from '../card-resource-delete.js';
 import {getCardResourceGroups} from '../card-resource-groups.js';
-import {
-  type ScannedCardData,
-  type ScannedCardKeyData,
-  isCardKeyItem,
-} from '../common.js';
+import {type ScannedCardKeyData, isCardKeyItem} from '../common.js';
 
 import {AddressTypePicker} from './@address-type-picker.js';
-import type {KeyItemState} from './@key-item.js';
+import type {KeyItemState, KeySyncDirection} from './@key-item.js';
 import {KeyItem} from './@key-item.js';
 import {CardResourceItem, CardResourceList} from './@resource-item.js';
 import {CardPINUpdate} from './card-pin-update.js';
@@ -75,20 +87,60 @@ const Description = styled.p`
   color: var(--color-text-secondary);
 `;
 
+const CreateKeyButton = styled(Button)`
+  ${keyTypeColorsCSS}
+
+  &.seed {
+    color: white;
+    border-color: var(--color-seed-light);
+    background-color: color-mix(
+      in srgb,
+      var(--color-seed-light) 20%,
+      transparent
+    );
+  }
+
+  &.master {
+    color: white;
+    border-color: var(--color-master-light);
+    background-color: color-mix(
+      in srgb,
+      var(--color-master-light) 20%,
+      transparent
+    );
+  }
+`;
+
 export const CardView = observer(
   ({view}: RouteComponentProps<Router['safe']['card']>): ReactNode => {
-    const {card} = view;
+    const {cardStore, router} = useEntrances();
+    const card = view.card && cardStore.get(view.card);
 
     return (
       <View>
         {card ? (
-          <CardContent key={card.id} card={card} view={view} />
+          <CardContent
+            key={`${card.id}:${card.publicKey}`}
+            card={card}
+            view={view}
+          />
         ) : (
           <>
             <ViewHeader>
               <ViewHeaderTitle>Card</ViewHeaderTitle>
             </ViewHeader>
-            <ViewContent />
+            <ViewContent
+              footer={
+                <ViewActionButton
+                  visible
+                  onClick={() => router.safe.scanCard.$replace()}
+                >
+                  Scan card
+                </ViewActionButton>
+              }
+            >
+              <ViewPlaceholder>Scan card to view items</ViewPlaceholder>
+            </ViewContent>
           </>
         )}
       </View>
@@ -103,19 +155,22 @@ type CardKeySelection = {
   derivations: WalletKeyPublicKeyData[];
 };
 
-function getDerivationRefs(
-  derivations: readonly WalletKeyPublicKeyData[],
-): CardKeySelection['refs'] {
-  const refs: CardKeySelection['refs'] = {};
+function getCardKeySelection(item: CardItem): CardKeySelection | undefined {
+  if (typeof item.type !== 'string') return;
 
-  for (const wallet of derivations) {
-    refs[wallet.addressType] ??= {
-      ...wallet,
-      address: getWalletData(wallet).address,
-    };
-  }
+  const addressType = item.addressType ?? getCardKeyAddressTypes(item.type)[0];
+  if (!addressType) return;
 
-  return refs;
+  return {
+    key: {
+      type: SafeKnownType.satisfies(item.type),
+      index: item.index,
+      alias: item.alias,
+    },
+    addressType,
+    refs: item.refs,
+    derivations: item.derivations ?? [],
+  };
 }
 
 const CardContent = observer(
@@ -123,11 +178,12 @@ const CardContent = observer(
     card,
     view,
   }: {
-    card: ScannedCardData;
+    card: CardState;
     view: RouteComponentProps<Router['safe']['card']>['view'];
   }): ReactNode => {
     const {walletStorageService, monoidCredentialsStore, errorService, router} =
       useEntrances();
+    const isViewActive = useViewActive(view);
     const [pinSession] = useState(() =>
       monoidCredentialsStore.createPINSession(),
     );
@@ -137,31 +193,16 @@ const CardContent = observer(
       retryOnError: true,
       pinSession,
     });
-    const [items, setItems] = useState<CardKeySelection[]>(() =>
-      card.items.flatMap(item => {
-        if (typeof item.type !== 'string') return [];
-
-        const addressType =
-          item.ref?.addressType ?? getCardKeyAddressTypes(item.type)[0];
-        if (!addressType) return [];
-
-        return [
-          {
-            key: {
-              type: SafeKnownType.satisfies(item.type),
-              index: item.index,
-              alias: item.alias,
-            },
-            addressType,
-            refs: {
-              ...getDerivationRefs(item.derivations ?? []),
-              ...(item.ref && {[item.ref.addressType]: item.ref}),
-            },
-            derivations: item.derivations ?? [],
-          },
-        ];
-      }),
-    );
+    const [createScanContent, createScan] = useMonoidScanPrompt({
+      safe: true,
+      auth: 'access',
+      retryOnError: false,
+      pinSession,
+    });
+    const items = card.items.flatMap(item => {
+      const selection = getCardKeySelection(item);
+      return selection ? [selection] : [];
+    });
     const [resourceFilter, setResourceFilter] = useState<'keys' | 'all'>(
       'keys',
     );
@@ -170,12 +211,30 @@ const CardContent = observer(
     const [updatingCard, setUpdatingCard] = useState(false);
     const [importing, setImporting] = useState(false);
     const [deleting, setDeleting] = useState(false);
+    const [creating, setCreating] = useState(false);
+    const [createKeyChain, setCreateKeyChain] = useState<AddressChain>();
     const [updatingPIN, setUpdatingPIN] = useState<CardPINKind>();
-    const [menu, setMenu] = useState<'actions' | 'delete'>();
+    const [menu, setMenu] = useState<'actions' | 'delete' | 'create'>();
+    const [syncChoices] = useState(() =>
+      observable.map<
+        SafeIndexHex,
+        {
+          direction: KeySyncDirection;
+          expected: WalletKeyWalletParameters[] | undefined;
+        }
+      >(),
+    );
+    const [previewIndexes] = useState(() => observable.set<SafeIndexHex>());
     const deletion = useRef<AbortController | undefined>(undefined);
+    const creation = useRef<AbortController | undefined>(undefined);
     const operationActive = useRef(false);
     const busy =
-      deriving || updatingCard || importing || deleting || !!updatingPIN;
+      deriving ||
+      updatingCard ||
+      importing ||
+      deleting ||
+      creating ||
+      !!updatingPIN;
     const mounted = useRef(true);
 
     useEffect(() => {
@@ -184,6 +243,7 @@ const CardContent = observer(
       return () => {
         mounted.current = false;
         deletion.current?.abort();
+        creation.current?.abort();
         pinSession.clear();
       };
     }, [pinSession]);
@@ -191,7 +251,7 @@ const CardContent = observer(
     useEffect(
       () =>
         reaction(
-          () => !!view.$leaving || !view.$match.$exact.$active,
+          () => !isViewActive(),
           leaving => {
             if (leaving) {
               pinSession.clear();
@@ -199,7 +259,19 @@ const CardContent = observer(
             }
           },
         ),
-      [pinSession, view],
+      [pinSession, isViewActive],
+    );
+
+    useEffect(
+      () =>
+        reaction(
+          () => card.items,
+          () => {
+            syncChoices.clear();
+            previewIndexes.clear();
+          },
+        ),
+      [card, syncChoices, previewIndexes],
     );
 
     const {indexToKeyMap} = walletStorageService;
@@ -207,53 +279,75 @@ const CardContent = observer(
     const keyItems = items.map(item => {
       const ref = item.refs[item.addressType];
       const existingKey = indexToKeyMap.get(item.key.index);
-      const state: KeyItemState = existingKey
-        ? ref &&
-          isWalletKeyUpToDate(
-            getCardKeyData(
-              {...item.key, ref},
-              Object.values(item.refs),
-              item.derivations,
-            ),
-            existingKey,
-          )
-          ? 'up-to-date'
-          : 'outdated'
-        : 'new';
-
-      const canWriteAlias =
-        existingKey?.alias !== undefined &&
-        existingKey.alias !== (item.key.alias ?? '');
       const cardDerivations = card.items.find(
         resource => resource.derivationRecord?.index === item.key.index,
       )?.derivationRecord?.wallets;
+      const recorded = cardDerivations !== undefined;
+      const recordedWallets = recorded ? item.derivations : [];
+      const empty =
+        recorded &&
+        !recordedWallets.length &&
+        !previewIndexes.has(item.key.index);
+      const source = {...item.key, alias: item.key.alias ?? ''};
+      const recordData = getCardKeyData(source, recordedWallets);
+      const needsRecordDownload =
+        recorded &&
+        (!existingKey || !isWalletKeyUpToDate(recordData, existingKey));
+      // A row represents its recorded list first. Only a later, separate
+      // import can add an unrecorded address currently being previewed.
+      const previewData =
+        !empty && ref ? getCardKeyData({...source, ref}) : undefined;
+      const incoming = needsRecordDownload
+        ? recordData
+        : (previewData ?? (recorded ? recordData : undefined));
+      const canDownload =
+        !!incoming &&
+        (!existingKey || !isWalletKeyUpToDate(incoming, existingKey));
+      const state: KeyItemState = !existingKey
+        ? 'new'
+        : canDownload
+          ? 'outdated'
+          : 'up-to-date';
+      const canWriteAlias =
+        !!existingKey && (existingKey.alias ?? '') !== (item.key.alias ?? '');
       const canWriteDerivations =
-        (item.key.type === 'seed' || item.key.type === 'master') &&
-        !!existingKey?.wallets.some(
-          wallet =>
-            !cardDerivations?.some(saved =>
-              matchesWalletReference(saved, wallet),
-            ),
-        );
-      const needsMerge =
         !!existingKey &&
-        item.derivations.some(
-          source =>
-            !existingKey.wallets.some(
-              saved =>
-                matchesWalletReference(saved, source) &&
-                saved.publicKey === source.publicKey,
-            ),
-        );
-
+        (cardDerivations === undefined ||
+          cardDerivations.length !== existingKey.wallets.length ||
+          existingKey.wallets.some(
+            wallet =>
+              !cardDerivations.some(saved =>
+                matchesWalletReference(saved, wallet),
+              ),
+          ));
+      const canUpload = canWriteAlias || canWriteDerivations;
+      const choice = syncChoices.get(item.key.index);
+      const direction: KeySyncDirection | undefined =
+        choice && (choice.direction === 'download' ? canDownload : canUpload)
+          ? choice.direction
+          : canDownload
+            ? 'download'
+            : canUpload
+              ? 'upload'
+              : undefined;
       return {
         item,
         ref,
         state,
+        incoming,
+        cardDerivations,
+        needsRecordDownload,
+        empty,
+        direction,
+        canDownload,
         canWriteAlias,
         canWriteDerivations,
-        needsMerge,
-        canWrite: !needsMerge && (canWriteAlias || canWriteDerivations),
+        canWrite: direction === 'upload',
+        canToggleDirection: canDownload && canUpload,
+        expected:
+          choice?.direction === 'upload'
+            ? choice.expected
+            : cardDerivations?.map(getWalletReference),
       };
     });
     const keyItemMap = new Map(
@@ -285,21 +379,25 @@ const CardContent = observer(
       resourceFilter === 'keys'
         ? selectedResources.filter(item => !isCardKeyItem(item)).length
         : 0;
-    const missing = selectedKeys.filter(({ref}) => !ref);
-    const writableKeys = selectedKeys.some(({needsMerge}) => needsMerge)
-      ? []
-      : selectedKeys.filter(({canWrite}) => canWrite);
+    const missing = selectedKeys.filter(
+      ({ref, empty, needsRecordDownload, direction}) =>
+        !ref && !empty && !needsRecordDownload && direction !== 'upload',
+    );
+    const writableKeys = selectedKeys.filter(({canWrite}) => canWrite);
+    const downloadableKeys = selectedKeys.filter(
+      ({direction, canDownload}) => direction === 'download' && canDownload,
+    );
     const canImport =
-      selectedResources.length > 0 &&
       selectedKeys.length === selectedResources.length &&
-      selectedKeys.every(({ref}) => ref) &&
-      selectedKeys.some(({state}) => state !== 'up-to-date');
+      downloadableKeys.length > 0 &&
+      missing.length === 0;
     const updating =
-      selectedKeys.length > 0 &&
-      selectedKeys.every(({state}) => state !== 'new');
+      downloadableKeys.length > 0 &&
+      downloadableKeys.every(({state}) => state !== 'new');
     const editing = items.find(item => item.key.index === editingIndex);
 
     const [imported, setImported] = useState(false);
+    const importComplete = imported && !canImport;
     const backToSafe = router.$backTo(router.safe.$exact);
 
     const selectItem = (index: SafeIndexHex, selected: boolean): void => {
@@ -308,6 +406,74 @@ const CardContent = observer(
         else selectedIndexSet.delete(index);
       });
       setImported(false);
+    };
+
+    const createKey = async (type: CardKeyType): Promise<void> => {
+      if (busy || operationActive.current) return;
+
+      operationActive.current = true;
+      setCreating(true);
+      setImported(false);
+      setMenu(undefined);
+      const operation = new AbortController();
+      creation.current = operation;
+      let writing: Promise<void> | undefined;
+      let createdIndex: SafeIndexHex | undefined;
+      const stopWatching = reaction(
+        () => !isViewActive(),
+        leaving => {
+          if (leaving) operation.abort();
+        },
+        {fireImmediately: true},
+      );
+
+      try {
+        await createScan(
+          'Scan card to create key',
+          async (applet, setStateContent, _hello, signal) => {
+            const cancel = (): void => operation.abort();
+            signal.addEventListener('abort', cancel, {once: true});
+            if (signal.aborted) cancel();
+
+            try {
+              setStateContent('Creating key...');
+              // Retain the command even if the callback is entered again.
+              writing ??= createCardKey(
+                applet,
+                type,
+                operation.signal,
+                item => {
+                  card.upsert(item);
+                  createdIndex = item.index;
+                  if (!operation.signal.aborted)
+                    setStateContent('Reading key...');
+                },
+                getCardKeyAddressTypes(type).find(
+                  addressType =>
+                    !createKeyChain ||
+                    ADDRESS_TYPES[addressType].chain === createKeyChain,
+                ),
+              );
+              await writing;
+            } finally {
+              signal.removeEventListener('abort', cancel);
+            }
+          },
+          hello => assertCardForUpdate(hello, card),
+        );
+
+        if (createdIndex && mounted.current && !operation.signal.aborted) {
+          selectItem(createdIndex, true);
+        }
+      } finally {
+        operation.abort();
+        // Preserve acknowledged creation when scan dismissal wins the race.
+        await writing?.catch(() => {});
+        stopWatching();
+        creation.current = undefined;
+        operationActive.current = false;
+        if (mounted.current) setCreating(false);
+      }
     };
 
     const deriveSelected = async (): Promise<void> => {
@@ -322,40 +488,39 @@ const CardContent = observer(
       try {
         await scanPrompt(
           'Scan card to derive',
-          async (applet, setStateContent) => {
-            for (const [index, {item}] of missing.entries()) {
+          async (applet, setStateContent, _hello, signal) => {
+            const showProgress = (current: number): void => {
+              if (signal.aborted || !mounted.current || !isViewActive()) return;
               setStateContent(
                 <MonoidScanStatePromptProgress
-                  current={index + 1}
+                  current={current}
                   total={missing.length}
+                  showCount
                 >
                   Deriving addresses
                 </MonoidScanStatePromptProgress>,
               );
+            };
+            showProgress(0);
+            for (const [index, {item}] of missing.entries()) {
+              if (signal.aborted || !mounted.current || !isViewActive()) return;
               derivedRefs.set(
                 item.key.index,
                 await readCardKeyAddress(applet, item.key, item.addressType),
               );
+              showProgress(index + 1);
             }
           },
           hello => assertCardForUpdate(hello, card),
         );
 
-        if (
-          mounted.current &&
-          !view.$leaving &&
-          view.$match.$exact.$active &&
-          view.card === card
-        ) {
-          setItems(current =>
-            current.map(item => {
-              const ref = derivedRefs.get(item.key.index);
-
-              return ref
-                ? {...item, refs: {...item.refs, [ref.addressType]: ref}}
-                : item;
-            }),
-          );
+        if (mounted.current && isViewActive()) {
+          runInAction(() => {
+            for (const item of card.items) {
+              const ref = derivedRefs.get(item.index);
+              if (ref) item.ref = ref;
+            }
+          });
         }
       } finally {
         operationActive.current = false;
@@ -372,6 +537,10 @@ const CardContent = observer(
         {
           key: CardKeySelection['key'];
           wallets: WalletKeyWalletParameters[];
+          options?: {
+            mode: 'replace';
+            expected: readonly WalletKeyWalletParameters[] | undefined;
+          };
         }
       >,
       onWritten?: (
@@ -382,8 +551,9 @@ const CardContent = observer(
     ): Promise<void> => {
       const total = pending.size + pendingDerivations.size;
       const operation = new AbortController();
+      let writing: Promise<void> | undefined;
       const stopWatching = reaction(
-        () => !!view.$leaving || !view.$match.$exact.$active,
+        () => !isViewActive(),
         leaving => {
           if (leaving) operation.abort();
         },
@@ -398,13 +568,12 @@ const CardContent = observer(
             if (signal.aborted) cancel();
 
             const showProgress = (): void => {
+              if (operation.signal.aborted || !mounted.current) return;
               setStateContent(
                 <MonoidScanStatePromptProgress
-                  current={Math.min(
-                    total,
-                    total - pending.size - pendingDerivations.size + 1,
-                  )}
+                  current={total - pending.size - pendingDerivations.size}
                   total={total}
+                  showCount
                 >
                   Updating card
                 </MonoidScanStatePromptProgress>,
@@ -412,97 +581,51 @@ const CardContent = observer(
             };
 
             try {
-              showProgress();
-              await writeCardAliases(
-                applet,
-                pending,
-                operation.signal,
-                (index, alias) => {
-                  runInAction(() => {
-                    card.items.find(item => item.index === index)!.alias =
-                      alias;
-                  });
-
-                  if (mounted.current && view.card === card) {
-                    setItems(current =>
-                      current.map(item =>
-                        item.key.index === index
-                          ? {...item, key: {...item.key, alias}}
-                          : item,
-                      ),
-                    );
-                  }
-
-                  showProgress();
-                },
-              );
-
-              for (const [index, {key, wallets}] of pendingDerivations) {
-                const {derivations, ...resource} = await writeCardDerivations(
-                  applet,
-                  key,
-                  wallets,
-                  operation.signal,
-                );
-                pendingDerivations.delete(index);
-                onWritten?.(index, derivations);
-                runInAction(() => {
-                  const resourceIndex = card.items.findIndex(
-                    item => item.index === resource.index,
-                  );
-                  if (resourceIndex === -1) card.items.push(resource);
-                  else card.items[resourceIndex] = resource;
-                  const keyItem = card.items.find(
-                    item => item.index === index,
-                  )!;
-                  keyItem.derivations = derivations;
-                  if (derivations[0]) {
-                    keyItem.ref = {
-                      ...derivations[0],
-                      address: getWalletData(derivations[0]).address,
-                    };
-                  }
-                });
-                if (mounted.current && view.card === card) {
-                  setItems(current =>
-                    current.map(item => {
-                      if (item.key.index !== index) return item;
-
-                      const previousRef = item.refs[item.addressType];
-                      const displayed =
-                        derivations.find(
-                          wallet =>
-                            previousRef &&
-                            matchesWalletReference(wallet, {
-                              addressType: previousRef.addressType,
-                              seed: previousRef.seed,
-                              curve: previousRef.curve,
-                              path: previousRef.path,
-                            }),
-                        ) ??
-                        derivations.find(
-                          wallet => wallet.addressType === item.addressType,
-                        ) ??
-                        derivations[0];
-                      const refs = getDerivationRefs(derivations);
-                      if (displayed) {
-                        refs[displayed.addressType] = {
-                          ...displayed,
-                          address: getWalletData(displayed).address,
-                        };
-                      }
-
-                      return {
-                        ...item,
-                        derivations,
-                        addressType: displayed?.addressType ?? item.addressType,
-                        refs,
-                      };
-                    }),
-                  );
-                }
+              writing = (async () => {
                 showProgress();
-              }
+                for (const [
+                  index,
+                  {key, wallets, options},
+                ] of pendingDerivations) {
+                  const {derivations, ...resource} = await writeCardDerivations(
+                    applet,
+                    key,
+                    wallets,
+                    operation.signal,
+                    options,
+                    progress => {
+                      if (operation.signal.aborted || !mounted.current) return;
+                      if (progress.stage === 'writing') showProgress();
+                      else
+                        setStateContent(
+                          <CardAddressProgress progress={progress} />,
+                        );
+                    },
+                  );
+                  pendingDerivations.delete(index);
+                  runInAction(() => {
+                    card.upsert(resource);
+                    const item = card.items.find(item => item.index === index)!;
+                    item.setRecordedWallets(derivations);
+                  });
+                  onWritten?.(index, derivations);
+                  showProgress();
+                }
+                await writeCardAliases(
+                  applet,
+                  pending,
+                  operation.signal,
+                  (index, alias) => {
+                    runInAction(() => {
+                      card.items.find(item => item.index === index)!.alias =
+                        alias;
+                    });
+
+                    showProgress();
+                  },
+                );
+              })();
+              await writing;
             } finally {
               signal.removeEventListener('abort', cancel);
             }
@@ -510,12 +633,30 @@ const CardContent = observer(
           hello => assertCardForUpdate(hello, card),
         );
       } finally {
+        operation.abort();
+        await writing?.catch(() => {});
         stopWatching();
       }
     };
 
     const updateCard = async (): Promise<void> => {
       if (busy || operationActive.current || writableKeys.length === 0) return;
+
+      for (const {item} of writableKeys) {
+        assertWalletPublicKeys([
+          ...indexToKeyMap.get(item.key.index)!.wallets,
+          ...item.derivations,
+          ...Object.values(item.refs).map(
+            ({addressType, seed, curve, path, publicKey}) => ({
+              addressType,
+              seed,
+              curve,
+              path,
+              publicKey,
+            }),
+          ),
+        ]);
+      }
 
       operationActive.current = true;
       setUpdatingCard(true);
@@ -528,23 +669,30 @@ const CardContent = observer(
               .filter(({canWriteAlias}) => canWriteAlias)
               .map(({item}) => [
                 item.key.index,
-                indexToKeyMap.get(item.key.index)!.alias!,
+                indexToKeyMap.get(item.key.index)!.alias ?? '',
               ]),
           ),
           new Map(
             writableKeys
               .filter(({canWriteDerivations}) => canWriteDerivations)
-              .map(({item}) => [
+              .map(({item, expected}) => [
                 item.key.index,
                 {
                   key: item.key,
                   wallets: indexToKeyMap
                     .get(item.key.index)!
                     .wallets.map(getWalletReference),
+                  options: {mode: 'replace', expected},
                 },
               ]),
           ),
         );
+        runInAction(() => {
+          for (const {item} of writableKeys) {
+            syncChoices.delete(item.key.index);
+            previewIndexes.delete(item.key.index);
+          }
+        });
       } finally {
         operationActive.current = false;
         if (mounted.current) setUpdatingCard(false);
@@ -555,32 +703,10 @@ const CardContent = observer(
       if (busy || operationActive.current || !canImport) return;
 
       const incoming = new Map(
-        selectedKeys
-          .filter(({state}) => state !== 'up-to-date')
-          .map(({item, ref, needsMerge}) => {
-            // Merge the recorded card wallets first. An unrecorded address
-            // preview can be imported in a subsequent operation.
-            const source = needsMerge
-              ? {
-                  ...item.derivations[0],
-                  address: getWalletData(item.derivations[0]).address,
-                }
-              : ref!;
-
-            return [
-              item.key.index,
-              getCardKeyData(
-                {...item.key, ref: source},
-                Object.values(item.refs),
-                item.derivations,
-              ),
-            ];
-          }),
+        downloadableKeys.map(({item, incoming}) => [item.key.index, incoming!]),
       );
       const pendingDerivations = new Map(
         [...incoming].flatMap(([index, key]) => {
-          if (key.type !== 'seed' && key.type !== 'master') return [];
-
           const saved = card.items.find(
             item => item.derivationRecord?.index === index,
           )?.derivationRecord?.wallets;
@@ -596,10 +722,7 @@ const CardContent = observer(
               index,
               {
                 key,
-                wallets: [
-                  ...(indexToKeyMap.get(index)?.wallets ?? []),
-                  ...key.wallets,
-                ].map(getWalletReference),
+                wallets: key.wallets.map(getWalletReference),
               },
             ] as const,
           ];
@@ -616,12 +739,18 @@ const CardContent = observer(
             pendingDerivations,
             (index, wallets) => {
               // Commit each acknowledged write before another scan command can fail.
+              const selected = incoming.get(index)!;
               importCardKey(walletStorageService, {
-                ...incoming.get(index)!,
-                wallets,
+                ...selected,
+                wallets: wallets.filter(wallet =>
+                  selected.wallets.some(source =>
+                    matchesWalletReference(source, wallet),
+                  ),
+                ),
               });
               incoming.delete(index);
-              if (!incoming.size && mounted.current && !view.$leaving) {
+              runInAction(() => syncChoices.delete(index));
+              if (!incoming.size && mounted.current && isViewActive()) {
                 setImported(true);
               }
             },
@@ -629,24 +758,39 @@ const CardContent = observer(
           );
         }
 
-        if (!mounted.current || view.$leaving || !view.$match.$exact.$active)
-          return;
+        if (!mounted.current || !isViewActive()) return;
 
         runInAction(() => {
-          for (const key of incoming.values())
+          for (const key of incoming.values()) {
             importCardKey(walletStorageService, key);
+            syncChoices.delete(key.index);
+          }
         });
         setImported(
-          selectedKeys.every(({item, ref}) =>
-            isWalletKeyUpToDate(
-              getCardKeyData(
-                {...item.key, ref: ref!},
-                Object.values(item.refs),
-                item.derivations,
-              ),
-              walletStorageService.indexToKeyMap.get(item.key.index)!,
-            ),
-          ),
+          downloadableKeys.every(({item, ref, empty}) => {
+            const existing = walletStorageService.indexToKeyMap.get(
+              item.key.index,
+            )!;
+            return (
+              (!ref ||
+                empty ||
+                isWalletKeyUpToDate(
+                  getCardKeyData({
+                    ...item.key,
+                    alias: item.key.alias ?? '',
+                    ref,
+                  }),
+                  existing,
+                )) &&
+              isWalletKeyUpToDate(
+                getCardKeyData(
+                  {...item.key, alias: item.key.alias ?? ''},
+                  item.derivations,
+                ),
+                existing,
+              )
+            );
+          }),
         );
       } finally {
         operationActive.current = false;
@@ -672,7 +816,7 @@ const CardContent = observer(
       let deletingItems: Promise<void> | undefined;
       deletion.current = operation;
       const stopWatching = reaction(
-        () => !!view.$leaving || !view.$match.$exact.$active,
+        () => !isViewActive(),
         leaving => {
           if (leaving) operation.abort();
         },
@@ -692,8 +836,9 @@ const CardContent = observer(
 
               setStateContent(
                 <MonoidScanStatePromptProgress
-                  current={Math.min(total, total - pending.size + 1)}
+                  current={total - pending.size}
                   total={total}
+                  showCount
                 >
                   Deleting items
                 </MonoidScanStatePromptProgress>,
@@ -722,17 +867,6 @@ const CardContent = observer(
                     if (source) source.derivations = [];
                   });
 
-                  if (mounted.current && view.card === card) {
-                    setItems(current =>
-                      current
-                        .filter(item => item.key.index !== index)
-                        .map(item =>
-                          item.key.index === sourceIndex
-                            ? {...item, derivations: []}
-                            : item,
-                        ),
-                    );
-                  }
                   showProgress();
                 },
               );
@@ -776,20 +910,26 @@ const CardContent = observer(
                 visible={deriving || missing.length > 0}
                 loading={deriving}
                 disabled={
-                  updatingCard || importing || deleting || !!updatingPIN
+                  updatingCard ||
+                  importing ||
+                  deleting ||
+                  creating ||
+                  !!updatingPIN
                 }
                 onClick={errorService.catch(deriveSelected)}
               >
                 Derive
               </ViewActionButton>
               <ViewActionButton
-                visible={importing || (imported ? !!backToSafe : canImport)}
+                visible={
+                  importing || (importComplete ? !!backToSafe : canImport)
+                }
                 id="import-button"
-                color={imported ? 'neutral' : 'primary'}
+                color={importComplete ? 'neutral' : 'primary'}
                 loading={importing}
-                disabled={busy || (!imported && !canImport)}
+                disabled={busy || (!importComplete && !canImport)}
                 onClick={errorService.catch(async () => {
-                  if (imported) {
+                  if (importComplete) {
                     backToSafe?.();
                     return;
                   }
@@ -797,12 +937,18 @@ const CardContent = observer(
                   await importSelected();
                 })}
               >
-                {imported ? 'Back to Safe' : updating ? 'Update' : 'Import'}
+                {importComplete
+                  ? 'Back to Safe'
+                  : updating
+                    ? 'Update'
+                    : 'Import'}
               </ViewActionButton>
               <ViewActionButton
                 visible={updatingCard || writableKeys.length > 0}
                 loading={updatingCard}
-                disabled={deriving || importing || deleting || !!updatingPIN}
+                disabled={
+                  deriving || importing || deleting || creating || !!updatingPIN
+                }
                 onClick={errorService.catch(updateCard)}
               >
                 Update card
@@ -818,7 +964,7 @@ const CardContent = observer(
                 onClick={() => {
                   router.safe
                     .copyItems({
-                      sourceCard: card,
+                      sourceCard: card.snapshot(),
                       sourceIndexes: selectedResources.map(item => item.index),
                     })
                     .$push();
@@ -866,7 +1012,16 @@ const CardContent = observer(
                   );
                 }
 
-                const {item, ref, state, canWrite} = keyItem;
+                const {
+                  item,
+                  ref,
+                  state,
+                  canWrite,
+                  empty,
+                  direction,
+                  canToggleDirection,
+                  cardDerivations,
+                } = keyItem;
                 return (
                   <KeyItem
                     key={item.key.index}
@@ -876,6 +1031,26 @@ const CardContent = observer(
                     path={ref?.path}
                     state={state}
                     canWrite={canWrite}
+                    empty={empty}
+                    syncDirection={direction}
+                    onChangeSyncDirection={
+                      canToggleDirection
+                        ? () => {
+                            if (busy) return;
+                            runInAction(() => {
+                              syncChoices.set(item.key.index, {
+                                direction:
+                                  direction === 'upload'
+                                    ? 'download'
+                                    : 'upload',
+                                expected:
+                                  cardDerivations?.map(getWalletReference),
+                              });
+                            });
+                            setImported(false);
+                          }
+                        : undefined
+                    }
                     selected={selectedIndexSet.has(item.key.index)}
                     disabled={busy}
                     onSelect={selected => selectItem(item.key.index, selected)}
@@ -896,72 +1071,71 @@ const CardContent = observer(
             addressTypes={getCardKeyAddressTypes(editing.key.type)}
             onDismiss={() => setEditingIndex(undefined)}
             onChange={addressType => {
-              setItems(current =>
-                current.map(item => {
-                  if (item.key.index !== editing.key.index) {
-                    return item;
+              runInAction(() => {
+                previewIndexes.add(editing.key.index);
+                syncChoices.delete(editing.key.index);
+                const item = card.items.find(
+                  item => item.index === editing.key.index,
+                )!;
+                const ordinaryRef =
+                  item.refs.evm ?? item.refs['bitcoin-segwit'];
+                let localRef =
+                  item.refs[addressType] ??
+                  (item.type === 'secp256k1' && ordinaryRef
+                    ? getLocalCardKeyAddress(ordinaryRef, addressType)
+                    : undefined);
+
+                if (
+                  !localRef &&
+                  (item.type === 'seed' || item.type === 'master')
+                ) {
+                  const options = ADDRESS_TYPES[addressType];
+                  const wallet = getLocalCardWalletDerivation(
+                    [
+                      ...(item.derivations ?? []),
+                      ...Object.values(item.refs).map(
+                        ({addressType, seed, curve, path, publicKey}) => ({
+                          addressType,
+                          seed,
+                          curve,
+                          path,
+                          publicKey,
+                        }),
+                      ),
+                      ...(indexToKeyMap.get(item.index)?.wallets ?? []),
+                    ],
+                    {
+                      addressType,
+                      seed: item.type === 'seed' ? options.seed : undefined,
+                      curve: options.curve,
+                      path: options.path(0),
+                    },
+                  );
+                  if (wallet) {
+                    localRef = {
+                      ...wallet,
+                      address: getWalletData(wallet).address,
+                    };
                   }
+                }
 
-                  const ordinaryRef =
-                    item.refs.evm ?? item.refs['bitcoin-segwit'];
-                  let localRef =
-                    item.refs[addressType] ??
-                    (item.key.type === 'secp256k1' && ordinaryRef
-                      ? getLocalCardKeyAddress(ordinaryRef, addressType)
-                      : undefined);
-
-                  if (
-                    !localRef &&
-                    (item.key.type === 'seed' || item.key.type === 'master')
-                  ) {
-                    const options = ADDRESS_TYPES[addressType];
-                    const wallet = getLocalCardWalletDerivation(
-                      [
-                        ...item.derivations,
-                        ...Object.values(item.refs).map(
-                          ({addressType, seed, curve, path, publicKey}) => ({
-                            addressType,
-                            seed,
-                            curve,
-                            path,
-                            publicKey,
-                          }),
-                        ),
-                        ...(indexToKeyMap.get(item.key.index)?.wallets ?? []),
-                      ],
-                      {
-                        addressType,
-                        seed:
-                          item.key.type === 'seed' ? options.seed : undefined,
-                        curve: options.curve,
-                        path: options.path(0),
-                      },
-                    );
-                    if (wallet) {
-                      localRef = {
-                        ...wallet,
-                        address: getWalletData(wallet).address,
-                      };
-                    }
-                  }
-
-                  return {
-                    ...item,
-                    addressType,
-                    refs: localRef
-                      ? {...item.refs, [addressType]: localRef}
-                      : item.refs,
-                  };
-                }),
-              );
+                item.addressType = addressType;
+                if (localRef) item.refs[addressType] = localRef;
+              });
               setImported(false);
               setEditingIndex(undefined);
             }}
           />
         )}
-        {menu && !busy && view.$match.$exact.$active && !view.$leaving && (
-          <CenteredPopup
-            aria-label={menu === 'delete' ? 'Delete items' : 'Card actions'}
+        {menu && !busy && isViewActive() && (
+          <DetailsPopup
+            aria-label={
+              menu === 'delete'
+                ? 'Delete items'
+                : menu === 'create'
+                  ? 'Create key'
+                  : 'Card actions'
+            }
             contentKey={menu}
             initialFocus={menu === 'delete' ? 'dialog' : 'control'}
             onDismiss={() => setMenu(undefined)}
@@ -989,37 +1163,82 @@ const CardContent = observer(
                   </Button>
                 </Buttons>
               </>
-            ) : canDelete ? (
+            ) : menu === 'create' ? (
               <>
-                <DetailsPopupTitle>
-                  Selected items · {selectedResources.length}
-                </DetailsPopupTitle>
-                <Button color="danger" onClick={() => setMenu('delete')}>
-                  Delete
-                </Button>
+                <DetailsPopupTitle>Create key</DetailsPopupTitle>
+                <DetailsPopupDivider />
+                <SegmentedControl<AddressChain>
+                  aria-label="Key network"
+                  allowDeselect
+                  value={createKeyChain}
+                  options={ADDRESS_CHAIN_OPTIONS}
+                  onChange={setCreateKeyChain}
+                />
+                <Buttons data-popup-animation-group>
+                  {CARD_KEY_TYPES.filter(
+                    type =>
+                      !createKeyChain ||
+                      getCardKeyAddressTypes(type).some(
+                        addressType =>
+                          ADDRESS_TYPES[addressType].chain === createKeyChain,
+                      ),
+                  ).map(type => (
+                    <CreateKeyButton
+                      key={type}
+                      className={type}
+                      color="neutral"
+                      aria-label={type}
+                      onClick={errorService.catch(() => createKey(type))}
+                    >
+                      {type}
+                    </CreateKeyButton>
+                  ))}
+                </Buttons>
               </>
             ) : (
-              <Buttons data-popup-animation-group>
-                {(['Access', 'Safe'] as const).map(kind => (
+              <>
+                {canDelete && (
+                  <DetailsPopupTitle>
+                    Selected items · {selectedResources.length}
+                  </DetailsPopupTitle>
+                )}
+                <Buttons data-popup-animation-group>
                   <Button
-                    key={kind}
-                    color="neutral"
+                    color="primary"
                     onClick={() => {
-                      if (operationActive.current) return;
-                      operationActive.current = true;
-                      setMenu(undefined);
-                      setUpdatingPIN(kind);
+                      setCreateKeyChain(undefined);
+                      setMenu('create');
                     }}
                   >
-                    <span>
-                      Update {kind === 'Safe' ? <PINKind kind={kind} /> : kind}{' '}
-                      PIN
-                    </span>
+                    Create key
                   </Button>
-                ))}
-              </Buttons>
+                  {canDelete ? (
+                    <Button color="danger" onClick={() => setMenu('delete')}>
+                      Delete
+                    </Button>
+                  ) : (
+                    (['Access', 'Safe'] as const).map(kind => (
+                      <Button
+                        key={kind}
+                        color="neutral"
+                        onClick={() => {
+                          if (operationActive.current) return;
+                          operationActive.current = true;
+                          setMenu(undefined);
+                          setUpdatingPIN(kind);
+                        }}
+                      >
+                        <span>
+                          Update{' '}
+                          {kind === 'Safe' ? <PINKind kind={kind} /> : kind} PIN
+                        </span>
+                      </Button>
+                    ))
+                  )}
+                </Buttons>
+              </>
             )}
-          </CenteredPopup>
+          </DetailsPopup>
         )}
         {updatingPIN && (
           <CardPINUpdate
@@ -1034,6 +1253,7 @@ const CardContent = observer(
           />
         )}
         {scanPromptContent}
+        {createScanContent}
       </>
     );
   },

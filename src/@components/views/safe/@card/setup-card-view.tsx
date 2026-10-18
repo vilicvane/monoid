@@ -33,6 +33,7 @@ import {
   ViewHeader,
   ViewHeaderButton,
   ViewHeaderTitle,
+  useViewActive,
 } from '../../../@view/index.js';
 
 import {CardInformationDetails} from './card-information-details.js';
@@ -42,13 +43,14 @@ import {CardSetupPIN} from './card-setup-pin.js';
 export const SetupCardView = observer(
   ({view}: RouteComponentProps<Router['safe']['setupCard']>): ReactNode => {
     const {router, errorService} = useEntrances();
+    const isViewActive = useViewActive(view);
     const scanPrompt = useIsoDepScanPrompt();
     const mounted = useRef(true);
     const operationState = useRef<'idle' | 'working' | 'installed'>('idle');
     const [busy, setBusy] = useState(false);
     const [complete, setComplete] = useState(false);
     const [interrupted, setInterrupted] = useState(false);
-    const [information, setInformation] = useState(view.cardInformation);
+    const [information, setInformation] = useState(() => view.cardInformation);
     const [showDetails, setShowDetails] = useState(false);
     const [pendingPIN, setPendingPIN] = useState<MonoidAppletHelloWithSafe>();
     const [showPINSetup, setShowPINSetup] = useState(false);
@@ -64,16 +66,15 @@ export const SetupCardView = observer(
     useEffect(
       () =>
         reaction(
-          () => !!view.$leaving || !view.$match.$exact.$active,
+          () => !isViewActive(),
           inactive => {
             if (inactive) setShowPINSetup(false);
           },
         ),
-      [view],
+      [isViewActive],
     );
 
-    const isActive = (): boolean =>
-      mounted.current && !view.$leaving && view.$match.$exact.$active;
+    const isActive = (): boolean => mounted.current && isViewActive();
 
     const scan = async (): Promise<void> => {
       const installing = information !== undefined;

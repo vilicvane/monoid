@@ -3,7 +3,7 @@ import {CBORAppletError} from '../../../@lib/cbor-applet.js';
 import type {MonoidApplet} from '../../../@lib/monoid/index.js';
 // eslint-disable-next-line @mufan/import -- Keep card scanning independent of UI services.
 import {getWalletData} from '../../../@services/wallet-storage-service.js';
-import {uint8ArrayToHex} from '../../../@utils/index.js';
+import {hexToUint8Array, uint8ArrayToHex} from '../../../@utils/index.js';
 
 import {
   getCardKeyAddressTypes,
@@ -19,9 +19,24 @@ import type {ScannedCardItemData} from './common.js';
 
 export async function scanCardItems(
   applet: MonoidApplet,
-  onProgress: (index: number, total: number) => void,
+  onProgress: (
+    current: number,
+    total: number,
+    stage: 'records' | 'keys',
+  ) => void,
+  signal?: AbortSignal,
 ): Promise<ScannedCardItemData[]> {
+  const assertActive = (): void => {
+    if (signal?.aborted) {
+      throw Object.assign(new Error('Card scan was cancelled'), {
+        code: 'CANCELLED',
+      });
+    }
+  };
+
+  assertActive();
   const {items} = await applet.list({});
+  assertActive();
   const scannedItems: ScannedCardItemData[] = items.map(
     ({index, type, alias, key, secret}) => ({
       index: uint8ArrayToHex(index),
@@ -34,40 +49,78 @@ export async function scanCardItems(
   const keys = scannedItems.filter(
     item =>
       typeof item.type === 'string' &&
-      getCardKeyAddressTypes(item.type).length > 0,
+      (getCardKeyAddressTypes(item.type).length > 0 ||
+        item.type === 'secp256r1'),
   );
   const derivationItems = scannedItems.filter(isCardDerivationItem);
   const records = new Map<string, CardDerivationRecord>();
-  const total = derivationItems.length + keys.length;
 
-  for (const [index, item] of derivationItems.entries()) {
-    onProgress(index, total);
-
-    const record = await readCardDerivationRecord(applet, item);
-    item.derivationRecord = record;
-    records.set(record.index, record);
+  if (derivationItems.length > 0) {
+    onProgress(0, derivationItems.length, 'records');
   }
 
-  for (const [index, item] of keys.entries()) {
-    onProgress(derivationItems.length + index, total);
+  for (const [index, item] of derivationItems.entries()) {
+    assertActive();
+    const record = await readCardDerivationRecord(applet, item);
+    assertActive();
+    item.derivationRecord = record;
+    records.set(record.index, record);
+    onProgress(index + 1, derivationItems.length, 'records');
+  }
 
+  const total = keys.reduce(
+    (count, item) =>
+      count +
+      (item.type === 'secp256r1'
+        ? 1
+        : (records.get(item.index)?.wallets.length ?? 1)),
+    0,
+  );
+  let completed = 0;
+
+  if (total > 0) {
+    assertActive();
+    onProgress(0, total, 'keys');
+  }
+
+  for (const item of keys) {
+    assertActive();
     const type = SafeKnownType.satisfies(item.type);
     const key = {type, index: item.index};
 
+    if (type === 'secp256r1') {
+      const {publicKey} = await applet.viewKey({
+        type: 'secp256r1',
+        index: hexToUint8Array(item.index),
+      });
+      assertActive();
+      item.publicKey = uint8ArrayToHex(publicKey);
+      onProgress(++completed, total, 'keys');
+      continue;
+    }
+
+    const record = records.get(item.index);
+
+    if (record) {
+      item.derivations = await readCardWalletDerivations(
+        applet,
+        key,
+        record.wallets,
+        signal,
+        current => {
+          assertActive();
+          onProgress(completed + current, total, 'keys');
+        },
+      );
+      assertActive();
+      completed += record.wallets.length;
+      const first = item.derivations[0];
+      if (first) item.ref = {...first, address: getWalletData(first).address};
+      continue;
+    }
+
     if (type === 'seed' || type === 'master') {
       item.derivations = [];
-      const record = records.get(item.index);
-
-      if (record?.wallets.length) {
-        item.derivations = await readCardWalletDerivations(
-          applet,
-          key,
-          record.wallets,
-        );
-        const first = item.derivations[0];
-        item.ref = {...first, address: getWalletData(first).address};
-        continue;
-      }
     }
 
     const ref = await readCardKeyAddress(
@@ -84,11 +137,14 @@ export async function scanCardItems(
 
       throw error;
     });
+    assertActive();
 
     if (ref) {
       item.ref = ref;
     }
+    onProgress(++completed, total, 'keys');
   }
 
+  assertActive();
   return scannedItems;
 }

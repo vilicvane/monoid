@@ -10,7 +10,12 @@ import {
   MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
 } from '../../@monoid/monoid-scan-prompt.js';
-import {View, ViewHeader, ViewHeaderTitle} from '../../@view/index.js';
+import {
+  View,
+  ViewHeader,
+  ViewHeaderTitle,
+  useViewActive,
+} from '../../@view/index.js';
 
 import type {ScannedCardData} from './common.js';
 import {scanCardItems} from './scan-card.js';
@@ -18,7 +23,9 @@ import {scanCardItems} from './scan-card.js';
 export const ScanCardView = ({
   view,
 }: RouteComponentProps<Router['safe']['scanCard']>): ReactNode => {
-  const {router, errorService} = useEntrances();
+  const {router, cardStore, errorService} = useEntrances();
+  const isViewActive = useViewActive(view);
+  const isViewPresent = useViewActive(view, {allowEntering: true});
   const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
     safe: true,
     allowInstallRedirect: true,
@@ -28,8 +35,7 @@ export const ScanCardView = ({
 
   useEffect(() => {
     let disposed = false;
-    const isActive = (): boolean =>
-      !disposed && !view.$leaving && view.$match.$exact.$active;
+    const isActive = (): boolean => !disposed && isViewActive();
 
     errorService.catch(
       (async () => {
@@ -38,19 +44,26 @@ export const ScanCardView = ({
         try {
           await scanPrompt(
             'Scan a monoid card',
-            async (applet, setStateContent, hello) => {
+            async (applet, setStateContent, hello, signal) => {
               setStateContent('Listing safe items...');
 
-              const items = await scanCardItems(applet, (index, total) => {
-                setStateContent(
-                  <MonoidScanStatePromptProgress
-                    current={index + 1}
-                    total={total}
-                  >
-                    Fetching keys
-                  </MonoidScanStatePromptProgress>,
-                );
-              });
+              const items = await scanCardItems(
+                applet,
+                (current, total, stage) => {
+                  setStateContent(
+                    <MonoidScanStatePromptProgress
+                      current={current}
+                      total={total}
+                      showCount
+                    >
+                      {stage === 'records'
+                        ? 'Reading address records'
+                        : 'Reading keys'}
+                    </MonoidScanStatePromptProgress>,
+                  );
+                },
+                signal,
+              );
 
               scannedCard = {
                 id: uint8ArrayToHex(hello.safe.id),
@@ -61,12 +74,14 @@ export const ScanCardView = ({
           );
 
           if (isActive() && scannedCard) {
-            router.safe.card({card: scannedCard}).$push();
+            cardStore.set(scannedCard);
+            const {id, publicKey} = scannedCard;
+            router.safe.card({card: {id, publicKey}}).$push();
           }
         } catch (error) {
           if (
             disposed ||
-            view.$leaving ||
+            !isViewPresent() ||
             error instanceof MonoidScanRedirectError
           ) {
             return;
@@ -84,7 +99,14 @@ export const ScanCardView = ({
     return () => {
       disposed = true;
     };
-  }, [errorService, router.safe, scanPrompt, view]);
+  }, [
+    cardStore,
+    errorService,
+    router.safe,
+    scanPrompt,
+    isViewActive,
+    isViewPresent,
+  ]);
 
   return (
     <>

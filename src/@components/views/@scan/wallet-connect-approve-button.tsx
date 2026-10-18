@@ -16,7 +16,10 @@ import {
 } from '../../../@lib/wallet-connect.js';
 import type {Router} from '../../../@routes.js';
 import {uint8ArrayToHex} from '../../../@utils/index.js';
-import {getWalletSigningAccount} from '../../@monoid/get-wallet-signing-account.js';
+import {
+  assertWalletSigningAccount,
+  getWalletSigningAccount,
+} from '../../@monoid/get-wallet-signing-account.js';
 import {
   MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
@@ -77,14 +80,15 @@ export function WalletConnectApproveButton({
         return account;
       });
     const tasks = authentication.map(auth => {
-      const {key, reference} = selected.find(
+      const account = selected.find(
         ({wallet}) =>
           wallet.address.toLowerCase() === auth.address.toLowerCase(),
       )!;
       return {
         auth,
-        index: key.index,
-        reference,
+        index: account.key.index,
+        reference: account.reference,
+        account,
       };
     });
 
@@ -108,9 +112,27 @@ export function WalletConnectApproveButton({
 
         await scanPrompt(
           signed.size ? 'Scan next card to sign in' : 'Scan card to sign in',
-          async (applet, setStateContent) => {
-            assertPending();
+          async (applet, setStateContent, _hello, signal) => {
+            const check = (): void => {
+              signal.throwIfAborted();
+              assertPending();
+            };
+            const showProgress = (): void => {
+              check();
+              setStateContent(
+                <MonoidScanStatePromptProgress
+                  current={signed.size + completed.length}
+                  total={tasks.length}
+                  showCount
+                >
+                  Signing
+                </MonoidScanStatePromptProgress>,
+              );
+            };
+            completed = [];
+            showProgress();
             const {items} = await applet.list({});
+            check();
             const indices = new Set(
               items.map(item => uint8ArrayToHex(item.index)),
             );
@@ -119,26 +141,23 @@ export function WalletConnectApproveButton({
             );
             if (!remaining.length)
               throw new Error('No selected accounts on this card');
-            completed = [];
 
-            for (const {auth, reference} of remaining) {
-              assertPending();
-              setStateContent(
-                <MonoidScanStatePromptProgress
-                  current={signed.size + completed.length + 1}
-                  total={tasks.length}
-                >
-                  Signing
-                </MonoidScanStatePromptProgress>,
-              );
+            for (const {auth, reference, account} of remaining) {
+              check();
               const signature = await signEvmMessage(
                 applet,
                 reference,
                 auth.message,
                 auth.address,
-                assertPending,
+                () => {
+                  check();
+                  assertWalletSigningAccount(
+                    walletStorageService.keys,
+                    account,
+                  );
+                },
               );
-              assertPending();
+              check();
               completed.push([
                 auth,
                 buildAuthObject(
@@ -147,6 +166,7 @@ export function WalletConnectApproveButton({
                   auth.iss,
                 ),
               ]);
+              showProgress();
             }
           },
         );

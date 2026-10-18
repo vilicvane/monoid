@@ -27,12 +27,15 @@ import {
 import {hexToUint8Array, uint8ArrayToHex} from '../../../@utils/index.js';
 import {XUint8Array, xCBOR} from '../../../@x-value/index.js';
 
-import {readCardWalletDerivations} from './card-address.js';
+import {
+  getCardKeyAddressTypes,
+  readCardWalletDerivations,
+} from './card-address.js';
 import type {ScannedCardItemData} from './common.js';
 
 // App-owned, non-secret metadata. The stable resource index hashes the complete
 // source index, while both its immutable lookup key and payload retain that index.
-// Groups describe derivation requests only; public keys come from the card and
+// Groups describe address requests only; public keys come from the card and
 // default-wallet preferences remain local to each phone.
 export const CARD_DERIVATIONS_TYPE = 0x0f01;
 
@@ -41,9 +44,20 @@ export type CardDerivationRecord = {
   wallets: WalletKeyWalletParameters[];
 };
 
+export type CardDerivationsProgress = {
+  stage: 'checking' | 'reading' | 'writing';
+  current: number;
+  total: number;
+};
+
 // [version, source index, [[algorithm, address type, binary paths], ...]]
 const CardDerivationGroup = x.tuple([
-  x.union([x.literal('bip32'), x.literal('slip10-ed25519')]),
+  x.union([
+    x.literal('bip32'),
+    x.literal('slip10-ed25519'),
+    x.literal('secp256k1'),
+    x.literal('ed25519'),
+  ]),
   x.union([
     x.literal('evm'),
     x.literal('solana'),
@@ -59,12 +73,19 @@ const CardDerivationPayload = x.tuple([
   x.array(CardDerivationGroup),
 ]);
 
-function getRootType(index: SafeIndexHex): 'seed' | 'master' {
-  if (!/^(02|03)[0-9a-f]{18}$/.test(index)) {
+function getRootType(
+  index: SafeIndexHex,
+): 'seed' | 'master' | 'secp256k1' | 'ed25519' {
+  if (!/^[0-9a-f]{20}$/.test(index)) {
     throw new Error('Invalid derivation source');
   }
 
-  return index.startsWith('02') ? 'seed' : 'master';
+  if (index.startsWith('02')) return 'seed';
+  if (index.startsWith('03')) return 'master';
+  if (index.startsWith('0401')) return 'secp256k1';
+  if (index.startsWith('0501')) return 'ed25519';
+
+  throw new Error('Invalid derivation source');
 }
 
 export function getCardDerivationItemIndex(index: SafeIndexHex): SafeIndexHex {
@@ -107,44 +128,61 @@ export function decodeCardDerivationRecord(
   const [, sourceIndex, groups] = CardDerivationPayload.decode(xCBOR, data);
   const index = SafeIndexHex.satisfies(uint8ArrayToHex(sourceIndex));
   const rootType = getRootType(index);
-  const wallets = groups.flatMap(([type, addressType, paths]) => {
-    const options = ADDRESS_TYPES[addressType];
+  const wallets = groups.flatMap<WalletKeyWalletParameters>(
+    ([type, addressType, paths]) => {
+      const options = ADDRESS_TYPES[addressType];
 
-    if (type !== (addressType === 'solana' ? 'slip10-ed25519' : 'bip32')) {
-      throw new Error('Invalid derivation parameters');
-    }
+      if (rootType === 'secp256k1' || rootType === 'ed25519') {
+        if (
+          type !== rootType ||
+          !getCardKeyAddressTypes(rootType).includes(addressType) ||
+          paths.length !== 0
+        ) {
+          throw new Error('Invalid derivation parameters');
+        }
 
-    return paths.map(pathBytes => {
-      if (!pathBytes.length || pathBytes.length % 4 !== 0) {
+        // A native group has one address without a path. No groups means no addresses.
+        return [
+          {addressType, seed: undefined, curve: undefined, path: undefined},
+        ];
+      }
+
+      if (type !== (addressType === 'solana' ? 'slip10-ed25519' : 'bip32')) {
         throw new Error('Invalid derivation parameters');
       }
 
-      const pathView = new DataView(
-        pathBytes.buffer,
-        pathBytes.byteOffset,
-        pathBytes.byteLength,
-      );
-      let path = 'm';
+      return paths.map(pathBytes => {
+        if (!pathBytes.length || pathBytes.length % 4 !== 0) {
+          throw new Error('Invalid derivation parameters');
+        }
 
-      for (let offset = 0; offset < pathView.byteLength; offset += 4) {
-        const component = pathView.getUint32(offset);
-        path += `/${component & 0x7fffffff}${component >= 0x80000000 ? "'" : ''}`;
-      }
+        const pathView = new DataView(
+          pathBytes.buffer,
+          pathBytes.byteOffset,
+          pathBytes.byteLength,
+        );
+        let path = 'm';
 
-      const error = getDerivationPathError(addressType, path);
+        for (let offset = 0; offset < pathView.byteLength; offset += 4) {
+          const component = pathView.getUint32(offset);
+          path += `/${component & 0x7fffffff}${component >= 0x80000000 ? "'" : ''}`;
+        }
 
-      if (error) {
-        throw new Error(error);
-      }
+        const error = getDerivationPathError(addressType, path);
 
-      return {
-        addressType,
-        seed: rootType === 'seed' ? options.seed : undefined,
-        curve: options.curve,
-        path: BIP39PathString.satisfies(path),
-      };
-    });
-  });
+        if (error) {
+          throw new Error(error);
+        }
+
+        return {
+          addressType,
+          seed: rootType === 'seed' ? options.seed : undefined,
+          curve: options.curve,
+          path: BIP39PathString.satisfies(path),
+        };
+      });
+    },
+  );
 
   return {index, wallets: mergeCardDerivationWallets(wallets)};
 }
@@ -159,6 +197,20 @@ export function encodeCardDerivationRecord({
   for (const wallet of mergeCardDerivationWallets(wallets)) {
     const {addressType, path, seed, curve} = wallet;
     const options = ADDRESS_TYPES[addressType];
+
+    if (rootType === 'secp256k1' || rootType === 'ed25519') {
+      if (
+        !getCardKeyAddressTypes(rootType).includes(addressType) ||
+        path !== undefined ||
+        seed !== undefined ||
+        curve !== undefined
+      ) {
+        throw new Error('Invalid derivation parameters');
+      }
+
+      groups.push([rootType, addressType, []]);
+      continue;
+    }
 
     if (
       !options ||
@@ -232,11 +284,31 @@ function throwIfCancelled(signal: AbortSignal): void {
   }
 }
 
+function sameWallets(
+  left: readonly WalletKeyWalletParameters[],
+  right: readonly WalletKeyWalletParameters[],
+): boolean {
+  const leftSet = mergeCardDerivationWallets(left);
+  const rightSet = mergeCardDerivationWallets(right);
+
+  return (
+    leftSet.length === rightSet.length &&
+    leftSet.every(wallet =>
+      rightSet.some(other => matchesWalletReference(wallet, other)),
+    )
+  );
+}
+
 export async function writeCardDerivations(
   applet: MonoidApplet,
   root: {index: SafeIndexHex; type: SafeKnownType},
   wallets: readonly WalletKeyWalletParameters[],
   signal: AbortSignal,
+  options?: {
+    mode: 'replace';
+    expected: readonly WalletKeyWalletParameters[] | undefined;
+  },
+  onProgress?: (progress: CardDerivationsProgress) => void,
 ): Promise<
   ScannedCardItemData & {
     derivationRecord: CardDerivationRecord;
@@ -257,6 +329,8 @@ export async function writeCardDerivations(
   throwIfCancelled(signal);
 
   // Verify that the referenced key still exists before creating its metadata.
+  onProgress?.({stage: 'checking', current: 0, total: 1});
+  throwIfCancelled(signal);
   await applet.view({index: sourceIndex});
   throwIfCancelled(signal);
 
@@ -287,12 +361,26 @@ export async function writeCardDerivations(
     : undefined;
   throwIfCancelled(signal);
 
+  if (
+    options?.mode === 'replace' &&
+    !(previous && sameWallets(previous.wallets, requested.wallets)) &&
+    !(previous
+      ? options.expected !== undefined &&
+        sameWallets(previous.wallets, options.expected)
+      : options.expected === undefined)
+  ) {
+    throw new Error('Card addresses changed, rescan card');
+  }
+
   const derivationRecord = {
     index: root.index,
-    wallets: mergeCardDerivationWallets(
-      previous?.wallets ?? [],
-      requested.wallets,
-    ),
+    wallets:
+      options?.mode === 'replace'
+        ? requested.wallets
+        : mergeCardDerivationWallets(
+            previous?.wallets ?? [],
+            requested.wallets,
+          ),
   };
   const data = encodeCardDerivationRecord(derivationRecord);
   const item = {
@@ -303,14 +391,21 @@ export async function writeCardDerivations(
     secret: false,
     derivationRecord,
   };
+  const readDerivations = async (): Promise<WalletKeyPublicKeyData[]> => {
+    const total = derivationRecord.wallets.length;
+    if (total) onProgress?.({stage: 'reading', current: 0, total});
 
-  if (previous && previous.wallets.length === derivationRecord.wallets.length) {
-    const derivations = await readCardWalletDerivations(
+    return readCardWalletDerivations(
       applet,
       root,
       derivationRecord.wallets,
       signal,
+      (current, total) => onProgress?.({stage: 'reading', current, total}),
     );
+  };
+
+  if (previous && sameWallets(previous.wallets, derivationRecord.wallets)) {
+    const derivations = await readDerivations();
     throwIfCancelled(signal);
 
     return {...item, derivations};
@@ -339,14 +434,11 @@ export async function writeCardDerivations(
 
   // Resolve every public key before mutation, so the caller can publish an
   // acknowledged write without another NFC command that could fail or cancel.
-  const derivations = await readCardWalletDerivations(
-    applet,
-    root,
-    derivationRecord.wallets,
-    signal,
-  );
+  const derivations = await readDerivations();
   throwIfCancelled(signal);
 
+  onProgress?.({stage: 'writing', current: 0, total: 1});
+  throwIfCancelled(signal);
   if (existing) {
     await applet.set(request);
   } else {
@@ -354,5 +446,6 @@ export async function writeCardDerivations(
   }
 
   // Return acknowledged writes even if cancellation arrived during the command.
+  onProgress?.({stage: 'writing', current: 1, total: 1});
   return {...item, derivations};
 }

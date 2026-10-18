@@ -8,13 +8,31 @@ import type {
   WalletKeyData,
   WalletKeyWalletData,
 } from '../../@services/index.js';
-import {getKeyWallets} from '../../@services/index.js';
+import {getKeyWallets, matchesWalletReference} from '../../@services/index.js';
 
 type WalletSigningAccount<Key> = {
   key: WalletKeyData;
   wallet: WalletKeyWalletData;
   reference: Key;
 };
+
+export function assertWalletSigningAccount(
+  keys: readonly WalletKeyData[],
+  account: Pick<WalletSigningAccount<unknown>, 'key' | 'wallet'>,
+): void {
+  const key = keys.find(key => key.index === account.key.index);
+  if (
+    !key ||
+    !getKeyWallets(key).some(
+      wallet =>
+        matchesWalletReference(wallet, account.wallet) &&
+        normalizeWalletAddress(wallet.address) ===
+          normalizeWalletAddress(account.wallet.address),
+    )
+  ) {
+    throw new Error('This account is no longer in Safe.');
+  }
+}
 
 export function getWalletSigningAccount(
   keys: readonly WalletKeyData[],

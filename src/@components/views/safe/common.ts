@@ -37,6 +37,7 @@ export type ScannedCardItemData = {
   alias?: string;
   key?: string;
   secret: boolean;
+  publicKey?: PublicKeyHex;
   ref?: ScannedCardKeyData['ref'];
   derivations?: WalletKeyPublicKeyData[];
   derivationRecord?: CardDerivationRecord;

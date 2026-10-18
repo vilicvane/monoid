@@ -31,7 +31,10 @@ import {
 } from '../../@services/index.js';
 import {useTransactionConfirmation} from '../@hooks/use-transaction-confirmation.js';
 import {WalletAccountList} from '../@key/wallet-account-list.js';
-import {getWalletSigningAccount} from '../@monoid/get-wallet-signing-account.js';
+import {
+  assertWalletSigningAccount,
+  getWalletSigningAccount,
+} from '../@monoid/get-wallet-signing-account.js';
 import {
   MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
@@ -304,21 +307,40 @@ const TransactionReplacementContent = observer(
         let result = saved?.signature?.serialized ?? signature.current;
         if (!result) {
           setBusy('signing');
-          await scan('Scan card to sign', async (applet, setContent) => {
-            assertActive();
-            setContent(
-              <MonoidScanStatePromptProgress current={1} total={1}>
-                Signing
-              </MonoidScanStatePromptProgress>,
-            );
-            result = await signEvmDigest(
-              applet,
-              account.reference,
-              Transaction.from(unsigned).unsignedHash,
-              original.from!,
-              assertActive,
-            );
-          });
+          await scan(
+            'Scan card to sign',
+            async (applet, setContent, _hello, signal) => {
+              const check = (): void => {
+                signal.throwIfAborted();
+                assertActive();
+              };
+              check();
+              setContent(
+                <MonoidScanStatePromptProgress current={0} total={1} showCount>
+                  Signing
+                </MonoidScanStatePromptProgress>,
+              );
+              result = await signEvmDigest(
+                applet,
+                account.reference,
+                Transaction.from(unsigned).unsignedHash,
+                original.from!,
+                () => {
+                  check();
+                  assertWalletSigningAccount(
+                    walletStorageService.keys,
+                    account,
+                  );
+                },
+              );
+              check();
+              setContent(
+                <MonoidScanStatePromptProgress current={1} total={1} showCount>
+                  Signing
+                </MonoidScanStatePromptProgress>,
+              );
+            },
+          );
           assertActive();
           signature.current = result;
         }

@@ -67,6 +67,9 @@ const KeyUpdateTag = styled(KeyTag)`
   background-color: #fff1dc;
   border-color: #f3d4a3;
   color: #b87316;
+  &[type='button'] {
+    ${addressTypeTriggerStyles}
+  }
 `;
 
 const KeySavedTag = styled(KeyTag)`
@@ -81,9 +84,13 @@ const KeyWriteTag = styled(KeyTag)`
   background-color: rgba(var(--ion-color-primary-rgb), 0.1);
   border-color: rgba(var(--ion-color-primary-rgb), 0.28);
   color: var(--ion-color-primary);
+  &[type='button'] {
+    ${addressTypeTriggerStyles}
+  }
 `;
 
 export type KeyItemState = 'new' | 'outdated' | 'up-to-date';
+export type KeySyncDirection = 'download' | 'upload';
 
 export const KeyItem = observer(
   ({
@@ -93,10 +100,13 @@ export const KeyItem = observer(
     path: derivedPath,
     state,
     canWrite,
+    empty,
+    syncDirection,
     selected,
     disabled,
     onSelect,
     onChangeAddressType,
+    onChangeSyncDirection,
   }: {
     data: Pick<ScannedCardKeyData, 'type' | 'index' | 'alias'>;
     addressType: AddressType;
@@ -104,16 +114,20 @@ export const KeyItem = observer(
     path?: BIP39PathString;
     state: KeyItemState;
     canWrite: boolean;
+    empty: boolean;
+    syncDirection: KeySyncDirection | undefined;
     selected: boolean;
     disabled: boolean;
     onSelect: (selected: boolean) => void;
     onChangeAddressType: () => void;
+    onChangeSyncDirection?: () => void;
   }): ReactNode => {
     const path =
       type === 'seed' || type === 'master'
         ? (derivedPath ?? ADDRESS_TYPES[addressType].path(0))
         : undefined;
-    const canChangeAddressType = getCardKeyAddressTypes(type).length > 1;
+    const canChangeAddressType =
+      empty || getCardKeyAddressTypes(type).length > 1;
 
     const addressTypeButtonProps: ButtonHTMLAttributes<HTMLButtonElement> = {
       type: 'button',
@@ -125,6 +139,18 @@ export const KeyItem = observer(
         onChangeAddressType();
       },
     };
+    const syncButtonProps: ButtonHTMLAttributes<HTMLButtonElement> | undefined =
+      onChangeSyncDirection
+        ? {
+            type: 'button',
+            disabled,
+            onPointerDown: event => event.stopPropagation(),
+            onClick: event => {
+              event.stopPropagation();
+              onChangeSyncDirection();
+            },
+          }
+        : undefined;
 
     return (
       <KeyListItem
@@ -148,12 +174,16 @@ export const KeyItem = observer(
                 canChangeAddressType
                   ? {
                       ...addressTypeButtonProps,
-                      'aria-label': `Change address type: ${path ?? ADDRESS_TYPE_LABELS[addressType]}`,
+                      'aria-label': empty
+                        ? 'Add address'
+                        : `Change address type: ${path ?? ADDRESS_TYPE_LABELS[addressType]}`,
                     }
                   : undefined
               }
             >
-              {path ?? ADDRESS_TYPE_LABELS[addressType]}
+              {empty
+                ? 'No addresses'
+                : (path ?? ADDRESS_TYPE_LABELS[addressType])}
             </DerivationTag>
             {canChangeAddressType && (
               <AddressTypeSwitch
@@ -164,31 +194,47 @@ export const KeyItem = observer(
                 <AppIcon icon={arrowLeftRight} aria-hidden="true" />
               </AddressTypeSwitch>
             )}
-            {state === 'outdated' && (
+            {syncDirection === 'download' && (
               <KeyUpdateTag
-                role="img"
-                aria-label="App update available"
-                title="Update app from card"
+                as={syncButtonProps ? 'button' : undefined}
+                {...syncButtonProps}
+                role={syncButtonProps ? undefined : 'img'}
+                aria-label={
+                  syncButtonProps
+                    ? 'Update phone from card. Switch to updating card'
+                    : 'Update phone from card'
+                }
+                title={
+                  syncButtonProps
+                    ? 'Update phone from card. Click to update card instead'
+                    : 'Update phone from card'
+                }
               >
                 <AppIcon icon={refreshCw} aria-hidden="true" />
               </KeyUpdateTag>
             )}
             {canWrite && (
               <KeyWriteTag
-                role="img"
-                aria-label="Card update available"
-                title="Update card from app"
+                as={syncButtonProps ? 'button' : undefined}
+                {...syncButtonProps}
+                role={syncButtonProps ? undefined : 'img'}
+                aria-label={
+                  syncButtonProps
+                    ? 'Update card from phone. Switch to updating phone'
+                    : 'Update card from phone'
+                }
+                title="Replace card addresses with phone addresses"
               >
                 <AppIcon icon={arrowUpToLine} aria-hidden="true" />
               </KeyWriteTag>
             )}
-            {state === 'up-to-date' && !canWrite && (
+            {state === 'up-to-date' && !syncDirection && (
               <KeySavedTag role="img" aria-label="Saved">
                 <AppIcon icon={saveCheck} aria-hidden="true" />
               </KeySavedTag>
             )}
           </KeyTags>
-          {address ? (
+          {empty ? null : address ? (
             <KeyListAddress>{address}</KeyListAddress>
           ) : (
             <KeyListAddressPlaceholder

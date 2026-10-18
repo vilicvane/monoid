@@ -128,12 +128,18 @@ final class AndroidVaultStore implements VaultController.Store {
     }
 
     @Override
-    public void remove(String id) throws VaultException {
+    public void remove(String id, VaultController.CommitGate gate) throws VaultException {
         String name = nameFor(id);
 
         try {
             VaultRecordCodec.Record previous = readRecordForReplacement(name);
-            files.remove(name);
+            gate.commit(() -> {
+                try {
+                    files.remove(name);
+                } catch (IOException | RuntimeException exception) {
+                    throw failure(exception, false);
+                }
+            });
 
             if (syncDirectory() && previous != null) {
                 // The record is already deleted. A key cleanup failure must not resurrect it.
@@ -176,7 +182,10 @@ final class AndroidVaultStore implements VaultController.Store {
         }
     }
 
-    private SecretKey generateKey(String alias) throws GeneralSecurityException {
+    private SecretKey generateKey(String alias) throws GeneralSecurityException, VaultException {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            throw new VaultException("UNSUPPORTED", "Biometric vault access requires Android 11 or later.");
+        }
         KeyGenParameterSpec.Builder spec = new KeyGenParameterSpec.Builder(
             alias, KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT
         )
@@ -184,17 +193,9 @@ final class AndroidVaultStore implements VaultController.Store {
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setRandomizedEncryptionRequired(true)
-            .setUserAuthenticationRequired(true);
-
-        if (Build.VERSION.SDK_INT >= 30) {
-            spec.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG);
-        } else {
-            spec.setUserAuthenticationValidityDurationSeconds(-1);
-        }
-
-        if (Build.VERSION.SDK_INT >= 24) {
-            spec.setInvalidatedByBiometricEnrollment(true);
-        }
+            .setUserAuthenticationRequired(true)
+            .setUserAuthenticationParameters(VaultKeyPolicy.AUTHENTICATION_VALIDITY_SECONDS, KeyProperties.AUTH_BIOMETRIC_STRONG)
+            .setInvalidatedByBiometricEnrollment(true);
 
         KeyGenerator generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE);
         generator.init(spec.build());
@@ -202,6 +203,9 @@ final class AndroidVaultStore implements VaultController.Store {
     }
 
     private void validateKey(SecretKey key) throws GeneralSecurityException, VaultException {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            throw new VaultException("UNSUPPORTED", "Biometric vault access requires Android 11 or later.");
+        }
         KeyInfo info = (KeyInfo) SecretKeyFactory.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
             .getKeySpec(key, KeyInfo.class);
         boolean hardware;
@@ -218,8 +222,8 @@ final class AndroidVaultStore implements VaultController.Store {
         VaultKeyPolicy.requireHardwareBiometrics(
             hardware, info.isUserAuthenticationRequired(), info.isUserAuthenticationRequirementEnforcedBySecureHardware(),
             info.getUserAuthenticationValidityDurationSeconds(),
-            Build.VERSION.SDK_INT < 30 || info.getUserAuthenticationType() == KeyProperties.AUTH_BIOMETRIC_STRONG,
-            Build.VERSION.SDK_INT < 24 || info.isInvalidatedByBiometricEnrollment()
+            info.getUserAuthenticationType() == KeyProperties.AUTH_BIOMETRIC_STRONG,
+            info.isInvalidatedByBiometricEnrollment()
         );
 
         if (info.getKeySize() != 256
@@ -302,7 +306,7 @@ final class AndroidVaultStore implements VaultController.Store {
             }
 
             if (cause instanceof UserNotAuthenticatedException) {
-                return new VaultException("AUTHENTICATION_FAILED", "The protected operation was not authorized.", exception);
+                return new VaultException("AUTHORIZATION_EXPIRED", "The biometric authorization window has expired.", exception);
             }
 
             if (cause instanceof NoSuchAlgorithmException || cause instanceof NoSuchProviderException
@@ -333,11 +337,6 @@ final class AndroidVaultStore implements VaultController.Store {
         Prepared(Cipher operation, byte[] aad) {
             this.operation = operation;
             this.aad = aad;
-        }
-
-        @Override
-        public Cipher cipher() {
-            return operation;
         }
 
         final void beginComplete() throws VaultException {
@@ -386,7 +385,7 @@ final class AndroidVaultStore implements VaultController.Store {
             beginComplete();
 
             try {
-                // AAD updates reach KeyMint too, so they must follow CryptoObject authentication.
+                // KeyMint requires the biometric authentication window for AAD and finalization too.
                 operation.updateAAD(aad);
                 byte[] ciphertext = operation.doFinal(plaintext);
                 byte[] encoded = VaultRecordCodec.encode(new VaultRecordCodec.Record(revision, operation.getIV(), ciphertext));

@@ -1,6 +1,7 @@
 export * from './address-book-service.js';
 export * from './app-preferences-service.js';
 export * from './bitcoin-wallet-service.js';
+export * from './card-store.js';
 export * from './chain-service.js';
 export * from './error-service.js';
 export * from './evm-call-history-service.js';

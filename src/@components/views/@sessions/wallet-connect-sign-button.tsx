@@ -19,7 +19,10 @@ import {
 import {assertWalletConnectTransaction} from '../../../@lib/wallet-connect-transaction.js';
 import type {Router} from '../../../@routes.js';
 import {uint8ArrayToHex} from '../../../@utils/index.js';
-import {getWalletSigningAccount} from '../../@monoid/get-wallet-signing-account.js';
+import {
+  assertWalletSigningAccount,
+  getWalletSigningAccount,
+} from '../../@monoid/get-wallet-signing-account.js';
 import {
   MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
@@ -176,10 +179,26 @@ export function WalletConnectSignButton({
             signed.some(Boolean)
               ? 'Scan next card to sign'
               : 'Scan card to sign',
-            async (applet, setContent) => {
-              assertPending();
+            async (applet, setContent, _hello, signal) => {
+              const check = (): void => {
+                signal.throwIfAborted();
+                assertPending();
+              };
+              const showProgress = (): void => {
+                check();
+                setContent(
+                  <MonoidScanStatePromptProgress
+                    current={signed.filter(Boolean).length}
+                    total={payload.transactions.length}
+                    showCount
+                  >
+                    Signing
+                  </MonoidScanStatePromptProgress>,
+                );
+              };
+              showProgress();
               const {items} = await applet.list({});
-              assertPending();
+              check();
               const indices = new Set(
                 items.map(item => uint8ArrayToHex(item.index)),
               );
@@ -202,24 +221,23 @@ export function WalletConnectSignButton({
               if (!remaining.length)
                 throw new MonoidCardError('Account not on this card');
               for (const {transaction, index, address, account} of remaining) {
-                assertPending();
-                setContent(
-                  <MonoidScanStatePromptProgress
-                    current={signed.filter(Boolean).length + 1}
-                    total={payload.transactions.length}
-                  >
-                    Signing
-                  </MonoidScanStatePromptProgress>,
-                );
+                check();
                 const signature = await signSolanaMessage(
                   applet,
                   account.reference,
                   transaction.messageBytes,
                   address,
-                  assertPending,
+                  () => {
+                    check();
+                    assertWalletSigningAccount(
+                      walletStorageService.keys,
+                      account,
+                    );
+                  },
                 );
-                assertPending();
+                check();
                 signed[index] = {address, signature};
+                showProgress();
               }
             },
           );
@@ -265,44 +283,69 @@ export function WalletConnectSignButton({
         if (!account) throw new Error('This account is no longer in Safe.');
         updateState('signing');
 
-        await scanPrompt('Scan card to sign', async (applet, setContent) => {
-          assertPending();
-          setContent(
-            <MonoidScanStatePromptProgress current={1} total={1}>
-              Signing
-            </MonoidScanStatePromptProgress>,
-          );
-          if (payload.method === 'solana_signMessage') {
-            const currentAccount = getWalletSigningAccount(
-              walletStorageService.keys,
-              payload.address,
-              'solana',
+        await scanPrompt(
+          'Scan card to sign',
+          async (applet, setContent, _hello, signal) => {
+            const check = (): void => {
+              signal.throwIfAborted();
+              assertPending();
+            };
+            check();
+            setContent(
+              <MonoidScanStatePromptProgress current={0} total={1} showCount>
+                Signing
+              </MonoidScanStatePromptProgress>,
             );
-            if (!currentAccount)
-              throw new Error('This account is no longer in Safe.');
-            result = await signSolanaMessage(
-              applet,
-              currentAccount.reference,
-              payload.message,
-              payload.address,
-              assertPending,
+            if (payload.method === 'solana_signMessage') {
+              const currentAccount = getWalletSigningAccount(
+                walletStorageService.keys,
+                payload.address,
+                'solana',
+              );
+              if (!currentAccount)
+                throw new Error('This account is no longer in Safe.');
+              result = await signSolanaMessage(
+                applet,
+                currentAccount.reference,
+                payload.message,
+                payload.address,
+                () => {
+                  check();
+                  assertWalletSigningAccount(
+                    walletStorageService.keys,
+                    currentAccount,
+                  );
+                },
+              );
+            } else {
+              const currentAccount = getWalletSigningAccount(
+                walletStorageService.keys,
+                payload.address,
+              );
+              if (!currentAccount)
+                throw new Error('This account is no longer in Safe.');
+              result = await signEvmDigest(
+                applet,
+                currentAccount.reference,
+                payload.digest,
+                payload.address,
+                () => {
+                  check();
+                  assertWalletSigningAccount(
+                    walletStorageService.keys,
+                    currentAccount,
+                  );
+                },
+              );
+            }
+            check();
+            setContent(
+              <MonoidScanStatePromptProgress current={1} total={1} showCount>
+                Signing
+              </MonoidScanStatePromptProgress>,
             );
-          } else {
-            const currentAccount = getWalletSigningAccount(
-              walletStorageService.keys,
-              payload.address,
-            );
-            if (!currentAccount)
-              throw new Error('This account is no longer in Safe.');
-            result = await signEvmDigest(
-              applet,
-              currentAccount.reference,
-              payload.digest,
-              payload.address,
-              assertPending,
-            );
-          }
-        });
+          },
+        );
 
         assertPending();
         signature.current = result;

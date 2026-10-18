@@ -97,7 +97,7 @@ export const ROUTE_SCHEMA = {
     },
     card: {
       $state: undefined! as {
-        card?: ScannedCardData;
+        card?: Pick<ScannedCardData, 'id' | 'publicKey'>;
       },
     },
   },

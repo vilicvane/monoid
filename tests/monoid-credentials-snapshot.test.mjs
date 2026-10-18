@@ -20,7 +20,25 @@ function fixture(pins = {}) {
   const state = {
     value: JSON.stringify(pins),
     calls: [],
+    authentications: [],
+    disposals: 0,
     backend: {
+      async authenticate(options) {
+        state.authentications.push(options);
+        await state.onAuthenticate?.();
+        const cancel = () => state.calls.push('close');
+        options.signal?.addEventListener('abort', cancel, {once: true});
+        return {
+          get: options => state.backend.get(options),
+          set: options => state.backend.set(options),
+          remove: options => state.backend.remove(options),
+          [Symbol.asyncDispose]: async () => {
+            options.signal?.removeEventListener('abort', cancel);
+            state.disposals++;
+            await state.onDispose?.();
+          },
+        };
+      },
       async get() {
         state.calls.push('get');
         await state.onGet?.();
@@ -40,7 +58,7 @@ function fixture(pins = {}) {
         state.value = null;
       },
       async cancel() {
-        state.calls.push('cancel');
+        state.calls.push('close');
       },
     },
   };
@@ -241,7 +259,8 @@ test('a page PIN session reuses one unlock across cards and scan cleanup', async
   session.clear();
   session.clear();
   await session.getPINs();
-  assert.deepEqual(state.calls, ['get', 'get']);
+  assert.deepEqual(state.calls, ['get', 'close', 'get']);
+  assert.equal(state.authentications.length, 2);
 });
 
 test('manual PIN saves refresh the page snapshot without another unlock', async () => {
@@ -297,7 +316,7 @@ test('a page PIN session preserves unrelated concurrent changes on its next save
   session.clear();
 });
 
-test('a failed page unlock can be retried without retaining a rejected promise', async () => {
+test('an interrupted read can be retried within the same authorization', async () => {
   const state = fixture({[CARD]: PIN});
   const session = state.store.createPINSession();
   state.onGet = () => {
@@ -333,7 +352,7 @@ test('clear cancels an in-flight page unlock and a late result cannot refill it'
   assert.equal(pins[CARD], undefined);
   assert.ok(pins[OTHER_CARD] === OTHER_PIN);
   await session.getPINs();
-  assert.deepEqual(state.calls, ['get', 'cancel', 'get']);
+  assert.deepEqual(state.calls, ['get', 'close', 'get']);
   session.clear();
 });
 
@@ -356,7 +375,7 @@ test('cancelling a scan during page unlock cancels the request and allows a late
 
   state.onGet = undefined;
   assert.ok((await session.getPINs())[CARD] === PIN);
-  assert.deepEqual(state.calls, ['get', 'cancel', 'get']);
+  assert.deepEqual(state.calls, ['get', 'close', 'get']);
   session.clear();
 });
 
@@ -370,18 +389,97 @@ test('a cleared page cannot refill its snapshot when an in-flight write commits 
     new Promise(resolve => {
       release = resolve;
     });
-  const rejected = assert.rejects(session.setPIN(OTHER_CARD, OTHER_PIN), {
-    code: 'CANCELLED',
-  });
+  const saving = session.setPIN(OTHER_CARD, OTHER_PIN);
   await setImmediate();
 
   session.clear();
   const next = session.getPINs();
   release();
-  await rejected;
+  await saving;
   const pins = await next;
   assert.ok(pins[OTHER_CARD] === OTHER_PIN);
   await session.getPINs();
-  assert.deepEqual(state.calls, ['get', 'set', 'cancel', 'get']);
+  assert.deepEqual(state.calls, ['get', 'set', 'close', 'get']);
   session.clear();
+});
+
+for (const code of ['BIOMETRIC_UNAVAILABLE', 'CANCELLED']) {
+  test(`a failed authorization (${code}) is not renewed at save`, async () => {
+    const state = fixture({[CARD]: PIN});
+    const session = state.store.createPINSession();
+    state.onAuthenticate = () => {
+      throw {code};
+    };
+    if (code === 'BIOMETRIC_UNAVAILABLE') {
+      assert.deepEqual(await session.getPINs(), {});
+    } else {
+      await assert.rejects(session.getPINs(), {code});
+    }
+    state.onAuthenticate = undefined;
+    await assert.rejects(session.setPIN(OTHER_CARD, OTHER_PIN), {code});
+    assert.equal(state.authentications.length, 1);
+    assertSaved(state, {[CARD]: PIN});
+    session.clear();
+    await session.setPIN(OTHER_CARD, OTHER_PIN);
+    assert.equal(state.authentications.length, 2);
+    await session[Symbol.asyncDispose]();
+  });
+}
+
+test('expired authorization fails a save without another prompt or replay', async () => {
+  const state = fixture({[CARD]: PIN});
+  const session = state.store.createPINSession();
+  await session.getPINs();
+  state.onSet = () => {
+    throw {code: 'AUTHORIZATION_EXPIRED'};
+  };
+  await assert.rejects(session.setPIN(OTHER_CARD, OTHER_PIN), {
+    code: 'AUTHORIZATION_EXPIRED',
+  });
+  await assert.rejects(session.setPIN(OTHER_CARD, OTHER_PIN), {
+    code: 'AUTHORIZATION_EXPIRED',
+  });
+  assert.equal(state.authentications.length, 1);
+  assertSaved(state, {[CARD]: PIN});
+  await session[Symbol.asyncDispose]();
+});
+
+test('a session first used for saving lazily acquires one authorization for its read and write', async () => {
+  const state = fixture({[CARD]: PIN});
+  const session = state.store.createPINSession();
+  assert.equal(state.authentications.length, 0);
+  await session.setPIN(OTHER_CARD, OTHER_PIN);
+  assert.equal(state.authentications.length, 1);
+  assert.deepEqual(state.calls, ['get', 'set']);
+  assertSaved(state, {[CARD]: PIN, [OTHER_CARD]: OTHER_PIN});
+  await session[Symbol.asyncDispose]();
+  assert.equal(state.disposals, 1);
+});
+
+test('disposal waits for every generation even if a previous cleanup failed', async () => {
+  const state = fixture({[CARD]: PIN});
+  const session = state.store.createPINSession();
+  await session.getPINs();
+  state.onDispose = () => {
+    throw new Error('secret native cleanup payload');
+  };
+  session.clear();
+  await setImmediate();
+  await session.getPINs();
+  const cleanup = Promise.withResolvers();
+  state.onDispose = () => cleanup.promise;
+  let settled = false;
+  const disposing = session[Symbol.asyncDispose]().finally(() => {
+    settled = true;
+  });
+  const rejected = assert.rejects(disposing, error => {
+    assert.equal(error.code, 'IO_ERROR');
+    assert.equal(error.message.includes('secret'), false);
+    return true;
+  });
+  await setImmediate();
+  assert.equal(settled, false);
+  cleanup.resolve();
+  await rejected;
+  assert.equal(state.disposals, 2);
 });

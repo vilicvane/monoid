@@ -359,16 +359,23 @@ export const BitcoinSendView = observer(
               assertActive(controller.signal);
             };
             check();
-            setContent(
-              <MonoidScanStatePromptProgress current={1} total={1}>
-                Signing
-              </MonoidScanStatePromptProgress>,
-            );
             signed = await signBitcoinTransaction(
               applet,
               account.reference,
               preview,
               check,
+              (current, total) => {
+                check();
+                setContent(
+                  <MonoidScanStatePromptProgress
+                    current={current}
+                    total={total}
+                    showCount
+                  >
+                    Signing
+                  </MonoidScanStatePromptProgress>,
+                );
+              },
             );
           },
         );

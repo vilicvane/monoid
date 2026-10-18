@@ -10,6 +10,7 @@ let fixture;
 const owners = [];
 mock.module('react', {
   namedExports: {
+    useMemo: create => create(),
     useRef: current => ({current}),
     useEffect: effect => {
       fixture.cleanup = effect();
@@ -49,6 +50,12 @@ mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
       return [null, fixture.scan];
     },
   },
+});
+const {useViewActive} = await import(
+  '../.bld/app/@components/@view/use-view-active.js'
+);
+mock.module('../.bld/app/@components/@view/index.js', {
+  namedExports: {useViewActive},
 });
 const {CardPINUpdate} = await import(
   '../.bld/app/@components/views/safe/@card/card-pin-update.js'
@@ -144,6 +151,7 @@ function mount(kind = 'Access') {
     state.scans.at(-1).resolve();
     await state.finished.promise;
   };
+  state.view.$match.$view = () => ({$entries: [state.view]});
   fixture = state;
   CardPINUpdate({
     ...state,

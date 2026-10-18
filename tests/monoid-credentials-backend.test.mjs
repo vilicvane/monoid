@@ -16,7 +16,7 @@ let releases;
 mock.module('capacitor-biometric-vault', {
   namedExports: {
     BiometricVault: Object.fromEntries(
-      ['get', 'set', 'remove', 'clear', 'cancel'].map(method => [
+      ['authenticate', 'clear'].map(method => [
         method,
         (...args) => vault[method](...args),
       ]),
@@ -55,6 +55,12 @@ beforeEach(() => {
   const values = new Map();
   vault = {
     values,
+    authenticate: mock.fn(async () => ({
+      get: options => vault.get(options),
+      set: options => vault.set(options),
+      remove: options => vault.remove(options),
+      [Symbol.asyncDispose]: async () => {},
+    })),
     get: mock.fn(async ({id}) => ({value: values.get(id) ?? null})),
     set: mock.fn(async ({id, value}) => values.set(id, value)),
     remove: mock.fn(async ({id}) => values.delete(id)),
@@ -96,7 +102,7 @@ function deferred() {
 }
 
 function assertVaultUnused() {
-  for (const method of ['get', 'set', 'remove', 'clear', 'cancel']) {
+  for (const method of ['authenticate', 'clear']) {
     assert.equal(vault[method].mock.callCount(), 0, method);
   }
 }
@@ -267,5 +273,27 @@ test('a committed plaintext write stays successful after abort and queued reads 
   delivered.resolve();
   await saving;
   assert.deepEqual(await following, {[CARD_ID]: PIN});
+  assertVaultUnused();
+});
+
+test('development access disposal waits for pending storage I/O without undoing its commit', async () => {
+  const backend = storage();
+  const credentials = await DevelopmentStore.create(backend);
+  const session = credentials.createPINSession();
+  await session.getPINs();
+  const commit = deferred();
+  backend.onSet = () => commit.promise;
+  const saving = session.setPIN(CARD_ID, PIN);
+  await setImmediate();
+  let disposed = false;
+  const closing = session[Symbol.asyncDispose]().then(() => {
+    disposed = true;
+  });
+  await setImmediate();
+  assert.equal(disposed, false);
+  commit.resolve();
+  await Promise.all([saving, closing]);
+  assert.deepEqual(JSON.parse(backend.values.get(DATA_KEY)), {[CARD_ID]: PIN});
+  assert.equal(disposed, true);
   assertVaultUnused();
 });

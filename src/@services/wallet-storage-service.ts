@@ -8,9 +8,10 @@ import type {
   PublicKeyHex,
   SafeIndexHex,
 } from '../@atomics.js';
+import {parseDerivationPath} from '../@lib/bip39.js';
 import type {AddressType} from '../@lib/wallet-address.js';
 import {ADDRESS_TYPES, computeWalletAddress} from '../@lib/wallet-address.js';
-import {hexToUint8Array} from '../@utils/index.js';
+import {hexToUint8Array, uint8ArrayToHex} from '../@utils/index.js';
 
 import type {StorageService} from './index.js';
 
@@ -49,9 +50,9 @@ export class WalletStorageService {
   addWallet(index: SafeIndexHex, source: WalletKeyPublicKeyData): void {
     const key = this.indexToKeyMap.get(index);
 
-    if (!key || (key.type !== 'seed' && key.type !== 'master')) {
-      return;
-    }
+    if (!key) return;
+
+    assertWalletPublicKeys([...key.wallets, source]);
 
     const existingIndex = key.wallets.findIndex(existing =>
       matchesWalletReference(existing, source),
@@ -60,8 +61,6 @@ export class WalletStorageService {
     runInAction(() => {
       if (existingIndex === -1) {
         key.wallets.push(source);
-      } else {
-        key.wallets[existingIndex] = source;
       }
     });
   }
@@ -72,9 +71,7 @@ export class WalletStorageService {
   ): void {
     const key = this.indexToKeyMap.get(index);
 
-    if (!key || (key.type !== 'seed' && key.type !== 'master')) {
-      return;
-    }
+    if (!key) return;
 
     const walletIndex = key.wallets.findIndex(wallet =>
       matchesWalletReference(wallet, reference),
@@ -119,9 +116,53 @@ export class WalletStorageService {
   }
 
   static async create(storage: StorageService): Promise<WalletStorageService> {
-    const keys = await storage.get('walletKeys');
+    const stored = (await storage.get('walletKeys')) ?? [];
+    let migrated = false;
+    const keys = stored.map(key => {
+      const legacy = key as WalletKeyData & {
+        publicKey?: PublicKeyHex;
+        taprootOutputKey?: PublicKeyHex;
+      };
+      if (!('publicKey' in legacy) && !('taprootOutputKey' in legacy)) {
+        return key;
+      }
 
-    return new WalletStorageService(storage, keys ?? []);
+      migrated = true;
+      const {publicKey, taprootOutputKey, ...current} = legacy;
+      const wallets = [...current.wallets];
+      const add = (addressType: AddressType, publicKey: PublicKeyHex): void => {
+        const source = {
+          addressType,
+          seed: undefined,
+          curve: undefined,
+          path: undefined,
+          publicKey,
+        };
+        assertWalletPublicKeys([...wallets, source]);
+        if (!wallets.some(wallet => matchesWalletReference(wallet, source))) {
+          wallets.push(source);
+        }
+      };
+
+      // Legacy native keys displayed these addresses implicitly. Materialize
+      // that set once, then remove the fields so an empty list stays empty.
+      if (current.type === 'secp256k1') {
+        if (publicKey) {
+          add('evm', publicKey);
+          add('bitcoin-segwit', publicKey);
+        }
+        if (taprootOutputKey) add('bitcoin-taproot', taprootOutputKey);
+      } else if (current.type === 'ed25519' && publicKey) {
+        add('solana', publicKey);
+      }
+
+      assertWalletPublicKeys(wallets);
+      return {...current, wallets};
+    });
+
+    if (migrated) await storage.set('walletKeys', keys);
+
+    return new WalletStorageService(storage, keys);
   }
 }
 
@@ -129,9 +170,6 @@ export type WalletKeyData = {
   type: WalletKeyKnownType;
   index: SafeIndexHex;
   alias: string | undefined;
-  publicKey?: PublicKeyHex;
-  // The card returns an already tweaked, x-only Taproot output key.
-  taprootOutputKey?: PublicKeyHex;
   wallets: WalletKeyPublicKeyData[];
   defaultWallet?: WalletKeyWalletParameters;
 };
@@ -184,38 +222,34 @@ export function getWalletData(
   };
 }
 
-export function getKeyWallets(key: WalletKeyData): WalletKeyWalletData[] {
-  if (key.type === 'seed' || key.type === 'master') {
-    return key.wallets.map(getWalletData);
-  }
+export function assertWalletPublicKeys(
+  wallets: readonly WalletKeyPublicKeyData[],
+): void {
+  const publicKeys = new Map<string, PublicKeyHex>();
 
-  const wallets: WalletKeyWalletData[] = [];
-  const add = (addressType: AddressType, publicKey: PublicKeyHex): void => {
-    wallets.push(
-      getWalletData({
-        addressType,
-        seed: undefined,
-        curve: undefined,
-        path: undefined,
-        publicKey,
-      }),
-    );
-  };
+  for (const wallet of wallets) {
+    const options = ADDRESS_TYPES[wallet.addressType];
+    const request = JSON.stringify([
+      options.curve,
+      wallet.seed,
+      wallet.curve,
+      wallet.path === undefined
+        ? undefined
+        : uint8ArrayToHex(parseDerivationPath(wallet.path)),
+      !!options.taproot,
+    ]);
+    const existing = publicKeys.get(request);
 
-  if (key.publicKey) {
-    if (key.type === 'secp256k1') {
-      add('evm', key.publicKey);
-      add('bitcoin-segwit', key.publicKey);
-    } else {
-      add('solana', key.publicKey);
+    if (existing !== undefined && existing !== wallet.publicKey) {
+      throw new Error('Address public key does not match');
     }
-  }
 
-  if (key.type === 'secp256k1' && key.taprootOutputKey) {
-    add('bitcoin-taproot', key.taprootOutputKey);
+    publicKeys.set(request, wallet.publicKey);
   }
+}
 
-  return wallets;
+export function getKeyWallets(key: WalletKeyData): WalletKeyWalletData[] {
+  return key.wallets.map(getWalletData);
 }
 
 export function getDefaultWallet(

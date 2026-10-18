@@ -10,6 +10,14 @@ const sameDependencies = (left, right) =>
 
 mock.module('react', {
   namedExports: {
+    useMemo(create, dependencies) {
+      const slot = rendering.slot(() => ({}));
+      if (!sameDependencies(slot.dependencies, dependencies)) {
+        slot.dependencies = dependencies;
+        slot.value = create();
+      }
+      return slot.value;
+    },
     useRef(initial) {
       return rendering.slot(() => ({current: initial}));
     },
@@ -136,6 +144,9 @@ mock.module(
 mock.module('../.bld/app/@components/views/safe/@card/card-setup-pin.js', {
   namedExports: {CardSetupPIN: 'card-setup-pin'},
 });
+const {useViewActive} = await import(
+  '../.bld/app/@components/@view/use-view-active.js'
+);
 mock.module('../.bld/app/@components/@view/index.js', {
   namedExports: {
     View: 'view',
@@ -143,12 +154,32 @@ mock.module('../.bld/app/@components/@view/index.js', {
     ViewHeader: 'header',
     ViewHeaderButton: 'header-button',
     ViewHeaderTitle: 'h1',
+    useViewActive,
   },
 });
 
 const {APPLET_NAMES, describeAppletInstallProgress} = await import(
   '../.bld/app/@lib/monoid/applet-install-progress.js'
 );
+
+test('upload percentage reaches 100 only after the final block is acknowledged', () => {
+  assert.equal(
+    describeAppletInstallProgress({
+      stage: 'monoid',
+      phase: 'uploading',
+      progress: 299 / 300,
+    }).percentage,
+    99,
+  );
+  assert.equal(
+    describeAppletInstallProgress({
+      stage: 'monoid',
+      phase: 'uploading',
+      progress: 1,
+    }).percentage,
+    100,
+  );
+});
 const install = async (sessionId, onProgress, signal) => {
   fixture.installs.push(sessionId);
   fixture.installSignals.push(signal);
@@ -296,6 +327,7 @@ function mount(Component = SetupCardView, viewOptions = {}) {
       state.slots.splice(0).forEach(slot => slot.cleanup?.());
     },
   };
+  state.view.$match.$view = () => ({$entries: [state.view]});
   state.entrances = {
     router: {
       $backTo: target => {

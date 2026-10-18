@@ -15,6 +15,7 @@ import {
   AddressBookService,
   AppPreferencesService,
   BitcoinWalletService,
+  CardStore,
   ChainService,
   ErrorService,
   EvmCallHistoryService,
@@ -115,6 +116,11 @@ export class Entrances {
   @entrance
   get monoidScanPromptPresenter() {
     return new MonoidScanPromptPresenter();
+  }
+
+  @entrance
+  get cardStore() {
+    return new CardStore();
   }
 
   @entrance

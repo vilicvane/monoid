@@ -1,4 +1,5 @@
 import type {
+  BiometricVaultAccess,
   BiometricVaultErrorCode,
   BiometricVaultPlugin,
 } from 'capacitor-biometric-vault';
@@ -17,10 +18,9 @@ declare global {
   }
 }
 
-type CredentialsBackend = Pick<
-  BiometricVaultPlugin,
-  'get' | 'set' | 'remove' | 'clear' | 'cancel'
->;
+type CredentialsBackend = Pick<BiometricVaultPlugin, 'authenticate' | 'clear'>;
+
+type GetAccess = () => Promise<BiometricVaultAccess>;
 
 const ERROR_MESSAGES: Record<BiometricVaultErrorCode, string> = {
   UNSUPPORTED: 'Protected credential storage is not supported on this device.',
@@ -36,6 +36,8 @@ const ERROR_MESSAGES: Record<BiometricVaultErrorCode, string> = {
   INVALID_ARGUMENT: 'The credential request is invalid.',
   CANCELLED: 'Credential authentication was cancelled.',
   APP_INACTIVE: 'Credential authentication ended because the app is inactive.',
+  AUTHORIZATION_EXPIRED: 'Credential authorization has expired.',
+  ACCESS_CLOSED: 'Credential access has ended.',
 };
 
 const MANUAL_PIN_CODES = new Set<BiometricVaultErrorCode>([
@@ -113,10 +115,6 @@ function parsePINs(value: string | null): MutablePINs {
   throw credentialError({code: 'DATA_CORRUPTED'});
 }
 
-function requestId(): string {
-  return crypto.getRandomValues(new Uint32Array(4)).join('-');
-}
-
 function throwIfCancelled(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw credentialError({code: 'CANCELLED'});
@@ -136,6 +134,30 @@ export class MonoidCredentialsStore {
     return new MonoidPINSession(this);
   }
 
+  authenticate(signal: AbortSignal): Promise<BiometricVaultAccess> {
+    return this.backend.authenticate({
+      reason: 'Unlock Access PINs',
+      signal,
+    });
+  }
+
+  private async withAccess<T>(
+    operation: (access: BiometricVaultAccess) => Promise<T>,
+    signal?: AbortSignal,
+    getAccess?: GetAccess,
+  ): Promise<T> {
+    throwIfCancelled(signal);
+
+    if (getAccess) return operation(await getAccess());
+
+    await using access = await this.backend.authenticate({
+      reason: 'Unlock Access PINs',
+      signal,
+    });
+
+    return await operation(access);
+  }
+
   private snapshot(pins: MutablePINs, signal?: AbortSignal): MonoidPINs {
     const snapshot = Object.freeze(pins);
     this.snapshots.set(snapshot, {revision, signal});
@@ -143,6 +165,7 @@ export class MonoidCredentialsStore {
   }
 
   private async pinsForUpdate(
+    access: BiometricVaultAccess,
     signal?: AbortSignal,
     snapshot?: MonoidPINs,
   ): Promise<MutablePINs> {
@@ -152,7 +175,7 @@ export class MonoidCredentialsStore {
     const metadata = snapshot && this.snapshots.get(snapshot);
     return metadata?.revision === revision && !metadata.signal?.aborted
       ? {...snapshot}
-      : this.readPINs(signal);
+      : this.readPINs(access, signal);
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -168,69 +191,37 @@ export class MonoidCredentialsStore {
     return result;
   }
 
-  private async readPINs(signal?: AbortSignal): Promise<MutablePINs> {
+  private async readPINs(
+    access: BiometricVaultAccess,
+    signal?: AbortSignal,
+  ): Promise<MutablePINs> {
     throwIfCancelled(signal);
-
-    const id = requestId();
-    const cancel = (): void => {
-      // The read still settles through its own result and cleanup.
-      void this.backend.cancel({requestId: id}).catch(() => {});
-    };
-
-    signal?.addEventListener('abort', cancel, {once: true});
-
-    try {
-      const {value} = await this.backend.get({
-        id: ENTRY_ID,
-        requestId: id,
-        reason: 'Unlock saved Access PINs',
-      });
-
-      throwIfCancelled(signal);
-
-      return parsePINs(value);
-    } catch (error) {
-      throw credentialError(signal?.aborted ? {code: 'CANCELLED'} : error);
-    } finally {
-      signal?.removeEventListener('abort', cancel);
-    }
+    const {value} = await access.get({id: ENTRY_ID});
+    throwIfCancelled(signal);
+    return parsePINs(value);
   }
 
   private async writePINs(
+    access: BiometricVaultAccess,
     pins: MutablePINs,
     signal?: AbortSignal,
   ): Promise<void> {
     throwIfCancelled(signal);
-
-    const id = requestId();
-    const cancel = (): void => {
-      // Keep the queue occupied until commit/cancellation and cleanup settle.
-      void this.backend.cancel({requestId: id}).catch(() => {});
-    };
-
-    signal?.addEventListener('abort', cancel, {once: true});
-
-    try {
-      // Invalidate before attempting a mutation, including an uncertain failure.
-      revision++;
-      await this.backend.set({
-        id: ENTRY_ID,
-        value: JSON.stringify(pins),
-        requestId: id,
-        reason: 'Save Access PINs on this device',
-      });
-      // Success means the write committed, even if cancellation arrived later.
-    } catch (error) {
-      throw credentialError(signal?.aborted ? {code: 'CANCELLED'} : error);
-    } finally {
-      signal?.removeEventListener('abort', cancel);
-    }
+    // Invalidate before attempting a mutation, including an uncertain failure.
+    revision++;
+    await access.set({id: ENTRY_ID, value: JSON.stringify(pins)});
+    // Success means the write committed, even if cancellation arrived later.
   }
 
-  getPINs(signal?: AbortSignal): Promise<MonoidPINs> {
+  getPINs(signal?: AbortSignal, getAccess?: GetAccess): Promise<MonoidPINs> {
     return this.enqueue(async () => {
       try {
-        return this.snapshot(await this.readPINs(signal), signal);
+        return await this.withAccess(
+          async access =>
+            this.snapshot(await this.readPINs(access, signal), signal),
+          signal,
+          getAccess,
+        );
       } catch (error) {
         const failure = credentialError(error);
 
@@ -248,16 +239,23 @@ export class MonoidCredentialsStore {
     pin: MonoidPIN,
     signal?: AbortSignal,
     snapshot?: MonoidPINs,
+    getAccess?: GetAccess,
   ): Promise<MonoidPINs> {
     return this.enqueue(async () => {
       if (!isCardId(id) || !MonoidPIN.is(pin)) {
         throw credentialError({code: 'INVALID_ARGUMENT'});
       }
 
-      const pins = await this.pinsForUpdate(signal, snapshot);
-      pins[id] = pin;
-      await this.writePINs(pins, signal);
-      return this.snapshot(pins, signal);
+      return this.withAccess(
+        async access => {
+          const pins = await this.pinsForUpdate(access, signal, snapshot);
+          pins[id] = pin;
+          await this.writePINs(access, pins, signal);
+          return this.snapshot(pins, signal);
+        },
+        signal,
+        getAccess,
+      );
     });
   }
 
@@ -266,6 +264,7 @@ export class MonoidCredentialsStore {
     expectedPIN?: MonoidPIN,
     signal?: AbortSignal,
     snapshot?: MonoidPINs,
+    getAccess?: GetAccess,
   ): Promise<MonoidPINs> {
     return this.enqueue(async () => {
       if (
@@ -275,27 +274,32 @@ export class MonoidCredentialsStore {
         throw credentialError({code: 'INVALID_ARGUMENT'});
       }
 
-      const pins = await this.pinsForUpdate(signal, snapshot);
-      throwIfCancelled(signal);
+      return this.withAccess(
+        async access => {
+          const pins = await this.pinsForUpdate(access, signal, snapshot);
+          throwIfCancelled(signal);
 
-      if (
-        !Object.hasOwn(pins, id) ||
-        (expectedPIN !== undefined && pins[id] !== expectedPIN)
-      ) {
-        return this.snapshot(pins, signal);
-      }
+          if (
+            !Object.hasOwn(pins, id) ||
+            (expectedPIN !== undefined && pins[id] !== expectedPIN)
+          ) {
+            return this.snapshot(pins, signal);
+          }
 
-      delete pins[id];
+          delete pins[id];
 
-      if (Object.keys(pins).length === 0) {
-        // Removal has no request ID and cannot be cancelled after it starts.
-        revision++;
-        await this.backend.remove({id: ENTRY_ID});
-      } else {
-        await this.writePINs(pins, signal);
-      }
+          if (Object.keys(pins).length === 0) {
+            revision++;
+            await access.remove({id: ENTRY_ID});
+          } else {
+            await this.writePINs(access, pins, signal);
+          }
 
-      return this.snapshot(pins, signal);
+          return this.snapshot(pins, signal);
+        },
+        signal,
+        getAccess,
+      );
     });
   }
 
@@ -317,14 +321,44 @@ export class MonoidCredentialsStore {
         storage.remove('monoidUnencryptedPINs');
 
       return new MonoidCredentialsStore({
-        get: async () => ({
-          value: (await storage.get('monoidUnencryptedPINs')) ?? null,
-        }),
-        set: async ({value}) => storage.set('monoidUnencryptedPINs', value),
-        remove,
+        async authenticate({signal}) {
+          throwIfCancelled(signal);
+          let closed = false;
+          const pending = new Set<Promise<unknown>>();
+          const check = (): void => {
+            throwIfCancelled(signal);
+            if (closed) throw credentialError({code: 'ACCESS_CLOSED'});
+          };
+          const request = <T>(operation: () => Promise<T>): Promise<T> => {
+            check();
+            const result = operation();
+            pending.add(result);
+            void result.finally(() => pending.delete(result)).catch(() => {});
+            return result;
+          };
+
+          return {
+            async get() {
+              return request(async () => {
+                const value =
+                  (await storage.get('monoidUnencryptedPINs')) ?? null;
+                check();
+                return {value};
+              });
+            },
+            async set({value}) {
+              await request(() => storage.set('monoidUnencryptedPINs', value));
+            },
+            async remove() {
+              await request(remove);
+            },
+            async [Symbol.asyncDispose]() {
+              closed = true;
+              await Promise.allSettled(pending);
+            },
+          };
+        },
         clear: remove,
-        // Storage I/O cannot be cancelled. The store still waits for settlement.
-        cancel: async () => {},
       });
     }
 
@@ -333,25 +367,54 @@ export class MonoidCredentialsStore {
 }
 
 /** Plaintext credentials owned by one page flow, never persisted outside the vault. */
-export class MonoidPINSession {
+export class MonoidPINSession implements AsyncDisposable {
   private owner = new AbortController();
   private unlocked: MonoidPINs | undefined;
   private pins: MutablePINs | undefined;
   private loading: Promise<void> | undefined;
+  private access: Promise<BiometricVaultAccess> | undefined;
+  private releasing: Promise<void> = Promise.resolve();
 
   constructor(private store: MonoidCredentialsStore) {}
 
   clear(): void {
+    const access = this.access;
     this.owner.abort();
     this.owner = new AbortController();
     this.unlocked = undefined;
     this.pins = undefined;
     this.loading = undefined;
+    this.access = undefined;
+    const release = access?.then(
+      value => value[Symbol.asyncDispose](),
+      () => {},
+    );
+    this.releasing = Promise.allSettled([this.releasing, release]).then(
+      results => {
+        const failure = results.find(result => result.status === 'rejected');
+        if (failure?.status === 'rejected')
+          throw credentialError(failure.reason);
+      },
+    );
+    // Page cleanup is synchronous; an awaited disposal still observes cleanup failures.
+    void this.releasing.catch(() => {});
+  }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    this.clear();
+    await this.releasing;
+  }
+
+  private getAccess(owner: AbortSignal): Promise<BiometricVaultAccess> {
+    throwIfCancelled(owner);
+    // Retain a failed authorization until the page explicitly starts a new generation.
+    return (this.access ??= this.store.authenticate(owner));
   }
 
   private async request<T>(
     signal: AbortSignal | undefined,
     operation: (owner: AbortSignal) => Promise<T>,
+    mutation = false,
   ): Promise<T> {
     throwIfCancelled(signal);
 
@@ -364,7 +427,7 @@ export class MonoidPINSession {
 
     try {
       const result = await operation(owner.signal);
-      throwIfCancelled(owner.signal);
+      if (!mutation) throwIfCancelled(owner.signal);
       return result;
     } finally {
       signal?.removeEventListener('abort', cancel);
@@ -375,7 +438,7 @@ export class MonoidPINSession {
     return this.request(signal, async owner => {
       if (!this.pins) {
         this.loading ??= this.store
-          .getPINs(owner)
+          .getPINs(owner, () => this.getAccess(owner))
           .then(snapshot => {
             throwIfCancelled(owner);
             this.unlocked = snapshot;
@@ -405,13 +468,23 @@ export class MonoidPINSession {
   }
 
   setPIN(id: MonoidIdHex, pin: MonoidPIN, signal?: AbortSignal): Promise<void> {
-    return this.request(signal, async owner => {
-      const snapshot = await this.store.setPIN(id, pin, owner, this.unlocked);
-      throwIfCancelled(owner);
-      this.unlocked = snapshot;
-      this.pins ??= {...snapshot};
-      this.pins[id] = pin;
-    });
+    return this.request(
+      signal,
+      async owner => {
+        const snapshot = await this.store.setPIN(
+          id,
+          pin,
+          owner,
+          this.unlocked,
+          () => this.getAccess(owner),
+        );
+        if (owner.aborted) return;
+        this.unlocked = snapshot;
+        this.pins ??= {...snapshot};
+        this.pins[id] = pin;
+      },
+      true,
+    );
   }
 
   removePIN(
@@ -419,15 +492,20 @@ export class MonoidPINSession {
     expectedPIN: MonoidPIN,
     signal?: AbortSignal,
   ): Promise<void> {
-    return this.request(signal, async owner => {
-      const snapshot = await this.store.removePIN(
-        id,
-        expectedPIN,
-        owner,
-        this.unlocked,
-      );
-      throwIfCancelled(owner);
-      this.unlocked = snapshot;
-    });
+    return this.request(
+      signal,
+      async owner => {
+        const snapshot = await this.store.removePIN(
+          id,
+          expectedPIN,
+          owner,
+          this.unlocked,
+          () => this.getAccess(owner),
+        );
+        if (owner.aborted) return;
+        this.unlocked = snapshot;
+      },
+      true,
+    );
   }
 }

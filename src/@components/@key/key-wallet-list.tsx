@@ -198,64 +198,58 @@ export const KeyWalletList = observer(
                               Default
                             </SwipeAction>
                           )}
-                          {derivable && (
-                            <SwipeAction
-                              type="button"
-                              $color="var(--ion-color-danger)"
-                              onClick={errorService.catch(
-                                async (
-                                  event: MouseEvent<HTMLButtonElement>,
-                                ) => {
-                                  const row =
-                                    event.currentTarget.closest<HTMLElement>(
-                                      '[role="group"]',
-                                    );
+                          <SwipeAction
+                            type="button"
+                            $color="var(--ion-color-danger)"
+                            onClick={errorService.catch(
+                              async (event: MouseEvent<HTMLButtonElement>) => {
+                                const row =
+                                  event.currentTarget.closest<HTMLElement>(
+                                    '[role="group"]',
+                                  );
 
-                                  await presentAlert({
-                                    header: 'Delete address?',
-                                    subHeader: wallet.address,
-                                    message:
-                                      'Remove this saved address from this device? You can derive it again from your card.',
-                                    buttons: [
-                                      {text: 'Cancel', role: 'cancel'},
-                                      {
-                                        text: 'Delete',
-                                        role: 'destructive',
-                                        handler: () => {
-                                          walletStorageService.deleteWallet(
-                                            data.index,
-                                            wallet,
-                                          );
-                                          setOpenWallet(current =>
-                                            current === id
-                                              ? undefined
-                                              : current,
-                                          );
-                                        },
+                                await presentAlert({
+                                  header: 'Delete address?',
+                                  subHeader: wallet.address,
+                                  message:
+                                    'Remove this saved address from this device? You can import it again from your card.',
+                                  buttons: [
+                                    {text: 'Cancel', role: 'cancel'},
+                                    {
+                                      text: 'Delete',
+                                      role: 'destructive',
+                                      handler: () => {
+                                        walletStorageService.deleteWallet(
+                                          data.index,
+                                          wallet,
+                                        );
+                                        setOpenWallet(current =>
+                                          current === id ? undefined : current,
+                                        );
                                       },
-                                    ],
-                                    onDidDismiss: () => {
-                                      const nextTarget = row?.isConnected
-                                        ? row
-                                        : (listRef.current?.querySelector<HTMLElement>(
-                                            '[role="group"]',
-                                          ) ??
-                                          emptyFocusRef?.current?.querySelector(
-                                            'button',
-                                          ));
-
-                                      nextTarget?.focus({
-                                        preventScroll: true,
-                                      });
                                     },
-                                  });
-                                },
-                              )}
-                            >
-                              <AppIcon icon={trash} aria-hidden="true" />
-                              Delete
-                            </SwipeAction>
-                          )}
+                                  ],
+                                  onDidDismiss: () => {
+                                    const nextTarget = row?.isConnected
+                                      ? row
+                                      : (listRef.current?.querySelector<HTMLElement>(
+                                          '[role="group"]',
+                                        ) ??
+                                        emptyFocusRef?.current?.querySelector(
+                                          'button',
+                                        ));
+
+                                    nextTarget?.focus({
+                                      preventScroll: true,
+                                    });
+                                  },
+                                });
+                              },
+                            )}
+                          >
+                            <AppIcon icon={trash} aria-hidden="true" />
+                            Delete
+                          </SwipeAction>
                         </>
                       }
                     >
@@ -361,7 +355,7 @@ export const KeyWalletList = observer(
         })}
         {wallets.length === 0 && (
           <KeyListItem>
-            <KeyListPlaceholder>No derived addresses</KeyListPlaceholder>
+            <KeyListPlaceholder>No addresses</KeyListPlaceholder>
           </KeyListItem>
         )}
         {active && receiveWallet && (

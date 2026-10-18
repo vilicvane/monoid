@@ -11,6 +11,7 @@ import {useMonoidScanPrompt} from '../../../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
+import {useViewActive} from '../../../@view/index.js';
 import {assertCardForUpdate} from '../card-alias-update.js';
 import {type CardPINKind, updateCardPIN} from '../card-pin-update.js';
 import type {ScannedCardData} from '../common.js';
@@ -44,6 +45,7 @@ export const CardPINUpdate = observer(
     onFinished: () => void;
   }): ReactNode => {
     const {errorService} = useEntrances();
+    const isViewActive = useViewActive(view);
     const toast = useToast();
     const [input, showInput] = useInputModal();
     const [scanInput, scan] = useMonoidScanPrompt({
@@ -64,10 +66,9 @@ export const CardPINUpdate = observer(
       let confirmation: string | undefined;
       let writing: Promise<void> | undefined;
       let updatedCardId: MonoidIdHex | undefined;
-      const active = (): boolean =>
-        !disposed && !view.$leaving && view.$match.$exact.$active;
+      const active = (): boolean => !disposed && isViewActive();
       const stopWatching = reaction(
-        () => !!view.$leaving || !view.$match.$exact.$active,
+        () => !isViewActive(),
         leaving => {
           if (leaving) operation.abort();
         },
@@ -195,9 +196,18 @@ export const CardPINUpdate = observer(
         operation.abort();
         stopWatching();
       };
-    }, [card, kind, pinSession, view, showInput, scan, toast, errorService]);
+    }, [
+      card,
+      kind,
+      pinSession,
+      isViewActive,
+      showInput,
+      scan,
+      toast,
+      errorService,
+    ]);
 
-    return !view.$leaving && view.$match.$exact.$active ? (
+    return isViewActive() ? (
       <>
         {input}
         {scanInput}

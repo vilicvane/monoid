@@ -40,6 +40,7 @@ const Container = styled.div<{
     pointer-events: none;
     transition:
       transform ${selectionTransition.duration}ms ${selectionTransition.easing},
+      opacity ${selectionTransition.duration}ms ${selectionTransition.easing},
       background-color ${selectionTransition.duration}ms linear;
   }
 
@@ -117,24 +118,36 @@ const OptionIcon = styled.span`
   flex-shrink: 0;
 `;
 
-export const SegmentedControl = <Value extends string>({
-  value,
-  options,
-  onChange,
-  disabled = false,
-  'aria-label': ariaLabel,
-}: {
-  value: Value;
+type SegmentedControlProps<Value extends string> = {
   options: readonly {
     value: Value;
     label: ReactNode;
     icon?: ReactNode;
     color?: OptionColor;
   }[];
-  onChange: (value: Value) => void;
   disabled?: boolean;
   'aria-label': string;
-}): ReactNode => {
+} & (
+  | {
+      allowDeselect: true;
+      value: Value | undefined;
+      onChange: (value: Value | undefined) => void;
+    }
+  | {
+      allowDeselect?: false;
+      value: Value;
+      onChange: (value: Value) => void;
+    }
+);
+
+export const SegmentedControl = <Value extends string>({
+  value,
+  options,
+  onChange,
+  allowDeselect,
+  disabled = false,
+  'aria-label': ariaLabel,
+}: SegmentedControlProps<Value>): ReactNode => {
   const name = useId();
   const selectedIndex = options.findIndex(option => option.value === value);
 
@@ -155,6 +168,19 @@ export const SegmentedControl = <Value extends string>({
             value={option.value}
             checked={value === option.value}
             disabled={disabled}
+            onClick={() => {
+              if (allowDeselect && value === option.value) onChange(undefined);
+            }}
+            onKeyDown={event => {
+              if (
+                allowDeselect &&
+                value === option.value &&
+                event.key === ' '
+              ) {
+                event.preventDefault();
+                onChange(undefined);
+              }
+            }}
             onChange={() => onChange(option.value)}
           />
           <OptionLabel>

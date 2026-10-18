@@ -8,6 +8,7 @@ import type {
 // eslint-disable-next-line @mufan/import -- Keep key import logic independent of UI services.
 import {
   WalletKeyKnownType,
+  assertWalletPublicKeys,
   getWalletReference,
   matchesWalletReference,
 } from '../../../@services/wallet-storage-service.js';
@@ -15,35 +16,39 @@ import {
 import type {ScannedCardKeyData} from './common.js';
 
 export function getCardKeyData(
-  key: ScannedCardKeyData,
-  refs: readonly ScannedCardKeyData['ref'][] = [key.ref],
-  derivations: readonly WalletKeyPublicKeyData[] = [],
+  key: Omit<ScannedCardKeyData, 'ref'> & {ref?: ScannedCardKeyData['ref']},
+  wallets?: readonly WalletKeyPublicKeyData[],
 ): WalletKeyData {
-  const {addressType, seed, curve, path, publicKey} = key.ref;
-  const source = {addressType, seed, curve, path, publicKey};
+  const reference = key.ref && {
+    addressType: key.ref.addressType,
+    seed: key.ref.seed,
+    curve: key.ref.curve,
+    path: key.ref.path,
+    publicKey: key.ref.publicKey,
+  };
+  const selected = wallets ?? (reference ? [reference] : []);
+  assertWalletPublicKeys(selected);
   const data: WalletKeyData = {
     type: WalletKeyKnownType.satisfies(key.type),
     index: key.index,
     alias: key.alias,
     wallets: [],
-    defaultWallet: getWalletReference(source),
   };
 
-  if (key.type === 'seed' || key.type === 'master') {
-    data.wallets.push(...derivations);
+  for (const source of selected) {
     if (!data.wallets.some(wallet => matchesWalletReference(wallet, source))) {
-      data.wallets.push(source);
+      data.wallets.push({
+        ...getWalletReference(source),
+        publicKey: source.publicKey,
+      });
     }
-  } else if (key.type === 'secp256k1') {
-    const ordinary = refs.find(
-      ref => ref.addressType === 'evm' || ref.addressType === 'bitcoin-segwit',
-    );
-    const taproot = refs.find(ref => ref.addressType === 'bitcoin-taproot');
+  }
 
-    if (ordinary) data.publicKey = ordinary.publicKey;
-    if (taproot) data.taprootOutputKey = taproot.publicKey;
-  } else {
-    data.publicKey = publicKey;
+  if (
+    reference &&
+    data.wallets.some(wallet => matchesWalletReference(wallet, reference))
+  ) {
+    data.defaultWallet = getWalletReference(reference);
   }
 
   return data;
@@ -55,28 +60,31 @@ export function importCardKey(
 ): void {
   runInAction(() => {
     const existing = service.indexToKeyMap.get(incoming.index);
+    assertWalletPublicKeys([...(existing?.wallets ?? []), ...incoming.wallets]);
 
     if (!existing) {
       service.keys.push(incoming);
       return;
     }
 
-    existing.type = incoming.type;
-    if (incoming.alias) {
+    if (existing.type !== incoming.type) {
+      throw new Error('Key type does not match');
+    }
+    if (incoming.alias !== undefined) {
       existing.alias = incoming.alias;
     }
 
-    if (incoming.publicKey !== undefined) {
-      existing.publicKey = incoming.publicKey;
-    }
-    if (incoming.taprootOutputKey !== undefined) {
-      existing.taprootOutputKey = incoming.taprootOutputKey;
+    for (const source of incoming.wallets) {
+      service.addWallet(existing.index, source);
     }
 
-    if (existing.type === 'seed' || existing.type === 'master') {
-      for (const source of incoming.wallets) {
-        service.addWallet(existing.index, source);
-      }
+    if (
+      existing.defaultWallet &&
+      !existing.wallets.some(wallet =>
+        matchesWalletReference(wallet, existing.defaultWallet!),
+      )
+    ) {
+      delete existing.defaultWallet;
     }
   });
 }
@@ -87,11 +95,8 @@ export function isWalletKeyUpToDate(
 ): boolean {
   return (
     existing.type === incoming.type &&
-    (!incoming.alias || existing.alias === incoming.alias) &&
-    (incoming.publicKey === undefined ||
-      existing.publicKey === incoming.publicKey) &&
-    (incoming.taprootOutputKey === undefined ||
-      existing.taprootOutputKey === incoming.taprootOutputKey) &&
+    (incoming.alias === undefined ||
+      (existing.alias ?? '') === incoming.alias) &&
     incoming.wallets.every(source =>
       existing.wallets.some(
         saved =>

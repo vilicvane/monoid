@@ -110,8 +110,11 @@ test('scan restores multiple paths of one address type without adding a default 
   assert.equal(root.ref.address, '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf');
   assert.deepEqual(items[1].derivationRecord, {index: ROOT, wallets});
   assert.deepEqual(progress, [
-    [0, 2],
-    [1, 2],
+    [0, 1, 'records'],
+    [1, 1, 'records'],
+    [0, 2, 'keys'],
+    [1, 2, 'keys'],
+    [2, 2, 'keys'],
   ]);
 });
 
@@ -187,7 +190,7 @@ test('scan preserves orphan metadata and unrelated resources without applying or
   });
 });
 
-test('an empty record keeps a default display address without inventing synced derivations', async () => {
+test('an empty record preserves an explicit empty list without reading a default address', async () => {
   const record = metadata(ROOT, []);
   const {applet, calls} = createApplet(
     [resource(ROOT, 'seed'), record.item],
@@ -196,9 +199,11 @@ test('an empty record keeps a default display address without inventing synced d
 
   const items = await scanCardItems(applet, () => {});
 
-  assert.equal(calls.viewKey.length, 1);
+  assert.equal(calls.get.length, 1);
+  assert.equal(calls.viewKey.length, 0);
   assert.deepEqual(items[0].derivations, []);
-  assert.equal(items[0].ref.path, ADDRESS_TYPES.evm.path(0));
+  assert.equal(items[0].ref, undefined);
+  assert.deepEqual(items[1].derivationRecord, {index: ROOT, wallets: []});
 });
 
 test('invalid recognized metadata fails the scan before deriving keys', async () => {
@@ -242,4 +247,114 @@ test('an unsupported default display derivation still leaves the key available',
   assert.equal(items[0].index, ROOT);
   assert.equal(items[0].ref, undefined);
   assert.deepEqual(items[0].derivations, []);
+});
+
+test('scan progress uses stable stages and counts every saved address, including reused public keys', async () => {
+  const path = "m/44'/60'/0'/0/7";
+  const record = metadata(ROOT, [
+    wallet('evm', path),
+    wallet('bitcoin-segwit', path),
+    wallet('evm', "m/44'/60'/0'/0/8"),
+  ]);
+  const empty = metadata(MASTER, []);
+  const {applet, calls} = createApplet(
+    [
+      resource(ROOT, 'seed'),
+      record.item,
+      resource(MASTER, 'master'),
+      empty.item,
+      resource('04010000000000000001', 'secp256k1'),
+      resource('06010000000000000001', 'secp256r1'),
+    ],
+    [record, empty],
+  );
+  const progress = [];
+  const beforeReads = [];
+  const originalViewKey = applet.viewKey;
+  applet.viewKey = request => {
+    beforeReads.push([...progress.at(-1)]);
+    return originalViewKey(request);
+  };
+
+  await scanCardItems(applet, (...value) => progress.push(value));
+
+  assert.deepEqual(progress, [
+    [0, 2, 'records'],
+    [1, 2, 'records'],
+    [2, 2, 'records'],
+    [0, 5, 'keys'],
+    [1, 5, 'keys'],
+    [2, 5, 'keys'],
+    [3, 5, 'keys'],
+    [4, 5, 'keys'],
+    [5, 5, 'keys'],
+  ]);
+  assert.deepEqual(beforeReads, [
+    [0, 5, 'keys'],
+    [1, 5, 'keys'],
+    [3, 5, 'keys'],
+    [4, 5, 'keys'],
+  ]);
+  assert.equal(calls.viewKey.length, 4);
+});
+
+for (const stage of ['list', 'records', 'saved-key', 'preview', 'p256']) {
+  test(`cancellation during ${stage} suppresses late progress and stops further card reads`, async () => {
+    const controller = new AbortController();
+    const record = metadata(ROOT, [
+      wallet('evm', "m/44'/60'/0'/0/7"),
+      wallet('evm', "m/44'/60'/0'/0/8"),
+    ]);
+    const resources =
+      stage === 'records' || stage === 'saved-key'
+        ? [resource(ROOT, 'seed'), record.item]
+        : [
+            resource(ROOT, stage === 'p256' ? 'secp256r1' : 'seed'),
+            resource(MASTER, 'master'),
+          ];
+    const {applet, calls} = createApplet(resources, [record]);
+    const method =
+      stage === 'list' ? 'list' : stage === 'records' ? 'get' : 'viewKey';
+    const original = applet[method];
+    const progress = [];
+    let progressAtCancellation;
+    applet[method] = async request => {
+      const result = await original(request);
+      controller.abort();
+      progressAtCancellation = [...progress];
+      return result;
+    };
+
+    await assert.rejects(
+      scanCardItems(
+        applet,
+        (...value) => progress.push(value),
+        controller.signal,
+      ),
+      {code: 'CANCELLED'},
+    );
+
+    assert.deepEqual(progress, progressAtCancellation);
+    assert.equal(calls.viewKey.length, method === 'viewKey' ? 1 : 0);
+    assert.equal(
+      progress.some(
+        ([current, total, kind]) => kind === 'keys' && current === total,
+      ),
+      false,
+    );
+  });
+}
+
+test('an already cancelled scan does not list the card', async () => {
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(
+    scanCardItems(
+      {list: () => assert.fail('Cancelled scans must not start an APDU')},
+      () => assert.fail('Cancelled scans must not publish progress'),
+      controller.signal,
+    ),
+    {code: 'CANCELLED'},
+  );
 });

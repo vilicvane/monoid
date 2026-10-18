@@ -223,7 +223,7 @@ test('adding derived sources preserves them and the chosen default after reload'
   );
 });
 
-test('updating a public key replaces only the source with the same parameters and preserves the default', async context => {
+test('a different public key for the same source is rejected without changing the default', async context => {
   context.mock.method(console, 'info', () => {});
 
   const reference = getWalletReference(EVM_SOURCE);
@@ -233,17 +233,17 @@ test('updating a public key replaces only the source with the same parameters an
   const service = await WalletStorageService.create(storage);
   const replacement = {...EVM_SOURCE, publicKey: '03' + PUBLIC_KEY.slice(2)};
 
-  service.addWallet(KEY_INDEX, replacement);
+  assert.throws(
+    () => service.addWallet(KEY_INDEX, replacement),
+    /public key does not match/,
+  );
 
   const key = service.keys[0];
 
-  assert.deepEqual(toJS(key.wallets), [SOLANA_SOURCE, replacement]);
-  assert.equal(
-    getDefaultWallet(key).address,
-    getWalletData(replacement).address,
-  );
-  assert.notEqual(getDefaultWallet(key).address, EVM_ADDRESS);
+  assert.deepEqual(toJS(key.wallets), [SOLANA_SOURCE, EVM_SOURCE]);
+  assert.equal(getDefaultWallet(key).address, EVM_ADDRESS);
   assert.deepEqual(toJS(key.defaultWallet), reference);
+  assert.deepEqual(storage.writes, []);
 });
 
 test('different derivation paths retain separate sources even when their addresses match', async context => {
@@ -384,7 +384,8 @@ test('deleting the final source keeps its parent key and permits derivation afte
   );
 });
 
-test('raw public keys produce only supported available addresses and reject source additions or deletions', async () => {
+test('legacy native keys migrate displayed addresses once and do not restore them after deletion', async context => {
+  context.mock.method(console, 'info', () => {});
   const keys = [
     {
       ...createKey([]),
@@ -407,6 +408,9 @@ test('raw public keys produce only supported available addresses and reject sour
   ];
   const storage = createStorage(keys);
   const service = await WalletStorageService.create(storage);
+  assert.equal(storage.writes.length, 1);
+  assert.ok(service.keys.every(key => !Object.hasOwn(key, 'publicKey')));
+  assert.ok(service.keys.every(key => !Object.hasOwn(key, 'taprootOutputKey')));
 
   assert.deepEqual(
     service.keys.map(key =>
@@ -423,11 +427,87 @@ test('raw public keys produce only supported available addresses and reject sour
     for (const wallet of getKeyWallets(key)) {
       service.deleteWallet(key.index, wallet);
     }
-    service.addWallet(key.index, EVM_SOURCE);
   }
 
-  assert.deepEqual(toJS(service.keys), keys);
+  assert.ok(service.keys.every(key => key.wallets.length === 0));
+  assert.equal(service.keys.length, keys.length);
+  const written = storage.writes.length;
+  const reloaded = await WalletStorageService.create(storage);
+  assert.deepEqual(toJS(reloaded.keys), toJS(service.keys));
+  assert.ok(reloaded.keys.every(key => getKeyWallets(key).length === 0));
+  assert.equal(storage.writes.length, written);
+});
+
+test('modern empty native keys load without migration and can add and delete one address independently', async context => {
+  context.mock.method(console, 'info', () => {});
+  const key = {...createKey([]), type: 'secp256k1'};
+  const storage = createStorage([key]);
+  const service = await WalletStorageService.create(storage);
+  const source = {
+    addressType: 'evm',
+    seed: undefined,
+    curve: undefined,
+    path: undefined,
+    publicKey: PUBLIC_KEY,
+  };
   assert.deepEqual(storage.writes, []);
+  service.addWallet(KEY_INDEX, source);
+  assert.deepEqual(
+    getKeyWallets(service.keys[0]).map(wallet => wallet.addressType),
+    ['evm'],
+  );
+  service.addWallet(KEY_INDEX, {...source, addressType: 'bitcoin-segwit'});
+  service.deleteWallet(KEY_INDEX, source);
+  assert.deepEqual(
+    getKeyWallets(service.keys[0]).map(wallet => wallet.addressType),
+    ['bitcoin-segwit'],
+  );
+  const reloaded = await WalletStorageService.create(storage);
+  assert.deepEqual(toJS(reloaded.keys), toJS(service.keys));
+});
+
+test('equivalent derived requests reject inconsistent public keys but keep address types separate', async context => {
+  context.mock.method(console, 'info', () => {});
+  const storage = createStorage([createKey([EVM_SOURCE])]);
+  const service = await WalletStorageService.create(storage);
+  const segwit = {...EVM_SOURCE, addressType: 'bitcoin-segwit'};
+  assert.throws(
+    () =>
+      service.addWallet(KEY_INDEX, {
+        ...segwit,
+        publicKey: '03' + PUBLIC_KEY.slice(2),
+      }),
+    /public key does not match/,
+  );
+  service.addWallet(KEY_INDEX, segwit);
+  assert.deepEqual(toJS(service.keys[0].wallets), [EVM_SOURCE, segwit]);
+});
+
+test('legacy migration preserves a valid local default and requires its normalized data to persist', async () => {
+  const reference = {
+    addressType: 'bitcoin-segwit',
+    seed: undefined,
+    curve: undefined,
+    path: undefined,
+  };
+  const legacy = {
+    ...createKey([]),
+    type: 'secp256k1',
+    publicKey: PUBLIC_KEY,
+    defaultWallet: reference,
+  };
+  const storage = createStorage([legacy]);
+  const service = await WalletStorageService.create(storage);
+  assert.equal(getDefaultWallet(service.keys[0]).addressType, 'bitcoin-segwit');
+  assert.deepEqual(toJS(service.keys[0].defaultWallet), reference);
+  const unavailable = createStorage([legacy]);
+  unavailable.set = async () => {
+    throw new Error('Storage unavailable');
+  };
+  await assert.rejects(
+    WalletStorageService.create(unavailable),
+    /Storage unavailable/,
+  );
 });
 
 test('unknown keys or wallet references leave stored data unchanged', async () => {

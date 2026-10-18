@@ -2,6 +2,8 @@ package app.monoid.plugins.biometricvault;
 
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Build;
+import android.os.SystemClock;
 import androidx.biometric.BiometricManager;
 import androidx.lifecycle.Lifecycle;
 import com.getcapacitor.JSObject;
@@ -44,8 +46,8 @@ public final class BiometricVaultPlugin extends Plugin {
             }
 
             @Override
-            public void remove(String id) throws VaultException {
-                store().remove(id);
+            public void remove(String id, VaultController.CommitGate gate) throws VaultException {
+                store().remove(id, gate);
             }
 
             @Override
@@ -54,10 +56,10 @@ public final class BiometricVaultPlugin extends Plugin {
             }
         };
         AndroidVaultAuthenticator authenticator = new AndroidVaultAuthenticator(getActivity(), main::post);
-        vault = new VaultController(store, (cipher, reason, callback) -> {
+        vault = new VaultController(store, (reason, callback) -> {
             ensureBiometricsAvailable();
-            return authenticator.authenticate(cipher, reason, callback);
-        }, main::post, worker);
+            return authenticator.authenticate(reason, callback);
+        }, main::post, worker, SystemClock::elapsedRealtime);
         vault.setForeground(getActivity().getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED));
     }
 
@@ -91,6 +93,32 @@ public final class BiometricVaultPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void authenticate(PluginCall call) {
+        main.post(() -> {
+            String requestId = null;
+            try {
+                requestId = text(call, "requestId", 128, false, false);
+                String reason = text(call, "reason", 256, false, false);
+                vault.authenticate(requestId, reason, result(call, null, requestId, "accessId"));
+            } catch (VaultException exception) {
+                reject(call, exception, null, requestId);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void closeAccess(PluginCall call) {
+        main.post(() -> {
+            try {
+                String accessId = text(call, "accessId", 128, false, false);
+                vault.closeAccess(accessId, result(call, null, null, null));
+            } catch (VaultException exception) {
+                reject(call, exception, null, null);
+            }
+        });
+    }
+
+    @PluginMethod
     public void set(PluginCall call) {
         access(call, true);
     }
@@ -107,13 +135,13 @@ public final class BiometricVaultPlugin extends Plugin {
             try {
                 id = text(call, "id", 512, true, false);
                 requestId = text(call, "requestId", 128, false, false);
-                String reason = text(call, "reason", 256, false, false);
-                VaultController.Result result = result(call, id, requestId, !writing);
+                String accessId = text(call, "accessId", 128, false, false);
+                VaultController.Result result = result(call, id, requestId, writing ? null : "value");
                 if (writing) {
                     String value = text(call, "value", 65_536, true, true);
-                    vault.set(id, value, requestId, reason, result);
+                    vault.set(accessId, id, value, requestId, result);
                 } else {
-                    vault.get(id, requestId, reason, result);
+                    vault.get(accessId, id, requestId, result);
                 }
             } catch (VaultException exception) {
                 reject(call, exception, id, requestId);
@@ -124,18 +152,27 @@ public final class BiometricVaultPlugin extends Plugin {
     @PluginMethod
     public void remove(PluginCall call) {
         main.post(() -> {
+            String id = null;
+            String requestId = null;
             try {
-                String id = text(call, "id", 512, true, false);
-                vault.remove(id, result(call, id, null, false));
+                id = text(call, "id", 512, true, false);
+                String accessId = null;
+                if (call.getData().has("accessId")) {
+                    accessId = text(call, "accessId", 128, false, false);
+                    requestId = text(call, "requestId", 128, false, false);
+                } else if (call.getData().has("requestId")) {
+                    throw new VaultException("INVALID_ARGUMENT", "requestId requires accessId.");
+                }
+                vault.remove(accessId, id, requestId, result(call, id, requestId, null));
             } catch (VaultException exception) {
-                reject(call, exception, null, null);
+                reject(call, exception, id, requestId);
             }
         });
     }
 
     @PluginMethod
     public void clear(PluginCall call) {
-        main.post(() -> vault.clear(result(call, null, null, false)));
+        main.post(() -> vault.clear(result(call, null, null, null)));
     }
 
     @PluginMethod
@@ -152,6 +189,9 @@ public final class BiometricVaultPlugin extends Plugin {
     }
 
     private int biometricStatus() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return BiometricManager.BIOMETRIC_ERROR_UNSUPPORTED;
+        }
         try {
             return BiometricManager.from(getContext()).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG);
         } catch (RuntimeException ignored) {
@@ -175,13 +215,13 @@ public final class BiometricVaultPlugin extends Plugin {
         }
     }
 
-    private static VaultController.Result result(PluginCall call, String id, String requestId, boolean reading) {
+    private static VaultController.Result result(PluginCall call, String id, String requestId, String resultField) {
         return new VaultController.Result() {
             @Override
             public void resolve(String value) {
-                if (reading) {
+                if (resultField != null) {
                     JSObject result = new JSObject();
-                    result.put("value", value == null ? JSONObject.NULL : value);
+                    result.put(resultField, value == null ? JSONObject.NULL : value);
                     call.resolve(result);
                 } else {
                     call.resolve();

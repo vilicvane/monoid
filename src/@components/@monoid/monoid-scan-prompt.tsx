@@ -22,7 +22,6 @@ import {
 import {renderIcon} from '../../@lib/render-icon.js';
 import {
   type MonoidPINSession,
-  type MonoidPINs,
   isCredentialRequestCancelled,
 } from '../../@services/index.js';
 import {uint8ArrayToHex} from '../../@utils/index.js';
@@ -138,6 +137,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
         MonoidScanPromptCallback<TSafe>,
         {resolve: () => void; reject: (error: unknown) => void},
         MonoidScanPromptValidateCard<TSafe> | undefined,
+        MonoidPINSession,
       ]
     >();
 
@@ -184,6 +184,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
       appletCallback,
       {resolve, reject},
       validateCard,
+      scanPINSession,
     ] = appletCallbackAndPromise;
 
     let retryStateContent = initialStateContent;
@@ -206,7 +207,6 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
     let disposed = false;
     const credentialsRequest = new AbortController();
     let pins: Partial<Record<MonoidIdHex, MonoidPIN>> = {};
-    let unlockedPINs: MonoidPINs | undefined;
     let stop: (() => Promise<void>) | undefined;
 
     const cancelled = (): Error =>
@@ -315,24 +315,9 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
           const {type, id, pin} = pendingUpdate;
 
           if (type === 'set') {
-            if (pinSession) {
-              await pinSession.setPIN(id, pin, credentialsRequest.signal);
-            } else {
-              await monoidCredentialsStore.setPIN(
-                id,
-                pin,
-                credentialsRequest.signal,
-                unlockedPINs,
-              );
-            }
-          } else if (pinSession) {
-            await pinSession.removePIN(id, pin, credentialsRequest.signal);
+            await scanPINSession.setPIN(id, pin, credentialsRequest.signal);
           } else {
-            await monoidCredentialsStore.removePIN(
-              id,
-              pin,
-              credentialsRequest.signal,
-            );
+            await scanPINSession.removePIN(id, pin, credentialsRequest.signal);
           }
         } catch {
           if (!disposed) {
@@ -576,7 +561,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
 
                 if (entered === undefined) {
                   delete pins[id];
-                  pinSession?.forgetPIN(id, pin);
+                  scanPINSession.forgetPIN(id, pin);
                   update = {type: 'remove', id, pin};
                 }
 
@@ -598,10 +583,13 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
 
             if (entered !== undefined) {
               pins[id] = entered;
-              pinSession?.rememberPIN(id, entered);
+              scanPINSession.rememberPIN(id, entered);
             }
 
-            if (entered !== undefined || pinSession?.hasUnsavedPIN(id, pin)) {
+            if (
+              entered !== undefined ||
+              scanPINSession.hasUnsavedPIN(id, pin)
+            ) {
               update = {type: 'set', id, pin};
             }
           }
@@ -612,7 +600,15 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
 
           await appletCallback(
             applet,
-            setStateContent,
+            content => {
+              if (
+                !disposed &&
+                !finishing &&
+                !credentialsRequest.signal.aborted
+              ) {
+                setStateContent(content);
+              }
+            },
             hello,
             credentialsRequest.signal,
           );
@@ -733,15 +729,12 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
 
     const start = async (): Promise<void> => {
       if (auth === 'access') {
-        const saved = await (pinSession ?? monoidCredentialsStore).getPINs(
-          credentialsRequest.signal,
-        );
+        const saved = await scanPINSession.getPINs(credentialsRequest.signal);
 
         if (disposed) {
           return;
         }
 
-        unlockedPINs = saved;
         pins = {...saved};
       }
 
@@ -754,7 +747,6 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
       disposed = true;
       credentialsRequest.abort();
       pins = {};
-      unlockedPINs = undefined;
       enteredPIN = undefined;
       setupPIN = undefined;
       update = undefined;
@@ -786,19 +778,36 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
   return [
     pinInput,
     useCallback(
-      (initialStateContent, appletCallback, validateCard) =>
-        new Promise((resolve, reject) => {
-          setState('hidden');
-          setStateContent(initialStateContent);
+      async (initialStateContent, appletCallback, validateCard) => {
+        let completed = false;
+        try {
+          // A borrowed page session survives scan cleanup; a temporary one spans the
+          // complete scan, including PIN retries, exit animation, and deferred save.
+          await using temporarySession = pinSession
+            ? undefined
+            : monoidCredentialsStore.createPINSession();
+          const scanPINSession = pinSession ?? temporarySession!;
 
-          setAppletCallbackAndPromise([
-            initialStateContent,
-            appletCallback,
-            {resolve, reject},
-            validateCard,
-          ]);
-        }),
-      [],
+          await new Promise<void>((resolve, reject) => {
+            setState('hidden');
+            setStateContent(initialStateContent);
+
+            setAppletCallbackAndPromise([
+              initialStateContent,
+              appletCallback,
+              {resolve, reject},
+              validateCard,
+              scanPINSession,
+            ]);
+          });
+          completed = true;
+        } catch (error) {
+          if (!completed) throw error;
+          // Closing storage access cannot undo an already completed card operation.
+          errorService.catch(Promise.reject(error));
+        }
+      },
+      [monoidCredentialsStore, pinSession, errorService],
     ),
   ];
 }

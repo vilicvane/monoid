@@ -2,6 +2,7 @@ package app.monoid.plugins.biometricvault;
 
 import static org.junit.Assert.*;
 
+import android.security.keystore.UserNotAuthenticatedException;
 import java.io.IOException;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.NoSuchAlgorithmException;
@@ -42,5 +43,12 @@ public class AndroidVaultStoreTest {
     @Test
     public void authenticationTagMismatchIsCorruptData() {
         assertEquals("DATA_CORRUPTED", AndroidVaultStore.failure(new AEADBadTagException(), true).code());
+    }
+
+    @Test
+    public void expiredAuthenticationWindowIsDistinctFromPromptFailure() {
+        UserNotAuthenticatedException exception = new UserNotAuthenticatedException();
+        assertEquals("AUTHORIZATION_EXPIRED", AndroidVaultStore.failure(exception, true).code());
+        assertEquals("AUTHORIZATION_EXPIRED", AndroidVaultStore.failure(new ProviderException(exception), false).code());
     }
 }

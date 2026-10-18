@@ -6,13 +6,16 @@ import {base58} from '@scure/base';
 
 import {parseDerivationPath} from '../.bld/app/@lib/bip39.js';
 import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
-import {getKeyWallets} from '../.bld/app/@services/wallet-storage-service.js';
+import {
+  getKeyWallets,
+  matchesWalletReference,
+} from '../.bld/app/@services/wallet-storage-service.js';
 
 mock.module('../.bld/app/@services/index.js', {
-  namedExports: {getKeyWallets},
+  namedExports: {getKeyWallets, matchesWalletReference},
 });
 
-const {getWalletSigningAccount} = await import(
+const {getWalletSigningAccount, assertWalletSigningAccount} = await import(
   '../.bld/app/@components/@monoid/get-wallet-signing-account.js'
 );
 
@@ -61,8 +64,7 @@ test('raw EVM keys carry their explicit type without derivation fields', () => {
     type: 'secp256k1',
     index: '04010000000000000001',
     alias: undefined,
-    publicKey: PUBLIC_KEY,
-    wallets: [],
+    wallets: [{addressType: 'evm', publicKey: PUBLIC_KEY}],
   };
 
   assert.deepEqual(getWalletSigningAccount([key], ADDRESS).reference, {
@@ -106,10 +108,9 @@ test('Solana signing preserves raw keys, SLIP-0010 paths, and address case', () 
       type,
       index: '05010000000000000001',
       alias: undefined,
-      publicKey: type === 'ed25519' ? publicKey : undefined,
       wallets:
         type === 'ed25519'
-          ? []
+          ? [{addressType: 'solana', publicKey}]
           : [
               {
                 addressType: 'solana',
@@ -141,4 +142,48 @@ test('Solana signing preserves raw keys, SLIP-0010 paths, and address case', () 
     );
     assert.equal(getWalletSigningAccount([key], address), undefined);
   }
+});
+
+test('a previously resolved account becomes unavailable when its explicit record is deleted', () => {
+  const evm = {addressType: 'evm', publicKey: PUBLIC_KEY};
+  const key = {
+    type: 'secp256k1',
+    index: '04010000000000000001',
+    alias: undefined,
+    wallets: [evm, {...evm, addressType: 'bitcoin-segwit'}],
+  };
+  const account = getWalletSigningAccount([key], ADDRESS);
+  assert.doesNotThrow(() => assertWalletSigningAccount([key], account));
+  key.wallets.shift();
+  assert.throws(
+    () => assertWalletSigningAccount([key], account),
+    /no longer in Safe/,
+  );
+  assert.equal(getWalletSigningAccount([key], ADDRESS), undefined);
+});
+
+test('a different imported record for the same address must be resolved separately after deletion', () => {
+  const first = {
+    addressType: 'evm',
+    seed: 'Bitcoin seed',
+    curve: 'secp256k1',
+    path: PATH,
+    publicKey: PUBLIC_KEY,
+  };
+  const second = {...first, path: "m/44'/60'/0'/0/8"};
+  const key = {
+    type: 'seed',
+    index: '02400000000000000001',
+    alias: undefined,
+    wallets: [first, second],
+  };
+  const previous = getWalletSigningAccount([key], ADDRESS);
+  key.wallets.shift();
+  assert.throws(
+    () => assertWalletSigningAccount([key], previous),
+    /no longer in Safe/,
+  );
+  const replacement = getWalletSigningAccount([key], ADDRESS);
+  assert.equal(replacement.wallet.path, second.path);
+  assert.doesNotThrow(() => assertWalletSigningAccount([key], replacement));
 });

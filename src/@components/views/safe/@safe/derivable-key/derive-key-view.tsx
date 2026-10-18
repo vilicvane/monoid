@@ -17,6 +17,7 @@ import type {WalletKeyPublicKeyData} from '../../../../../@services/index.js';
 import {
   getWalletData,
   getWalletReference,
+  matchesWalletReference,
 } from '../../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../../@utils/index.js';
 import {AddressTypeSelector} from '../../../../@key/address-type-selector.js';
@@ -31,7 +32,9 @@ import {
   ViewHeader,
   ViewHeaderIdentifier,
   ViewHeaderTitle,
+  useViewActive,
 } from '../../../../@view/index.js';
+import {CardAddressProgress} from '../../card-address-progress.js';
 import {
   getLocalCardWalletDerivation,
   readCardKeyAddress,
@@ -46,8 +49,14 @@ export const DeriveKeyView = observer(
   }: RouteComponentProps<
     Router['safe']['derivableKey']['derive']
   >): ReactNode => {
-    const {router, walletStorageService, monoidCredentialsStore, errorService} =
-      useEntrances();
+    const {
+      router,
+      cardStore,
+      walletStorageService,
+      monoidCredentialsStore,
+      errorService,
+    } = useEntrances();
+    const isViewActive = useViewActive(view);
     const [pinSession] = useState(() =>
       monoidCredentialsStore.createPINSession(),
     );
@@ -66,7 +75,7 @@ export const DeriveKeyView = observer(
     useEffect(() => {
       mounted.current = true;
       const stopWatching = reaction(
-        () => !!view.$leaving || !view.$match.$exact.$active,
+        () => !isViewActive(),
         leaving => {
           if (leaving) {
             operation.current?.abort();
@@ -82,7 +91,7 @@ export const DeriveKeyView = observer(
         pinSession.clear();
         stopWatching();
       };
-    }, [pinSession, view]);
+    }, [pinSession, isViewActive]);
 
     const key = walletStorageService.indexToKeyMap.get(view.index);
 
@@ -130,7 +139,7 @@ export const DeriveKeyView = observer(
       kind: 'derive' | 'import',
       action: (controller: AbortController) => Promise<void>,
     ): Promise<void> => {
-      if (operation.current || view.$leaving || !view.$match.$exact.$active) {
+      if (operation.current || !isViewActive()) {
         return;
       }
 
@@ -199,12 +208,7 @@ export const DeriveKeyView = observer(
           },
         );
 
-        if (
-          mounted.current &&
-          !controller.signal.aborted &&
-          !view.$leaving &&
-          view.$match.$exact.$active
-        ) {
+        if (mounted.current && !controller.signal.aborted && isViewActive()) {
           setDerived(result);
         }
       });
@@ -217,10 +221,7 @@ export const DeriveKeyView = observer(
 
       const {wallet} = derived;
       let card = derived.card;
-      const wallets = [
-        ...key.wallets.map(getWalletReference),
-        getWalletReference(wallet),
-      ];
+      const wallets = [getWalletReference(wallet)];
 
       await runOperation('import', async controller => {
         await scanPrompt(
@@ -255,12 +256,29 @@ export const DeriveKeyView = observer(
                 key,
                 wallets,
                 controller.signal,
+                undefined,
+                progress => {
+                  if (controller.signal.aborted || !mounted.current) return;
+                  setStateContent(<CardAddressProgress progress={progress} />);
+                },
               );
               // Acknowledged card writes are committed locally before cancellation
               // or route checks; only navigation waits for the scan to finish.
-              for (const source of resource.derivations) {
-                walletStorageService.addWallet(key.index, source);
+              const source = resource.derivations.find(source =>
+                matchesWalletReference(source, wallet),
+              )!;
+              const cachedCard = cardStore.get(card);
+              if (cachedCard) {
+                runInAction(() => {
+                  const {derivations, ...record} = resource;
+                  cachedCard.upsert(record);
+                  const cachedKey = cachedCard.items.find(
+                    item => item.index === key.index,
+                  );
+                  cachedKey?.setRecordedWallets(derivations);
+                });
               }
+              walletStorageService.addWallet(key.index, source);
             } finally {
               signal.removeEventListener('abort', cancel);
             }
@@ -270,12 +288,7 @@ export const DeriveKeyView = observer(
           },
         );
 
-        if (
-          !mounted.current ||
-          controller.signal.aborted ||
-          view.$leaving ||
-          !view.$match.$exact.$active
-        )
+        if (!mounted.current || controller.signal.aborted || !isViewActive())
           return;
 
         runInAction(() => {

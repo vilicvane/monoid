@@ -7,10 +7,11 @@ import {parseDerivationPath} from '../.bld/app/@lib/bip39.js';
 import {
   getKeyWallets,
   getWalletData,
+  matchesWalletReference,
 } from '../.bld/app/@services/wallet-storage-service.js';
 
 mock.module('../.bld/app/@services/index.js', {
-  namedExports: {getKeyWallets},
+  namedExports: {getKeyWallets, matchesWalletReference},
 });
 
 const {getBitcoinWalletSigningAccount, hasBitcoinWallet} = await import(
@@ -50,7 +51,11 @@ function key(type, fields = {}) {
   };
 }
 
-test('Home requires an actual BTC derivation or an available raw Bitcoin public key', () => {
+function raw(source) {
+  return {...source, seed: undefined, curve: undefined, path: undefined};
+}
+
+test('Home requires an explicitly imported BTC address', () => {
   assert.equal(hasBitcoinWallet([]), false);
   for (const type of ['seed', 'master']) {
     assert.equal(hasBitcoinWallet([key(type)]), false);
@@ -61,17 +66,15 @@ test('Home requires an actual BTC derivation or an available raw Bitcoin public 
   }
   assert.equal(hasBitcoinWallet([key('secp256k1')]), false);
   assert.equal(
-    hasBitcoinWallet([key('secp256k1', {publicKey: PUBLIC_KEY})]),
+    hasBitcoinWallet([key('secp256k1', {wallets: [raw(SEGWIT_SOURCE)]})]),
     true,
   );
   assert.equal(
-    hasBitcoinWallet([
-      key('secp256k1', {taprootOutputKey: TAPROOT_OUTPUT_KEY}),
-    ]),
+    hasBitcoinWallet([key('secp256k1', {wallets: [raw(TAPROOT_SOURCE)]})]),
     true,
   );
   assert.equal(
-    hasBitcoinWallet([key('ed25519', {publicKey: '00'.repeat(32)})]),
+    hasBitcoinWallet([key('secp256k1', {wallets: [raw(EVM_SOURCE)]})]),
     false,
   );
 });
@@ -107,8 +110,7 @@ test('derived BTC signing keeps the selected source public key and BIP32 path', 
 
 test('raw BTC signing uses the matching key format without inventing a derivation', () => {
   const storedKey = key('secp256k1', {
-    publicKey: PUBLIC_KEY,
-    taprootOutputKey: TAPROOT_OUTPUT_KEY,
+    wallets: [raw(SEGWIT_SOURCE), raw(TAPROOT_SOURCE)],
   });
   for (const source of [SEGWIT_SOURCE, TAPROOT_SOURCE]) {
     const account = getBitcoinWalletSigningAccount(
@@ -140,4 +142,10 @@ test('removed wallets and unrelated addresses cannot resolve to a signing key', 
     ),
     undefined,
   );
+  const rawKey = key('secp256k1', {wallets: [raw(EVM_SOURCE)]});
+  assert.equal(getBitcoinWalletSigningAccount([rawKey], address), undefined);
+  rawKey.wallets.push(raw(SEGWIT_SOURCE));
+  assert.ok(getBitcoinWalletSigningAccount([rawKey], address));
+  rawKey.wallets.pop();
+  assert.equal(getBitcoinWalletSigningAccount([rawKey], address), undefined);
 });

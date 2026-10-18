@@ -22,9 +22,7 @@ const overlappingKeyTagCSS = css`
   );
 `;
 
-export const KeyTypeTag = styled(KeyTag)`
-  z-index: 1;
-
+export const keyTypeColorsCSS = css`
   &.seed {
     background-color: var(--color-seed-light);
     border-color: var(--color-seed-light-shade);
@@ -36,6 +34,11 @@ export const KeyTypeTag = styled(KeyTag)`
     border-color: var(--color-master-light-shade);
     color: var(--color-master-light-contrast);
   }
+`;
+
+export const KeyTypeTag = styled(KeyTag)`
+  z-index: 1;
+  ${keyTypeColorsCSS}
 `;
 
 export const KeyAliasTag = styled(PrimaryTag)`

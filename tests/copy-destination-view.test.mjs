@@ -12,6 +12,10 @@ import {
   getBackupCardIdentity,
   readBackupCardIdentity,
 } from '../.bld/app/@components/views/safe/@card/card-backup-session.js';
+import {
+  encodeCardDerivationRecord,
+  getCardDerivationItemIndex,
+} from '../.bld/app/@components/views/safe/card-derivations.js';
 
 let fixture;
 let rendering;
@@ -20,6 +24,7 @@ const PIN = 'Copy-42';
 
 mock.module('react', {
   namedExports: {
+    useMemo: create => rendering.slot(() => ({value: create()})).value,
     useState(initial) {
       const slot = rendering.slot(() => ({
         value: typeof initial === 'function' ? initial() : initial,
@@ -158,6 +163,9 @@ mock.module('../.bld/app/@components/@ui/toast.js', {
   namedExports: {useToast: () => value => fixture.toasts.push(value)},
 });
 
+const {useViewActive} = await import(
+  '../.bld/app/@components/@view/use-view-active.js'
+);
 for (const [path, names] of [
   ['@monoid/applet-install-progress', ['AppletInstallProgressContent']],
   ['@monoid/monoid-card', ['MonoidCard', 'MonoidCardFrame']],
@@ -193,7 +201,10 @@ for (const [path, names] of [
   ['views/safe/@card/@resource-item', ['CardResourceItem', 'CardResourceList']],
 ]) {
   mock.module(`../.bld/app/@components/${path}.js`, {
-    namedExports: Object.fromEntries(names.map(name => [name, name])),
+    namedExports: {
+      ...Object.fromEntries(names.map(name => [name, name])),
+      ...(path === '@view/index' ? {useViewActive} : {}),
+    },
   });
 }
 
@@ -235,7 +246,7 @@ function hello(number, initialized = true) {
   };
 }
 
-function mount({initialized = true, source = true} = {}) {
+function mount({initialized = true, source = true, items} = {}) {
   const state = {
     slots: [],
     index: 0,
@@ -256,7 +267,7 @@ function mount({initialized = true, source = true} = {}) {
       sourceCard: source
         ? {
             ...readBackupCardIdentity(hello(1)),
-            items: [
+            items: items ?? [
               {index: '02400000000000000001', type: 'seed', secret: true},
             ],
           }
@@ -302,6 +313,7 @@ function mount({initialized = true, source = true} = {}) {
       state.slots.splice(0).forEach(slot => slot.cleanup?.());
     },
   };
+  state.view.$match.$view = () => ({$entries: [state.view]});
   state.entrances = {
     router: {$backTo: () => undefined, safe: {$exact: {}}},
     monoidApplet: {},
@@ -455,3 +467,169 @@ test('reading a source still uses the ordinary authenticated scan and cannot ins
   );
   await state.flush();
 });
+
+test('multi-card export advances for every transferred item and keeps the source card count aligned', async () => {
+  const index = '02400000000000000001';
+  const state = mount({
+    items: [
+      {index, type: 'seed', secret: true},
+      {
+        index: getCardDerivationItemIndex(index),
+        type: 0x0f01,
+        key: index,
+        derivationRecord: {index, wallets: []},
+        secret: false,
+      },
+    ],
+  });
+  const session = state.sessions[0];
+  await session.addTarget(hello(2));
+  await session.addTarget(hello(3));
+  await session.confirmTargets();
+  state.click('Scan source card');
+  state.inputs[0].finished.resolve(PIN);
+  await state.flush();
+  const scan = state.monoidScans[0];
+  const progress = [];
+  const descriptions = [];
+  scan.validate(hello(1));
+  await scan.callback(
+    {
+      authenticate: async () => {},
+      exportItem: async () => ({data: Uint8Array.of(1)}),
+    },
+    content => {
+      if (typeof content === 'string') return;
+      progress.push(content.props.value);
+      const card = find(
+        state.render(),
+        node =>
+          node.type === 'MonoidCard' &&
+          node.props.id === session.backup.source.id,
+      );
+      if (content.props.value !== '4/4')
+        descriptions.push(card.props.description);
+    },
+    hello(1),
+    new AbortController().signal,
+  );
+  scan.finished.resolve();
+  await state.flush();
+
+  assert.deepEqual(progress, ['0/4', '1/4', '2/4', '3/4', '4/4']);
+  assert.deepEqual(descriptions, [
+    'Items · 0/4',
+    'Items · 1/4',
+    'Items · 2/4',
+    'Items · 3/4',
+  ]);
+  assert.deepEqual(state.errors, []);
+});
+
+test('single-item import shows the count and changes to Checking card during final verification', async () => {
+  const state = mount();
+  const session = state.sessions[0];
+  await session.addTarget(hello(2));
+  await session.confirmTargets();
+  await session.exportItems(
+    {
+      authenticate: async () => {},
+      exportItem: async () => ({data: Uint8Array.of(1)}),
+    },
+    hello(1),
+    PIN,
+    new AbortController().signal,
+    () => {},
+  );
+  state.click('Scan a destination card');
+  const scan = state.monoidScans[0];
+  const progress = [];
+  scan.validate(hello(2));
+  await scan.callback(
+    {
+      importItem: async () => {},
+      list: async () => {
+        assert.equal(progress.at(-1), 'Checking card...');
+        assert.equal(session.backup.complete, false);
+        return {
+          items: [
+            {
+              index: Uint8Array.from(
+                Buffer.from('02400000000000000001', 'hex'),
+              ),
+            },
+          ],
+        };
+      },
+    },
+    content =>
+      progress.push(
+        typeof content === 'string' ? content : content.props.value,
+      ),
+    hello(2),
+    new AbortController().signal,
+  );
+  scan.finished.resolve();
+  await state.flush();
+
+  assert.deepEqual(progress, ['0/1', '1/1', 'Checking card...']);
+  assert.equal(session.backup.complete, true);
+  assert.deepEqual(state.errors, []);
+});
+
+for (const hasRecord of [true, false]) {
+  test(`reading a Copy source ${hasRecord ? 'shows a single record count' : 'keeps the listing message without a count'}`, async () => {
+    const state = mount({source: false});
+    state.click('Scan source card');
+    const scan = state.monoidScans[0];
+    const index = '02400000000000000001';
+    const bytes = value => Uint8Array.from(Buffer.from(value, 'hex'));
+    const progress = [];
+    scan.validate(hello(1));
+    await scan.callback(
+      {
+        list: async () => ({
+          items: [
+            {index: bytes(index), type: 'seed', secret: true},
+            ...(hasRecord
+              ? [
+                  {
+                    index: bytes(getCardDerivationItemIndex(index)),
+                    key: bytes(index),
+                    type: 0x0f01,
+                    secret: false,
+                  },
+                ]
+              : []),
+          ],
+        }),
+        get: async () => ({
+          data: encodeCardDerivationRecord({index, wallets: []}),
+        }),
+      },
+      content =>
+        progress.push(
+          typeof content === 'string'
+            ? content
+            : [content.props.children, content.props.value],
+        ),
+      hello(1),
+      new AbortController().signal,
+    );
+    scan.finished.resolve();
+    await state.flush();
+
+    assert.deepEqual(
+      progress,
+      hasRecord
+        ? [
+            'Reading items...',
+            ['Reading address records', '0/1'],
+            ['Reading address records', '1/1'],
+          ]
+        : ['Reading items...'],
+    );
+    assert.ok(state.sessions[0].backup);
+    assert.deepEqual(state.errors, []);
+  });
+}

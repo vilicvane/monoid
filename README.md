@@ -12,6 +12,10 @@ Just another awesome magic.
 - [Security Key 签名算法支持顺序](research/security-key/README.md)
 - [多链签名解析与交易结果模拟](research/signing-payload-parsing/README.md)
 
+## Design
+
+- [地址管理与卡片同步](docs/address-management.md)
+
 ## License
 
 MIT License.

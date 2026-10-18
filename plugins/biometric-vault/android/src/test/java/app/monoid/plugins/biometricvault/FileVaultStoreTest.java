@@ -108,6 +108,20 @@ public class FileVaultStoreTest {
     }
 
     @Test
+    public void failedTemporaryCleanupPreservesTheVisibleRecord() throws Exception {
+        File directory = temporary.newFolder();
+        FileVaultStore store = store(directory);
+        String name = VaultRecordCodec.fileName("entry");
+        save(store, name, new byte[] { 7 });
+        File blockedTemporary = new File(directory, name + ".new");
+        assertTrue(blockedTemporary.mkdir());
+        assertTrue(new File(blockedTemporary, "child").createNewFile());
+
+        assertThrows(IOException.class, () -> store.remove(name));
+        assertArrayEquals(new byte[] { 7 }, store.read(name));
+    }
+
+    @Test
     public void confirmedAbsentRecordIsNullAndDeletionIsIdempotent() throws Exception {
         FileVaultStore store = store(temporary.newFolder());
         String name = VaultRecordCodec.fileName("missing");

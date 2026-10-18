@@ -90,8 +90,26 @@ test('the complete source index distinguishes seed and master with the same inde
   );
 });
 
-test('a matching non-derivable resource is not treated as a source root', () => {
-  const raw = {index: '04010000000000000001', type: 'secp256k1'};
+test('native address records, including empty ones, attach to their supported raw key', () => {
+  for (const [type, index] of [
+    ['secp256k1', '04010000000000000001'],
+    ['ed25519', '05010000000000000001'],
+  ]) {
+    const raw = {index, type};
+    const attached = record('0f010000000000000001', index);
+
+    assert.deepEqual(getCardResourceGroups([attached, raw]), [
+      {item: raw, items: [raw, attached]},
+    ]);
+    assert.equal(
+      formatCardResourceCount(getCardResourceGroups([raw, attached])),
+      '1+1',
+    );
+  }
+});
+
+test('P-256 does not attach wallet address records', () => {
+  const raw = {index: '04020000000000000001', type: 'secp256r1'};
   const unrelated = record('0f010000000000000001', raw.index);
 
   assert.deepEqual(getCardResourceGroups([raw, unrelated]), [

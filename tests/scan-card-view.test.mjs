@@ -5,6 +5,7 @@ let fixture;
 
 mock.module('react', {
   namedExports: {
+    useMemo: create => create(),
     useEffect: effect => {
       fixture.cleanup = effect();
     },
@@ -45,13 +46,25 @@ mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
     ],
   },
 });
+const {useViewActive} = await import(
+  '../.bld/app/@components/@view/use-view-active.js'
+);
 mock.module('../.bld/app/@components/@view/index.js', {
-  namedExports: {View: 'div', ViewHeader: 'header', ViewHeaderTitle: 'h1'},
+  namedExports: {
+    View: 'div',
+    ViewHeader: 'header',
+    ViewHeaderTitle: 'h1',
+    useViewActive,
+  },
 });
 mock.module('../.bld/app/@components/views/safe/scan-card.js', {
   namedExports: {
-    scanCardItems: async applet => {
+    scanCardItems: async (applet, onProgress, signal) => {
       fixture.scannedApplet = applet;
+      fixture.scannedSignal = signal;
+      for (const progress of fixture.progress ?? []) {
+        onProgress(...progress);
+      }
       return fixture.scannedItems;
     },
   },
@@ -62,12 +75,21 @@ const {ScanCardView} = await import(
 );
 
 function mount({active = true, leaving = false} = {}) {
-  const state = {replacements: 0, errors: [], cards: [], scannedItems: []};
+  const state = {
+    replacements: 0,
+    errors: [],
+    cards: [],
+    scannedItems: [],
+    storedCards: [],
+  };
   state.scan = new Promise((resolve, reject) => {
     state.resolveScan = resolve;
     state.rejectScan = reject;
   });
   state.entrances = {
+    cardStore: {
+      set: card => state.storedCards.push(card),
+    },
     router: {
       safe: {
         $replace: () => state.replacements++,
@@ -81,9 +103,12 @@ function mount({active = true, leaving = false} = {}) {
     },
   };
   fixture = state;
-  ScanCardView({
-    view: {$leaving: leaving, $match: {$exact: {$active: active}}},
-  });
+  const view = {
+    $leaving: leaving,
+    $match: {$exact: {$active: active, $transition: !active && !leaving}},
+  };
+  view.$match.$view = () => ({$entries: [view]});
+  ScanCardView({view});
   return state;
 }
 
@@ -96,6 +121,7 @@ test('background cancellation returns an active scan page to Safe without an err
 
   assert.equal(state.replacements, 1);
   assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.storedCards, []);
   state.cleanup();
 });
 
@@ -106,6 +132,7 @@ test('ordinary scan cancellation still returns to Safe', async () => {
 
   assert.equal(state.replacements, 1);
   assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.storedCards, []);
   state.cleanup();
 });
 
@@ -146,7 +173,7 @@ test('a late failure cannot replace a route that is already leaving', async () =
   state.cleanup();
 });
 
-test('a completed scan opens Card with every scanned item, including resources without an address', async () => {
+test('a completed scan stores every resource and routes to Card with only its identity', async () => {
   const state = mount();
   state.scannedItems = [
     {type: 'seed', index: '00010000000000000001', alias: 'Seed', secret: true},
@@ -164,16 +191,78 @@ test('a completed scan opens Card with every scanned item, including resources w
   await state.finished;
 
   assert.equal(state.scannedApplet, applet);
+  assert.deepEqual(state.storedCards, [
+    {
+      id: '01020304',
+      publicKey: Buffer.from(publicKey).toString('hex'),
+      items: state.scannedItems,
+    },
+  ]);
   assert.deepEqual(state.cards, [
     {
       card: {
         id: '01020304',
         publicKey: Buffer.from(publicKey).toString('hex'),
-        items: state.scannedItems,
       },
     },
   ]);
   assert.equal(state.replacements, 0);
   assert.deepEqual(state.errors, []);
+  state.cleanup();
+});
+
+test('a successful scan finishing after unmount neither overwrites the store nor opens Card', async () => {
+  const state = mount();
+  state.scannedItems = [
+    {type: 'seed', index: '02400000000000000001', secret: true},
+  ];
+  state.cleanup();
+  await state.onScan({}, () => {}, {
+    safe: {
+      id: new Uint8Array([1, 2, 3, 4]),
+      publicKey: new Uint8Array([4, 1, 2, 3]),
+    },
+  });
+  state.resolveScan();
+  await state.finished;
+
+  assert.deepEqual(state.storedCards, []);
+  assert.deepEqual(state.cards, []);
+  assert.equal(state.replacements, 0);
+  assert.deepEqual(state.errors, []);
+});
+
+test('scan progress displays completed single-item counts and forwards cancellation', async () => {
+  const state = mount();
+  state.progress = [
+    [0, 1, 'records'],
+    [1, 1, 'records'],
+    [0, 1, 'keys'],
+    [1, 1, 'keys'],
+  ];
+  const controller = new AbortController();
+  const content = [];
+  await state.onScan(
+    {},
+    value => content.push(value),
+    {safe: {id: new Uint8Array([1]), publicKey: new Uint8Array([4])}},
+    controller.signal,
+  );
+
+  assert.equal(state.scannedSignal, controller.signal);
+  assert.deepEqual(
+    content
+      .filter(value => typeof value !== 'string')
+      .map(value => value.props),
+    state.progress.map(([current, total, stage]) => ({
+      current,
+      total,
+      showCount: true,
+      children:
+        stage === 'records' ? 'Reading address records' : 'Reading keys',
+    })),
+  );
+  state.resolveScan();
+  await state.finished;
   state.cleanup();
 });

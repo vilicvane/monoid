@@ -201,24 +201,25 @@ test('copy selection and the scanned Card snapshot do not share mutable item sta
   assert.deepEqual(session.backup, copy);
 });
 
-function groupedFixture() {
+function groupedFixture({type = 'seed', wallets} = {}) {
   const state = fixture();
-  const rootIndex = '02400000000000000001';
-  const orphanRootIndex = '02400000000000000002';
+  const prefix = {seed: '0240', secp256k1: '0401', ed25519: '0501'}[type];
+  const rootIndex = `${prefix}0000000000000001`;
+  const orphanRootIndex = `${prefix}0000000000000002`;
   const wallet = {
     addressType: 'evm',
     seed: ADDRESS_TYPES.evm.seed,
     curve: ADDRESS_TYPES.evm.curve,
     path: ADDRESS_TYPES.evm.path(0),
   };
-  const record = index => ({index, wallets: [{...wallet}]});
+  const record = index => ({index, wallets: wallets ?? [{...wallet}]});
   const attachment = sourceIndex => ({
     index: bytes(getCardDerivationItemIndex(sourceIndex)),
     key: bytes(sourceIndex),
     secret: false,
     derivationRecord: record(sourceIndex),
   });
-  const root = {index: bytes(rootIndex), type: 'seed', secret: true};
+  const root = {index: bytes(rootIndex), type, secret: true};
   const companion = attachment(rootIndex);
   const orphan = attachment(orphanRootIndex);
   // Deliberately list the companion first: transfer must still import its root
@@ -316,6 +317,181 @@ test('direct Copy validates linked records with Get and transfers both physical 
   assert.deepEqual(target.records.get(hex(companion.index)).key, root.index);
   assert.equal(session.backup.complete, true);
 });
+
+test('reading a Copy source reports completed address records with a fixed total', async () => {
+  const {source} = groupedFixture();
+  const session = new CardBackupSession();
+  const reported = [];
+  const beforeReads = [];
+  const originalGet = source.get;
+  source.get = function (request) {
+    beforeReads.push([...reported.at(-1)]);
+    return originalGet.call(this, request);
+  };
+
+  await session.readSource(
+    source,
+    source.hello,
+    signal(),
+    undefined,
+    (...value) => reported.push(value),
+  );
+
+  assert.deepEqual(reported, [
+    [0, 2],
+    [1, 2],
+    [2, 2],
+  ]);
+  assert.deepEqual(beforeReads, [
+    [0, 2],
+    [1, 2],
+  ]);
+  assert.ok(session.backup);
+});
+
+test('a Copy source without address records does not publish a fabricated count', async () => {
+  const {source} = fixture();
+  const session = new CardBackupSession();
+
+  await session.readSource(source, source.hello, signal(), undefined, () =>
+    assert.fail('No records to read'),
+  );
+
+  assert.ok(session.backup);
+});
+
+test('cancelling a Copy source record read suppresses late progress and leaves the source unset', async () => {
+  const {source} = groupedFixture();
+  const session = new CardBackupSession();
+  const controller = new AbortController();
+  const reported = [];
+  const originalGet = source.get;
+  source.get = async function (request) {
+    const result = await originalGet.call(this, request);
+    controller.abort();
+    return result;
+  };
+
+  await assert.rejects(
+    session.readSource(
+      source,
+      source.hello,
+      controller.signal,
+      undefined,
+      (...value) => reported.push(value),
+    ),
+    {code: 'CANCELLED'},
+  );
+  assert.deepEqual(reported, [[0, 2]]);
+  assert.equal(source.calls.filter(([method]) => method === 'get').length, 1);
+  assert.equal(session.backup, undefined);
+});
+
+for (const [type, addressType] of [
+  ['secp256k1', 'bitcoin-segwit'],
+  ['ed25519', 'solana'],
+]) {
+  for (const empty of [false, true]) {
+    test(`Copy retains a ${empty ? 'cleared' : 'populated'} ${type} address record with its source key`, async () => {
+      const wallets = empty
+        ? []
+        : [{addressType, seed: undefined, curve: undefined, path: undefined}];
+      const {source, target, items, root, companion, records} = groupedFixture({
+        type,
+        wallets,
+      });
+      const snapshot = cardSnapshot(source, items);
+      const fromCard = new CardBackupSession(snapshot, [hex(root.index)]);
+      assert.deepEqual(
+        fromCard.backup.items
+          .filter(item => item.selected)
+          .map(item => item.index),
+        [hex(root.index), hex(companion.index)],
+      );
+
+      const session = new CardBackupSession();
+      await session.readSource(source, source.hello, signal(), [
+        hex(root.index),
+      ]);
+      const linked = session.backup.items.find(
+        item => item.index === hex(companion.index),
+      );
+      assert.deepEqual(linked.derivationRecord.wallets, wallets);
+      const payload = records.get(hex(companion.index));
+      await session.addTarget(target.hello);
+      await session.confirmTargets();
+      await session.exportItems(source, source.hello, PIN, signal(), progress);
+      await session.importItems(target, target.hello, signal(), progress);
+
+      assert.deepEqual(
+        [...target.records.keys()],
+        [hex(root.index), hex(companion.index)],
+      );
+      assert.deepEqual(
+        target.records.get(hex(companion.index)).key,
+        root.index,
+      );
+      assert.deepEqual(records.get(hex(companion.index)), payload);
+      assert.deepEqual(linked.derivationRecord.wallets, wallets);
+      assert.equal(session.backup.complete, true);
+    });
+  }
+
+  test(`Copy reports a cleared ${type} address record conflicting with an existing populated record`, async () => {
+    const {source, target, root, companion} = groupedFixture({
+      type,
+      wallets: [],
+    });
+    const session = new CardBackupSession();
+    await session.readSource(source, source.hello, signal(), [hex(root.index)]);
+    await session.addTarget(target.hello);
+    await session.confirmTargets();
+    await session.exportItems(source, source.hello, PIN, signal(), progress);
+    const existing = {
+      index: companion.index,
+      senderPublicKey: source.hello.safe.publicKey,
+      key: root.index,
+      data: Uint8Array.from([
+        target.hello.safe.publicKey[1],
+        ...encodeCardDerivationRecord({
+          index: hex(root.index),
+          wallets: [
+            {addressType, seed: undefined, curve: undefined, path: undefined},
+          ],
+        }),
+      ]),
+    };
+    target.records.set(hex(companion.index), structuredClone(existing));
+
+    await session.importItems(target, target.hello, signal(), progress);
+
+    const [copiedKey, conflictedRecord] = session.backup.targets[0].items;
+    assert.equal(copiedKey.index, hex(root.index));
+    assert.equal(copiedKey.imported, true);
+    assert.equal(conflictedRecord.index, hex(companion.index));
+    assert.equal(conflictedRecord.conflict, true);
+    assert.equal(conflictedRecord.imported, false);
+    assert.deepEqual(
+      session.backup.items.find(item => item.index === hex(companion.index))
+        .derivationRecord.wallets,
+      [],
+    );
+    assert.deepEqual(target.records.get(hex(companion.index)), existing);
+    assert.equal(session.backup.complete, false);
+
+    const callCount = target.calls.length;
+    await session.importItems(target, target.hello, signal(), progress);
+    assert.deepEqual(
+      target.calls
+        .slice(callCount)
+        .filter(([method]) => method === 'importItem')
+        .map(([, request]) => hex(request.index)),
+      [hex(companion.index)],
+    );
+    assert.deepEqual(target.records.get(hex(companion.index)), existing);
+    assert.equal(session.backup.complete, false);
+  });
+}
 
 test('an orphan derivation record can be selected and copied on its own', async () => {
   const {source, target, orphan} = groupedFixture();
@@ -958,9 +1134,12 @@ test('cancellation after acknowledged Import retains that item and starts no nex
   const {session, source, target} = await ready();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
   const controller = new AbortController();
+  const reported = [];
   target.afterImport = () => controller.abort();
   await assert.rejects(
-    session.importItems(target, target.hello, controller.signal, progress),
+    session.importItems(target, target.hello, controller.signal, (...value) =>
+      reported.push(value),
+    ),
     {code: 'CANCELLED'},
   );
   assert.equal(target.calls.length, 1);
@@ -968,6 +1147,119 @@ test('cancellation after acknowledged Import retains that item and starts no nex
     session.backup.targets[0].items.map(item => item.imported),
     [true, false, false],
   );
+  assert.deepEqual(reported, [[0, 3, 'importing']]);
+});
+
+test('cancellation after acknowledged Export retains its artifact without publishing late progress', async () => {
+  const {session, source} = await ready();
+  const controller = new AbortController();
+  const reported = [];
+  source.onExport = () => controller.abort();
+
+  await assert.rejects(
+    session.exportItems(
+      source,
+      source.hello,
+      PIN,
+      controller.signal,
+      (...value) => reported.push(value),
+    ),
+    {code: 'CANCELLED'},
+  );
+
+  assert.equal(
+    source.calls.filter(([method]) => method === 'exportItem').length,
+    1,
+  );
+  assert.equal(
+    session.backup.targets[0].items.filter(item => item.exported).length,
+    1,
+  );
+  assert.deepEqual(reported, [[0, 3]]);
+});
+
+test('a cancelled source authentication does not publish export progress or begin exports', async () => {
+  const {session, source} = await ready();
+  const controller = new AbortController();
+  source.authenticate = async () => controller.abort();
+
+  await assert.rejects(
+    session.exportItems(source, source.hello, PIN, controller.signal, () =>
+      assert.fail('Late progress'),
+    ),
+    {code: 'CANCELLED'},
+  );
+  assert.equal(
+    source.calls.filter(([method]) => method === 'exportItem').length,
+    0,
+  );
+});
+
+test('Import reports a separate verification stage and counts only acknowledged imports', async () => {
+  const {session, source, target} = await ready();
+  await session.exportItems(source, source.hello, PIN, signal(), progress);
+  target.records.set(hex(index(2)), {index: index(2), data: bytes('deadbeef')});
+  const reported = [];
+  const originalList = target.list;
+  target.list = function (request) {
+    assert.deepEqual(reported.at(-1), [2, 3, 'verifying']);
+    assert.equal(session.backup.targets[0].complete, false);
+    return originalList.call(this, request);
+  };
+
+  await session.importItems(target, target.hello, signal(), (...value) =>
+    reported.push(value),
+  );
+
+  assert.deepEqual(reported, [
+    [0, 3, 'importing'],
+    [1, 3, 'importing'],
+    [1, 3, 'importing'],
+    [2, 3, 'importing'],
+    [2, 3, 'verifying'],
+  ]);
+  assert.equal(session.backup.targets[0].complete, false);
+});
+
+test('cancellation during verification preserves imported items and retries only verification', async () => {
+  const {session, source, target} = await ready();
+  await session.exportItems(source, source.hello, PIN, signal(), progress);
+  const controller = new AbortController();
+  const reported = [];
+  const originalList = target.list;
+  target.list = async function (request) {
+    const result = await originalList.call(this, request);
+    controller.abort();
+    return result;
+  };
+
+  await assert.rejects(
+    session.importItems(target, target.hello, controller.signal, (...value) =>
+      reported.push(value),
+    ),
+    {code: 'CANCELLED'},
+  );
+  assert.deepEqual(reported, [
+    [0, 3, 'importing'],
+    [1, 3, 'importing'],
+    [2, 3, 'importing'],
+    [3, 3, 'importing'],
+    [3, 3, 'verifying'],
+  ]);
+  assert.equal(
+    session.backup.targets[0].items.every(item => item.imported),
+    true,
+  );
+  assert.equal(session.backup.targets[0].complete, false);
+
+  target.list = originalList;
+  await session.importItems(target, target.hello, signal(), progress);
+  assert.equal(
+    target.calls.filter(([method]) => method === 'importItem').length,
+    3,
+  );
+  assert.equal(target.calls.filter(([method]) => method === 'list').length, 2);
+  assert.equal(session.backup.complete, true);
 });
 
 test('a new page session starts fresh and repeated identical imports preserve existing target items', async () => {
@@ -1103,7 +1395,10 @@ test('multiple destinations receive their own ciphertext and can finish in eithe
       [1, 2, 3].map(value => hex(index(value))),
     );
   }
-  assert.deepEqual(exportedProgress.at(-1), [6, 6]);
+  assert.deepEqual(
+    exportedProgress,
+    Array.from({length: 7}, (_, current) => [current, 6]),
+  );
   assert.notEqual(
     session.backup.targets[0].items[0].exported.data,
     session.backup.targets[1].items[0].exported.data,

@@ -329,11 +329,28 @@ for (const addressType of ['bitcoin-segwit', 'bitcoin-taproot']) {
     const data = fixture(address, [60000n, 40000n]);
     const preview = prepare(data, {address, addressType, amountSats: 80000n});
     verifyBitcoinInputs(preview, data.previousTransactions);
+    const progress = [];
+    const applet = softwareApplet(preview);
+    const sign = applet.sign;
+    let completed = 0;
+    applet.sign = async request => {
+      assert.deepEqual(progress.at(-1), [completed, 2, completed]);
+      const result = await sign(request);
+      completed++;
+      return result;
+    };
     const signed = await signBitcoinTransaction(
-      softwareApplet(preview),
+      applet,
       reference,
       preview,
+      undefined,
+      (current, total) => progress.push([current, total, completed]),
     );
+    assert.deepEqual(progress, [
+      [0, 2, 0],
+      [1, 2, 1],
+      [2, 2, 2],
+    ]);
     const decoded = Transaction.fromRaw(hex.decode(signed.hex));
     assert.equal(decoded.inputsLength, 2);
     assert.equal(decoded.outputsLength, 2);
@@ -356,6 +373,82 @@ for (const addressType of ['bitcoin-segwit', 'bitcoin-taproot']) {
     }
   });
 }
+
+for (const failure of ['rejection', 'invalid signature', 'cancellation']) {
+  test(`Bitcoin input progress excludes the second signature on ${failure}`, async () => {
+    const data = fixture(segwit.address, [60000n, 40000n]);
+    const preview = prepare(data, {amountSats: 80000n});
+    verifyBitcoinInputs(preview, data.previousTransactions);
+    const applet = softwareApplet(preview);
+    const sign = applet.sign;
+    const controller = new AbortController();
+    const progress = [];
+    let attempts = 0;
+    applet.sign = async request => {
+      attempts++;
+      if (attempts === 2 && failure === 'rejection')
+        throw new Error('Card disconnected');
+      const result = await sign(request);
+      if (attempts === 2) {
+        if (failure === 'cancellation') controller.abort();
+        else return {signature: new Uint8Array(64)};
+      }
+      return result;
+    };
+    await assert.rejects(
+      signBitcoinTransaction(
+        applet,
+        reference,
+        preview,
+        () => controller.signal.throwIfAborted(),
+        (...value) => progress.push(value),
+      ),
+      failure === 'rejection'
+        ? /Card disconnected/
+        : failure === 'invalid signature'
+          ? /signature does not match/
+          : {name: 'AbortError'},
+    );
+    assert.deepEqual(progress, [
+      [0, 2],
+      [1, 2],
+    ]);
+    assert.equal(attempts, 2);
+  });
+}
+
+test('cancellation after Bitcoin progress completes an input prevents the next signing command', async () => {
+  const data = fixture(segwit.address, [60000n, 40000n]);
+  const preview = prepare(data, {amountSats: 80000n});
+  verifyBitcoinInputs(preview, data.previousTransactions);
+  const applet = softwareApplet(preview);
+  const sign = applet.sign;
+  const controller = new AbortController();
+  const progress = [];
+  let attempts = 0;
+  applet.sign = async request => {
+    attempts++;
+    return sign(request);
+  };
+  await assert.rejects(
+    signBitcoinTransaction(
+      applet,
+      reference,
+      preview,
+      () => controller.signal.throwIfAborted(),
+      (current, total) => {
+        progress.push([current, total]);
+        if (current === 1) controller.abort();
+      },
+    ),
+    {name: 'AbortError'},
+  );
+  assert.deepEqual(progress, [
+    [0, 2],
+    [1, 2],
+  ]);
+  assert.equal(attempts, 1);
+});
 
 test('rejects a different card, corrupted signatures and invalidated signing sessions', async () => {
   const data = fixture();

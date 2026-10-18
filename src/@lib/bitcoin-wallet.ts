@@ -3,6 +3,7 @@ import {
   type WalletKeyData,
   type WalletKeyWalletData,
   getKeyWallets,
+  matchesWalletReference,
 } from '../@services/index.js';
 
 import type {MonoidAppletSECP256K1Key} from './monoid/index.js';
@@ -49,18 +50,9 @@ export function getBitcoinWalletSigningAccount(
         continue;
       }
 
-      const publicKey =
-        key.type === 'seed' || key.type === 'master'
-          ? key.wallets.find(
-              source =>
-                source.addressType === addressType &&
-                source.seed === wallet.seed &&
-                source.curve === wallet.curve &&
-                source.path === wallet.path,
-            )!.publicKey
-          : addressType === 'bitcoin-taproot'
-            ? key.taprootOutputKey!
-            : key.publicKey!;
+      const publicKey = key.wallets.find(source =>
+        matchesWalletReference(source, wallet),
+      )!.publicKey;
 
       return {
         key,

@@ -2,10 +2,15 @@ import assert from 'node:assert/strict';
 import {afterEach, mock, test} from 'node:test';
 
 import {observable, runInAction, toJS} from 'mobx';
+import {CardStore} from '../.bld/app/@services/card-store.js';
 
-import {MonoidWrongCardError} from '../.bld/app/@lib/monoid/card-error.js';
+import {
+  MonoidCardError,
+  MonoidWrongCardError,
+} from '../.bld/app/@lib/monoid/card-error.js';
 import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
 import {
+  assertWalletPublicKeys,
   getWalletData,
   getWalletReference,
   matchesWalletReference,
@@ -17,6 +22,7 @@ let rendering;
 const owners = [];
 const INDEX = '02400000000000000001';
 const SECOND_INDEX = '02400000000000000002';
+const CREATED_INDEX = '04010000000000000003';
 const PUBLIC_KEY =
   '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
 const OTHER_PUBLIC_KEY =
@@ -40,6 +46,9 @@ mock.module('react', {
     useRef(initial) {
       return rendering.slot(() => ({current: initial}));
     },
+    useMemo(compute) {
+      return rendering.slot(() => ({value: compute()})).value;
+    },
     useEffect(effect) {
       rendering.slot(() => ({cleanup: effect()}));
     },
@@ -59,23 +68,37 @@ mock.module('lucide-react', {
   namedExports: {Ellipsis: 'ellipsis'},
 });
 mock.module('styled-components', {
-  namedExports: {styled: {p: () => 'description'}},
+  namedExports: {
+    styled: Object.assign(component => () => component, {
+      p: () => 'description',
+    }),
+  },
 });
 mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => fixture.entrances},
 });
 mock.module('../.bld/app/@services/index.js', {
-  namedExports: {getWalletData, getWalletReference, matchesWalletReference},
+  namedExports: {
+    assertWalletPublicKeys,
+    getWalletData,
+    getWalletReference,
+    matchesWalletReference,
+  },
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
-  namedExports: {getAppletKey, MonoidWrongCardError},
+  namedExports: {getAppletKey, MonoidCardError, MonoidWrongCardError},
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
     MonoidScanStatePromptProgress: 'progress',
     useMonoidScanPrompt: options => {
-      fixture.scanOptions.push(options);
-      return [null, fixture.scan];
+      const state = fixture;
+      state.scanOptions.push(options);
+      return [
+        null,
+        (label, callback, validate) =>
+          state.scan(label, callback, validate, options),
+      ];
     },
   },
 });
@@ -84,17 +107,39 @@ mock.module('../.bld/app/@components/views/safe/card-derivations.js', {
     writeCardDerivations: (...args) => fixture.write(...args),
   },
 });
+const {useViewActive} = await import(
+  '../.bld/app/@components/@view/use-view-active.js'
+);
 for (const [path, exports] of [
+  [
+    '@key/address-type-selector',
+    {
+      ADDRESS_CHAIN_OPTIONS: [
+        {value: 'evm', label: 'EVM'},
+        {value: 'solana', label: 'Solana'},
+        {value: 'bitcoin', label: 'BTC'},
+      ],
+    },
+  ],
   ['@key/key-list', {KeyListPlaceholder: 'placeholder'}],
+  ['@key/key-tags', {KeyTypeTag: 'key-type-tag', keyTypeColorsCSS: ''}],
   ['@monoid/pin-input-placeholder', {PINKind: 'pin-kind'}],
   ['@ui/app-icon', {AppIcon: 'icon'}],
   ['@ui/button', {Button: 'popup-button', Buttons: 'buttons'}],
   ['@ui/centered-popup', {CenteredPopup: 'popup'}],
-  ['@ui/details-popup', {DetailsPopupTitle: 'popup-title'}],
+  [
+    '@ui/details-popup',
+    {
+      DetailsPopup: 'popup',
+      DetailsPopupTitle: 'popup-title',
+      DetailsPopupDivider: 'popup-divider',
+    },
+  ],
   ['@ui/segmented-control', {SegmentedControl: 'segmented'}],
   [
     '@view/index',
     {
+      useViewActive,
       View: 'view',
       ViewActionButton: 'button',
       ViewContent: 'content',
@@ -169,7 +214,7 @@ function key(index, wallets, defaultWallet = wallets[0]) {
     type: 'seed',
     alias: undefined,
     wallets,
-    defaultWallet: getWalletReference(defaultWallet),
+    ...(defaultWallet && {defaultWallet: getWalletReference(defaultWallet)}),
   };
 }
 
@@ -206,6 +251,9 @@ function mount({items, keys = []}) {
     writes: [],
     aliasWrites: [],
     removals: [],
+    creations: [],
+    views: [],
+    keyViews: [],
     progressUpdates: [],
     errors: [],
     routes: [],
@@ -217,7 +265,6 @@ function mount({items, keys = []}) {
       card: {
         id: 'aabbccdd',
         publicKey: `04${'12'.repeat(64)}`,
-        items,
       },
       $leaving: false,
       $match: {$exact: {$active: true}},
@@ -259,6 +306,11 @@ function mount({items, keys = []}) {
     select(index, selected = true) {
       state.item(index).props.onSelect(selected);
     },
+    toggleDirection(index) {
+      const change = state.item(index).props.onChangeSyncDirection;
+      assert.ok(change, 'sync direction should be switchable');
+      change();
+    },
     changeAddressType(index, addressType) {
       state.item(index).props.onChangeAddressType();
       find(
@@ -296,13 +348,21 @@ function mount({items, keys = []}) {
     popupButton(label) {
       return find(
         state.popup(),
-        node => node.type === 'popup-button' && textContent(node) === label,
+        node =>
+          node.type === 'popup-button' &&
+          (node.props['aria-label'] ?? textContent(node)) === label,
       );
     },
     confirmDelete() {
       state.menuButton().props.onClick();
       state.popupButton('Delete').props.onClick();
       return state.popupButton('Delete').props.onClick;
+    },
+    createKey(label = 'secp256k1') {
+      state.menuButton().props.onClick();
+      state.popupButton('Create key').props.onClick();
+      state.popupButton(label).props.onClick();
+      return state.finished;
     },
     async tap(hello = state.hello) {
       const scan = state.scans.at(-1);
@@ -331,6 +391,8 @@ function mount({items, keys = []}) {
       state.slots.splice(0).forEach(slot => slot.cleanup?.());
     },
   };
+  state.cardStore = new CardStore();
+  state.card = state.cardStore.set({...state.view.card, items});
   state.hello = {
     safe: {
       id: bytes(state.view.card.id),
@@ -338,6 +400,18 @@ function mount({items, keys = []}) {
     },
   };
   state.applet = {
+    async createRandomKey(request) {
+      state.creations.push(request);
+      return {index: bytes(CREATED_INDEX)};
+    },
+    async view(request) {
+      state.views.push(request);
+      return {secret: true};
+    },
+    async viewKey(request) {
+      state.keyViews.push(request);
+      return {publicKey: bytes(PUBLIC_KEY)};
+    },
     async set(request) {
       state.aliasWrites.push(request);
     },
@@ -345,29 +419,41 @@ function mount({items, keys = []}) {
       state.removals.push(Buffer.from(index).toString('hex'));
     },
   };
-  state.scan = (label, callback, validate) => {
+  state.scan = (label, callback, validate, options) => {
     const scan = {
       ...deferred(),
       label,
       callback,
       validate,
+      options,
       controller: new AbortController(),
     };
     state.scans.push(scan);
     return scan.promise;
   };
-  state.write = async (applet, source, wallets, signal) => {
-    state.writes.push({applet, key: source, wallets, signal});
+  state.write = async (applet, source, wallets, signal, options) => {
+    state.writes.push({applet, key: source, wallets, signal, options});
     if (signal.aborted)
       throw Object.assign(new Error('Cancelled'), {code: 'CANCELLED'});
-    const derivations = wallets.map(parameters => ({
+    const previous = state.card.items.find(
+      item => item.derivationRecord?.index === source.index,
+    )?.derivationRecord?.wallets;
+    const merged = options?.mode === 'replace' ? [] : [...(previous ?? [])];
+    for (const wallet of wallets) {
+      if (!merged.some(entry => matchesWalletReference(entry, wallet))) {
+        merged.push(wallet);
+      }
+    }
+    const derivations = merged.map(parameters => ({
       ...parameters,
       publicKey: PUBLIC_KEY,
     }));
-    return {...metadata(source.index, wallets), derivations};
+    return {...metadata(source.index, merged), derivations};
   };
   state.pinSession = {clear: () => state.clears++};
+  state.view.$match.$view = () => ({$entries: [state.view]});
   state.entrances = {
+    cardStore: state.cardStore,
     walletStorageService: storage,
     monoidCredentialsStore: {createPINSession: () => state.pinSession},
     router: {
@@ -437,7 +523,7 @@ for (const kind of ['Access', 'Safe']) {
     click();
     const update = find(state.render(), node => node.type === 'pin-update');
     assert.equal(update.props.kind, kind);
-    assert.equal(update.props.card, state.view.card);
+    assert.equal(update.props.card, state.card);
     assert.equal(update.props.pinSession, state.pinSession);
     assert.equal(state.menuButton().props.disabled, true);
     assert.equal(state.popup(), undefined);
@@ -482,7 +568,7 @@ test('deleting a selected group and standalone resource removes companions first
   ]);
   assert.deepEqual(state.rowIndexes(), [SECOND_INDEX]);
   assert.deepEqual(
-    toJS(state.view.card.items),
+    state.card.snapshot().items,
     cardItems(SECOND_INDEX, [wallet(1)]),
   );
   assert.deepEqual(toJS(state.storage.keys), phoneBefore);
@@ -504,12 +590,12 @@ test('deletion rejects a mismatched full Safe identity before authentication and
   );
   assert.equal(state.authCount, 0);
   assert.deepEqual(state.removals, []);
-  assert.equal(state.view.card.items.length, 2);
+  assert.equal(state.card.items.length, 2);
 
   await state.tap();
   await state.finish();
   assert.equal(state.authCount, 1);
-  assert.deepEqual(state.view.card.items, []);
+  assert.deepEqual(state.card.items, []);
   assert.deepEqual(state.rowIndexes(), []);
 });
 
@@ -535,10 +621,10 @@ test('an acknowledged companion deletion survives a failed root deletion and reo
   await state.dismiss();
 
   assert.deepEqual(
-    state.view.card.items.map(item => item.index),
+    state.card.items.map(item => item.index),
     [INDEX],
   );
-  assert.deepEqual(toJS(state.view.card.items[0].derivations), []);
+  assert.deepEqual(toJS(state.card.items[0].derivations), []);
   assert.equal(state.item(INDEX).props.selected, true);
   assert.equal(state.item(INDEX).props.canWrite, true);
   assert.ok(state.menuButton());
@@ -552,7 +638,7 @@ test('an acknowledged companion deletion survives a failed root deletion and reo
     INDEX,
     INDEX,
   ]);
-  assert.deepEqual(state.view.card.items, []);
+  assert.deepEqual(state.card.items, []);
   assert.deepEqual(toJS(state.storage.keys), phoneBefore);
   assert.equal(state.menuButton().props.disabled, false);
 });
@@ -570,7 +656,7 @@ test('two confirmation clicks before rerender start only one deletion scan', asy
   state.scans[0].resolve();
   await finished;
   assert.deepEqual(state.removals, [metadata(INDEX, [wallet(0)]).index, INDEX]);
-  assert.deepEqual(state.view.card.items, []);
+  assert.deepEqual(state.card.items, []);
 });
 
 test('dismissing an in-flight delete keeps actions blocked until its ACK is published without updating the closed prompt', async () => {
@@ -605,7 +691,7 @@ test('dismissing an in-flight delete keeps actions blocked until its ACK is publ
   assert.equal(state.button('Copy').props.disabled, true);
   clickDelete();
   assert.equal(state.scans.length, 1);
-  assert.equal(state.view.card.items.length, 2);
+  assert.equal(state.card.items.length, 2);
 
   release.resolve();
   await Promise.all([rejected, dismissing]);
@@ -613,10 +699,10 @@ test('dismissing an in-flight delete keeps actions blocked until its ACK is publ
   assert.equal(dismissed, true);
   assert.deepEqual(state.removals, [metadata(INDEX, [wallet(0)]).index]);
   assert.deepEqual(
-    state.view.card.items.map(item => item.index),
+    state.card.items.map(item => item.index),
     [INDEX],
   );
-  assert.deepEqual(toJS(state.view.card.items[0].derivations), []);
+  assert.deepEqual(toJS(state.card.items[0].derivations), []);
   assert.equal(state.progressUpdates.length, 1);
   assert.equal(state.item(INDEX).props.disabled, false);
   assert.ok(state.menuButton());
@@ -661,10 +747,10 @@ for (const cancellation of ['route leave', 'scan cancellation']) {
 
     assert.deepEqual(state.removals, [metadata(INDEX, [wallet(0)]).index]);
     assert.deepEqual(
-      state.view.card.items.map(item => item.index),
+      state.card.items.map(item => item.index),
       [INDEX, SECOND_INDEX, metadata(SECOND_INDEX, [wallet(1)]).index],
     );
-    assert.deepEqual(toJS(state.view.card.items[0].derivations), []);
+    assert.deepEqual(toJS(state.card.items[0].derivations), []);
     assert.deepEqual(toJS(state.storage.keys), phoneBefore);
     assert.equal(state.popup(), undefined);
     assert.deepEqual(state.routes, []);
@@ -699,7 +785,7 @@ test('All groups linked derivation records with their key and keeps orphan and u
   assert.deepEqual(state.scans, []);
   assert.deepEqual(state.writes, []);
   assert.deepEqual(toJS(state.storage.keys[0].wallets), [saved]);
-  assert.deepEqual(toJS(state.view.card.items).slice(-2), [orphan, unknown]);
+  assert.deepEqual(state.card.snapshot().items.slice(-2), [orphan, unknown]);
 });
 
 test('Copy passes selected logical key indexes with their full card snapshot for companion expansion', () => {
@@ -719,7 +805,7 @@ test('Copy passes selected logical key indexes with their full card snapshot for
 
   assert.equal(state.copies.length, 1);
   assert.deepEqual(state.copies[0].sourceIndexes, [INDEX]);
-  assert.equal(state.copies[0].sourceCard, state.view.card);
+  assert.deepEqual(state.copies[0].sourceCard, state.card.snapshot());
   assert.deepEqual(toJS(state.copies[0].sourceCard.items), items);
   assert.deepEqual(state.scans, []);
   assert.deepEqual(state.writes, []);
@@ -802,7 +888,7 @@ test('divergent derivations merge into the phone before offering the merged card
   assert.deepEqual(state.routes, []);
 });
 
-test('one pending card merge takes priority over phone-only changes elsewhere in the selected batch', async () => {
+test('a pending download does not block an independent upload in the selected batch', async () => {
   const state = mount({
     items: [
       ...cardItems(INDEX, [wallet(0), wallet(1)]),
@@ -817,7 +903,7 @@ test('one pending card merge takes priority over phone-only changes elsewhere in
   state.select(SECOND_INDEX);
 
   assert.equal(state.visible('Update'), true);
-  assert.equal(state.visible('Update card'), false);
+  assert.equal(state.visible('Update card'), true);
   await state.click('Update');
 
   assert.deepEqual(state.scans, []);
@@ -830,7 +916,376 @@ test('one pending card merge takes priority over phone-only changes elsewhere in
   );
 });
 
-test('a recorded derivation with a different public key must update the phone before writing the card', async () => {
+test('switching a card-only difference to upload propagates a local deletion without changing the selection', async () => {
+  const retained = wallet(0);
+  const removed = wallet(1);
+  const state = mount({
+    items: cardItems(INDEX, [retained, removed]),
+    keys: [key(INDEX, [retained])],
+  });
+  state.select(INDEX);
+
+  assert.equal(state.item(INDEX).props.syncDirection, 'download');
+  state.toggleDirection(INDEX);
+  assert.equal(state.item(INDEX).props.selected, true);
+  assert.equal(state.item(INDEX).props.syncDirection, 'upload');
+  assert.equal(state.visible('Update'), false);
+  assert.equal(state.visible('Update card'), true);
+  assert.deepEqual(state.writes, []);
+  assert.equal(state.card.items[0].derivations.length, 2);
+
+  state.click('Update card');
+  await state.tap();
+  await state.finish();
+
+  assert.deepEqual(state.writes[0].options, {
+    mode: 'replace',
+    expected: [retained, removed].map(getWalletReference),
+  });
+  assert.deepEqual(toJS(state.card.items[0].derivations), [retained]);
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), [retained]);
+  assert.equal(state.item(INDEX).props.syncDirection, undefined);
+  assert.equal(state.visible('Update card'), false);
+});
+
+test('manual upload replaces equal-length divergent lists instead of silently merging them', async () => {
+  const state = mount({
+    items: cardItems(INDEX, [wallet(0), wallet(1)]),
+    keys: [key(INDEX, [wallet(0), wallet(2)])],
+  });
+  state.select(INDEX);
+  state.toggleDirection(INDEX);
+  state.click('Update card');
+  await state.tap();
+  await state.finish();
+
+  assert.deepEqual(toJS(state.card.items[0].derivations), [
+    wallet(0),
+    wallet(2),
+  ]);
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), [wallet(0), wallet(2)]);
+});
+
+test('a single update exposes address progress and counts completion only after the write acknowledgement', async () => {
+  const state = mount({
+    items: cardItems(INDEX, [wallet(0)]),
+    keys: [key(INDEX, [wallet(0), wallet(1)])],
+  });
+  const release = deferred();
+  const write = state.write;
+  state.write = async (...args) => {
+    const progress = args[5];
+    progress({stage: 'checking', current: 0, total: 1});
+    progress({stage: 'reading', current: 0, total: 2});
+    progress({stage: 'reading', current: 1, total: 2});
+    progress({stage: 'reading', current: 2, total: 2});
+    progress({stage: 'writing', current: 0, total: 1});
+    await release.promise;
+    progress({stage: 'writing', current: 1, total: 1});
+    return write(...args);
+  };
+  state.select(INDEX);
+  state.click('Update card');
+  const tapping = state.tap();
+  const renderProgress = node =>
+    typeof node.type === 'function' ? node.type(node.props) : node;
+  const reading = state.progressUpdates
+    .map(renderProgress)
+    .filter(node => node.props?.children === 'Reading addresses');
+  assert.deepEqual(
+    reading.map(node => [
+      node.props.current,
+      node.props.total,
+      node.props.showCount,
+    ]),
+    [
+      [0, 2, true],
+      [1, 2, true],
+      [2, 2, true],
+    ],
+  );
+  assert.equal(state.progressUpdates.at(-1).props.current, 0);
+  assert.equal(state.progressUpdates.at(-1).props.total, 1);
+  assert.equal(state.progressUpdates.at(-1).props.showCount, true);
+  release.resolve();
+  await tapping;
+  await state.finish();
+  assert.equal(state.progressUpdates.at(-1).props.current, 1);
+});
+
+test('a single derived address remains at zero until its read finishes', async () => {
+  const state = mount({items: [{index: INDEX, type: 'seed', secret: true}]});
+  const release = deferred();
+  const read = state.applet.viewKey;
+  state.applet.viewKey = async request => {
+    await release.promise;
+    return read(request);
+  };
+  state.select(INDEX);
+  state.click('Derive');
+  const tapping = state.tap();
+  assert.equal(state.progressUpdates.at(-1).props.current, 0);
+  assert.equal(state.progressUpdates.at(-1).props.showCount, true);
+  release.resolve();
+  await tapping;
+  await state.finish();
+  assert.equal(state.progressUpdates.at(-1).props.current, 1);
+});
+
+test('uploading an empty phone list preserves an empty companion, the key and copy availability', async () => {
+  const state = mount({
+    items: cardItems(INDEX, [wallet(0)]),
+    keys: [key(INDEX, [])],
+  });
+  state.select(INDEX);
+  state.toggleDirection(INDEX);
+  state.click('Update card');
+  await state.tap();
+  await state.finish();
+
+  assert.deepEqual(state.writes[0].wallets, []);
+  assert.deepEqual(state.writes[0].options.expected, [
+    getWalletReference(wallet(0)),
+  ]);
+  assert.deepEqual(toJS(state.card.items[0].derivations), []);
+  assert.deepEqual(toJS(state.card.items[0].refs), {});
+  assert.deepEqual(toJS(state.card.items[1].derivationRecord.wallets), []);
+  assert.equal(state.storage.keys.length, 1);
+  assert.equal(state.item(INDEX).props.empty, true);
+  assert.equal(state.item(INDEX).props.syncDirection, undefined);
+  assert.equal(state.visible('Derive'), false);
+  assert.equal(state.visible('Import'), false);
+  assert.equal(state.visible('Update'), false);
+  state.click('Copy');
+  assert.deepEqual(
+    state.copies[0].sourceCard.items[1].derivationRecord.wallets,
+    [],
+  );
+});
+
+test('a fresh phone can import an explicit empty card list without deriving or writing any address', async () => {
+  const state = mount({
+    items: [
+      {index: INDEX, type: 'seed', secret: true, derivations: []},
+      metadata(INDEX, []),
+    ],
+  });
+  state.select(INDEX);
+  assert.equal(state.item(INDEX).props.onChangeSyncDirection, undefined);
+  assert.equal(state.item(INDEX).props.empty, true);
+  assert.equal(state.visible('Derive'), false);
+  assert.equal(state.visible('Update card'), false);
+  await state.click('Import');
+
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), []);
+  assert.equal(state.storage.keys[0].defaultWallet, undefined);
+  assert.equal(state.visible('Back to Safe'), true);
+});
+
+test('an explicit empty record ignores a cached default preview until the user asks to preview an address', async () => {
+  const state = mount({
+    items: [...cardItems(INDEX, []), metadata(INDEX, [])],
+    keys: [key(INDEX, [])],
+  });
+  state.select(INDEX);
+  assert.equal(state.item(INDEX).props.empty, true);
+  assert.equal(state.visible('Update'), false);
+  assert.equal(state.visible('Derive'), false);
+
+  state.changeAddressType(INDEX, 'evm');
+  assert.equal(state.item(INDEX).props.empty, false);
+  assert.equal(state.visible('Update'), true);
+  state.click('Update');
+  await state.tap();
+  await state.finish();
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), [wallet(0)]);
+});
+
+test('mixed directions update only their chosen keys and an empty upload does not block downloading another key', async () => {
+  const state = mount({
+    items: [
+      ...cardItems(INDEX, [wallet(0)]),
+      ...cardItems(SECOND_INDEX, [wallet(1)]),
+    ],
+    keys: [key(INDEX, [])],
+  });
+  state.select(INDEX);
+  state.select(SECOND_INDEX);
+  state.toggleDirection(INDEX);
+  assert.equal(state.visible('Import'), true);
+  assert.equal(state.visible('Update card'), true);
+
+  state.click('Update card');
+  await state.tap();
+  await state.finish();
+  assert.deepEqual(
+    state.writes.map(write => write.key.index),
+    [INDEX],
+  );
+  assert.equal(state.storage.indexToKeyMap.has(SECOND_INDEX), false);
+  assert.equal(state.visible('Derive'), false);
+  await state.click('Import');
+  assert.deepEqual(toJS(state.storage.indexToKeyMap.get(INDEX).wallets), []);
+  assert.deepEqual(
+    toJS(state.storage.indexToKeyMap.get(SECOND_INDEX).wallets),
+    [wallet(1)],
+  );
+});
+
+test('card alias clearing downloads as an explicit empty value and phone alias clearing uploads', async () => {
+  const local = {...key(INDEX, [wallet(0)]), alias: 'Phone name'};
+  const state = mount({items: cardItems(INDEX, [wallet(0)]), keys: [local]});
+  state.select(INDEX);
+  await state.click('Update');
+  assert.equal(state.storage.keys[0].alias, '');
+  assert.deepEqual(state.scans, []);
+
+  runInAction(() => {
+    state.card.items[0].alias = 'Card name';
+  });
+  state.toggleDirection(INDEX);
+  state.click('Update card');
+  await state.tap();
+  await state.finish();
+  assert.deepEqual(state.aliasWrites, [{index: bytes(INDEX), alias: ''}]);
+  assert.equal(state.card.items[0].alias, '');
+  assert.equal(state.storage.keys[0].alias, '');
+});
+
+test('a card change after choosing upload retains the chosen snapshot and leaves the stored snapshot untouched on failure', async () => {
+  const initial = [wallet(0), wallet(1)];
+  const state = mount({
+    items: cardItems(INDEX, initial),
+    keys: [key(INDEX, [wallet(0)])],
+  });
+  state.select(INDEX);
+  state.toggleDirection(INDEX);
+  const failure = new Error('Card addresses changed, scan card again');
+  state.write = async (_applet, _key, _wallets, _signal, options) => {
+    assert.deepEqual(options, {
+      mode: 'replace',
+      expected: initial.map(getWalletReference),
+    });
+    throw failure;
+  };
+  state.click('Update card');
+  await assert.rejects(state.tap(), failure);
+  await state.dismiss(failure);
+  assert.deepEqual(toJS(state.card.items[0].derivations), initial);
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), [wallet(0)]);
+});
+
+test('native addresses have the same explicit replacement semantics as derived addresses', async () => {
+  const index = '04010000000000000004';
+  const evm = {
+    addressType: 'evm',
+    seed: undefined,
+    curve: undefined,
+    path: undefined,
+    publicKey: PUBLIC_KEY,
+  };
+  const segwit = {...evm, addressType: 'bitcoin-segwit'};
+  const state = mount({
+    items: [
+      {
+        index,
+        type: 'secp256k1',
+        secret: true,
+        ref: {...evm, address: getWalletData(evm).address},
+        derivations: [evm, segwit],
+      },
+      metadata(index, [evm, segwit]),
+    ],
+    keys: [{index, type: 'secp256k1', alias: undefined, wallets: [evm]}],
+  });
+  state.select(index);
+  state.toggleDirection(index);
+  state.click('Update card');
+  await state.tap();
+  await state.finish();
+
+  assert.deepEqual(state.writes[0].options, {
+    mode: 'replace',
+    expected: [evm, segwit].map(getWalletReference),
+  });
+  assert.deepEqual(toJS(state.card.items[0].derivations), [evm]);
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), [evm]);
+  assert.equal(state.item(index).props.syncDirection, undefined);
+});
+
+test('dismissal during an upload waits for the write acknowledgement and never restores deleted addresses', async () => {
+  const state = mount({
+    items: cardItems(INDEX, [wallet(0), wallet(1)]),
+    keys: [key(INDEX, [wallet(0)])],
+  });
+  const release = deferred();
+  const write = state.write;
+  state.write = async (...args) => {
+    const result = await write(...args);
+    await release.promise;
+    return result;
+  };
+  state.select(INDEX);
+  state.toggleDirection(INDEX);
+  state.click('Update card');
+  const tapping = state.tap();
+  let dismissed = false;
+  const dismissing = state.dismiss().then(() => {
+    dismissed = true;
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(dismissed, false);
+  assert.equal(state.item(INDEX).props.disabled, true);
+  assert.equal(state.writes.length, 1);
+  const progressBefore = state.progressUpdates.length;
+
+  release.resolve();
+  await Promise.all([tapping, dismissing]);
+  assert.equal(state.item(INDEX).props.disabled, false);
+  assert.deepEqual(toJS(state.card.items[0].derivations), [wallet(0)]);
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), [wallet(0)]);
+  assert.equal(state.progressUpdates.length, progressBefore);
+});
+
+test('importing a preview does not save unrelated phone records to the card or import newly discovered card records', async () => {
+  const known = wallet(0);
+  const phoneOnly = wallet(1);
+  const preview = wallet(2);
+  const discovered = wallet(3);
+  const state = mount({
+    items: cardItems(INDEX, [known], preview),
+    keys: [key(INDEX, [known, phoneOnly])],
+  });
+  const write = state.write;
+  state.write = async (...args) => {
+    const result = await write(...args);
+    return {
+      ...metadata(INDEX, [known, preview, discovered]),
+      derivations: [known, preview, discovered],
+    };
+  };
+  state.select(INDEX);
+  state.click('Update');
+  await state.tap();
+  await state.finish();
+
+  assert.deepEqual(state.writes[0].wallets, [getWalletReference(preview)]);
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), [
+    known,
+    phoneOnly,
+    preview,
+  ]);
+  assert.deepEqual(toJS(state.card.items[0].derivations), [
+    known,
+    preview,
+    discovered,
+  ]);
+  assert.equal(state.visible('Update'), true);
+  assert.equal(state.visible('Back to Safe'), false);
+});
+
+test('a recorded derivation with a different public key cannot silently overwrite local data in either direction', async () => {
   const saved = wallet(0);
   const state = mount({
     items: cardItems(INDEX, [saved]),
@@ -844,8 +1299,13 @@ test('a recorded derivation with a different public key must update the phone be
   await state.click('Update');
 
   assert.deepEqual(state.scans, []);
-  assert.equal(state.storage.keys[0].wallets[0].publicKey, saved.publicKey);
-  assert.equal(state.visible('Update card'), true);
+  assert.equal(state.storage.keys[0].wallets[0].publicKey, OTHER_PUBLIC_KEY);
+  assert.match(state.errors[0].message, /public key does not match/);
+  state.toggleDirection(INDEX);
+  await state.click('Update card');
+  assert.deepEqual(state.scans, []);
+  assert.equal(state.errors.length, 2);
+  assert.match(state.errors[1].message, /public key does not match/);
 });
 
 test('an unrecorded preview does not turn the first card-to-phone merge into a card write', async () => {
@@ -991,7 +1451,14 @@ for (const source of ['card', 'phone']) {
       false,
     );
 
-    state.click(source === 'phone' ? 'Update' : 'Import');
+    if (source === 'card') {
+      await state.click('Import');
+      assert.deepEqual(state.scans, []);
+      assert.deepEqual(toJS(state.storage.indexToKeyMap.get(INDEX).wallets), [
+        known,
+      ]);
+    }
+    state.click('Update');
     assert.equal(state.scans.length, 1);
     assert.equal(state.scans[0].label, 'Scan card to import');
     assert.deepEqual(state.writes, []);
@@ -1002,17 +1469,14 @@ for (const source of ['card', 'phone']) {
       known,
       segwit,
     ]);
-    assert.deepEqual(state.writes[0].wallets, [
-      getWalletReference(known),
-      getWalletReference(segwit),
-    ]);
+    assert.deepEqual(state.writes[0].wallets, [getWalletReference(segwit)]);
     assert.equal(state.item(INDEX).props.state, 'up-to-date');
     assert.equal(state.visible('Back to Safe'), true);
     assert.deepEqual(state.errors, []);
   });
 }
 
-test('a new raw key imports directly and shows completion using the newly stored key', async () => {
+test('a new raw key records and imports only the previewed address before showing completion', async () => {
   const index = '04010000000000000003';
   const ref = {addressType: 'evm', publicKey: PUBLIC_KEY};
   const state = mount({
@@ -1027,12 +1491,408 @@ test('a new raw key imports directly and shows completion using the newly stored
   });
   state.select(index);
 
-  await state.click('Import');
+  state.click('Import');
+  await state.tap();
+  await state.finish();
 
-  assert.deepEqual(state.scans, []);
-  assert.deepEqual(state.writes, []);
-  assert.equal(state.storage.indexToKeyMap.get(index).publicKey, PUBLIC_KEY);
+  assert.equal(state.scans.length, 1);
+  assert.equal(state.writes.length, 1);
+  assert.deepEqual(
+    state.storage.indexToKeyMap
+      .get(index)
+      .wallets.map(wallet => wallet.addressType),
+    ['evm'],
+  );
   assert.equal(state.item(index).props.state, 'up-to-date');
   assert.equal(state.visible('Back to Safe'), true);
   assert.deepEqual(state.errors, []);
+});
+
+test('Create key offers a dismissible second menu on an empty card without a Back button', () => {
+  const state = mount({items: []});
+  state.menuButton().props.onClick();
+  state.popupButton('Create key').props.onClick();
+
+  for (const label of ['seed', 'master', 'secp256k1', 'secp256r1', 'ed25519']) {
+    assert.ok(state.popupButton(label), `${label} should be available`);
+  }
+  assert.equal(state.popupButton('Back'), undefined);
+  state.popup().props.onDismiss();
+  assert.equal(state.popup(), undefined);
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.creations, []);
+});
+
+test('the optional network filter limits key types without creating anything and resets when reopened', () => {
+  const state = mount({items: []});
+  state.menuButton().props.onClick();
+  state.popupButton('Create key').props.onClick();
+  const network = () =>
+    find(
+      state.popup(),
+      node =>
+        node.type === 'segmented' && node.props['aria-label'] === 'Key network',
+    );
+  const available = () =>
+    ['seed', 'master', 'secp256k1', 'secp256r1', 'ed25519'].filter(label =>
+      state.popupButton(label),
+    );
+
+  assert.equal(network().props.value, undefined);
+  assert.equal(network().props.allowDeselect, true);
+  assert.deepEqual(available(), [
+    'seed',
+    'master',
+    'secp256k1',
+    'secp256r1',
+    'ed25519',
+  ]);
+  for (const chain of ['evm', 'bitcoin']) {
+    network().props.onChange(chain);
+    assert.equal(network().props.value, chain);
+    assert.deepEqual(available(), ['seed', 'master', 'secp256k1']);
+  }
+  network().props.onChange('solana');
+  assert.deepEqual(available(), ['seed', 'master', 'ed25519']);
+  network().props.onChange(undefined);
+  assert.deepEqual(available(), [
+    'seed',
+    'master',
+    'secp256k1',
+    'secp256r1',
+    'ed25519',
+  ]);
+
+  network().props.onChange('solana');
+  state.popup().props.onDismiss();
+  state.menuButton().props.onClick();
+  state.popupButton('Create key').props.onClick();
+  assert.equal(network().props.value, undefined);
+  assert.ok(state.popupButton('secp256r1'));
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.creations, []);
+});
+
+test('creating a seed through the Solana filter reads its Solana address immediately', async () => {
+  const state = mount({items: []});
+  const publicKey = '12'.repeat(32);
+  state.applet.viewKey = async request => {
+    state.keyViews.push(request);
+    return {publicKey: bytes(publicKey)};
+  };
+  state.menuButton().props.onClick();
+  state.popupButton('Create key').props.onClick();
+  find(
+    state.popup(),
+    node =>
+      node.type === 'segmented' && node.props['aria-label'] === 'Key network',
+  ).props.onChange('solana');
+  state.popupButton('seed').props.onClick();
+  await state.tap();
+  await state.finish();
+
+  assert.deepEqual(state.creations, [{type: 'seed', length: 64}]);
+  assert.deepEqual(state.keyViews, [
+    {
+      type: 'seed',
+      index: bytes(CREATED_INDEX),
+      derivation: {
+        type: 'slip10',
+        curve: 'ed25519',
+        path: bytes('8000002c800001f58000000080000000'),
+      },
+    },
+  ]);
+  const created = state.card.items[0];
+  assert.equal(created.ref.addressType, 'solana');
+  assert.equal(created.ref.path, "m/44'/501'/0'/0'");
+  assert.equal(created.ref.publicKey, publicKey);
+  assert.equal(state.item(CREATED_INDEX).props.addressType, 'solana');
+  assert.equal(state.item(CREATED_INDEX).props.address, created.ref.address);
+  assert.equal(state.storage.keys.length, 0);
+});
+
+test('creating a key on an empty card reads it and adds the canonical and displayed item without importing it', async () => {
+  const state = mount({items: []});
+  state.createKey();
+  const scan = state.scans[0];
+
+  assert.equal(state.menuButton().props.disabled, true);
+  assert.equal(scan.options.retryOnError, false);
+  assert.equal(scan.options.pinSession, state.pinSession);
+  assert.equal(scan.options.safe, true);
+  assert.equal(scan.options.auth, 'access');
+  await state.tap();
+  assert.equal(state.item(CREATED_INDEX).props.selected, false);
+  await state.finish();
+
+  assert.deepEqual(state.creations, [{type: 'secp256k1'}]);
+  assert.deepEqual(state.views, [{index: bytes(CREATED_INDEX)}]);
+  assert.deepEqual(state.keyViews, [
+    {type: 'secp256k1', index: bytes(CREATED_INDEX)},
+  ]);
+  assert.deepEqual(state.rowIndexes(), [CREATED_INDEX]);
+  const created = state.card.items[0];
+  assert.equal(created.type, 'secp256k1');
+  assert.equal(created.secret, true);
+  assert.equal(created.ref.publicKey, PUBLIC_KEY);
+  assert.equal(state.item(CREATED_INDEX).type, 'key-item');
+  assert.equal(state.item(CREATED_INDEX).props.address, created.ref.address);
+  assert.equal(state.item(CREATED_INDEX).props.state, 'new');
+  assert.equal(state.item(CREATED_INDEX).props.selected, true);
+  assert.equal(state.storage.keys.length, 0);
+
+  state.click('Copy');
+  assert.deepEqual(state.copies[0].sourceIndexes, [CREATED_INDEX]);
+  assert.deepEqual(state.copies[0].sourceCard, state.card.snapshot());
+  assert.equal(state.copies[0].sourceCard.items[0].ref.publicKey, PUBLIC_KEY);
+});
+
+for (const [label, request, addressType] of [
+  ['seed', {type: 'seed', length: 64}, 'evm'],
+  ['master', {type: 'master', length: 32}, 'evm'],
+  ['ed25519', {type: 'ed25519'}, 'solana'],
+]) {
+  test(`creating ${label} reads its default address with the matching key type`, async () => {
+    const state = mount({items: []});
+    const publicKey = addressType === 'solana' ? '12'.repeat(32) : PUBLIC_KEY;
+    state.applet.viewKey = async input => {
+      state.keyViews.push(input);
+      return {publicKey: bytes(publicKey)};
+    };
+    state.createKey(label);
+    await state.tap();
+    await state.finish();
+
+    assert.deepEqual(state.creations, [request]);
+    assert.equal(state.keyViews.length, 1);
+    assert.equal(state.keyViews[0].type, request.type);
+    const created = state.card.items[0];
+    assert.equal(created.type, request.type);
+    assert.equal(created.ref.addressType, addressType);
+    assert.equal(created.ref.publicKey, publicKey);
+    assert.equal(state.item(CREATED_INDEX).props.address, created.ref.address);
+    assert.equal(state.item(CREATED_INDEX).props.selected, true);
+    assert.equal(state.storage.keys.length, 0);
+  });
+}
+
+test('adding a key preserves existing selections, the resource filter and a switched address preview', async () => {
+  const existingIndex = '04010000000000000001';
+  const ref = {addressType: 'evm', publicKey: PUBLIC_KEY};
+  const unknown = {index: '90000000000000000003', type: 0x9000, secret: false};
+  const state = mount({
+    items: [
+      {
+        index: existingIndex,
+        type: 'secp256k1',
+        secret: true,
+        ref: {...ref, address: getWalletData(ref).address},
+      },
+      unknown,
+    ],
+  });
+  state.filter('all');
+  state.select(existingIndex);
+  state.select(unknown.index);
+  state.changeAddressType(existingIndex, 'bitcoin-segwit');
+  const preview = state.item(existingIndex).props.address;
+
+  state.createKey();
+  await state.tap();
+  await state.finish();
+
+  assert.deepEqual(state.rowIndexes(), [
+    existingIndex,
+    unknown.index,
+    CREATED_INDEX,
+  ]);
+  assert.equal(state.item(existingIndex).props.selected, true);
+  assert.equal(state.item(unknown.index).props.selected, true);
+  assert.equal(state.item(CREATED_INDEX).props.selected, true);
+  assert.equal(state.item(existingIndex).props.addressType, 'bitcoin-segwit');
+  assert.equal(state.item(existingIndex).props.address, preview);
+  assert.equal(
+    find(state.render(), node => node.type === 'segmented').props.value,
+    'all',
+  );
+  state.click('Copy');
+  assert.deepEqual(state.copies[0].sourceIndexes, [
+    existingIndex,
+    unknown.index,
+    CREATED_INDEX,
+  ]);
+  assert.equal(state.copies[0].sourceCard.items.length, 3);
+  assert.equal(state.keyViews.length, 1);
+});
+
+test('an acknowledged key survives a failed View and callback reentry never creates it again', async () => {
+  const state = mount({items: []});
+  const failure = new Error('View failed');
+  state.applet.view = async request => {
+    state.views.push(request);
+    throw failure;
+  };
+  state.createKey();
+  await assert.rejects(state.tap(), failure);
+  await assert.rejects(state.tap(), failure);
+  await state.dismiss(failure);
+
+  assert.equal(state.creations.length, 1);
+  assert.equal(state.views.length, 1);
+  assert.deepEqual(state.rowIndexes(), [CREATED_INDEX]);
+  assert.equal(state.card.items[0].index, CREATED_INDEX);
+  assert.equal(state.item(CREATED_INDEX).type, 'key-item');
+  assert.equal(state.item(CREATED_INDEX).props.address, undefined);
+  assert.equal(state.item(CREATED_INDEX).props.selected, false);
+  assert.equal(state.menuButton().props.disabled, false);
+});
+
+test('a failed public-key read retains the created key without changing existing selections', async () => {
+  const state = mount({items: cardItems(INDEX, [wallet(0)])});
+  state.select(INDEX);
+  const failure = new Error('Public-key read failed');
+  state.applet.viewKey = async request => {
+    state.keyViews.push(request);
+    throw failure;
+  };
+  state.createKey();
+  await assert.rejects(state.tap(), failure);
+  await state.dismiss(failure);
+
+  assert.equal(state.creations.length, 1);
+  assert.equal(state.views.length, 1);
+  assert.equal(state.keyViews.length, 1);
+  assert.equal(state.item(INDEX).props.selected, true);
+  assert.equal(state.item(CREATED_INDEX).props.selected, false);
+  assert.equal(state.item(CREATED_INDEX).props.address, undefined);
+});
+
+test('leaving after key reads finish does not automatically select the new key', async () => {
+  const state = mount({items: cardItems(INDEX, [wallet(0)])});
+  state.select(INDEX);
+  state.createKey();
+  await state.tap();
+  runInAction(() => {
+    state.view.$leaving = true;
+  });
+  await state.finish();
+
+  assert.equal(state.item(INDEX).props.selected, true);
+  assert.equal(state.item(CREATED_INDEX).props.selected, false);
+  assert.equal(
+    state.item(CREATED_INDEX).props.address,
+    getWalletData({addressType: 'evm', publicKey: PUBLIC_KEY}).address,
+  );
+});
+
+test('Create key rejects another full Safe identity before authentication or mutation', async () => {
+  const state = mount({items: []});
+  state.createKey('master');
+  await assert.rejects(
+    state.tap({
+      safe: {
+        ...state.hello.safe,
+        publicKey: bytes(`04${'34'.repeat(64)}`),
+      },
+    }),
+    MonoidWrongCardError,
+  );
+  await state.dismiss();
+
+  assert.equal(state.authCount, 0);
+  assert.deepEqual(state.creations, []);
+  assert.deepEqual(state.card.snapshot().items, []);
+});
+
+test('cancelling during Create retains its eventual acknowledgement and skips further card reads', async () => {
+  const state = mount({items: []});
+  const response = deferred();
+  state.applet.createRandomKey = async request => {
+    state.creations.push(request);
+    return response.promise;
+  };
+  state.createKey();
+  const cancelled = assert.rejects(
+    state.tap(),
+    error => error.code === 'CANCELLED',
+  );
+  const dismissed = state.dismiss();
+  response.resolve({index: bytes(CREATED_INDEX)});
+  await cancelled;
+  await dismissed;
+
+  assert.equal(state.creations.length, 1);
+  assert.deepEqual(state.views, []);
+  assert.deepEqual(state.keyViews, []);
+  assert.deepEqual(state.rowIndexes(), [CREATED_INDEX]);
+  assert.equal(state.card.items[0].index, CREATED_INDEX);
+  assert.equal(state.item(CREATED_INDEX).props.selected, false);
+  assert.equal(state.menuButton().props.disabled, false);
+});
+
+test('creating secp256r1 reads its public key and keeps it available as a card resource', async () => {
+  const state = mount({items: []});
+  const publicKey = `04${'12'.repeat(64)}`;
+  state.applet.viewKey = async request => {
+    state.keyViews.push(request);
+    return {publicKey: bytes(publicKey)};
+  };
+  state.createKey('secp256r1');
+  await state.tap();
+  await state.finish();
+
+  assert.deepEqual(state.creations, [{type: 'secp256r1'}]);
+  assert.deepEqual(state.keyViews, [
+    {type: 'secp256r1', index: bytes(CREATED_INDEX)},
+  ]);
+  assert.deepEqual(state.rowIndexes(), [CREATED_INDEX]);
+  assert.equal(state.item(CREATED_INDEX).type, 'resource-item');
+  assert.equal(state.card.items[0].publicKey, publicKey);
+  assert.equal(state.item(CREATED_INDEX).props.selected, true);
+  assert.equal(state.visible('Import'), false);
+  assert.equal(state.visible('Derive'), false);
+  state.click('Copy');
+  assert.deepEqual(state.copies[0].sourceIndexes, [CREATED_INDEX]);
+});
+
+test('returning to the same card reads new keys and address choices from the global store', async () => {
+  const state = mount({items: cardItems(INDEX, [wallet(0)])});
+  state.changeAddressType(INDEX, 'bitcoin-segwit');
+  state.menuButton().props.onClick();
+  state.popupButton('Create key').props.onClick();
+  state.popupButton('secp256k1').props.onClick();
+  await state.tap();
+  await state.finish();
+
+  state.unmount();
+  state.render();
+
+  assert.deepEqual(Object.keys(state.view.card), ['id', 'publicKey']);
+  assert.equal(state.item(INDEX).props.addressType, 'bitcoin-segwit');
+  assert.equal(
+    state.item(CREATED_INDEX).props.address,
+    getWalletData({
+      addressType: 'evm',
+      publicKey: PUBLIC_KEY,
+    }).address,
+  );
+  assert.equal(state.cardStore.get(state.view.card), state.card);
+});
+
+test('an unacknowledged creation stops without inventing an item or resending the command', async () => {
+  const state = mount({items: []});
+  state.applet.createRandomKey = async request => {
+    state.creations.push(request);
+    throw Object.assign(new Error('Response lost'), {code: 'TAG_LOST'});
+  };
+  state.menuButton().props.onClick();
+  state.popupButton('Create key').props.onClick();
+  state.popupButton('secp256k1').props.onClick();
+
+  await assert.rejects(state.tap(), /Creation not confirmed/);
+  await assert.rejects(state.tap(), /Creation not confirmed/);
+  assert.equal(state.creations.length, 1);
+  assert.deepEqual(state.card.snapshot().items, []);
+  await state.dismiss();
 });

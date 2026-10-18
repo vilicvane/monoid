@@ -79,6 +79,7 @@ export async function readCardWalletDerivations(
   key: Pick<ScannedCardKeyData, 'type' | 'index'>,
   wallets: readonly WalletKeyWalletParameters[],
   signal?: AbortSignal,
+  onProgress?: (current: number, total: number) => void,
 ): Promise<WalletKeyPublicKeyData[]> {
   const derived: WalletKeyPublicKeyData[] = [];
   const publicKeys = new Map<string, PublicKeyHex>();
@@ -104,6 +105,7 @@ export async function readCardWalletDerivations(
     }
 
     derived.push({...wallet, publicKey});
+    onProgress?.(derived.length, wallets.length);
   }
 
   return derived;

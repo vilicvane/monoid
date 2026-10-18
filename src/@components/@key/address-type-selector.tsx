@@ -42,7 +42,7 @@ const ALL_ADDRESS_TYPES: readonly AddressType[] = [
   'bitcoin-taproot',
 ];
 
-const ADDRESS_CHAIN_OPTIONS = [
+export const ADDRESS_CHAIN_OPTIONS = [
   {value: 'evm', label: 'EVM', icon: <AddressChainIcon chain="evm" />},
   {value: 'solana', label: 'Solana', icon: <AddressChainIcon chain="solana" />},
   {value: 'bitcoin', label: 'BTC', icon: <AddressChainIcon chain="bitcoin" />},

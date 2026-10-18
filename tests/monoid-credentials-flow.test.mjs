@@ -252,6 +252,8 @@ function mount(overrides = {}) {
     retryErrors: [],
     presentedErrors: [],
     gets: 0,
+    unlocks: 0,
+    disposals: 0,
     readSignals: [],
     authenticated: [],
     authenticationRequests: [],
@@ -278,7 +280,7 @@ function mount(overrides = {}) {
   state.business = async (applet, _setContent, hello) => {
     state.businessCalls++;
     state.businessHello = hello;
-    await state.onBusiness?.(applet);
+    await state.onBusiness?.(applet, _setContent, hello);
     state.businessCompleted++;
   };
   const assertMutationReady = () => {
@@ -314,21 +316,36 @@ function mount(overrides = {}) {
       catch: promise => promise.catch(error => state.retryErrors.push(error)),
     },
     monoidCredentialsStore: {
-      async getPINs(signal) {
+      createPINSession() {
+        return new MonoidPINSession(this);
+      },
+      async authenticate() {
+        state.unlocks++;
+        return {
+          [Symbol.asyncDispose]: async () => {
+            state.disposals++;
+            await state.onDispose?.();
+          },
+        };
+      },
+      async getPINs(signal, getAccess) {
+        await getAccess?.();
         state.gets++;
         state.readSignals.push(signal);
         return state.onGet
           ? state.onGet(signal)
           : Object.freeze({...state.savedPINs});
       },
-      async setPIN(id, pin, signal) {
+      async setPIN(id, pin, signal, _snapshot, getAccess) {
+        await getAccess?.();
         assertMutationReady();
         state.writes.push({id, pin, signal});
         await state.onSet?.(signal);
         state.savedPINs[id] = pin;
         return Object.freeze({...state.savedPINs});
       },
-      async removePIN(id, expectedPIN, signal) {
+      async removePIN(id, expectedPIN, signal, _snapshot, getAccess) {
+        await getAccess?.();
         assertMutationReady();
         state.removals.push({id, expectedPIN, signal});
         await state.onRemove?.(signal);
@@ -1604,6 +1621,7 @@ for (const order of ['stop-first', 'animation-first']) {
     if (order === 'stop-first') await state.finishStop();
     else await state.finishAnimation();
     state.owner.unmount();
+    await state.flush();
     assert.equal(state.readSignals[0].aborted, true);
     if (order === 'stop-first') await state.finishAnimation();
     else await state.finishStop();
@@ -1894,4 +1912,76 @@ test('prompt: auth false never reads or stores a Safe PIN used by the business a
   assert.deepEqual(state.removals, []);
   assert.equal(state.inputs.length, 0);
   assert.equal(state.outcome, 'resolved');
+});
+
+test('prompt: a temporary scope spans preloading, retries, final animation and saving', async () => {
+  const state = mount();
+  await state.enterManualPIN();
+  assert.equal(state.unlocks, 1);
+  assert.equal(state.disposals, 0);
+  const saving = deferred();
+  state.onSet = () => saving.promise;
+  await state.tap();
+  await state.finishAnimation();
+  assert.equal(state.disposals, 0);
+  await state.finishStop();
+  assert.equal(state.writes.length, 1);
+  assert.equal(state.disposals, 0);
+  saving.resolve();
+  await state.flush();
+  assert.equal(state.unlocks, 1);
+  assert.equal(state.disposals, 1);
+  assert.equal(state.outcome, 'resolved');
+});
+
+test('prompt: temporary scope cleanup failure does not report completed card work as failed', async () => {
+  const state = mount({savedPINs: {[CARD_ID]: PIN}});
+  state.onDispose = () => {
+    throw new Error('secret cleanup payload');
+  };
+  await state.tap();
+  await state.finishExit();
+  assert.equal(state.outcome, 'resolved');
+  assert.equal(state.businessCalls, 1);
+  assert.equal(state.disposals, 1);
+  assert.deepEqual(state.errors, []);
+  assert.equal(state.retryErrors.length, 1);
+  assert.equal(state.retryErrors[0].code, 'IO_ERROR');
+  assert.equal(state.retryErrors[0].message.includes('secret'), false);
+});
+
+test('prompt: auth false can first acquire the page authorization when saving after scan returns', async () => {
+  const state = mount({auth: false, pinSession: true});
+  await state.tap();
+  await state.finishExit();
+  assert.equal(state.outcome, 'resolved');
+  assert.equal(state.unlocks, 0);
+  await state.pinSession.setPIN(CARD_ID, PIN);
+  assert.equal(state.unlocks, 1);
+  assert.equal(state.disposals, 0);
+  assert.equal(state.savedPINs[CARD_ID], PIN);
+  await state.pinSession[Symbol.asyncDispose]();
+  assert.equal(state.disposals, 1);
+});
+
+test('prompt: a completed scan cannot overwrite progress in the next scan', async () => {
+  let lateProgress;
+  const state = mount({
+    auth: false,
+    onBusiness: (_applet, setContent) => {
+      lateProgress = setContent;
+      setContent('Reading addresses');
+    },
+  });
+  await state.tap();
+  await state.finishExit();
+  assert.equal(state.outcome, 'resolved');
+  state.start();
+  await state.flush();
+  const current = state.presenter.current;
+  const before = current.content;
+  lateProgress('Stale progress');
+  await state.flush();
+  assert.equal(state.presenter.current.token, current.token);
+  assert.equal(state.presenter.current.content, before);
 });

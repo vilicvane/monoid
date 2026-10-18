@@ -56,6 +56,7 @@ import {
   ViewHeader,
   ViewHeaderButton,
   ViewHeaderTitle,
+  useViewActive,
 } from '../../../@view/index.js';
 import {
   type CardResourceGroup,
@@ -196,20 +197,11 @@ const StatusIcon = styled(AppIcon)<{$done: boolean; $conflict: boolean}>`
 `;
 
 function getCopyProgress(
-  groups: readonly CardResourceGroup<CardBackupItem>[],
   targets: readonly CardBackupTarget[],
   phase: 'exported' | 'imported',
 ): string {
-  return formatCardResourceCount(
-    groups,
-    item =>
-      targets.length > 0 &&
-      targets.every(target =>
-        target.items.some(
-          transfer => transfer.index === item.index && transfer[phase],
-        ),
-      ),
-  );
+  const transfers = targets.flatMap(target => target.items);
+  return `${transfers.filter(transfer => transfer[phase]).length}/${transfers.length}`;
 }
 
 const CopyProgress = ({
@@ -256,7 +248,7 @@ const DestinationCards = ({
           <ListItemContent>
             <ListItemName>{target.id}</ListItemName>
             <ListItemDescription>
-              Items · {getCopyProgress(groups, [target], 'imported')}
+              Items · {getCopyProgress([target], 'imported')}
             </ListItemDescription>
             {conflicts.length > 0 && (
               <ConflictDescription>
@@ -279,9 +271,14 @@ export const CopyItemsView = observer(
   ({view}: RouteComponentProps<Router['safe']['copyItems']>): ReactNode => {
     const {router, errorService, monoidApplet, monoidCredentialsStore} =
       useEntrances();
+    const isViewActive = useViewActive(view);
     const toast = useToast();
+    const [routeSource] = useState(() => ({
+      card: view.sourceCard,
+      indexes: view.sourceIndexes,
+    }));
     const [session] = useState(
-      () => new CardBackupSession(view.sourceCard, view.sourceIndexes),
+      () => new CardBackupSession(routeSource.card, routeSource.indexes),
     );
     const [pinSession] = useState(() =>
       monoidCredentialsStore.createPINSession(),
@@ -325,13 +322,13 @@ export const CopyItemsView = observer(
     useEffect(
       () =>
         reaction(
-          () => !!view.$leaving || !view.$match.$exact.$active,
+          () => !isViewActive(),
           leaving => {
             if (leaving) pinSession.clear();
           },
           {fireImmediately: true},
         ),
-      [pinSession, view],
+      [pinSession, isViewActive],
     );
 
     useEffect(() => {
@@ -453,13 +450,7 @@ export const CopyItemsView = observer(
           scanned = hello;
         },
       );
-      if (
-        !scanned ||
-        !mounted.current ||
-        view.$leaving ||
-        !view.$match.$exact.$active
-      )
-        return;
+      if (!scanned || !mounted.current || !isViewActive()) return;
 
       if (
         scanned.pin !== false &&
@@ -491,13 +482,7 @@ export const CopyItemsView = observer(
       });
 
       try {
-        if (
-          pin === undefined ||
-          !mounted.current ||
-          view.$leaving ||
-          !view.$match.$exact.$active
-        )
-          return;
+        if (pin === undefined || !mounted.current || !isViewActive()) return;
         if (!MonoidPIN.is(pin)) {
           toast({
             message: 'Safe PIN must contain 6 to 16 characters',
@@ -519,7 +504,7 @@ export const CopyItemsView = observer(
             signal.addEventListener('abort', cancel, {once: true});
             if (signal.aborted) cancel();
             const stopWatching = reaction(
-              () => !!view.$leaving || !view.$match.$exact.$active,
+              () => !isViewActive(),
               leaving => {
                 if (leaving) cancel();
               },
@@ -564,7 +549,19 @@ export const CopyItemsView = observer(
           'Scan the source card',
           async (applet, setState, hello, signal) => {
             setState('Reading items...');
-            await session.readSource(applet, hello, signal, view.sourceIndexes);
+            await session.readSource(
+              applet,
+              hello,
+              signal,
+              routeSource.indexes,
+              (current, total) => {
+                setState(
+                  <CopyProgress value={`${current}/${total}`}>
+                    Reading address records
+                  </CopyProgress>,
+                );
+              },
+            );
           },
           hello => {
             if (source) {
@@ -587,13 +584,7 @@ export const CopyItemsView = observer(
           maxLength: 16,
         });
 
-        if (
-          !mounted.current ||
-          view.$leaving ||
-          !view.$match.$exact.$active ||
-          pin === undefined
-        )
-          return;
+        if (!mounted.current || !isViewActive() || pin === undefined) return;
         if (!MonoidPIN.is(pin)) {
           throw new MonoidCardError(
             'Safe PIN must contain 6 to 16 characters.',
@@ -614,11 +605,7 @@ export const CopyItemsView = observer(
               await session.exportItems(applet, hello, pin!, signal, () => {
                 setState(
                   <CopyProgress
-                    value={getCopyProgress(
-                      selectedGroups,
-                      session.backup!.targets,
-                      'exported',
-                    )}
+                    value={getCopyProgress(session.backup!.targets, 'exported')}
                   >
                     Exporting items
                   </CopyProgress>,
@@ -649,21 +636,29 @@ export const CopyItemsView = observer(
               setStartedImports(current =>
                 new Set(current).add(target!.publicKey),
               );
-              await session.importItems(applet, hello, signal, () => {
-                setState(
-                  <CopyProgress
-                    value={getCopyProgress(
-                      selectedGroups,
-                      session.backup!.targets.filter(
-                        card => card.publicKey === target!.publicKey,
-                      ),
-                      'imported',
-                    )}
-                  >
-                    Importing items
-                  </CopyProgress>,
-                );
-              });
+              await session.importItems(
+                applet,
+                hello,
+                signal,
+                (_current, _total, stage) => {
+                  if (stage === 'verifying') {
+                    setState('Checking card...');
+                    return;
+                  }
+                  setState(
+                    <CopyProgress
+                      value={getCopyProgress(
+                        session.backup!.targets.filter(
+                          card => card.publicKey === target!.publicKey,
+                        ),
+                        'imported',
+                      )}
+                    >
+                      Importing items
+                    </CopyProgress>,
+                  );
+                },
+              );
             },
             hello => {
               if (target) {
@@ -720,7 +715,7 @@ export const CopyItemsView = observer(
               id={sourceId}
               description={
                 step === 3
-                  ? `Items · ${getCopyProgress(selectedGroups, targets, 'exported')}`
+                  ? `Items · ${getCopyProgress(targets, 'exported')}`
                   : itemCountLabel
               }
               $interrupted={interruptedCards.has(backup!.source.publicKey)}
@@ -749,7 +744,7 @@ export const CopyItemsView = observer(
               id={target.id}
               description={
                 step === 4 && startedImports.has(target.publicKey)
-                  ? `Items · ${getCopyProgress(selectedGroups, [target], 'imported')}`
+                  ? `Items · ${getCopyProgress([target], 'imported')}`
                   : undefined
               }
               $interrupted={interruptedCards.has(target.publicKey)}
@@ -870,7 +865,7 @@ export const CopyItemsView = observer(
         {accessPINInput}
         {scanContent}
         {safePINInput}
-        {details && backup && view.$match.$exact.$active && !view.$leaving && (
+        {details && backup && isViewActive() && (
           <DetailsPopup
             aria-label={
               details === 'items' ? 'Selected items' : 'Import progress'
@@ -892,7 +887,7 @@ export const CopyItemsView = observer(
                   <CardResourceItem
                     key={item.index}
                     data={item}
-                    resources={view.sourceCard?.items ?? backup?.items}
+                    resources={routeSource.card?.items ?? backup?.items}
                   />
                 ))}
               </CardResourceList>
@@ -911,26 +906,23 @@ export const CopyItemsView = observer(
             )}
           </DetailsPopup>
         )}
-        {destination &&
-          destinationsEditable &&
-          view.$match.$exact.$active &&
-          !view.$leaving && (
-            <CenteredPopup
-              aria-label={`Destination card ${destination.id}`}
-              onDismiss={() => setDestination(undefined)}
+        {destination && destinationsEditable && isViewActive() && (
+          <CenteredPopup
+            aria-label={`Destination card ${destination.id}`}
+            onDismiss={() => setDestination(undefined)}
+          >
+            <Button
+              color="danger"
+              disabled={busy}
+              onClick={() => {
+                setDestination(undefined);
+                void run(() => session.removeTarget(destination.publicKey));
+              }}
             >
-              <Button
-                color="danger"
-                disabled={busy}
-                onClick={() => {
-                  setDestination(undefined);
-                  void run(() => session.removeTarget(destination.publicKey));
-                }}
-              >
-                Remove
-              </Button>
-            </CenteredPopup>
-          )}
+              Remove
+            </Button>
+          </CenteredPopup>
+        )}
         {confirmRestart && (
           <CenteredPopup
             aria-label="Restart copying"
@@ -948,7 +940,7 @@ export const CopyItemsView = observer(
                   setConfirmRestart(false);
                   void run(async () => {
                     pinSession.clear();
-                    await session.reset(view.sourceCard, view.sourceIndexes);
+                    await session.reset(routeSource.card, routeSource.indexes);
                   });
                 }}
               >

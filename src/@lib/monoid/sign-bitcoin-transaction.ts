@@ -22,11 +22,14 @@ export async function signBitcoinTransaction(
   key: MonoidAppletSECP256K1Key,
   preview: BitcoinTransactionPreview,
   assertActive?: () => void,
+  onProgress?: (current: number, total: number) => void,
 ): Promise<SignedBitcoinTransaction> {
   assertActive?.();
 
   const transaction = getBitcoinSigningTransaction(preview);
   const taproot = preview.addressType === 'bitcoin-taproot';
+  onProgress?.(0, preview.inputs.length);
+  assertActive?.();
   const {publicKey} = await applet
     .viewKey({...key, ...(taproot ? {taproot: true} : {})})
     .catch(handleSigningError);
@@ -99,6 +102,7 @@ export async function signBitcoinTransaction(
         partialSig: [[verificationKey, withHashType]],
       });
     }
+    onProgress?.(index + 1, preview.inputs.length);
   }
 
   assertActive?.();
