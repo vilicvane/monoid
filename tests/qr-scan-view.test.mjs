@@ -150,7 +150,7 @@ mock.module('../.bld/app/@components/@view/index.js', {
     ViewHeaderTitle: 'h1',
   },
 });
-mock.module('../.bld/app/@components/views/@scan/qr-scan-preview.js', {
+mock.module('../.bld/app/@components/@ui/qr-scan-preview.js', {
   namedExports: {
     QrScanPreview: 'qr-scan-preview',
     SCAN_CIRCLE_INSET: 40,

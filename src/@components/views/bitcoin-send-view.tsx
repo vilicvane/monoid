@@ -1,12 +1,15 @@
+import {BookUser as bookUser, ScanLine as scanLine} from 'lucide-react';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
+import {styled} from 'styled-components';
+import {UnmountAnimationClone} from 'unmount-animation-clone';
 
 import {useEntrances} from '../../@entrances.js';
 import type {BitcoinFeeRates} from '../../@lib/bitcoin-api.js';
+import {parseBitcoinPaymentRequest} from '../../@lib/bitcoin-payment-request.js';
 import {
   type BitcoinTransactionPreview,
-  formatBitcoinAmount,
   parseBitcoinAmount,
   prepareBitcoinTransaction,
   validateBitcoinAddress,
@@ -18,37 +21,139 @@ import {
   signBitcoinTransaction,
 } from '../../@lib/monoid/index.js';
 import type {Router} from '../../@routes.js';
+import {popOutAnimationCSS} from '../@animations.js';
 import {WalletAccountFieldset} from '../@key/wallet-account-fieldset.js';
 import {
   MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
 } from '../@monoid/monoid-scan-prompt.js';
+import {AppIcon} from '../@ui/app-icon.js';
 import {Button} from '../@ui/button.js';
+import {ExpandableAddress} from '../@ui/expandable-address.js';
+import {IconButton} from '../@ui/icon-button.js';
 import {
   InfoFieldset,
+  InfoFieldsetHeader,
   InfoFieldsetValue,
   InfoLegend,
-  InfoSection,
-  InfoSectionItemLabel,
-  InfoSectionRow,
-  InfoTable,
 } from '../@ui/info-section.js';
 import {Input} from '../@ui/input.js';
-import {InteractiveAddress} from '../@ui/interactive-address.js';
 import {
   ErrorMessage,
-  InfoMessage,
+  MessageSectionTags,
   WarningMessage,
 } from '../@ui/message-content.js';
-import {SegmentedControl} from '../@ui/segmented-control.js';
+import {NativeAmount} from '../@ui/native-amount.js';
+import {QrScanPopup} from '../@ui/qr-scan-popup.js';
+import {WhiteTag} from '../@ui/tag.js';
 import {
   View,
   ViewContent,
   ViewHeader,
   ViewHeaderTitle,
+  ViewPlaceholder,
 } from '../@view/index.js';
 
-type FeeChoice = keyof BitcoinFeeRates | 'custom';
+import {BitcoinFeeDetails} from './@bitcoin/bitcoin-fee-details.js';
+import type {BitcoinFeeChoice} from './@bitcoin/bitcoin-fee-editor.js';
+import {BitcoinRecipientPicker} from './@bitcoin/bitcoin-recipient-picker.js';
+import {getBitcoinRecipients} from './@bitcoin/bitcoin-recipients.js';
+
+const BTC = {symbol: 'BTC', decimals: 8};
+
+const InputFieldset = styled(InfoFieldset)`
+  &:focus-within::before {
+    border-color: var(--ion-color-medium-shade);
+  }
+`;
+
+const InputRow = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+`;
+
+const FieldInput = styled(Input)`
+  flex: 1;
+  min-width: 0;
+  width: 0;
+  height: 21px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  outline: none;
+  font-size: 16px;
+  line-height: 21px;
+  color: var(--ion-color-dark);
+
+  &:not(:focus) {
+    color: var(--ion-color-dark);
+  }
+`;
+
+const AmountInput = styled(FieldInput)<{$compact: boolean}>`
+  width: 100%;
+  flex: none;
+  height: 42px;
+  font-size: ${props => (props.$compact ? 24 : 32)}px;
+  line-height: 42px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+
+  &::placeholder {
+    color: var(--ion-color-medium-tint);
+    opacity: 1;
+  }
+`;
+
+const AmountTags = styled(MessageSectionTags)`
+  > ${InfoLegend}:first-child:not(:last-child) {
+    margin-right: calc(-1 * var(--tag-overlap) - var(--tag-inline-margin));
+  }
+`;
+
+const MaxToggle = styled(WhiteTag).attrs({as: 'button', type: 'button'})`
+  margin-left: auto;
+  margin-right: calc(
+    var(--info-fieldset-label-inset) - var(--info-fieldset-padding) - var(
+        --info-fieldset-border-width
+      ) - var(--tag-inline-margin)
+  );
+  color: var(--ion-color-medium-tint);
+  cursor: pointer;
+
+  &[aria-pressed='true'] {
+    background: var(--ion-color-primary);
+    border-color: var(--ion-color-primary-shade);
+    color: var(--ion-color-primary-contrast);
+  }
+
+  &.unmount {
+    ${popOutAnimationCSS}
+    pointer-events: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    &.unmount {
+      animation-duration: 0s;
+    }
+  }
+`;
+
+const InputActions = styled.div`
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  height: 21px;
+  gap: 0;
+  margin-right: -6px;
+`;
+
+const RecipientButton = styled(IconButton)<{$known: boolean}>`
+  ${({$known}) => $known && 'color: var(--ion-color-primary);'}
+`;
 
 export const BitcoinSendView = observer(
   ({
@@ -61,12 +166,28 @@ export const BitcoinSendView = observer(
       view.address,
     );
     const [recipient, setRecipient] = useState('');
+    const {addresses: recipientAddresses} = getBitcoinRecipients(
+      walletStorageService.keys,
+      bitcoinWalletService.getSubmissions(view.address),
+    );
+    let knownRecipient = false;
+
+    try {
+      knownRecipient = recipientAddresses.has(
+        validateBitcoinAddress(recipient),
+      );
+    } catch {
+      // An incomplete address is not a selected recipient.
+    }
+
     const [amount, setAmount] = useState('');
     const [maximum, setMaximum] = useState(false);
     const [fees, setFees] = useState<BitcoinFeeRates>();
     const [feeError, setFeeError] = useState<string>();
-    const [feeChoice, setFeeChoice] = useState<FeeChoice>('normal');
+    const [feeChoice, setFeeChoice] = useState<BitcoinFeeChoice>('normal');
     const [customFee, setCustomFee] = useState('1');
+    const [popup, setPopup] = useState<'recipient' | 'scan'>();
+    const amountInput = useRef<HTMLInputElement>(null);
     const [preview, setPreview] = useState<BitcoinTransactionPreview>();
     const [busy, setBusy] = useState<'preparing' | 'signing' | 'sending'>();
     const [error, setError] = useState<string>();
@@ -91,6 +212,7 @@ export const BitcoinSendView = observer(
 
     useEffect(() => {
       if (!active) {
+        setPopup(undefined);
         operation.current?.abort();
         return;
       }
@@ -104,9 +226,7 @@ export const BitcoinSendView = observer(
         },
         () => {
           if (!controller.signal.aborted)
-            setFeeError(
-              'Fee estimates are unavailable. Enter a custom fee rate to continue.',
-            );
+            setFeeError('Fee estimates unavailable. Set a custom rate.');
         },
       );
       return () => controller.abort();
@@ -132,6 +252,24 @@ export const BitcoinSendView = observer(
           {code: 'CANCELLED'},
         );
       }
+    };
+
+    const acceptRecipient = (value: string): void => {
+      if (
+        !mounted.current ||
+        !currentActive.current ||
+        operation.current ||
+        preview
+      )
+        return;
+      const request = parseBitcoinPaymentRequest(value);
+      setRecipient(request.address);
+      if (request.amount !== undefined) {
+        setAmount(request.amount);
+        setMaximum(false);
+      }
+      setError(undefined);
+      setPopup(undefined);
     };
 
     const review = async (): Promise<void> => {
@@ -338,7 +476,7 @@ export const BitcoinSendView = observer(
           }
         >
           {!account ? (
-            <InfoMessage>This wallet is no longer in Safe.</InfoMessage>
+            <ViewPlaceholder>This wallet is no longer in Safe.</ViewPlaceholder>
           ) : (
             <>
               <WalletAccountFieldset
@@ -351,154 +489,166 @@ export const BitcoinSendView = observer(
                 <>
                   <InfoFieldset>
                     <InfoLegend>To</InfoLegend>
-                    <InteractiveAddress copyable>
-                      {preview.recipient}
-                    </InteractiveAddress>
+                    <ExpandableAddress>{preview.recipient}</ExpandableAddress>
                   </InfoFieldset>
-                  <InfoFieldset>
+                  <InfoFieldset $equalPadding>
                     <InfoLegend>Amount</InfoLegend>
                     <InfoFieldsetValue>
-                      {formatBitcoinAmount(preview.amountSats)} BTC
+                      <NativeAmount value={preview.amountSats} currency={BTC} />
                     </InfoFieldsetValue>
                   </InfoFieldset>
-                  <InfoTable>
-                    <tbody>
-                      <tr>
-                        <th>Network fee</th>
-                        <td>{formatBitcoinAmount(preview.feeSats)} BTC</td>
-                      </tr>
-                      <tr>
-                        <th>Target fee rate</th>
-                        <td>{preview.feeRate} sat/vB</td>
-                      </tr>
-                      <tr>
-                        <th>Total</th>
-                        <td>{formatBitcoinAmount(preview.totalSats)} BTC</td>
-                      </tr>
-                      <tr>
-                        <th>Change to this wallet</th>
-                        <td>{formatBitcoinAmount(preview.changeSats)} BTC</td>
-                      </tr>
-                    </tbody>
-                  </InfoTable>
+                  <BitcoinFeeDetails
+                    fees={fees}
+                    feeError={feeError}
+                    choice={feeChoice}
+                    customFee={customFee}
+                    preview={preview}
+                    disabled={!active || !!busy}
+                  />
                   {preview.feeSats * BigInt(10) > preview.amountSats && (
                     <WarningMessage>
-                      The network fee is more than 10% of the amount being sent.
+                      Network fee exceeds 10% of the amount.
                     </WarningMessage>
                   )}
-                  <InfoMessage>
-                    Check the address and amount before signing. This payment
-                    uses Bitcoin mainnet.
-                  </InfoMessage>
                 </>
               ) : (
                 <>
-                  <InfoSection>
-                    <InfoSectionItemLabel
-                      as="label"
-                      htmlFor="bitcoin-recipient"
-                    >
-                      To
-                    </InfoSectionItemLabel>
-                    <Input
-                      id="bitcoin-recipient"
-                      placeholder="Bitcoin address"
-                      autoCapitalize="off"
-                      autoCorrect="off"
-                      spellCheck={false}
-                      value={recipient}
-                      disabled={!!busy}
-                      onChange={event => {
-                        setRecipient(event.target.value);
-                        setError(undefined);
-                      }}
-                    />
-                  </InfoSection>
-                  <InfoSection>
-                    <InfoSectionItemLabel as="label" htmlFor="bitcoin-amount">
-                      Amount (BTC)
-                    </InfoSectionItemLabel>
-                    <Input
+                  <InputFieldset>
+                    <InfoFieldsetHeader>
+                      <InfoLegend as="span">To</InfoLegend>
+                    </InfoFieldsetHeader>
+                    <InputRow>
+                      <FieldInput
+                        id="bitcoin-recipient"
+                        aria-label="To"
+                        placeholder="Bitcoin address"
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        value={recipient}
+                        disabled={!!busy}
+                        onPaste={event => {
+                          const value = event.clipboardData.getData('text');
+                          if (!/^bitcoin:/i.test(value.trim())) return;
+                          event.preventDefault();
+                          try {
+                            acceptRecipient(value);
+                          } catch (cause) {
+                            setError((cause as Error).message);
+                          }
+                        }}
+                        onChange={event => {
+                          setRecipient(event.target.value);
+                          setError(undefined);
+                        }}
+                      />
+                      <InputActions>
+                        <RecipientButton
+                          $known={knownRecipient}
+                          aria-label="Choose address"
+                          feedback="color"
+                          aria-haspopup="dialog"
+                          disabled={!!busy}
+                          onClick={() => setPopup('recipient')}
+                        >
+                          <AppIcon icon={bookUser} aria-hidden="true" />
+                        </RecipientButton>
+                        <IconButton
+                          aria-label="Scan address"
+                          feedback="color"
+                          aria-haspopup="dialog"
+                          disabled={!!busy}
+                          onClick={() => setPopup('scan')}
+                        >
+                          <AppIcon icon={scanLine} aria-hidden="true" />
+                        </IconButton>
+                      </InputActions>
+                    </InputRow>
+                  </InputFieldset>
+                  <InputFieldset $equalPadding>
+                    <InfoFieldsetHeader>
+                      <AmountTags>
+                        <InfoLegend as="span">Amount</InfoLegend>
+                        <WhiteTag as="span">BTC</WhiteTag>
+                      </AmountTags>
+                      {!busy && (
+                        <UnmountAnimationClone
+                          onUnmountClone={clone => {
+                            clone.inert = true;
+                            clone.setAttribute('aria-hidden', 'true');
+                          }}
+                        >
+                          <MaxToggle
+                            aria-pressed={maximum}
+                            onClick={() => {
+                              setMaximum(value => !value);
+                              setError(undefined);
+                              if (maximum)
+                                requestAnimationFrame(() =>
+                                  amountInput.current?.focus(),
+                                );
+                            }}
+                          >
+                            Max
+                          </MaxToggle>
+                        </UnmountAnimationClone>
+                      )}
+                    </InfoFieldsetHeader>
+                    <AmountInput
+                      $compact={!maximum && amount.length > 14}
+                      ref={amountInput}
                       id="bitcoin-amount"
+                      aria-label="Amount (BTC)"
                       inputMode="decimal"
-                      placeholder={
-                        maximum ? 'All available BTC, less network fee' : '0.00'
-                      }
-                      value={maximum ? '' : amount}
-                      disabled={!!busy || maximum}
+                      placeholder="0.00"
+                      value={maximum ? 'Max' : amount}
+                      readOnly={maximum}
+                      disabled={!!busy}
                       onChange={event => {
                         setAmount(event.target.value);
                         setError(undefined);
                       }}
                     />
-                    <Button
-                      color="neutral"
-                      disabled={!!busy}
-                      onClick={() => {
-                        setMaximum(value => !value);
-                        setError(undefined);
-                      }}
-                    >
-                      {maximum ? 'Enter amount' : 'Send max'}
-                    </Button>
-                  </InfoSection>
-                  <InfoSection>
-                    <InfoSectionItemLabel>Network fee</InfoSectionItemLabel>
-                    <SegmentedControl<FeeChoice>
-                      aria-label="Network fee"
-                      value={feeChoice}
-                      disabled={!!busy}
-                      options={[
-                        {value: 'economy', label: 'Economy'},
-                        {value: 'normal', label: 'Normal'},
-                        {value: 'fast', label: 'Fast'},
-                        {value: 'custom', label: 'Custom'},
-                      ]}
-                      onChange={value => {
-                        setFeeChoice(value);
-                        setError(undefined);
-                      }}
-                    />
-                    {feeChoice === 'custom' ? (
-                      <Input
-                        aria-label="Fee rate in satoshis per virtual byte"
-                        inputMode="decimal"
-                        value={customFee}
-                        disabled={!!busy}
-                        onChange={event => {
-                          setCustomFee(event.target.value);
-                          setError(undefined);
-                        }}
-                      />
-                    ) : (
-                      <InfoSectionRow>
-                        <InfoSectionItemLabel>
-                          Estimated rate
-                        </InfoSectionItemLabel>
-                        <span>
-                          {feeRate
-                            ? `${feeRate} sat/vB`
-                            : feeError
-                              ? 'Unavailable'
-                              : 'Loading…'}
-                        </span>
-                      </InfoSectionRow>
-                    )}
-                    {feeChoice === 'custom' && (
-                      <InfoSectionItemLabel>sat/vB</InfoSectionItemLabel>
-                    )}
-                    {feeError && <InfoMessage>{feeError}</InfoMessage>}
-                  </InfoSection>
-                  <InfoMessage>
-                    Only confirmed, available BTC can be sent. The exact fee is
-                    shown before signing.
-                  </InfoMessage>
+                  </InputFieldset>
+                  <BitcoinFeeDetails
+                    fees={fees}
+                    feeError={feeError}
+                    choice={feeChoice}
+                    customFee={customFee}
+                    disabled={!active || !!busy}
+                    onApply={(choice, value) => {
+                      setFeeChoice(choice);
+                      setCustomFee(value);
+                      setError(undefined);
+                    }}
+                  />
                 </>
               )}
             </>
           )}
           {error && <ErrorMessage>{error}</ErrorMessage>}
         </ViewContent>
+        {active && account && !busy && !preview && popup === 'recipient' && (
+          <BitcoinRecipientPicker
+            address={view.address}
+            onSelect={acceptRecipient}
+            onDismiss={() => setPopup(undefined)}
+          />
+        )}
+        {active && account && !busy && !preview && popup === 'scan' && (
+          <QrScanPopup
+            validate={value => {
+              try {
+                parseBitcoinPaymentRequest(value);
+                return undefined;
+              } catch (cause) {
+                return (cause as Error).message;
+              }
+            }}
+            onScan={acceptRecipient}
+            onDismiss={() => setPopup(undefined)}
+          />
+        )}
         {scanContent}
       </View>
     );

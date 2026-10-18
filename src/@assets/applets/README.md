@@ -1,7 +1,8 @@
 # Applet installation bundle
 
-No CAP bundle is currently selected. Installation remains disabled until the
-Java Card project supplies the intended Safe Identity, Safe and Monoid firmware.
+The bundled Safe Identity, Safe and Monoid CAPs were selected from the Java Card
+build output dated 2026-10-18 19:10 (Asia/Shanghai). Their CAP hashes, load-image
+hashes and AIDs are recorded in `manifest.json`. Setup installs this bundled version.
 
 To bundle all three CAP files, run from the app repository:
 

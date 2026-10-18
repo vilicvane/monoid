@@ -1,6 +1,6 @@
 import classNames from 'classNames';
 import type {ReactNode} from 'react';
-import {useCallback, useId, useState} from 'react';
+import {useCallback, useId, useRef, useState} from 'react';
 import {createPortal} from 'react-dom';
 import {styled} from 'styled-components';
 
@@ -124,11 +124,13 @@ export function useInputModal(): [
 
   const [value, setValue] = useState('');
   const descriptionId = useId();
+  const nextInstanceId = useRef(0);
   const [completion, setCompletion] = useState<{
     value: string | undefined;
   }>();
 
   const [instance, setInstance] = useState<{
+    id: number;
     options: InputModalOptions;
     resolve: (value: string | undefined) => void;
   }>();
@@ -137,7 +139,7 @@ export function useInputModal(): [
     return new Promise<string | undefined>(resolve => {
       setValue(options.defaultValue ?? '');
       setCompletion(undefined);
-      setInstance({options, resolve});
+      setInstance({id: nextInstanceId.current++, options, resolve});
     });
   }, []);
 
@@ -165,6 +167,7 @@ export function useInputModal(): [
         <PopupBackdrop onDismiss={() => complete(undefined)} />
         {createPortal(
           <InputContainer
+            key={instance.id}
             className={classNames({closing: completion})}
             onAnimationEnd={event => {
               if (event.target !== event.currentTarget || !completion) {

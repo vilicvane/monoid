@@ -82,7 +82,7 @@ type Detail =
   | {type: 'balances'}
   | {type: 'token'; token: SolanaToken}
   | {type: 'amount'; change: BalanceChange}
-  | {type: 'address'; address: string; label: string};
+  | {type: 'address'; address: string; label: BalanceChange['label']};
 
 export const SolanaTokenActivity = observer(function SolanaTokenActivity({
   chainId,
@@ -105,33 +105,41 @@ export const SolanaTokenActivity = observer(function SolanaTokenActivity({
     symbol: 'SOL',
     decimals: 9,
   };
-  const changes = useMemo<BalanceChange[]>(
-    () =>
-      balances
-        ? [
-            ...(balances.native ?? []).flatMap(({address, before, after}) =>
-              before === after
-                ? []
-                : [{address, value: after - before, label: 'Account' as const}],
-            ),
-            ...getSolanaTokenBalanceChanges(balances).map(change => ({
-              address: (change.owner ?? change.account)!,
-              label: change.owner
-                ? ('Owner' as const)
-                : ('Token account' as const),
-              value: change.value,
-              token: {
-                mint: change.mint,
-                decimals: change.decimals,
-                programId: change.programId,
-              },
-            })),
-          ]
-        : [],
-    [balances],
-  );
+  const changes = useMemo<BalanceChange[]>(() => {
+    if (!balances) return [];
+
+    const tokenAccounts = new Set(balances.tokens?.map(token => token.address));
+
+    return [
+      ...(balances.native ?? []).flatMap<BalanceChange>(
+        ({address, before, after}) =>
+          before === after
+            ? []
+            : [
+                {
+                  address,
+                  value: after - before,
+                  label: tokenAccounts.has(address)
+                    ? 'Token account'
+                    : 'Account',
+                },
+              ],
+      ),
+      ...getSolanaTokenBalanceChanges(balances).map(change => ({
+        address: (change.owner ?? change.account)!,
+        label: change.owner ? ('Owner' as const) : ('Token account' as const),
+        value: change.value,
+        token: {
+          mint: change.mint,
+          decimals: change.decimals,
+          programId: change.programId,
+        },
+      })),
+    ];
+  }, [balances]);
   const accountChanges = changes.filter(
-    change => change.address === signer && change.label !== 'Token account',
+    change =>
+      change.address === signer && (!change.token || change.label === 'Owner'),
   );
   const unknownOwners = balances?.tokens?.some(
     token =>
@@ -151,16 +159,27 @@ export const SolanaTokenActivity = observer(function SolanaTokenActivity({
       .filter(wallet => wallet.addressType === 'solana')
       .map(wallet => wallet.address),
   );
-  const addressKind = (address: string): AddressKind =>
-    address === signer
-      ? 'signer'
-      : ownAddresses.has(address)
-        ? 'own'
-        : addressBookService.hasSigned('solana', address)
-          ? 'seen'
-          : 'unknown';
-  const shouldHighlightAddress = (address: string, label: string): boolean =>
-    label === 'Mint' ||
+  const addressKind = (
+    address: string,
+    label: BalanceChange['label'],
+  ): AddressKind | undefined =>
+    label === 'Token account'
+      ? undefined
+      : address === signer
+        ? 'signer'
+        : ownAddresses.has(address)
+          ? 'own'
+          : addressBookService.hasSigned('solana', address)
+            ? 'seen'
+            : 'unknown';
+  const selectedAddressKind =
+    selected?.type === 'address'
+      ? addressKind(selected.address, selected.label)
+      : undefined;
+  const shouldHighlightAddress = (
+    address: string,
+    label: BalanceChange['label'],
+  ): boolean =>
     label === 'Owner' ||
     (label === 'Account' && (address === signer || ownAddresses.has(address)));
   const openDetail = (detail: Detail): void =>
@@ -244,7 +263,7 @@ export const SolanaTokenActivity = observer(function SolanaTokenActivity({
           <BlackTag>Token changes</BlackTag>
           {balances === undefined ? (
             <InfoSectionLoadingSpinner aria-label="Loading balance changes" />
-          ) : (
+          ) : changes.length > 0 ? (
             <TokenActivityDetailsButton
               aria-label="All balance changes"
               aria-haspopup="dialog"
@@ -252,7 +271,7 @@ export const SolanaTokenActivity = observer(function SolanaTokenActivity({
             >
               <AppIcon icon={list} aria-hidden="true" />
             </TokenActivityDetailsButton>
-          )}
+          ) : null}
         </InfoSectionHeader>
         {balances !== undefined && (
           <>
@@ -310,13 +329,6 @@ export const SolanaTokenActivity = observer(function SolanaTokenActivity({
             <SolanaTokenDetailsContent
               chainId={chainId}
               token={selected.token}
-              onAddressClick={() =>
-                openDetail({
-                  type: 'address',
-                  address: selected.token.mint,
-                  label: 'Mint',
-                })
-              }
             />
           ) : selected.type === 'amount' ? (
             <FormattedNumberDetailsContent
@@ -347,12 +359,12 @@ export const SolanaTokenActivity = observer(function SolanaTokenActivity({
                 <InfoSectionItemLabel>Account type</InfoSectionItemLabel>
                 <span>{selected.label}</span>
               </InfoSectionRow>
-              <InfoSectionRow>
-                <InfoSectionItemLabel>Identity</InfoSectionItemLabel>
-                <span>
-                  {getAddressMarkerLabel(addressKind(selected.address))}
-                </span>
-              </InfoSectionRow>
+              {selectedAddressKind && (
+                <InfoSectionRow>
+                  <InfoSectionItemLabel>Identity</InfoSectionItemLabel>
+                  <span>{getAddressMarkerLabel(selectedAddressKind)}</span>
+                </InfoSectionRow>
+              )}
             </>
           ) : (
             <>
@@ -390,11 +402,15 @@ export const SolanaTokenActivity = observer(function SolanaTokenActivity({
                             change.address,
                             change.label,
                           )}
-                          kind={addressKind(change.address)}
-                          mark={addressBookService.getMark(
-                            'solana',
-                            change.address,
-                          )}
+                          kind={addressKind(change.address, change.label)}
+                          mark={
+                            change.label === 'Token account'
+                              ? undefined
+                              : addressBookService.getMark(
+                                  'solana',
+                                  change.address,
+                                )
+                          }
                           onClick={() =>
                             openDetail({
                               type: 'address',

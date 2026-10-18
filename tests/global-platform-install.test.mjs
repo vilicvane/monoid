@@ -162,7 +162,7 @@ test('an existing selectable Safe is preserved without loading or installing any
   const installer = await GlobalPlatformInstaller.open(card.transceive);
   await installer.install(safe, value => progress.push(value));
   card.done();
-  assert.deepEqual(progress, [0, 1]);
+  assert.deepEqual(progress, [{phase: 'checking'}, {phase: 'complete'}]);
   assert.equal(channelOpens, 1);
 });
 
@@ -200,6 +200,7 @@ for (const lifecycle of [0x03, 0x83, 0x87]) {
 }
 
 test('a loaded package with the matching module is instantiated without loading it again', async () => {
+  const progress = [];
   const card = cardScript([
     {command: select()},
     absent(0x40, safe.appletAid),
@@ -209,9 +210,14 @@ test('a loaded package with the matching module is instantiated without loading 
   ]);
   await (
     await GlobalPlatformInstaller.open(card.transceive)
-  ).install(safe, () => {});
+  ).install(safe, update => progress.push(update));
   card.done();
   assert.ok(card.calls.every(apdu => apdu[1] !== 0xe8));
+  assert.deepEqual(progress, [
+    {phase: 'checking'},
+    {phase: 'configuring'},
+    {phase: 'complete'},
+  ]);
 });
 
 test('registry pagination keeps the filter and finds a matching module after another package', async () => {
@@ -300,22 +306,30 @@ test('a fresh package sends complete C4 data in sequential 220-byte blocks befor
     absent(0x10, safe.packageAid),
     {command: prepareCommand()},
     ...loadSteps,
-    {command: installCommand()},
-    {command: status(0x40, safe.appletAid), response: response(installedSafe)},
+    {
+      command: installCommand(),
+      check: () => assert.deepEqual(progress.at(-1), {phase: 'configuring'}),
+    },
+    {
+      command: status(0x40, safe.appletAid),
+      response: response(installedSafe),
+      check: () => assert.deepEqual(progress.at(-1), {phase: 'configuring'}),
+    },
   ]);
   await (
     await GlobalPlatformInstaller.open(card.transceive)
   ).install({...safe, code}, value => progress.push(value));
   card.done();
   assert.equal(hex(join(...receivedBlocks)), hex(expectedLoadFile));
-  assert.equal(progress[0], 0);
-  assert.equal(progress.at(-1), 1);
-  assert.ok(progress.slice(1, -1).every(value => value > 0 && value < 1));
-  assert.ok(
-    progress.every(
-      (value, index) => index === 0 || value > progress[index - 1],
-    ),
-  );
+  assert.deepEqual(progress, [
+    {phase: 'checking'},
+    {phase: 'uploading', progress: 0},
+    {phase: 'uploading', progress: 1 / 3},
+    {phase: 'uploading', progress: 2 / 3},
+    {phase: 'uploading', progress: 1},
+    {phase: 'configuring'},
+    {phase: 'complete'},
+  ]);
 });
 
 for (const [length, prefix] of [
@@ -443,7 +457,12 @@ for (const failure of [new Error('Tag lost'), response(undefined, 0x6581)]) {
         failure instanceof Error ? error === failure : error.sw === 0x6581,
     );
     card.done();
-    assert.ok(progress.at(-1) < 1);
+    assert.deepEqual(progress.at(-1), {phase: 'uploading', progress: 1 / 3});
+    assert.ok(
+      progress.every(update =>
+        ['checking', 'uploading'].includes(update.phase),
+      ),
+    );
   });
 }
 
@@ -462,7 +481,7 @@ test('INSTALL failure is not retried and never reports completion', async () => 
     error => error.sw === 0x6985,
   );
   card.done();
-  assert.deepEqual(progress, [0]);
+  assert.deepEqual(progress, [{phase: 'checking'}, {phase: 'configuring'}]);
 });
 
 test('INSTALL success still requires a selectable instance in the registry', async () => {

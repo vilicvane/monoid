@@ -1,148 +1,278 @@
-import {X as x} from 'lucide-react';
-import {type ReactNode, useMemo, useState} from 'react';
+import {Info as info} from 'lucide-react';
+import {reaction} from 'mobx';
+import {observer} from 'mobx-react-lite';
+import {type ReactNode, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
-import {MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
-import {renderIcon} from '../../../../@lib/render-icon.js';
+import {
+  type CardInformation,
+  readCardInformation,
+} from '../../../../@lib/global-platform/card-information.js';
+import {
+  type MonoidAppletHelloWithSafe,
+  hasAppletBundle,
+  installMonoidApplets,
+} from '../../../../@lib/monoid/index.js';
 import type {Router} from '../../../../@routes.js';
-import {
-  MonoidScanStatePromptContentHighlight,
-  useMonoidScanPrompt,
-} from '../../../@monoid/monoid-scan-prompt.js';
-import {
-  PINKind,
-  getPINInputPlaceholder,
-} from '../../../@monoid/pin-input-placeholder.js';
+import {isCredentialRequestCancelled} from '../../../../@services/index.js';
+import {AppletInstallProgressContent} from '../../../@monoid/applet-install-progress.js';
+import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
+import {AppIcon} from '../../../@ui/app-icon.js';
 import {Button} from '../../../@ui/button.js';
-import {Step, Steps} from '../../../@ui/step.js';
-import {useToast} from '../../../@ui/toast.js';
-import {useInputModal} from '../../../@ui/use-input-modal.js';
+import {
+  DetailsPopup,
+  DetailsPopupDivider,
+  DetailsPopupTitle,
+} from '../../../@ui/details-popup.js';
+import {InfoSectionItemLabel} from '../../../@ui/info-section.js';
+import {OperationComplete} from '../../../@ui/operation-complete.js';
 import {
   View,
   ViewContent,
   ViewHeader,
-  ViewHeaderIdentifier,
+  ViewHeaderButton,
   ViewHeaderTitle,
 } from '../../../@view/index.js';
 
-export const SetupCardView = ({
-  view,
-}: RouteComponentProps<Router['safe']['setupCard']>): ReactNode => {
-  const {errorService} = useEntrances();
+import {CardInformationDetails} from './card-information-details.js';
+import {CardSetupInformation} from './card-setup-information.js';
+import {CardSetupPIN} from './card-setup-pin.js';
 
-  const toast = useToast();
+export const SetupCardView = observer(
+  ({view}: RouteComponentProps<Router['safe']['setupCard']>): ReactNode => {
+    const {router, errorService} = useEntrances();
+    const scanPrompt = useIsoDepScanPrompt();
+    const mounted = useRef(true);
+    const operationState = useRef<'idle' | 'working' | 'installed'>('idle');
+    const [busy, setBusy] = useState(false);
+    const [complete, setComplete] = useState(false);
+    const [interrupted, setInterrupted] = useState(false);
+    const [information, setInformation] = useState(view.cardInformation);
+    const [showDetails, setShowDetails] = useState(false);
+    const [pendingPIN, setPendingPIN] = useState<MonoidAppletHelloWithSafe>();
+    const [showPINSetup, setShowPINSetup] = useState(false);
 
-  const [pinSet, setPINSet] = useState(view.pin);
-  const [safePINSet, setSafePINSet] = useState(view.safe.pin);
-  const [safeUnlocked, setSafeUnlocked] = useState(view.safe.unlocked);
+    useEffect(() => {
+      mounted.current = true;
 
-  const [step, setStep] = useState(() => {
-    if (!view.safe.pin || !view.safe.unlocked) {
-      return 1;
-    }
+      return () => {
+        mounted.current = false;
+      };
+    }, []);
 
-    return 2;
-  });
-
-  const [safePINInput, showSafePINInput] = useInputModal();
-
-  const [toUnlockSafe] = useState(() => view.safe.pin !== false);
-  const [safePIN, setSafePIN] = useState<string>();
-
-  const step1_safePINReady = useMemo(() => MonoidPIN.is(safePIN), [safePIN]);
-
-  const step2_pinReady = useMemo(() => MonoidPIN.is(pinSet), [pinSet]);
-
-  const [settingSafePINScanPromptContent, settingSafePINScanPrompt] =
-    useMonoidScanPrompt({ensureSetup: false});
-
-  const onSetSafePINScanButtonClick = errorService.catch(
-    async (): Promise<void> => {
-      const safePIN = await showSafePINInput({
-        type: 'password',
-        ...getPINInputPlaceholder('Safe'),
-        description: view.pin ? undefined : (
-          <>
-            Will be used as initial <PINKind kind="Access" /> PIN
-          </>
+    useEffect(
+      () =>
+        reaction(
+          () => !!view.$leaving || !view.$match.$exact.$active,
+          inactive => {
+            if (inactive) setShowPINSetup(false);
+          },
         ),
-        center: true,
-      });
+      [view],
+    );
 
-      if (!MonoidPIN.is(safePIN)) {
-        toast({
-          message: 'Incorrect PIN format, expected 6 to 16 characters.',
-          color: 'danger',
-          icon: renderIcon(x),
-          position: 'top',
-        });
+    const isActive = (): boolean =>
+      mounted.current && !view.$leaving && view.$match.$exact.$active;
+
+    const scan = async (): Promise<void> => {
+      const installing = information !== undefined;
+
+      if (
+        (installing && !hasAppletBundle) ||
+        operationState.current !== 'idle' ||
+        !isActive()
+      ) {
         return;
       }
 
-      await settingSafePINScanPrompt(
-        <>
-          Scan card{' '}
-          <MonoidScanStatePromptContentHighlight>
-            {view.safe.id}
-          </MonoidScanStatePromptContentHighlight>
-        </>,
-        async (applet, setStateContent) => {
-          setStateContent(
-            toUnlockSafe ? 'Unlocking safe...' : 'Setting Safe PIN...',
-          );
+      operationState.current = 'working';
+      setBusy(true);
+      setInterrupted(false);
 
-          if (toUnlockSafe) {
-            await applet.authenticate({
-              pin: safePIN,
-              safe: true,
-            });
+      try {
+        let scannedInformation: CardInformation | undefined;
+        let installed: MonoidAppletHelloWithSafe | undefined;
+
+        await scanPrompt(
+          installing ? 'Scan the card to install applets' : 'Scan a card',
+          async (sessionId, setStateContent, signal) => {
+            setStateContent('Reading card information...');
+            scannedInformation = await readCardInformation(sessionId, signal);
+
+            signal.throwIfAborted();
+
+            if (!isActive()) {
+              return;
+            }
+
+            if (installing) {
+              const expected = information.cplc;
+              const actual = scannedInformation.cplc;
+
+              if (
+                expected &&
+                (!actual ||
+                  expected.icFabricator !== actual.icFabricator ||
+                  expected.icType !== actual.icType ||
+                  expected.icSerialNumber !== actual.icSerialNumber)
+              ) {
+                throw new Error('Wrong card');
+              }
+
+              installed = await installMonoidApplets(
+                sessionId,
+                update => {
+                  if (mounted.current) {
+                    setStateContent(
+                      <AppletInstallProgressContent update={update} />,
+                    );
+                  }
+                },
+                signal,
+              );
+            }
+          },
+        );
+
+        if (!isActive() || (installing && !installed)) {
+          return;
+        }
+
+        if (installing) {
+          operationState.current = 'installed';
+          setShowDetails(false);
+          if (
+            installed &&
+            (installed.pin === false ||
+              installed.safe.pin === false ||
+              !installed.safe.unlocked)
+          ) {
+            setPendingPIN(installed);
+            setShowPINSetup(true);
+          } else {
+            setComplete(true);
           }
+        } else {
+          setInformation(scannedInformation);
+        }
+      } catch (error) {
+        if (!isActive()) {
+          return;
+        }
 
-          await applet.setPIN({
-            pin: safePIN,
-            safe: true,
-          });
+        setInterrupted(installing);
 
-          setStep(step + 1);
-        },
-      );
-    },
-  );
+        if (!isCredentialRequestCancelled(error)) {
+          throw error;
+        }
+      } finally {
+        if (operationState.current === 'working') {
+          operationState.current = 'idle';
+        }
 
-  return (
-    <>
+        if (mounted.current) {
+          setBusy(false);
+        }
+      }
+    };
+
+    const backToSafe = complete
+      ? router.$backTo(router.safe.$exact)
+      : undefined;
+
+    return (
       <View>
         <ViewHeader>
-          <ViewHeaderTitle>Setup Card</ViewHeaderTitle>
-          <ViewHeaderIdentifier
-            identifier={{
-              type: 'card',
-              id: view.safe.id,
-            }}
-          />
+          <ViewHeaderTitle>Setup card</ViewHeaderTitle>
+          {information && !complete && (
+            <ViewHeaderButton
+              aria-label="Card information"
+              aria-haspopup="dialog"
+              aria-expanded={showDetails}
+              onClick={() => setShowDetails(true)}
+            >
+              <AppIcon icon={info} aria-hidden="true" />
+            </ViewHeaderButton>
+          )}
         </ViewHeader>
         <ViewContent
-          footerReveal="end"
           footer={
-            step === 1 && (
-              <Button onClick={onSetSafePINScanButtonClick}>
-                {toUnlockSafe ? 'Unlock safe' : 'Set Safe PIN'}
+            complete ? (
+              backToSafe && (
+                <Button color="neutral" onClick={() => backToSafe()}>
+                  Back to Safe
+                </Button>
+              )
+            ) : pendingPIN ? (
+              <Button onClick={() => setShowPINSetup(true)}>
+                {pendingPIN.safe.pin === false ? 'Set Safe PIN' : 'Unlock safe'}
+              </Button>
+            ) : (
+              <Button
+                disabled={information !== undefined && !hasAppletBundle}
+                loading={busy}
+                onClick={errorService.catch(scan)}
+              >
+                {!information
+                  ? 'Read card'
+                  : interrupted
+                    ? 'Try again'
+                    : 'Install applets'}
               </Button>
             )
           }
         >
-          <Steps>
-            <Step
-              title={toUnlockSafe ? 'Unlock safe' : 'Set Safe PIN'}
-              numero={1}
-              activeNumero={step}
-            />
-          </Steps>
+          {complete ? (
+            <OperationComplete />
+          ) : (
+            <>
+              {information ? (
+                <CardSetupInformation information={information} />
+              ) : (
+                <InfoSectionItemLabel>
+                  Scan a card to read its information before installation
+                </InfoSectionItemLabel>
+              )}
+              {!hasAppletBundle && (
+                <InfoSectionItemLabel>
+                  Applet package not available yet
+                </InfoSectionItemLabel>
+              )}
+              {interrupted && (
+                <InfoSectionItemLabel role="status">
+                  Installation interrupted. Scan again to continue
+                </InfoSectionItemLabel>
+              )}
+            </>
+          )}
         </ViewContent>
+        {showDetails && information && !complete && (
+          <DetailsPopup
+            onDismiss={() => setShowDetails(false)}
+            aria-label="Card information"
+            initialFocus="dialog"
+          >
+            <DetailsPopupTitle>Card information</DetailsPopupTitle>
+            <DetailsPopupDivider />
+            <CardInformationDetails information={information} />
+          </DetailsPopup>
+        )}
+        {showPINSetup && pendingPIN && isActive() && (
+          <CardSetupPIN
+            hello={pendingPIN}
+            onFinished={(initialized, current) => {
+              setShowPINSetup(false);
+              if (initialized) {
+                setPendingPIN(undefined);
+                setComplete(true);
+              } else if (current) {
+                setPendingPIN(current);
+              }
+            }}
+          />
+        )}
       </View>
-      {safePINInput}
-      {settingSafePINScanPromptContent}
-    </>
-  );
-};
+    );
+  },
+);

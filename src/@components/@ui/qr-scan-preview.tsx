@@ -1,11 +1,8 @@
 import {type ReactNode, useEffect, useRef} from 'react';
 import {styled} from 'styled-components';
 
-import {LoadingSpinner} from '../../@ui/loading-spinner.js';
-import {
-  SCAN_REVEAL_DURATION,
-  SCAN_REVEAL_EASING,
-} from '../../@ui/scan-motion.js';
+import {LoadingSpinner} from './loading-spinner.js';
+import {SCAN_REVEAL_DURATION, SCAN_REVEAL_EASING} from './scan-motion.js';
 
 export const SCAN_CIRCLE_INSET = 40;
 

@@ -130,6 +130,20 @@ class IsoDepScanError extends Error {}
 mock.module('../.bld/app/@lib/isodep.js', {
   namedExports: {IsoDepScanError},
 });
+mock.module('../.bld/app/@lib/global-platform/card-information.js', {
+  namedExports: {
+    async readCardInformation(sessionId) {
+      const state = fixture;
+      const scan = state.scans.at(-1);
+      assert.equal(scan.stopRequested, false);
+      assert.notEqual(scan.callbackReturned, true);
+      state.cardInformationReads.push(sessionId);
+      return state.onReadCardInformation
+        ? state.onReadCardInformation(sessionId)
+        : state.cardInformation;
+    },
+  },
+});
 const MonoidAppletHelloWithSafe = {
   satisfies: hello => {
     assert.ok(hello.safe);
@@ -236,6 +250,7 @@ function mount(overrides = {}) {
     notifications: [],
     errors: [],
     retryErrors: [],
+    presentedErrors: [],
     gets: 0,
     readSignals: [],
     authenticated: [],
@@ -248,6 +263,12 @@ function mount(overrides = {}) {
     businessCalls: 0,
     businessCompleted: 0,
     navigations: [],
+    cardInformationReads: [],
+    cardInformation: {
+      cardManagerAid: 'a000000151000000',
+      globalPlatformVersion: '2.3',
+      secureChannels: ['SCP03'],
+    },
     exitedTokens: new Set(),
     safePublicKey: new Uint8Array(65),
     ...overrides,
@@ -276,16 +297,20 @@ function mount(overrides = {}) {
   state.entrances = {
     router: {
       safe: {
-        installApplet: {
-          $replace: () => state.navigations.push({route: 'installApplet'}),
-        },
         setupCard: options => ({
-          $push: () => state.navigations.push({route: 'setupCard', options}),
+          $replace: () => {
+            assertMutationReady();
+            state.navigations.push({route: 'setupCard', options});
+          },
         }),
       },
     },
     monoidScanPromptPresenter: state.presenter,
     errorService: {
+      markPresented: error => {
+        state.presentedErrors.push(error);
+        return error;
+      },
       catch: promise => promise.catch(error => state.retryErrors.push(error)),
     },
     monoidCredentialsStore: {
@@ -320,6 +345,7 @@ function mount(overrides = {}) {
         onCleanup,
         onConnectionChange,
         waitForRemoval,
+        onNotFound,
       ) {
         assert.ok(
           state.scans.every(scan => scan.stopFinished),
@@ -331,6 +357,7 @@ function mount(overrides = {}) {
           onCleanup,
           onConnectionChange,
           waitForRemoval,
+          onNotFound,
           stopRequested: false,
           stopFinished: false,
           stop: deferred(),
@@ -394,6 +421,7 @@ function mount(overrides = {}) {
     return useMonoidScanPrompt({
       safe: state.safe,
       ensureSetup: state.ensureSetup,
+      allowInstallRedirect: state.allowInstallRedirect,
       auth: state.auth,
       retryOnError: true,
       pinSession: state.pinSession,
@@ -440,15 +468,21 @@ function mount(overrides = {}) {
     await state.flush();
     return scan;
   };
-  state.missingApplet = async () => {
+  state.missingApplet = async ({cleanup = true} = {}) => {
     await state.flush();
     const scan = state.scans.at(-1);
     scan.presentationToken = state.presenter.current.token;
     scan.onConnectionChange(true);
-    scan.onError(new AppletNotFoundError());
+    try {
+      if (scan.onNotFound) await scan.onNotFound('missing-applet-card');
+      else throw new AppletNotFoundError();
+    } catch (error) {
+      scan.onError(error);
+    }
+    scan.callbackReturned = true;
     scan.waitingForRemoval = scan.waitForRemoval();
     scan.onConnectionChange(false);
-    scan.onCleanup();
+    if (cleanup && !scan.stopRequested) scan.onCleanup();
     await state.flush();
     return scan;
   };
@@ -519,7 +553,7 @@ test('prompt: late connection events cannot restart feedback during exit', async
   assert.equal(state.outcome, 'resolved');
 });
 
-test('prompt: a known card error stays visible until removal without restarting or a duplicate toast', async () => {
+test('prompt: a known card error stays visible until removal and is marked as presented before retry', async () => {
   const failure = new MonoidCardError('Account not on this card');
   const state = mount({
     auth: false,
@@ -540,6 +574,7 @@ test('prompt: a known card error stays visible until removal without restarting 
     /Account not on this card/,
   );
   assert.equal(state.presenter.current.content, failure.message);
+  assert.deepEqual(state.presentedErrors, [failure]);
   assert.deepEqual(state.retryErrors, []);
 
   scan.onConnectionChange(false);
@@ -554,7 +589,9 @@ test('prompt: a known card error stays visible until removal without restarting 
   await state.finishExit();
   assert.equal(state.scans.length, 2);
   assert.equal(state.presenter.current.error, false);
-  assert.deepEqual(state.retryErrors, []);
+  assert.deepEqual(state.retryErrors, [failure]);
+  assert.deepEqual(state.presentedErrors, [failure]);
+  assert.deepEqual(state.notifications, []);
 });
 
 test('prompt: wrong card highlights the expected card ID', async () => {
@@ -757,11 +794,95 @@ test('prompt: dismissing while waiting for removal cancels without retry', async
   assert.deepEqual(state.retryErrors, []);
 });
 
+test('prompt: missing applet reads card information on the open connection before cleanup', async () => {
+  const reading = deferred();
+  const state = mount({
+    auth: false,
+    allowInstallRedirect: true,
+    onReadCardInformation: () => reading.promise,
+  });
+  const tapping = state.missingApplet();
+  await state.flush();
+  const scan = state.scans.at(-1);
+
+  assert.deepEqual(state.cardInformationReads, ['missing-applet-card']);
+  assert.equal(scan.stopRequested, false);
+  assert.equal(scan.callbackReturned, undefined);
+  assert.equal(state.presenter.current.closing, false);
+  assert.equal(state.presenter.current.content, 'Reading card information...');
+  assert.deepEqual(state.navigations, []);
+
+  reading.resolve(state.cardInformation);
+  await tapping;
+  assert.equal(scan.callbackReturned, true);
+  assert.equal(scan.waitingForRemoval, false);
+  assert.equal(scan.stopRequested, true);
+  assert.deepEqual(state.navigations, []);
+  await state.finishExit();
+  assert.deepEqual(state.navigations, [
+    {route: 'setupCard', options: {cardInformation: state.cardInformation}},
+  ]);
+});
+
+for (const cancellation of ['dismiss', 'unmount']) {
+  test(`prompt: ${cancellation} during card information read prevents a late install redirect`, async () => {
+    const reading = deferred();
+    const state = mount({
+      auth: false,
+      allowInstallRedirect: true,
+      onReadCardInformation: () => reading.promise,
+    });
+    const tapping = state.missingApplet();
+    await state.flush();
+    assert.deepEqual(state.cardInformationReads, ['missing-applet-card']);
+    if (cancellation === 'dismiss') state.presenter.current.onDismiss();
+    else state.owner.unmount();
+    await state.flush();
+
+    assert.equal(state.scans[0].stopRequested, true);
+    assert.equal(state.outcome, 'rejected');
+    assert.equal(state.errors[0].code, 'CANCELLED');
+    reading.resolve(state.cardInformation);
+    await tapping;
+    await state.finishExit();
+
+    assert.deepEqual(state.navigations, []);
+    assert.deepEqual(state.notifications, []);
+    assert.deepEqual(state.retryErrors, []);
+    assert.equal(state.scans.length, 1);
+    assert.equal(state.businessCalls, 0);
+  });
+}
+
+test('prompt: card information read failure does not navigate or reuse incomplete metadata', async () => {
+  const failure = new Error('Card information read failed');
+  const state = mount({
+    auth: false,
+    allowInstallRedirect: true,
+    onReadCardInformation: () => {
+      throw failure;
+    },
+  });
+  await state.missingApplet();
+  await state.finishExit();
+
+  assert.deepEqual(state.cardInformationReads, ['missing-applet-card']);
+  assert.deepEqual(state.navigations, []);
+  assert.deepEqual(state.retryErrors, [failure]);
+  assert.equal(state.businessCalls, 0);
+  assert.equal(state.scans.length, 2);
+});
+
 for (const order of ['stop-first', 'animation-first']) {
-  test(`prompt: missing applet waits for ${order} cleanup then redirects once without retry`, async () => {
-    const state = mount({auth: false, safe: true});
+  test(`prompt: missing applet redirects after ${order} cleanup without waiting for card removal`, async () => {
+    const state = mount({
+      auth: false,
+      safe: true,
+      allowInstallRedirect: true,
+    });
     const scan = await state.missingApplet();
 
+    assert.equal(scan.waitingForRemoval, false);
     assert.equal(scan.stopRequested, true);
     assert.equal(state.presenter.current.closing, true);
     assert.deepEqual(state.navigations, []);
@@ -775,7 +896,10 @@ for (const order of ['stop-first', 'animation-first']) {
     scan.onCleanup();
     await state.flush();
 
-    assert.deepEqual(state.navigations, [{route: 'installApplet'}]);
+    assert.deepEqual(state.cardInformationReads, ['missing-applet-card']);
+    assert.deepEqual(state.navigations, [
+      {route: 'setupCard', options: {cardInformation: state.cardInformation}},
+    ]);
     assert.equal(state.outcome, 'rejected');
     assert.equal(state.errors.length, 1);
     assert.ok(state.errors[0] instanceof MonoidScanRedirectError);
@@ -790,7 +914,11 @@ for (const order of ['stop-first', 'animation-first']) {
   });
 
   test(`prompt: leaving during ${order} cleanup prevents an applet-install redirect`, async () => {
-    const state = mount({auth: false, safe: true});
+    const state = mount({
+      auth: false,
+      safe: true,
+      allowInstallRedirect: true,
+    });
     await state.missingApplet();
     if (order === 'stop-first') await state.finishStop();
     else await state.finishAnimation();
@@ -808,7 +936,11 @@ for (const order of ['stop-first', 'animation-first']) {
 }
 
 test('prompt: failed native cleanup prevents an applet-install redirect', async () => {
-  const state = mount({auth: false, safe: true});
+  const state = mount({
+    auth: false,
+    safe: true,
+    allowInstallRedirect: true,
+  });
   const scan = await state.missingApplet();
   await state.finishAnimation();
   const failure = new Error('Native scan could not stop');
@@ -823,6 +955,29 @@ test('prompt: failed native cleanup prevents an applet-install redirect', async 
   assert.deepEqual(state.retryErrors, []);
 });
 
+for (const allowInstallRedirect of [undefined, false]) {
+  test(`prompt: reading Safe metadata does not enable installation (${allowInstallRedirect})`, async () => {
+    const state = mount({auth: false, safe: true, allowInstallRedirect});
+    const scan = await state.missingApplet({cleanup: false});
+    assert.equal(scan.waitingForRemoval, true);
+    assert.equal(scan.stopRequested, false);
+    assert.equal(state.presenter.current.error, true);
+    assert.equal(state.presenter.current.closing, false);
+    assert.equal(state.presenter.current.content, 'Initialize card from Safe');
+    scan.onCleanup();
+    await state.flush();
+    await state.finishExit();
+
+    assert.deepEqual(state.navigations, []);
+    assert.deepEqual(state.cardInformationReads, []);
+    assert.equal(state.businessCalls, 0);
+    assert.equal(state.outcome, 'rejected');
+    assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
+    assert.deepEqual(state.notifications, []);
+    assert.equal(state.scans.length, 1);
+  });
+}
+
 test('prompt: a business command returning 6a82 does not redirect to applet installation', async () => {
   const failure = new AppletISOError(
     'Record not found',
@@ -831,6 +986,7 @@ test('prompt: a business command returning 6a82 does not redirect to applet inst
   );
   const state = mount({
     auth: false,
+    allowInstallRedirect: true,
     onBusiness: () => {
       throw failure;
     },
@@ -839,6 +995,7 @@ test('prompt: a business command returning 6a82 does not redirect to applet inst
   await state.finishExit();
 
   assert.deepEqual(state.navigations, []);
+  assert.deepEqual(state.cardInformationReads, []);
   assert.deepEqual(state.retryErrors, [failure]);
   assert.equal(state.scans.length, 2);
   assert.equal(state.businessCalls, 1);
@@ -1017,10 +1174,13 @@ for (const differentIdentity of ['Monoid ID', 'Safe public key']) {
     assert.deepEqual(state.cardPINWrites, []);
     assert.deepEqual(state.writes, []);
     assert.equal(state.businessCalls, 0);
+    assert.equal(state.presentedErrors.length, 1);
+    assert.ok(state.presentedErrors[0] instanceof MonoidWrongCardError);
     await state.finishExit();
     assert.equal(state.scans.length, 3);
     assert.equal(state.inputs.length, 1);
-    assert.deepEqual(state.retryErrors, []);
+    assert.deepEqual(state.retryErrors, state.presentedErrors);
+    assert.deepEqual(state.notifications, []);
 
     state.cardId = CARD_ID;
     state.safePublicKey[64] = 0;
@@ -1181,10 +1341,18 @@ for (const safe of [undefined, false, true]) {
 for (const missingApplet of [false, true]) {
   test(`prompt: ordinary operations stop on an uninitialized card (${missingApplet ? 'no applet' : 'no PIN'})`, async () => {
     const state = mount({helloPIN: false, savedPINs: {[CARD_ID]: PIN}});
-    if (missingApplet) await state.missingApplet();
-    else await state.tap();
+    const scan = missingApplet
+      ? await state.missingApplet({cleanup: false})
+      : await state.tap({cleanup: false});
 
+    assert.equal(scan.waitingForRemoval, true);
+    assert.equal(scan.stopRequested, false);
+    assert.equal(state.presenter.current.error, true);
+    assert.equal(state.presenter.current.closing, false);
+    assert.equal(state.presenter.current.content, 'Initialize card from Safe');
     assert.deepEqual(state.notifications, []);
+    scan.onCleanup();
+    await state.flush();
     await state.finishStop();
     assert.deepEqual(state.notifications, []);
     await state.finishAnimation();
@@ -1199,8 +1367,7 @@ for (const missingApplet of [false, true]) {
     assert.deepEqual(state.retryErrors, []);
     assert.equal(state.outcome, 'rejected');
     assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
-    assert.equal(state.notifications.length, 1);
-    assert.equal(state.notifications[0].message, 'Initialize card from Safe');
+    assert.deepEqual(state.notifications, []);
   });
 }
 

@@ -24,6 +24,7 @@ import {
   MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
+import {PINKind} from '../../../@monoid/pin-input-placeholder.js';
 import {AppIcon} from '../../../@ui/app-icon.js';
 import {Button, Buttons} from '../../../@ui/button.js';
 import {CenteredPopup} from '../../../@ui/centered-popup.js';
@@ -52,6 +53,7 @@ import {
   importCardKey,
   isWalletKeyUpToDate,
 } from '../card-key-import.js';
+import type {CardPINKind} from '../card-pin-update.js';
 import {deleteCardResources} from '../card-resource-delete.js';
 import {getCardResourceGroups} from '../card-resource-groups.js';
 import {
@@ -64,6 +66,7 @@ import {AddressTypePicker} from './@address-type-picker.js';
 import type {KeyItemState} from './@key-item.js';
 import {KeyItem} from './@key-item.js';
 import {CardResourceItem, CardResourceList} from './@resource-item.js';
+import {CardPINUpdate} from './card-pin-update.js';
 
 const Description = styled.p`
   margin: 0;
@@ -167,10 +170,12 @@ const CardContent = observer(
     const [updatingCard, setUpdatingCard] = useState(false);
     const [importing, setImporting] = useState(false);
     const [deleting, setDeleting] = useState(false);
+    const [updatingPIN, setUpdatingPIN] = useState<CardPINKind>();
     const [menu, setMenu] = useState<'actions' | 'delete'>();
     const deletion = useRef<AbortController | undefined>(undefined);
     const operationActive = useRef(false);
-    const busy = deriving || updatingCard || importing || deleting;
+    const busy =
+      deriving || updatingCard || importing || deleting || !!updatingPIN;
     const mounted = useRef(true);
 
     useEffect(() => {
@@ -754,16 +759,15 @@ const CardContent = observer(
         <ViewHeader>
           <ViewHeaderTitle>Card</ViewHeaderTitle>
           <ViewHeaderIdentifier identifier={{type: 'card', id: card.id}} />
-          {canDelete && (
-            <ViewHeaderButton
-              aria-label="Card actions"
-              aria-haspopup="dialog"
-              aria-expanded={!!menu}
-              onClick={() => setMenu('actions')}
-            >
-              <AppIcon icon={ellipsis} />
-            </ViewHeaderButton>
-          )}
+          <ViewHeaderButton
+            aria-label="Card actions"
+            aria-haspopup="dialog"
+            aria-expanded={!!menu}
+            disabled={busy}
+            onClick={() => setMenu('actions')}
+          >
+            <AppIcon icon={ellipsis} />
+          </ViewHeaderButton>
         </ViewHeader>
         <ViewContent
           footer={
@@ -771,7 +775,9 @@ const CardContent = observer(
               <ViewActionButton
                 visible={deriving || missing.length > 0}
                 loading={deriving}
-                disabled={updatingCard || importing || deleting}
+                disabled={
+                  updatingCard || importing || deleting || !!updatingPIN
+                }
                 onClick={errorService.catch(deriveSelected)}
               >
                 Derive
@@ -796,7 +802,7 @@ const CardContent = observer(
               <ViewActionButton
                 visible={updatingCard || writableKeys.length > 0}
                 loading={updatingCard}
-                disabled={deriving || importing || deleting}
+                disabled={deriving || importing || deleting || !!updatingPIN}
                 onClick={errorService.catch(updateCard)}
               >
                 Update card
@@ -953,7 +959,7 @@ const CardContent = observer(
             }}
           />
         )}
-        {menu && canDelete && view.$match.$exact.$active && !view.$leaving && (
+        {menu && !busy && view.$match.$exact.$active && !view.$leaving && (
           <CenteredPopup
             aria-label={menu === 'delete' ? 'Delete items' : 'Card actions'}
             contentKey={menu}
@@ -983,7 +989,7 @@ const CardContent = observer(
                   </Button>
                 </Buttons>
               </>
-            ) : (
+            ) : canDelete ? (
               <>
                 <DetailsPopupTitle>
                   Selected items · {selectedResources.length}
@@ -992,8 +998,40 @@ const CardContent = observer(
                   Delete
                 </Button>
               </>
+            ) : (
+              <Buttons data-popup-animation-group>
+                {(['Access', 'Safe'] as const).map(kind => (
+                  <Button
+                    key={kind}
+                    color="neutral"
+                    onClick={() => {
+                      if (operationActive.current) return;
+                      operationActive.current = true;
+                      setMenu(undefined);
+                      setUpdatingPIN(kind);
+                    }}
+                  >
+                    <span>
+                      Update {kind === 'Safe' ? <PINKind kind={kind} /> : kind}{' '}
+                      PIN
+                    </span>
+                  </Button>
+                ))}
+              </Buttons>
             )}
           </CenteredPopup>
+        )}
+        {updatingPIN && (
+          <CardPINUpdate
+            card={card}
+            kind={updatingPIN}
+            pinSession={pinSession}
+            view={view}
+            onFinished={() => {
+              operationActive.current = false;
+              if (mounted.current) setUpdatingPIN(undefined);
+            }}
+          />
         )}
         {scanPromptContent}
       </>

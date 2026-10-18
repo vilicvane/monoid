@@ -204,12 +204,18 @@ test('dismissal waits for outstanding callback and ignores its late progress', a
   const {presenter, start} = setup();
   const callback = deferred();
   let lateContent;
-  const run = start(async (_sessionId, setContent) => {
+  let signal;
+  const run = start(async (_sessionId, setContent, scanSignal) => {
     lateContent = setContent;
+    signal = scanSignal;
     await callback.promise;
   });
   const connected = connect(run.scan);
+  assert.equal(signal.aborted, false);
   presenter.current.onDismiss();
+  assert.equal(signal.aborted, true);
+  assert.equal(signal.reason.code, 'CANCELLED');
+  assert.equal(run.scan.stopCalls, 0);
   lateContent('Late progress');
   assert.equal(presenter.current.content, 'Hold card');
   hide(presenter);
@@ -220,6 +226,53 @@ test('dismissal waits for outstanding callback and ignores its late progress', a
   await connected;
   assert.equal((await run.promise).error.code, 'CANCELLED');
   assert.equal(run.scan.stopCalls, 1);
+});
+
+test('unmount aborts pending callback work before native stop completes', async () => {
+  const {presenter, owner, start} = setup();
+  const pendingRead = deferred();
+  let signal;
+  let continued = false;
+  const run = start(async (_sessionId, _setContent, scanSignal) => {
+    signal = scanSignal;
+    await pendingRead.promise;
+    signal.throwIfAborted();
+    continued = true;
+  });
+  const connected = connect(run.scan);
+
+  owner.unmount();
+  assert.equal(signal.aborted, true);
+  assert.equal(signal.reason.code, 'CANCELLED');
+  pendingRead.resolve();
+  await connected;
+  assert.equal(continued, false);
+  assert.equal(run.settled, false);
+  run.scan.stopped.resolve();
+  hide(presenter);
+  assert.equal((await run.promise).error.code, 'CANCELLED');
+});
+
+test('native tag loss aborts pending callback work without waiting for its response', async () => {
+  const {presenter, start} = setup();
+  const pendingRead = deferred();
+  let signal;
+  const run = start(async (_sessionId, _setContent, scanSignal) => {
+    signal = scanSignal;
+    await pendingRead.promise;
+    signal.throwIfAborted();
+  });
+  const connected = connect(run.scan);
+
+  run.scan.onError(Object.assign(new Error('Card lost'), {code: 'TAG_LOST'}));
+  assert.equal(signal.aborted, true);
+  assert.equal(signal.reason.code, 'CANCELLED');
+  pendingRead.resolve();
+  await connected;
+  run.scan.stopped.resolve();
+  hide(presenter);
+  assert.equal((await run.promise).error, signal.reason);
+  assert.equal(run.scan.waitingForRemoval, false);
 });
 
 test('tag loss closes quietly and does not retry', async () => {

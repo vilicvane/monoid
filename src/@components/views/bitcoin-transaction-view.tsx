@@ -4,7 +4,6 @@ import type {RouteComponentProps} from 'routra-react';
 
 import {useEntrances} from '../../@entrances.js';
 import type {BitcoinTransaction} from '../../@lib/bitcoin-api.js';
-import {formatBitcoinAmount} from '../../@lib/bitcoin-transaction.js';
 import {getBitcoinWalletSigningAccount} from '../../@lib/bitcoin-wallet.js';
 import type {Router} from '../../@routes.js';
 import {WalletAccountFieldset} from '../@key/wallet-account-fieldset.js';
@@ -18,11 +17,8 @@ import {
   InfoSectionRow,
 } from '../@ui/info-section.js';
 import {InteractiveAddress} from '../@ui/interactive-address.js';
-import {
-  ErrorMessage,
-  InfoMessage,
-  WarningMessage,
-} from '../@ui/message-content.js';
+import {ErrorMessage, WarningMessage} from '../@ui/message-content.js';
+import {NativeAmount} from '../@ui/native-amount.js';
 import {TransactionDetailsPanel} from '../@ui/transaction-details-panel.js';
 import {TransactionHeaderStatus} from '../@ui/transaction-status.js';
 import {
@@ -31,6 +27,8 @@ import {
   ViewHeader,
   ViewHeaderTitle,
 } from '../@view/index.js';
+
+const BTC = {symbol: 'BTC', decimals: 8};
 
 export const BitcoinTransactionView = observer(
   ({
@@ -246,7 +244,10 @@ export const BitcoinTransactionView = observer(
               <InfoFieldset>
                 <InfoLegend>Amount sent</InfoLegend>
                 <InfoFieldsetValue>
-                  {formatBitcoinAmount(BigInt(payment.amountSats))} BTC
+                  <NativeAmount
+                    value={BigInt(payment.amountSats)}
+                    currency={BTC}
+                  />
                 </InfoFieldsetValue>
               </InfoFieldset>
             </>
@@ -256,7 +257,7 @@ export const BitcoinTransactionView = observer(
               <InfoLegend>Balance change</InfoLegend>
               <InfoFieldsetValue>
                 {net > BigInt(0) ? '+' : ''}
-                {formatBitcoinAmount(net)} BTC
+                <NativeAmount value={net} currency={BTC} />
               </InfoFieldsetValue>
             </InfoFieldset>
           )}
@@ -280,7 +281,7 @@ export const BitcoinTransactionView = observer(
             {fee !== undefined && (
               <InfoSectionRow>
                 <InfoSectionItemLabel>Network fee</InfoSectionItemLabel>
-                <span>{formatBitcoinAmount(fee)} BTC</span>
+                <NativeAmount value={fee} currency={BTC} />
               </InfoSectionRow>
             )}
             {status?.confirmed && (
@@ -296,16 +297,9 @@ export const BitcoinTransactionView = observer(
               </InfoSectionRow>
             )}
           </TransactionDetailsPanel>
-          {submission && !confirmed && (
-            <InfoMessage>
-              Retry broadcasts the same signed transaction. It does not create
-              another payment.
-            </InfoMessage>
-          )}
           {submission?.status === 'unknown' && !observed && (
             <WarningMessage>
-              The service has not confirmed whether this payment was accepted.
-              Its inputs remain reserved until the transaction is resolved.
+              Broadcast unconfirmed. Funds remain reserved.
             </WarningMessage>
           )}
           {submission?.error &&
@@ -314,18 +308,7 @@ export const BitcoinTransactionView = observer(
             submission.status !== 'unknown' && (
               <WarningMessage>{submission.error}</WarningMessage>
             )}
-          {net !== undefined && net < BigInt(0) && (
-            <InfoMessage>
-              The balance change includes the network fee.
-            </InfoMessage>
-          )}
           {error && <ErrorMessage>{error}</ErrorMessage>}
-          {staleStatus && (
-            <WarningMessage>
-              The current transaction status could not be checked. The details
-              above show the last successful update.
-            </WarningMessage>
-          )}
         </ViewContent>
       </View>
     );

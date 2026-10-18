@@ -22,7 +22,7 @@ const actionExitKeyframes = keyframes`
   }
 
   to {
-    transform: translateY(16px) scale(0);
+    transform: translateY(var(--footer-action-exit-offset, 16px)) scale(0);
     opacity: 0;
   }
 `;

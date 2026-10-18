@@ -11,9 +11,14 @@ import type {RouteComponentProps} from 'routra-react';
 import {createGlobalStyle, styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
+import {qrScanLifecycle} from '../../@lib/qr-scanner.js';
 import {parseWalletConnectUri} from '../../@lib/wallet-connect.js';
 import type {Router} from '../../@routes.js';
 import {Button} from '../@ui/button.js';
+import {
+  QrScanPreview,
+  type QrScanPreviewPhase,
+} from '../@ui/qr-scan-preview.js';
 import {
   SCAN_REVEAL_CURVE,
   SCAN_REVEAL_DURATION,
@@ -28,10 +33,6 @@ import {
 } from '../@view/index.js';
 
 import {QrScanInstructions} from './@scan/qr-scan-instructions.js';
-import {
-  QrScanPreview,
-  type QrScanPreviewPhase,
-} from './@scan/qr-scan-preview.js';
 
 const CameraBackground = createGlobalStyle`
   body {
@@ -199,17 +200,6 @@ const STATUS_TEXT: Record<
   unsupported: 'Camera scanning is unavailable here',
   error: 'Could not scan. Please try again.',
 };
-
-// Keep the same object across hot updates: the old effect's cleanup runs after
-// the new module has loaded, and must still block its next camera startup.
-const scanLifecycle: {closing: Promise<void>} = import.meta.hot?.data
-  .scanLifecycle ?? {
-  closing: Promise.resolve(),
-};
-
-if (import.meta.hot) {
-  import.meta.hot.data.scanLifecycle = scanLifecycle;
-}
 
 export const ScanView = observer(
   ({view}: RouteComponentProps<Router['scan']>): ReactNode => {
@@ -388,7 +378,7 @@ export const ScanView = observer(
       };
 
       void (async () => {
-        await scanLifecycle.closing;
+        await qrScanLifecycle.closing;
         if (disposed || finished || scannedUriRef.current) return;
 
         let permissions = await QrScanner.checkPermissions();
@@ -500,8 +490,8 @@ export const ScanView = observer(
         for (const listener of listeners.splice(0)) {
           errorService.catch(listener.remove());
         }
-        scanLifecycle.closing = Promise.all([
-          scanLifecycle.closing,
+        qrScanLifecycle.closing = Promise.all([
+          qrScanLifecycle.closing,
           stop().catch(error => errorService.catch(Promise.reject(error))),
         ]).then(() => undefined);
       };

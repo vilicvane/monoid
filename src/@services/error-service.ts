@@ -11,6 +11,18 @@ export class ErrorService {
   presentToast: UseIonToastResult[0] | undefined;
   presentAlert: UseIonAlertResult[0] | undefined;
 
+  private readonly presentedErrors = new WeakSet<object>();
+
+  markPresented(error: unknown): unknown {
+    const presented =
+      typeof error === 'object' && error !== null
+        ? error
+        : new Error(String(error));
+
+    this.presentedErrors.add(presented);
+    return presented;
+  }
+
   catch(promise: Promise<void>, message?: string): void;
   catch<TArgs extends unknown[]>(
     callback: (...args: TArgs) => Promise<void> | void,
@@ -39,6 +51,14 @@ export class ErrorService {
     }
 
     console.error(error);
+
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      this.presentedErrors.has(error)
+    ) {
+      return;
+    }
 
     void this.presentToast?.({
       cssClass: 'error-toast',

@@ -86,6 +86,7 @@ mock.module('../.bld/app/@components/views/safe/card-derivations.js', {
 });
 for (const [path, exports] of [
   ['@key/key-list', {KeyListPlaceholder: 'placeholder'}],
+  ['@monoid/pin-input-placeholder', {PINKind: 'pin-kind'}],
   ['@ui/app-icon', {AppIcon: 'icon'}],
   ['@ui/button', {Button: 'popup-button', Buttons: 'buttons'}],
   ['@ui/centered-popup', {CenteredPopup: 'popup'}],
@@ -109,6 +110,7 @@ for (const [path, exports] of [
     {AddressTypePicker: 'address-type-picker'},
   ],
   ['views/safe/@card/@key-item', {KeyItem: 'key-item'}],
+  ['views/safe/@card/card-pin-update', {CardPINUpdate: 'pin-update'}],
   [
     'views/safe/@card/@resource-item',
     {CardResourceItem: 'resource-item', CardResourceList: 'resource-list'},
@@ -141,6 +143,14 @@ function find(node, predicate) {
     const match = find(child, predicate);
     if (match) return match;
   }
+}
+
+function textContent(node) {
+  if (node == null) return '';
+  if (typeof node !== 'object') return String(node);
+  if (Array.isArray(node)) return node.map(textContent).join('');
+  if (node.type === 'pin-kind') return node.props.kind;
+  return textContent(node.props?.children);
 }
 
 function wallet(number, publicKey = PUBLIC_KEY) {
@@ -286,7 +296,7 @@ function mount({items, keys = []}) {
     popupButton(label) {
       return find(
         state.popup(),
-        node => node.type === 'popup-button' && node.props.children === label,
+        node => node.type === 'popup-button' && textContent(node) === label,
       );
     },
     confirmDelete() {
@@ -382,15 +392,22 @@ function mount({items, keys = []}) {
 
 afterEach(() => owners.splice(0).forEach(owner => owner.unmount()));
 
-test('Card actions requires a selection and cancelling deletion never starts a scan', () => {
+test('Card actions remains available without a selection and cancelling deletion never starts a scan', () => {
   const state = mount({items: cardItems(INDEX, [wallet(0)])});
-  assert.equal(state.menuButton(), undefined);
+  assert.equal(state.menuButton().props.disabled, false);
+  state.menuButton().props.onClick();
+  assert.ok(state.popupButton('Update Access PIN'));
+  assert.ok(state.popupButton('Update Safe PIN'));
+  assert.equal(state.popupButton('Delete'), undefined);
+  state.popup().props.onDismiss();
 
   state.select(INDEX);
   assert.equal(state.menuButton().props['aria-haspopup'], 'dialog');
   state.menuButton().props.onClick();
   assert.equal(state.popup().props['aria-label'], 'Card actions');
   assert.equal(state.menuButton().props['aria-expanded'], true);
+  assert.equal(state.popupButton('Update Access PIN'), undefined);
+  assert.equal(state.popupButton('Update Safe PIN'), undefined);
   state.popupButton('Delete').props.onClick();
   assert.equal(state.popup().props['aria-label'], 'Delete items');
   assert.equal(state.popup().props.initialFocus, 'dialog');
@@ -407,8 +424,31 @@ test('Card actions requires a selection and cancelling deletion never starts a s
   assert.deepEqual(state.scans, []);
   assert.deepEqual(state.removals, []);
   state.select(INDEX, false);
-  assert.equal(state.menuButton(), undefined);
+  assert.equal(state.menuButton().props.disabled, false);
 });
+
+for (const kind of ['Access', 'Safe']) {
+  test(`an empty card can open ${kind} PIN settings and keeps the menu disabled until completion`, () => {
+    const state = mount({items: []});
+    state.menuButton().props.onClick();
+    assert.equal(state.popupButton('Delete'), undefined);
+    const click = state.popupButton(`Update ${kind} PIN`).props.onClick;
+    click();
+    click();
+    const update = find(state.render(), node => node.type === 'pin-update');
+    assert.equal(update.props.kind, kind);
+    assert.equal(update.props.card, state.view.card);
+    assert.equal(update.props.pinSession, state.pinSession);
+    assert.equal(state.menuButton().props.disabled, true);
+    assert.equal(state.popup(), undefined);
+    update.props.onFinished();
+    assert.equal(state.menuButton().props.disabled, false);
+    assert.equal(
+      find(state.render(), node => node.type === 'pin-update'),
+      undefined,
+    );
+  });
+}
 
 test('deleting a selected group and standalone resource removes companions first and retains phone records', async () => {
   const saved = wallet(0);
@@ -428,7 +468,7 @@ test('deleting a selected group and standalone resource removes companions first
   state.confirmDelete()();
 
   assert.equal(state.scans[0].label, 'Scan card to delete');
-  assert.equal(state.menuButton(), undefined);
+  assert.equal(state.menuButton().props.disabled, true);
   assert.equal(state.popup(), undefined);
   assert.equal(state.item(INDEX).props.disabled, true);
   assert.deepEqual(state.removals, []);
@@ -446,7 +486,7 @@ test('deleting a selected group and standalone resource removes companions first
     cardItems(SECOND_INDEX, [wallet(1)]),
   );
   assert.deepEqual(toJS(state.storage.keys), phoneBefore);
-  assert.equal(state.menuButton(), undefined);
+  assert.equal(state.menuButton().props.disabled, false);
   assert.deepEqual(state.routes, []);
   assert.deepEqual(state.errors, []);
 });
@@ -514,7 +554,7 @@ test('an acknowledged companion deletion survives a failed root deletion and reo
   ]);
   assert.deepEqual(state.view.card.items, []);
   assert.deepEqual(toJS(state.storage.keys), phoneBefore);
-  assert.equal(state.menuButton(), undefined);
+  assert.equal(state.menuButton().props.disabled, false);
 });
 
 test('two confirmation clicks before rerender start only one deletion scan', async () => {
@@ -558,7 +598,7 @@ test('dismissing an in-flight delete keeps actions blocked until its ACK is publ
   await new Promise(resolve => setImmediate(resolve));
 
   assert.equal(dismissed, false);
-  assert.equal(state.menuButton(), undefined);
+  assert.equal(state.menuButton().props.disabled, true);
   assert.equal(state.popup(), undefined);
   assert.equal(state.item(INDEX).props.disabled, true);
   assert.equal(state.button('Import').props.disabled, true);

@@ -18,6 +18,10 @@ export type AppletPackage = {
   code: Uint8Array;
 };
 
+export type GlobalPlatformInstallProgress =
+  | {phase: 'checking' | 'configuring' | 'complete'}
+  | {phase: 'uploading'; progress: number};
+
 type RegistryEntry = {
   lifecycle: number;
   modules: Uint8Array[];
@@ -58,9 +62,9 @@ export class GlobalPlatformInstaller {
 
   async install(
     applet: AppletPackage,
-    onProgress: (progress: number) => void,
+    onProgress: (update: GlobalPlatformInstallProgress) => void,
   ): Promise<void> {
-    onProgress(0);
+    onProgress({phase: 'checking'});
 
     const instance = await this.findEntry(0x40, applet.appletAid);
 
@@ -71,7 +75,7 @@ export class GlobalPlatformInstaller {
         );
       }
 
-      onProgress(1);
+      onProgress({phase: 'complete'});
       return;
     }
 
@@ -89,6 +93,8 @@ export class GlobalPlatformInstaller {
     } else {
       await this.load(applet, onProgress);
     }
+
+    onProgress({phase: 'configuring'});
 
     // No privileges, no installation parameters, no delegated-management token.
     const data = concat(
@@ -110,12 +116,12 @@ export class GlobalPlatformInstaller {
       );
     }
 
-    onProgress(1);
+    onProgress({phase: 'complete'});
   }
 
   private async load(
     applet: AppletPackage,
-    onProgress: (progress: number) => void,
+    onProgress: (update: GlobalPlatformInstallProgress) => void,
   ): Promise<void> {
     const {code} = applet;
     const blockSize = 220;
@@ -153,6 +159,8 @@ export class GlobalPlatformInstaller {
       'Preparing the applet transfer',
     );
 
+    onProgress({phase: 'uploading', progress: 0});
+
     for (let index = 0; index < blocks; index++) {
       const final = index === blocks - 1;
       const block = loadFile.subarray(
@@ -166,7 +174,7 @@ export class GlobalPlatformInstaller {
         ),
         'Transferring the applet',
       );
-      onProgress((0.95 * (index + 1)) / blocks);
+      onProgress({phase: 'uploading', progress: (index + 1) / blocks});
     }
   }
 

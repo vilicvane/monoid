@@ -28,10 +28,24 @@ export abstract class Applet<TCommandDefinitions> {
     onConnectionChange?: (connected: boolean) => void,
     /** Evaluated after the operation or onError, before connection cleanup. */
     waitForRemoval?: () => boolean,
+    /** Handles a missing SELECT target while its raw connection is still open. */
+    onNotFound?: (sessionId: string) => Promise<void>,
   ): () => Promise<void> {
     return standbyIsoDep(
       async sessionId => {
-        const applet = await this.openSession(sessionId);
+        let applet: this;
+
+        try {
+          applet = await this.openSession(sessionId);
+        } catch (error) {
+          if (error instanceof AppletNotFoundError && onNotFound) {
+            await onNotFound(sessionId);
+            return;
+          }
+
+          throw error;
+        }
+
         await callback(applet);
       },
       onError,

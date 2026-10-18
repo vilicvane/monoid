@@ -32,6 +32,9 @@ const Layer = styled.div`
 `;
 
 const Dialog = styled.div`
+  --ion-color-neutral: transparent;
+  --ion-color-neutral-contrast: white;
+  --ion-color-neutral-shade: rgba(255, 255, 255, 0.55);
   --color-text-label: rgba(255, 255, 255, 0.7);
   --color-text-secondary: white;
   --color-message-background: rgba(255, 255, 255, 0.12);

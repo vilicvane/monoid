@@ -1,8 +1,12 @@
 import {IsoDepNfc} from 'capacitor-isodep-nfc';
+import {sha256} from 'ethers';
 
-import {hexToUint8Array, uint8ArrayToHex} from '../../@utils/index.js';
+import {hexToUint8Array} from '../../@utils/index.js';
 import {exchange} from '../global-platform/commands.js';
-import {GlobalPlatformInstaller} from '../global-platform/install.js';
+import {
+  type GlobalPlatformInstallProgress,
+  GlobalPlatformInstaller,
+} from '../global-platform/install.js';
 
 import {appletBundle} from './@applet-bundle.js';
 import {
@@ -18,10 +22,12 @@ export type BundledApplet = {
   sha256: string;
 };
 
-export type AppletInstallProgress = {
-  stage: 'checking' | BundledApplet['stage'] | 'verifying';
-  progress?: number;
-};
+export type AppletInstallProgress =
+  | {stage: 'checking' | 'verifying'}
+  | ({
+      stage: BundledApplet['stage'];
+      phase: Exclude<GlobalPlatformInstallProgress['phase'], 'complete'>;
+    } & GlobalPlatformInstallProgress);
 
 export const hasAppletBundle = appletBundle !== undefined;
 
@@ -29,7 +35,10 @@ export const hasAppletBundle = appletBundle !== undefined;
 export async function installMonoidApplets(
   sessionId: string,
   onProgress: (update: AppletInstallProgress) => void,
+  signal?: AbortSignal,
 ): Promise<MonoidAppletHelloWithSafe> {
+  signal?.throwIfAborted();
+
   if (!appletBundle) {
     throw new Error('The applet installation package is not available yet.');
   }
@@ -44,21 +53,21 @@ export async function installMonoidApplets(
   }
 
   onProgress({stage: 'checking'});
+  signal?.throwIfAborted();
 
   const packages = await Promise.all(
     appletBundle.map(async item => {
-      const response = await fetch(item.codeURL);
+      const response = await fetch(item.codeURL, {signal});
+      signal?.throwIfAborted();
 
       if (!response.ok) {
         throw new Error('Could not read the bundled applet package.');
       }
 
       const code = new Uint8Array(await response.arrayBuffer());
-      const digest = new Uint8Array(
-        await crypto.subtle.digest('SHA-256', code),
-      );
+      signal?.throwIfAborted();
 
-      if (uint8ArrayToHex(digest) !== item.sha256) {
+      if (sha256(code).slice(2) !== item.sha256) {
         throw new Error(
           'The bundled applet package failed its integrity check.',
         );
@@ -72,31 +81,48 @@ export async function installMonoidApplets(
       };
     }),
   );
+  signal?.throwIfAborted();
 
   const installer = await GlobalPlatformInstaller.open(command =>
     exchange(async data => {
+      signal?.throwIfAborted();
       const response = await IsoDepNfc.transceive({
         sessionId,
         data: Array.from(data),
         timeoutMs: 30000,
       });
+      signal?.throwIfAborted();
 
       return new Uint8Array(response.data);
     }, command),
   );
 
   for (const applet of packages) {
-    await installer.install(applet, progress =>
-      onProgress({stage: applet.stage, progress}),
-    );
+    signal?.throwIfAborted();
+    await installer.install(applet, update => {
+      signal?.throwIfAborted();
+      if (update.phase === 'uploading') {
+        onProgress({stage: applet.stage, ...update});
+      } else if (update.phase !== 'complete') {
+        onProgress({stage: applet.stage, phase: update.phase});
+      }
+      signal?.throwIfAborted();
+    });
   }
 
+  signal?.throwIfAborted();
   onProgress({stage: 'verifying'});
+  signal?.throwIfAborted();
 
-  // SELECT ends the GP secure channel. Verify the installed applet using its real schema.
+  // SELECT ends the GP secure channel. This checks availability and the hello
+  // schema, not hardware crypto support; features are firmware declarations.
   const monoid = await createMonoidApplet(packages[2].appletAid).openSession(
     sessionId,
   );
+  signal?.throwIfAborted();
 
-  return MonoidAppletHelloWithSafe.satisfies(await monoid.hello({safe: true}));
+  const hello = await monoid.hello({safe: true});
+  signal?.throwIfAborted();
+
+  return MonoidAppletHelloWithSafe.satisfies(hello);
 }

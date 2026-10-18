@@ -5,7 +5,6 @@ import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
-import {formatBitcoinAmount} from '../../@lib/bitcoin-transaction.js';
 import {getBitcoinWalletSigningAccount} from '../../@lib/bitcoin-wallet.js';
 import type {Router} from '../../@routes.js';
 import {useBitcoinWalletRefresh} from '../@hooks/use-bitcoin-wallet-refresh.js';
@@ -23,8 +22,10 @@ import {
   InfoSectionRow,
 } from '../@ui/info-section.js';
 import {ErrorMessage, InfoMessage} from '../@ui/message-content.js';
+import {NativeAmount} from '../@ui/native-amount.js';
 import {
   View,
+  ViewActionButton,
   ViewContent,
   ViewHeader,
   ViewHeaderButton,
@@ -33,9 +34,16 @@ import {
   ViewPlaceholder,
 } from '../@view/index.js';
 
+const BTC = {symbol: 'BTC', decimals: 8};
+
 const Balance = styled(InfoFieldsetValue)`
   padding: 8px 0;
   font-variant-numeric: tabular-nums;
+`;
+
+const SendButton = styled(ViewActionButton)`
+  --footer-action-exit-offset: -16px;
+  transform-origin: center;
 `;
 
 export const BitcoinWalletView = observer(
@@ -74,16 +82,17 @@ export const BitcoinWalletView = observer(
           footer={
             account && (
               <>
-                <Button
-                  disabled={
-                    state.status !== 'ready' ||
-                    !snapshot ||
-                    snapshot.spendableBalance <= BigInt(0)
+                <SendButton
+                  visible={
+                    active &&
+                    !!snapshot &&
+                    snapshot.spendableBalance > BigInt(0)
                   }
+                  disabled={!active}
                   onClick={() => route.send.$push()}
                 >
                   Send
-                </Button>
+                </SendButton>
                 <Button color="neutral" onClick={() => setReceiving(true)}>
                   Receive
                 </Button>
@@ -122,31 +131,38 @@ export const BitcoinWalletView = observer(
                   <InfoFieldset>
                     <InfoLegend>Balance</InfoLegend>
                     <Balance>
-                      {formatBitcoinAmount(
-                        snapshot.confirmedBalance + snapshot.pendingBalance,
-                      )}{' '}
-                      BTC
+                      <NativeAmount
+                        value={
+                          snapshot.confirmedBalance + snapshot.pendingBalance
+                        }
+                        currency={BTC}
+                      />
                     </Balance>
                     <InfoSectionRow>
                       <InfoSectionItemLabel>Confirmed</InfoSectionItemLabel>
-                      <span>
-                        {formatBitcoinAmount(snapshot.confirmedBalance)} BTC
-                      </span>
+                      <NativeAmount
+                        value={snapshot.confirmedBalance}
+                        currency={BTC}
+                      />
                     </InfoSectionRow>
                     <InfoSectionRow>
                       <InfoSectionItemLabel>Pending</InfoSectionItemLabel>
                       <span>
                         {snapshot.pendingBalance > BigInt(0) ? '+' : ''}
-                        {formatBitcoinAmount(snapshot.pendingBalance)} BTC
+                        <NativeAmount
+                          value={snapshot.pendingBalance}
+                          currency={BTC}
+                        />
                       </span>
                     </InfoSectionRow>
                     <InfoSectionRow>
                       <InfoSectionItemLabel>
                         Available to send
                       </InfoSectionItemLabel>
-                      <span>
-                        {formatBitcoinAmount(snapshot.spendableBalance)} BTC
-                      </span>
+                      <NativeAmount
+                        value={snapshot.spendableBalance}
+                        currency={BTC}
+                      />
                     </InfoSectionRow>
                   </InfoFieldset>
                   {snapshot.pendingBalance !== BigInt(0) && (

@@ -4,6 +4,10 @@ export type GlobalPlatformTransceive = (
   command: Uint8Array,
 ) => Promise<Uint8Array>;
 
+export const SCP03_S8_VARIANTS: readonly number[] = [
+  0x00, 0x10, 0x20, 0x30, 0x60, 0x70,
+];
+
 export class GlobalPlatformSecureChannelError extends Error {
   constructor(
     readonly code:
@@ -274,10 +278,7 @@ export async function openSecureChannel(
 
   const variant = protocol === 3 ? update[12] : 0x55;
 
-  if (
-    protocol === 3 &&
-    ![0x00, 0x10, 0x20, 0x30, 0x60, 0x70].includes(variant)
-  ) {
+  if (protocol === 3 && !SCP03_S8_VARIANTS.includes(variant)) {
     throw new GlobalPlatformSecureChannelError(
       'GP_UNSUPPORTED_PROTOCOL',
       'This SCP03 mode is not supported for installation.',

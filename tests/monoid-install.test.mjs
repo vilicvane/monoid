@@ -13,14 +13,22 @@ mock.module('../.bld/app/@lib/monoid/@applet-bundle.js', {
 mock.module('../.bld/app/@lib/global-platform/install.js', {
   namedExports: {
     GlobalPlatformInstaller: {
-      open: async () => {
+      open: async transceive => {
         fixture.events.push('open GP');
+        for (const command of fixture.openCommands ?? []) {
+          await transceive(command);
+        }
         return {
           install: async (applet, progress) => {
             fixture.events.push(applet.stage);
             if (fixture.failStage === applet.stage)
               throw new Error('Card lost');
-            progress(1);
+            progress({phase: 'checking'});
+            progress({phase: 'uploading', progress: 0.4});
+            progress({phase: 'uploading', progress: 1});
+            progress({phase: 'configuring'});
+            progress({phase: 'complete'});
+            fixture.onInstalled?.(applet.stage);
           },
         };
       },
@@ -32,6 +40,7 @@ mock.module('capacitor-isodep-nfc', {
     IsoDepNfc: {
       transceive: async command => {
         fixture.commands.push(command);
+        if (fixture.transceive) return fixture.transceive(command);
         if (command.data[1] === 0xa4) {
           fixture.events.push('SELECT Monoid');
           return {data: [0x90, 0]};
@@ -47,6 +56,20 @@ const {installMonoidApplets} = await import(
   '../.bld/app/@lib/monoid/install.js'
 );
 const {createMonoidApplet} = await import('../.bld/app/@lib/monoid/index.js');
+
+function deferred() {
+  let resolve;
+  const promise = new Promise(accept => {
+    resolve = accept;
+  });
+  return {promise, resolve};
+}
+
+function cancel(controller) {
+  const error = Object.assign(new Error('Cancelled'), {code: 'CANCELLED'});
+  controller.abort(error);
+  return error;
+}
 
 beforeEach(() => {
   fixture = {
@@ -96,10 +119,16 @@ test('installation processes Identity, Safe and Monoid in order and verifies saf
     'hello',
   ]);
   assert(fixture.commands.every(command => command.sessionId === 'connection'));
-  assert.deepEqual(
-    fixture.progress.map(update => update.stage),
-    ['checking', 'identity', 'safe', 'monoid', 'verifying'],
-  );
+  assert.deepEqual(fixture.progress, [
+    {stage: 'checking'},
+    ...['identity', 'safe', 'monoid'].flatMap(stage => [
+      {stage, phase: 'checking'},
+      {stage, phase: 'uploading', progress: 0.4},
+      {stage, phase: 'uploading', progress: 1},
+      {stage, phase: 'configuring'},
+    ]),
+    {stage: 'verifying'},
+  ]);
   assert.deepEqual(
     fixture.commands[0].data.slice(5),
     Array.from(Buffer.from(bundle[2].appletAid, 'hex')),
@@ -111,6 +140,27 @@ test('installation processes Identity, Safe and Monoid in order and verifies saf
 
 test('bundle integrity is checked before authenticating or writing to the card', async () => {
   bundle[1].sha256 = '0'.repeat(64);
+  await assert.rejects(
+    installMonoidApplets('connection', () => {}),
+    /integrity/,
+  );
+  assert.deepEqual(fixture.events, []);
+  assert.deepEqual(fixture.commands, []);
+});
+
+test('bundle validation works without crypto.subtle in an HTTP WebView', async context => {
+  context.mock.getter(globalThis.crypto, 'subtle', () => undefined);
+
+  assert.deepEqual(
+    await installMonoidApplets('connection', () => {}),
+    fixture.hello,
+  );
+  assert.equal(fixture.events.at(-1), 'hello');
+
+  fixture.events.length = 0;
+  fixture.commands.length = 0;
+  bundle[1].sha256 = '0'.repeat(64);
+
   await assert.rejects(
     installMonoidApplets('connection', () => {}),
     /integrity/,
@@ -167,4 +217,138 @@ test('opening an existing session selects on a separate applet object without bi
   assert.notEqual(session, template);
   assert.deepEqual(await session.hello({}), fixture.hello);
   await assert.rejects(template.hello({}), /open NFC session/);
+});
+
+test('an already cancelled installation does not fetch packages or access the card', async context => {
+  const controller = new AbortController();
+  const reason = cancel(controller);
+  const fetch = context.mock.method(globalThis, 'fetch', () => {
+    assert.fail('Cancelled installation must not fetch');
+  });
+
+  await assert.rejects(
+    installMonoidApplets('connection', () => {}, controller.signal),
+    error => error === reason,
+  );
+  assert.equal(fetch.mock.callCount(), 0);
+  assert.deepEqual(fixture.events, []);
+  assert.deepEqual(fixture.commands, []);
+});
+
+test('cancellation while reading bundle data prevents opening a card-management session', async context => {
+  const controller = new AbortController();
+  const body = deferred();
+  const reading = deferred();
+  context.mock.method(globalThis, 'fetch', async (_url, options) => {
+    assert.equal(options.signal, controller.signal);
+    return {
+      ok: true,
+      arrayBuffer() {
+        reading.resolve();
+        return body.promise;
+      },
+    };
+  });
+  const installing = installMonoidApplets(
+    'connection',
+    () => {},
+    controller.signal,
+  );
+  await reading.promise;
+  const reason = cancel(controller);
+  body.resolve(Uint8Array.of(1, 2, 3).buffer);
+
+  await assert.rejects(installing, error => error === reason);
+  assert.deepEqual(fixture.events, []);
+  assert.deepEqual(fixture.commands, []);
+});
+
+test('cancellation during an APDU prevents response continuation and the next card command', async () => {
+  const controller = new AbortController();
+  const response = deferred();
+  const sent = deferred();
+  fixture.openCommands = [
+    Uint8Array.of(0x80, 0xca, 0, 0, 0),
+    Uint8Array.of(0x80, 0xe6, 0, 0, 0),
+  ];
+  fixture.transceive = () => {
+    sent.resolve();
+    return response.promise;
+  };
+  const installing = installMonoidApplets(
+    'connection',
+    () => {},
+    controller.signal,
+  );
+  await sent.promise;
+  const reason = cancel(controller);
+  response.resolve({data: [0x61, 0x01]});
+
+  await assert.rejects(installing, error => error === reason);
+  assert.equal(fixture.commands.length, 1);
+  assert.deepEqual(fixture.commands[0].data, [...fixture.openCommands[0]]);
+  assert.deepEqual(fixture.events, ['open GP']);
+});
+
+test('cancellation after one applet finishes prevents the next applet from starting', async () => {
+  const controller = new AbortController();
+  let reason;
+  fixture.onInstalled = stage => {
+    if (stage === 'identity') reason = cancel(controller);
+  };
+  await assert.rejects(
+    installMonoidApplets('connection', () => {}, controller.signal),
+    error => error === reason,
+  );
+  assert.deepEqual(fixture.events, ['open GP', 'identity']);
+  assert.deepEqual(fixture.commands, []);
+});
+
+test('cancellation when verification starts prevents selecting the installed applet', async () => {
+  const controller = new AbortController();
+  let reason;
+  await assert.rejects(
+    installMonoidApplets(
+      'connection',
+      update => {
+        if (update.stage === 'verifying') reason = cancel(controller);
+      },
+      controller.signal,
+    ),
+    error => error === reason,
+  );
+  assert.deepEqual(fixture.events, ['open GP', 'identity', 'safe', 'monoid']);
+  assert.deepEqual(fixture.commands, []);
+});
+
+test('cancellation while selecting the installed applet prevents the final hello', async () => {
+  const controller = new AbortController();
+  let reason;
+  fixture.transceive = command => {
+    assert.equal(command.data[1], 0xa4);
+    reason = cancel(controller);
+    return {data: [0x90, 0]};
+  };
+
+  await assert.rejects(
+    installMonoidApplets('connection', () => {}, controller.signal),
+    error => error === reason,
+  );
+  assert.equal(fixture.commands.length, 1);
+});
+
+test('cancellation while reading the final hello cannot report installation success', async () => {
+  const controller = new AbortController();
+  let reason;
+  fixture.transceive = command => {
+    if (command.data[1] === 0xa4) return {data: [0x90, 0]};
+    reason = cancel(controller);
+    return {data: [...encode(fixture.hello), 0x90, 0]};
+  };
+
+  await assert.rejects(
+    installMonoidApplets('connection', () => {}, controller.signal),
+    error => error === reason,
+  );
+  assert.equal(fixture.commands.length, 2);
 });

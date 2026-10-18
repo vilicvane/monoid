@@ -1,7 +1,6 @@
 import {
   Check as check,
   CircleAlert as circleAlert,
-  CircleCheck as circleCheck,
   CreditCard as creditCard,
   Plus as plus,
   RotateCcw as rotateCcw,
@@ -21,7 +20,7 @@ import {
 } from '../../../../@lib/monoid/index.js';
 import type {Router} from '../../../../@routes.js';
 import {isCredentialRequestCancelled} from '../../../../@services/index.js';
-import {fadeInAnimationCSS, popInAnimationCSS} from '../../../@animations.js';
+import {AppletInstallProgressContent} from '../../../@monoid/applet-install-progress.js';
 import {MonoidCard, MonoidCardFrame} from '../../../@monoid/monoid-card.js';
 import {
   MonoidScanStatePromptContentHighlight,
@@ -31,6 +30,7 @@ import {
   PINKind,
   getPINInputPlaceholder,
 } from '../../../@monoid/pin-input-placeholder.js';
+import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
 import {AppIcon} from '../../../@ui/app-icon.js';
 import {Button, Buttons} from '../../../@ui/button.js';
 import {CenteredPopup} from '../../../@ui/centered-popup.js';
@@ -46,6 +46,7 @@ import {
   ListItemDescription,
   ListItemName,
 } from '../../../@ui/list.js';
+import {OperationComplete} from '../../../@ui/operation-complete.js';
 import {Step, Steps} from '../../../@ui/step.js';
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
@@ -55,7 +56,6 @@ import {
   ViewHeader,
   ViewHeaderButton,
   ViewHeaderTitle,
-  ViewPlaceholder,
 } from '../../../@view/index.js';
 import {
   type CardResourceGroup,
@@ -74,45 +74,13 @@ import {
   initializeBackupTarget,
   readBackupCardIdentity,
 } from './card-backup-session.js';
+import {readCopyDestination} from './read-copy-destination.js';
 
 const Description = styled.p`
   margin: 0;
   font-size: 14px;
   line-height: 21px;
   color: var(--color-text-secondary);
-`;
-
-const Completion = styled(ViewPlaceholder)`
-  flex-direction: column;
-  gap: 16px;
-  color: var(--ion-color-dark);
-  font-size: 16px;
-`;
-
-const CompletionIcon = styled.span`
-  --icon-stroke-width: 3px;
-
-  ${popInAnimationCSS}
-  animation-duration: 300ms;
-  animation-timing-function: ease-in;
-  display: flex;
-  font-size: 96px;
-  color: var(--ion-color-safe);
-
-  @media (prefers-reduced-motion: reduce) {
-    animation: none;
-  }
-`;
-
-const CompletionLabel = styled.span`
-  ${fadeInAnimationCSS}
-  animation-timing-function: ease-out;
-  animation-delay: 280ms;
-  animation-fill-mode: both;
-
-  @media (prefers-reduced-motion: reduce) {
-    animation: none;
-  }
 `;
 
 const Notice = styled.div`
@@ -309,7 +277,8 @@ const DestinationCards = ({
 
 export const CopyItemsView = observer(
   ({view}: RouteComponentProps<Router['safe']['copyItems']>): ReactNode => {
-    const {router, errorService, monoidCredentialsStore} = useEntrances();
+    const {router, errorService, monoidApplet, monoidCredentialsStore} =
+      useEntrances();
     const toast = useToast();
     const [session] = useState(
       () => new CardBackupSession(view.sourceCard, view.sourceIndexes),
@@ -341,6 +310,7 @@ export const CopyItemsView = observer(
       safe: true,
       ensureSetup: false,
     });
+    const scanRawDestination = useIsoDepScanPrompt();
     const mounted = useRef(true);
     const running = useRef(false);
 
@@ -458,10 +428,18 @@ export const CopyItemsView = observer(
     };
 
     const scanDestination = async (): Promise<void> => {
-      let uninitialized: MonoidAppletHelloWithSafe | undefined;
-      await scan(
+      let scanned: MonoidAppletHelloWithSafe | undefined;
+      await scanRawDestination(
         'Scan a destination card',
-        async (_applet, _setState, hello) => {
+        async (sessionId, setStateContent, signal) => {
+          const hello = await readCopyDestination(
+            sessionId,
+            monoidApplet,
+            update =>
+              setStateContent(<AppletInstallProgressContent update={update} />),
+            signal,
+          );
+          signal.throwIfAborted();
           const identity = readBackupCardIdentity(hello);
           if (identity.publicKey === backup!.source.publicKey) {
             throw new MonoidCardError('Use a different card');
@@ -472,26 +450,27 @@ export const CopyItemsView = observer(
           if (hello.safe.pin === 0)
             throw new MonoidCardError('Safe PIN blocked');
           if (hello.pin === 0) throw new MonoidCardError('Access PIN blocked');
-          if (
-            hello.pin === false ||
-            hello.safe.pin === false ||
-            !hello.safe.unlocked
-          ) {
-            uninitialized = hello;
-          } else {
-            await session.addTarget(hello);
-          }
+          scanned = hello;
         },
       );
       if (
-        !uninitialized ||
+        !scanned ||
         !mounted.current ||
         view.$leaving ||
         !view.$match.$exact.$active
       )
         return;
 
-      const expected = uninitialized;
+      if (
+        scanned.pin !== false &&
+        scanned.safe.pin !== false &&
+        scanned.safe.unlocked
+      ) {
+        await session.addTarget(scanned);
+        return;
+      }
+
+      const expected = scanned;
       const identity = readBackupCardIdentity(expected);
       const isNew = expected.safe.pin === false;
       let pin = await showSafePINInput({
@@ -833,14 +812,7 @@ export const CopyItemsView = observer(
             }
           >
             {backup?.complete ? (
-              !busy && (
-                <Completion role="status">
-                  <CompletionIcon aria-hidden="true">
-                    <AppIcon icon={circleCheck} />
-                  </CompletionIcon>
-                  <CompletionLabel>Complete</CompletionLabel>
-                </Completion>
-              )
+              !busy && <OperationComplete />
             ) : (
               <Steps>
                 <Step

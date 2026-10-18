@@ -8,6 +8,7 @@ import {isCredentialRequestCancelled} from '../../@services/index.js';
 type ScanCallback = (
   sessionId: string,
   setStateContent: (content: ReactNode) => void,
+  signal: AbortSignal,
 ) => Promise<void>;
 
 type ScanResult = {success: true} | {error: unknown};
@@ -47,6 +48,7 @@ export function useIsoDepScanPrompt(): (
 
       return new Promise<void>((resolve, reject) => {
         const owner = Symbol();
+        const controller = new AbortController();
         let content = initialContent;
         let scanning = false;
         let failed = false;
@@ -87,7 +89,17 @@ export function useIsoDepScanPrompt(): (
           })();
         };
 
-        const operation = {cancel: () => finish({error: cancelled()})};
+        const operation = {
+          cancel: () => {
+            if (finishing) {
+              return;
+            }
+
+            const error = cancelled();
+            controller.abort(error);
+            finish({error});
+          },
+        };
         active.current = operation;
 
         const show = (): void => {
@@ -111,20 +123,29 @@ export function useIsoDepScanPrompt(): (
               return;
             }
 
-            const pending = callback(sessionId, nextContent => {
-              if (!mounted.current || finishing) {
-                return;
-              }
+            const pending = callback(
+              sessionId,
+              nextContent => {
+                if (
+                  !mounted.current ||
+                  finishing ||
+                  controller.signal.aborted
+                ) {
+                  return;
+                }
 
-              content = nextContent;
-              show();
-            });
+                content = nextContent;
+                show();
+              },
+              controller.signal,
+            );
             callbackFinished = pending.then(
               () => {},
               () => {},
             );
 
             await pending;
+            controller.signal.throwIfAborted();
             result = {success: true};
           },
           error => {
@@ -138,6 +159,7 @@ export function useIsoDepScanPrompt(): (
               'code' in error &&
               error.code === 'TAG_LOST';
             result = {error: tagLost ? cancelled() : error};
+            controller.abort(result.error);
           },
           () => {
             if (result) {

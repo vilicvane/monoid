@@ -21,6 +21,7 @@ export const ScanCardView = ({
   const {router, errorService} = useEntrances();
   const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
     safe: true,
+    allowInstallRedirect: true,
     auth: 'access',
     retryOnError: true,
   });

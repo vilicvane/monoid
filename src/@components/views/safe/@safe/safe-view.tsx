@@ -31,6 +31,7 @@ export const SafeView = observer(
 
     const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
       safe: true,
+      allowInstallRedirect: true,
       auth: 'access',
       retryOnError: true,
     });

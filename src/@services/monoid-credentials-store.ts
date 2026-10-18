@@ -409,6 +409,8 @@ export class MonoidPINSession {
       const snapshot = await this.store.setPIN(id, pin, owner, this.unlocked);
       throwIfCancelled(owner);
       this.unlocked = snapshot;
+      this.pins ??= {...snapshot};
+      this.pins[id] = pin;
     });
   }
 

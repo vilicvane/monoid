@@ -1,6 +1,6 @@
 import {css, styled} from 'styled-components';
 
-import {InfoSection, InfoSectionHeader} from './info-section.js';
+import {InfoFieldset, InfoSection, InfoSectionHeader} from './info-section.js';
 import {Tag, darkTagCSS} from './tag.js';
 
 const messageBlockCSS = css`
@@ -26,6 +26,10 @@ export const InfoMessage = styled(InfoSection).attrs({role: 'status'})`
   background: var(--color-message-background, var(--ion-color-light));
   color: var(--color-text-secondary);
   font-size: 14px;
+
+  ${InfoFieldset} + & {
+    margin-top: 0;
+  }
 `;
 
 export const ErrorMessage = styled(InfoSection).attrs({role: 'status'})`

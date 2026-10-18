@@ -63,17 +63,8 @@ export const SolanaTransactionDetails = observer(
               contained
             />
           </InfoSection>
-          {(status === 'signed' || status === 'not-found') && (
-            <InfoMessage>
-              <div>
-                {status === 'signed'
-                  ? 'Signed. The website handles broadcasting.'
-                  : 'Transaction not found on the network. The website may not have broadcast it.'}
-              </div>
-              {!signature && (
-                <div>Transaction ID unavailable until the fee payer signs.</div>
-              )}
-            </InfoMessage>
+          {status === 'not-found' && (
+            <InfoMessage>Transaction not found on the network.</InfoMessage>
           )}
           {(status === 'confirmed' || status === 'failed') && (
             <SolanaTokenActivity

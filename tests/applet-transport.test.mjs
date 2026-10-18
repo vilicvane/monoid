@@ -3,6 +3,7 @@ import {beforeEach, mock, test} from 'node:test';
 
 let exchanges;
 let respond;
+let scan;
 
 mock.module('capacitor-isodep-nfc', {
   namedExports: {
@@ -17,13 +18,22 @@ mock.module('capacitor-isodep-nfc', {
 
 mock.module('../.bld/app/@lib/isodep.js', {
   namedExports: {
-    standbyIsoDep() {
-      assert.fail('Transport tests use an existing NFC session.');
+    standbyIsoDep(
+      callback,
+      onError,
+      onCleanup,
+      onConnectionChange,
+      waitForRemoval,
+    ) {
+      scan = {callback, onError, onCleanup, onConnectionChange, waitForRemoval};
+      return async () => {};
     },
   },
 });
 
-const {Applet, AppletISOError} = await import('../.bld/app/@lib/applet.js');
+const {Applet, AppletISOError, AppletNotFoundError} = await import(
+  '../.bld/app/@lib/applet.js'
+);
 
 class TestApplet extends Applet {
   encoded = [];
@@ -43,7 +53,132 @@ class TestApplet extends Applet {
 beforeEach(() => {
   exchanges = [];
   respond = () => [0x90, 0x00];
+  scan = undefined;
 });
+
+function standby({callback = async () => {}, onNotFound} = {}) {
+  const events = [];
+  const failures = [];
+  new TestApplet(new Uint8Array([1, 2, 3])).standby(
+    callback,
+    error => failures.push(error),
+    () => events.push('cleanup'),
+    connected => events.push(connected ? 'connected' : 'disconnected'),
+    () => false,
+    onNotFound,
+  );
+  const current = scan;
+  return {
+    events,
+    failures,
+    async tap() {
+      current.onConnectionChange(true);
+      try {
+        await current.callback('missing-applet-card');
+      } catch (error) {
+        current.onError(error);
+      }
+      assert.equal(current.waitForRemoval(), false);
+      current.onConnectionChange(false);
+      current.onCleanup();
+    },
+  };
+}
+
+test('standby awaits missing-SELECT preflight on the same open connection before cleanup', async () => {
+  respond = () => [0x6a, 0x82];
+  let finishRead;
+  let startedRead;
+  const reading = new Promise(resolve => {
+    finishRead = resolve;
+  });
+  const started = new Promise(resolve => {
+    startedRead = resolve;
+  });
+  const state = standby({
+    callback: () => assert.fail('Business must not run for a missing applet'),
+    onNotFound: async sessionId => {
+      assert.equal(sessionId, 'missing-applet-card');
+      state.events.push('read');
+      startedRead();
+      await reading;
+      state.events.push('read-complete');
+    },
+  });
+  const tapping = state.tap();
+  await started;
+  assert.deepEqual(state.events, ['connected', 'read']);
+  assert.deepEqual(exchanges[0], {
+    sessionId: 'missing-applet-card',
+    data: [0, 0xa4, 4, 0, 3, 1, 2, 3],
+  });
+  finishRead();
+  await tapping;
+  assert.deepEqual(state.events, [
+    'connected',
+    'read',
+    'read-complete',
+    'disconnected',
+    'cleanup',
+  ]);
+  assert.deepEqual(state.failures, []);
+});
+
+test('standby forwards a missing SELECT when no preflight handler was supplied', async () => {
+  respond = () => [0x6a, 0x82];
+  const state = standby({
+    callback: () => assert.fail('Missing applet must not run business'),
+  });
+  await state.tap();
+  assert.equal(state.failures.length, 1);
+  assert.ok(state.failures[0] instanceof AppletNotFoundError);
+  assert.deepEqual(state.events, ['connected', 'disconnected', 'cleanup']);
+});
+
+test('standby propagates a preflight failure and still permits connection cleanup', async () => {
+  respond = () => [0x6a, 0x82];
+  const failure = new Error('Card information unavailable');
+  const state = standby({
+    callback: () => assert.fail('Failed preflight must not run business'),
+    onNotFound: async () => {
+      throw failure;
+    },
+  });
+  await state.tap();
+  assert.deepEqual(state.failures, [failure]);
+  assert.deepEqual(state.events, ['connected', 'disconnected', 'cleanup']);
+});
+
+for (const kind of [
+  'SELECT response',
+  'business response',
+  'business exception',
+]) {
+  test(`standby does not run install preflight for a missing ${kind}`, async () => {
+    respond = ({data}) => {
+      if (kind === 'SELECT response')
+        return data[1] === 0xa4 ? [0x61, 1] : [0x6a, 0x82];
+      return data[1] === 0xa4 ? [0x90, 0] : [0x6a, 0x82];
+    };
+    const failure = new AppletNotFoundError(new Uint8Array());
+    const state = standby({
+      callback: async applet => {
+        if (kind === 'business exception') throw failure;
+        await applet.sendCommand(0x41, new Uint8Array([1]));
+      },
+      onNotFound: () =>
+        assert.fail('Only the initial SELECT may trigger installation'),
+    });
+    await state.tap();
+    assert.equal(state.failures.length, 1);
+    if (kind === 'business exception') assert.equal(state.failures[0], failure);
+    else {
+      assert.ok(state.failures[0] instanceof AppletISOError);
+      assert.equal(state.failures[0] instanceof AppletNotFoundError, false);
+      assert.equal(state.failures[0].sw, 0x6a82);
+    }
+  });
+}
 
 async function openApplet() {
   const applet = await new TestApplet(new Uint8Array([1, 2, 3])).openSession(

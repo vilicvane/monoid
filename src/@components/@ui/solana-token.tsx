@@ -92,11 +92,9 @@ export const SolanaTokenDetailsContent = observer(
   function SolanaTokenDetailsContent({
     chainId,
     token,
-    onAddressClick,
   }: {
     chainId: string;
     token: SolanaToken;
-    onAddressClick?: () => void;
   }): ReactNode {
     const {chainService} = useEntrances();
     const metadata = useTokenMetadata(chainId, token);
@@ -107,9 +105,7 @@ export const SolanaTokenDetailsContent = observer(
           <TokenLogo src={metadata?.logoURI} />
           <DetailsPopupTitle>{metadata?.name ?? 'SPL Token'}</DetailsPopupTitle>
         </TokenDetailsHeader>
-        <CenteredPopupAddress highlightEdges onClick={onAddressClick}>
-          {token.mint}
-        </CenteredPopupAddress>
+        <CenteredPopupAddress highlightEdges>{token.mint}</CenteredPopupAddress>
         <DetailsPopupDivider />
         {metadata && (
           <InfoSectionRow>

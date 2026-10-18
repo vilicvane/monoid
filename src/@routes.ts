@@ -1,8 +1,9 @@
 import type {Router as RoutraRouter, SchemaRecord} from 'routra';
 
-import type {MonoidIdHex, MonoidSafeIdHex, SafeIndexHex} from './@atomics.js';
+import type {SafeIndexHex} from './@atomics.js';
 import type {ScannedCardData} from './@components/views/safe/index.js';
 import type {EvmTransactionReplacementKind} from './@lib/evm-transaction-replacement.js';
+import type {CardInformation} from './@lib/global-platform/card-information.js';
 import type {AddressChain} from './@lib/wallet-address.js';
 import type {WalletConnectAuthentication} from './@lib/wallet-connect-authentication.js';
 
@@ -91,17 +92,8 @@ export const ROUTE_SCHEMA = {
         sourceIndexes?: SafeIndexHex[];
       },
     },
-    installApplet: true,
     setupCard: {
-      $state: undefined! as {
-        id: MonoidIdHex;
-        pin: boolean;
-        safe: {
-          id: MonoidSafeIdHex;
-          pin: boolean;
-          unlocked: boolean;
-        };
-      },
+      $state: undefined! as {cardInformation?: CardInformation},
     },
     card: {
       $state: undefined! as {
