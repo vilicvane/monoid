@@ -212,7 +212,10 @@ export const ScanView = observer(
     const pasteRef = useRef<AbortController>(undefined);
     const foregroundRef = useRef<QrScanForeground>(undefined);
     const [pasting, setPasting] = useState(false);
-    const [scanAttempt, setScanAttempt] = useState(0);
+    const [scanAttempt, setScanAttempt] = useState({
+      number: 0,
+      resuming: false,
+    });
     const [status, setStatus] = useState<ScanStatus>('starting');
     const [settledPhase, setSettledPhase] = useState<QrScanPreviewPhase>();
     const [controlsPhase, setControlsPhase] = useState<QrScanPreviewPhase>();
@@ -318,6 +321,9 @@ export const ScanView = observer(
 
     useEffect(() => {
       if (!cameraVisible) {
+        if (scanAttempt.resuming) {
+          setScanAttempt(attempt => ({...attempt, resuming: false}));
+        }
         return;
       }
 
@@ -367,7 +373,11 @@ export const ScanView = observer(
           cancelResume = foregroundRef.current!.requestResume(
             ready,
             canResume,
-            () => setScanAttempt(attempt => attempt + 1),
+            () =>
+              setScanAttempt(attempt => ({
+                number: attempt.number + 1,
+                resuming: true,
+              })),
           );
         }
       };
@@ -446,7 +456,7 @@ export const ScanView = observer(
         let permissions = await QrScanner.checkPermissions();
         if (disposed || finished || scannedUriRef.current) return;
 
-        if (permissions.camera !== 'granted' || scanAttempt > 0) {
+        if (permissions.camera !== 'granted' || scanAttempt.number > 0) {
           permissions = await QrScanner.requestPermissions();
         }
         if (disposed || finished || scannedUriRef.current) return;
@@ -524,9 +534,9 @@ export const ScanView = observer(
         revealRef.current = duration =>
           QrScanner.animatePreview({
             scanId,
-            fromScale: 0.5,
+            fromScale: scanAttempt.resuming ? 1 : 0.5,
             toScale: 1,
-            duration,
+            duration: scanAttempt.resuming ? 0 : duration,
             easing: SCAN_REVEAL_CURVE,
           }).then(
             () => true,
@@ -574,7 +584,10 @@ export const ScanView = observer(
       if (scannedUri.consumed) {
         // A consumed QR code starts a new scan when this page is revisited.
         setStatus('starting');
-        setScanAttempt(attempt => attempt + 1);
+        setScanAttempt(attempt => ({
+          number: attempt.number + 1,
+          resuming: false,
+        }));
         return;
       }
 
@@ -668,6 +681,7 @@ export const ScanView = observer(
           >
             <QrScanPreview
               phase={phase}
+              revealMode={scanAttempt.resuming ? 'fade' : 'zoom'}
               onReveal={duration =>
                 revealRef.current?.(duration) ?? Promise.resolve(false)
               }

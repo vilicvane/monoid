@@ -5,7 +5,7 @@ description: Monoid app development basics, sibling firmware, Capacitor iOS/Andr
 
 # Monoid app development
 
-Source: `../records.md`, records 13, 14, 25–36. Treat these records as authoritative and keep them up to date.
+Source: `../records.md`, records 13, 14, 25–38. Treat these records as authoritative and keep them up to date.
 
 - The app (Ionic React + Capacitor, iOS and Android) drives the card applets of the sibling repo `monoid-javacard`, which owns the card protocol. The app mirrors its commands as x-value schemas in `src/@lib/monoid/monoid-applet.ts`, on top of the generic `CBORApplet`/`Applet` transport in `src/@lib`.
 - The project is old: point out whenever the user's choices conflict with the interactions its existing code implies.
@@ -17,3 +17,4 @@ Source: `../records.md`, records 13, 14, 25–36. Treat these records as authori
 - After `npm run build`, run application tests with `node --experimental-test-module-mocks --test tests/*.test.mjs`. The native plugin packages have independent XCTest targets; simulator checks do not establish NFC or Secure Enclave behavior. Core iOS decisions and remaining physical-device checks are in `../29.md`.
 - The shared `MonoidUITests` scheme verifies first camera authorization on a real iPhone, resetting only Monoid's camera permission and preserving app data and other permissions. First authorization must wait for an actual app-activation notification after requesting access, because the reply can precede deactivation while activity snapshots still appear active.
 - Both QR scanners resume on foreground with a fresh scan ID after successful camera cleanup; never restart a dismissed/leaving scanner or one that already accepted a result. The Bitcoin scanner dismisses through the popup's outside/back behavior without a Cancel button. Only main-scan link processing shows the loading spinner; cancelling does not. These QR rules do not permit NFC operation replay.
+- QR recovery keeps the preview at full size under a static cover, then fades that cover after the first native frame is ready. Entry zoom belongs to the first scan, not foreground recovery.

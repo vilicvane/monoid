@@ -52,6 +52,7 @@ export function useIsoDepScanPrompt(): (
         const controller = new AbortController();
         let content = initialContent;
         let scanning = false;
+        let sessionId: string | undefined;
         let failed = false;
         let finishing = false;
         let result: ScanResult | undefined;
@@ -111,6 +112,7 @@ export function useIsoDepScanPrompt(): (
           presenter.show(owner, {
             content,
             scanning,
+            sessionId,
             error: failed,
             onDismiss: operation.cancel,
           });
@@ -167,11 +169,13 @@ export function useIsoDepScanPrompt(): (
               finish(result);
             }
           },
-          connected => {
+          (connected, nativeSessionId) => {
+            sessionId =
+              connected && !finishing && !result ? nativeSessionId : undefined;
             if (!result) {
               scanning = connected;
-              show();
             }
+            show();
           },
           () => {
             // Core NFC covers the WebView. Return the error after closing its sheet.

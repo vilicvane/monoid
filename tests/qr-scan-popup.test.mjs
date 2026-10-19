@@ -237,6 +237,7 @@ function fixture(t, overrides = {}) {
   native = {
     starts: [],
     stops: [],
+    animations: [],
     listeners: [],
     permissionRequests: 0,
     checkPermissions: async () => ({camera: 'granted'}),
@@ -262,7 +263,9 @@ function fixture(t, overrides = {}) {
     async stopScan({scanId}) {
       native.stops.push(scanId);
     },
-    async animatePreview() {},
+    async animatePreview(options) {
+      native.animations.push(options);
+    },
     async updatePreviewBounds() {},
     ...overrides,
   };
@@ -449,6 +452,46 @@ test('foreground recovery waits for camera cleanup and creates only one fresh sc
   await state.flush();
   assert.equal(native.starts.length, 2);
   assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.errors, []);
+});
+
+test('foreground recovery keeps the native popup preview at full scale after its first frame', async t => {
+  const ready = deferred();
+  const {state, native} = fixture(t, {
+    async startScan(options) {
+      native.starts.push(options);
+      if (native.starts.length === 2) await ready.promise;
+    },
+  });
+  await state.flush();
+  assert.equal(state.find('qr-scan-preview').props.revealMode, 'zoom');
+  await state.find('qr-scan-preview').props.onReveal(480);
+  assert.equal(native.animations[0].fromScale, 0.5);
+  assert.equal(native.animations[0].duration, 480);
+
+  state.appActive(false);
+  state.appActive(true);
+  await state.flush();
+  assert.equal(state.status, 'starting');
+  assert.equal(state.find('qr-scan-preview').props.revealMode, 'fade');
+  assert.equal(
+    state.find('qr-scan-preview').props.showProcessingSpinner,
+    false,
+  );
+  assert.equal(await state.find('qr-scan-preview').props.onReveal(480), false);
+  assert.equal(native.animations.length, 1);
+
+  ready.resolve();
+  await state.flush();
+  assert.equal(state.status, 'scanning');
+  await state.find('qr-scan-preview').props.onReveal(480);
+  assert.deepEqual(native.animations[1], {
+    scanId: native.starts[1].scanId,
+    fromScale: 1,
+    toScale: 1,
+    duration: 0,
+    easing: [0.22, 1, 0.36, 1],
+  });
   assert.deepEqual(state.errors, []);
 });
 

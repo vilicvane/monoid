@@ -13,6 +13,7 @@ public final class IsoDepNfcPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startScan", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopScan", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "transceive", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setSessionMessage", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "closeSession", returnType: CAPPluginReturnPromise)
     ]
 
@@ -110,6 +111,14 @@ public final class IsoDepNfcPlugin: CAPPlugin, CAPBridgedPlugin {
                 case .failure(let failure): self.reject(call, failure: failure, idKey: "sessionId", id: id, operation: "transceive")
                 }
             }
+        }
+    }
+
+    @objc public func setSessionMessage(_ call: CAPPluginCall) {
+        perform(call, idKey: "sessionId") { options, id, _ in
+            let message = try NFCArguments.message(options)
+            try self.sessions.setSessionMessage(id: id, message: message)
+            call.resolve()
         }
     }
 

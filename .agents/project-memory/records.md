@@ -53,3 +53,8 @@
 
 35. [user] automatically resume both the main QR scanner and Bitcoin QR popup when returning to the app; remove the Bitcoin scanner's Cancel button, and do not show the loading spinner when cancelling a scan. The spinner belongs to the main scanner's link processing. QR foreground recovery, scanner presentation.
 36. [agent] QR foreground recovery creates a fresh scan ID only after the previous camera stops successfully and the app is active and visible. Share lifecycle coordination across both scanners, tolerate delayed native pause events, and limit recovery to one attempt per foreground transition; dismissed, leaving, accepted-result, permission-denied and hardware-error states do not resume. This camera behavior does not change NFC's no-replay policy. QR lifecycle ownership.
+
+## 5409391
+
+37. [user] resuming QR scanning should keep the full preview size and fade out its cover once the camera is ready, without repeating the entry zoom animation. QR recovery motion.
+38. [agent] Core NFC exposes dynamic system-sheet text but no public spinner/progress-animation control. Mirror the rendered scan prompt's real stage/count text through a session-bound `setSessionMessage` API; only the current connected session accepts updates, and late updates cannot replace removal/disconnection messages. This is presentation only and must not send/replay APDUs or affect operation results. See [29.md](29.md). NFC progress feedback.

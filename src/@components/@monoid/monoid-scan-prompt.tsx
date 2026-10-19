@@ -147,12 +147,14 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
   );
 
   const [stateContent, setStateContent] = useState<ReactNode>();
+  const [sessionId, setSessionId] = useState<string>();
   const [owner] = useState(() => Symbol());
 
   useLayoutEffect(() => {
     if (appletCallbackAndPromise && state !== 'hidden') {
       monoidScanPromptPresenter.show(owner, {
         scanning: state === 'scanning',
+        sessionId,
         error: state === 'error',
         content: stateContent,
         onDismiss: () => setAppletCallbackAndPromise(undefined),
@@ -166,6 +168,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
     appletCallbackAndPromise,
     state,
     stateContent,
+    sessionId,
   ]);
 
   useLayoutEffect(
@@ -375,6 +378,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
       }
 
       setState('ready');
+      setSessionId(undefined);
 
       stop = monoidApplet.standby(
         async applet => {
@@ -664,8 +668,12 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
         () => {
           void finish().catch(fail);
         },
-        connected => {
-          if (!disposed && !finishing && !result) {
+        (connected, nativeSessionId) => {
+          if (disposed) return;
+          setSessionId(
+            connected && !finishing && !result ? nativeSessionId : undefined,
+          );
+          if (!finishing && !result) {
             setState(connected ? 'scanning' : 'ready');
           }
         },

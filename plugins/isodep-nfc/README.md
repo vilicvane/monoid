@@ -24,6 +24,7 @@ this local package to an application.
 | `startScan({scanId, transceiveTimeoutMs?})`  | Enables continuous scanning without waiting for a tag        |
 | `stopScan({scanId})`                         | Stops the scan, cancels its pending work and awaits cleanup  |
 | `transceive({sessionId, data, timeoutMs?})`  | `{data}` with the unmodified response bytes                  |
+| `setSessionMessage({sessionId, message})`    | Updates the iOS system sheet; Android rejects `UNSUPPORTED`  |
 | `closeSession({sessionId, waitForRemoval?})` | Closes one connection; optionally waits for detected removal |
 
 ## iOS integration and differences
@@ -52,6 +53,16 @@ asking for a PIN or presenting biometrics; initiate another scan after the user
 finishes. The plugin never silently restarts a cancelled or timed-out reader.
 `getStatus` reports `readingAvailable` for both `supported` and `enabled`; iOS has
 no user-facing NFC switch or dedicated NFC settings screen.
+
+`setSessionMessage` updates the system sheet's
+[`alertMessage`](https://developer.apple.com/documentation/corenfc/nfcreadersessionprotocol/alertmessage)
+for the current connected session, including during an APDU exchange. Pass a
+nonblank string; invalid text rejects `INVALID_ARGUMENT`. Updates for unknown,
+closed or ended sessions, or while waiting for removal, reject `SESSION_CLOSED`
+without replacing the current message. Text changes do not send commands,
+restart polling or extend deadlines. Core NFC exposes no public spinner or
+progress-bar control; callers can show actual operation stages or measured
+progress in this text. Android rejects this iOS-only method with `UNSUPPORTED`.
 
 The platform imposes its own reader-session time limit, normally 60 seconds.
 Longer `transceiveTimeoutMs` values cannot extend it. A system timeout emits

@@ -163,6 +163,29 @@ test('iOS closes the native sheet before returning an operation error', async ()
   assert.equal((await run.promise).error, failure);
 });
 
+test('raw scan presentation binds progress to its native session and clears it after callback completion', async () => {
+  platform = 'ios';
+  const {presenter, start} = setup();
+  const run = start(async (_sessionId, setContent) => {
+    setContent('Installing applet\n42%');
+  });
+  assert.equal(presenter.current.sessionId, undefined);
+  run.scan.onConnectionChange(true, 'install-session');
+  assert.equal(presenter.current.sessionId, 'install-session');
+  await run.scan.callback('install-session');
+  assert.equal(presenter.current.content, 'Installing applet\n42%');
+  assert.equal(presenter.current.sessionId, 'install-session');
+  run.scan.onConnectionChange(false);
+  assert.equal(presenter.current.sessionId, undefined);
+  run.scan.onConnectionChange(true, 'late-session');
+  assert.equal(presenter.current.sessionId, undefined);
+  run.scan.onCleanup();
+  await setImmediate();
+  run.scan.stopped.resolve();
+  hide(presenter);
+  assert.deepEqual(await run.promise, {success: true});
+});
+
 test('failure is displayed while waiting for removal and can be cancelled', async () => {
   const {presenter, start} = setup();
   const failure = new Error('Could not install applet');

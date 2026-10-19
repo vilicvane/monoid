@@ -25,7 +25,7 @@ export abstract class Applet<TCommandDefinitions> {
     /** Called after a connection attempt or a failed scan has been cleaned up. */
     onCleanup?: () => void,
     /** Reports native connection changes, including the SELECT exchange. */
-    onConnectionChange?: (connected: boolean) => void,
+    onConnectionChange?: (connected: boolean, sessionId?: string) => void,
     /** Evaluated after the operation or onError, before connection cleanup. */
     waitForRemoval?: () => boolean,
     /** Handles a missing SELECT target while its raw connection is still open. */

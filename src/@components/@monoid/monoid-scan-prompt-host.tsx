@@ -1,3 +1,5 @@
+import {Capacitor} from '@capacitor/core';
+import {IsoDepNfc} from 'capacitor-isodep-nfc';
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 import {useLayoutEffect, useRef, useState} from 'react';
@@ -71,11 +73,44 @@ function MonoidScanPromptLayer({
   const promptRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const stateContentRef = useRef<HTMLDivElement>(null);
+  const nativeMessageRef = useRef<{sessionId: string; message: string}>(
+    undefined,
+  );
   const presentationRef = useRef(presentation);
   const initializedRef = useRef(false);
   const [arrived, setArrived] = useState(false);
   const [backdropOwner] = useState(() => Symbol());
-  const {closing, scanning, token} = presentation;
+  const {closing, scanning, token, sessionId, error, content} = presentation;
+
+  useLayoutEffect(() => {
+    if (
+      Capacitor.getPlatform() !== 'ios' ||
+      !sessionId ||
+      !scanning ||
+      closing ||
+      error
+    ) {
+      return;
+    }
+
+    // Read the committed content, including text rendered by progress components.
+    const message = stateContentRef.current!.innerText.trim();
+    if (
+      !message ||
+      (nativeMessageRef.current?.sessionId === sessionId &&
+        nativeMessageRef.current.message === message)
+    ) {
+      return;
+    }
+    nativeMessageRef.current = {sessionId, message};
+
+    errorService.catch(
+      IsoDepNfc.setSessionMessage({sessionId, message}).catch(error => {
+        // A disconnect can reach native before React presents the new state.
+        if ((error as {code?: string}).code !== 'SESSION_CLOSED') throw error;
+      }),
+    );
+  }, [sessionId, scanning, closing, error, content, errorService]);
 
   useLayoutEffect(() => {
     if (scanning && !closing) {

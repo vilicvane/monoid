@@ -18,6 +18,14 @@ enum NFCArguments {
         return value
     }
 
+    static func message(_ options: [String: Any]) throws -> String {
+        guard let value = options["message"] as? String,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw NFCFailure(code: "INVALID_ARGUMENT", message: "message must be a nonblank string.")
+        }
+        return value
+    }
+
     static func bytes(_ options: [String: Any]) throws -> [UInt8] {
         guard let values = options["data"] as? [Any], !values.isEmpty else {
             throw NFCFailure(code: "INVALID_ARGUMENT", message: "data must be a nonempty array of bytes.")

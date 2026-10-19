@@ -205,6 +205,54 @@ test('successive card taps close only their sessions and leave scanning active',
   assert.deepEqual(device.connections, [true, false, true, false]);
 });
 
+for (const kind of ['raw', 'applet']) {
+  test(`${kind} connection feedback exposes only the current native session ID`, async () => {
+    const first = deferred();
+    const second = deferred();
+    const connections = [];
+    const args = [
+      async () => {
+        await (connections.length === 1 ? first : second).promise;
+      },
+      error => device.errors.push(error),
+      () => device.cleanupCount++,
+      (connected, sessionId) => connections.push({connected, sessionId}),
+    ];
+    device.disposers.push(
+      kind === 'raw'
+        ? standbyIsoDep(...args)
+        : new TestApplet(new Uint8Array([1])).standby(...args),
+    );
+    await until(() => device.starts.length === 1);
+    device.tap('first-native-session');
+    await setImmediate();
+    assert.deepEqual(connections, [
+      {connected: true, sessionId: 'first-native-session'},
+    ]);
+    first.resolve();
+    await until(() => device.cleanupCount === 1);
+    device.tap('second-native-session');
+    await setImmediate();
+    device.emit('sessionEnded', {
+      scanId: device.scanId,
+      sessionId: 'first-native-session',
+      reason: 'closed',
+    });
+    assert.deepEqual(connections, [
+      {connected: true, sessionId: 'first-native-session'},
+      {connected: false, sessionId: undefined},
+      {connected: true, sessionId: 'second-native-session'},
+    ]);
+    second.resolve();
+    await until(() => device.cleanupCount === 2);
+    assert.deepEqual(connections.at(-1), {
+      connected: false,
+      sessionId: undefined,
+    });
+    assert.deepEqual(device.errors, []);
+  });
+}
+
 test('an operation error is reported before waiting for removal and cleanup resumes only after removal', async () => {
   const removed = deferred();
   const failure = new Error('The selected account is not on this card');

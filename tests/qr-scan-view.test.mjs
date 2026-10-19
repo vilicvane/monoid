@@ -993,6 +993,61 @@ test('native reveal waits for the camera frame and the aperture, and cannot run 
   assert.deepEqual(state.errors, []);
 });
 
+test('foreground recovery reveals a full-size native preview, while a new page entry still zooms', async () => {
+  const ready = deferred();
+  const native = resetScanner({
+    async startScan(options) {
+      native.starts.push(options);
+      if (native.starts.length === 2) await ready.promise;
+    },
+  });
+  const state = mount(await loadView());
+  await setImmediate();
+  state.rerender();
+  assert.equal(state.find('qr-scan-preview').props.revealMode, 'zoom');
+  native.listeners
+    .find(listener => listener.name === 'scanEnded')
+    .callback({scanId: native.starts[0].scanId, reason: 'app-paused'});
+  foregrounds[0].activate();
+  await setImmediate();
+  state.rerender();
+  await setImmediate();
+  state.rerender();
+  assert.equal(state.status, 'starting');
+  assert.equal(state.find('qr-scan-preview').props.revealMode, 'fade');
+  assert.equal(await state.find('qr-scan-preview').props.onReveal(480), false);
+  assert.deepEqual(native.animations, []);
+
+  ready.resolve();
+  await setImmediate();
+  state.rerender();
+  assert.equal(state.status, 'scanning');
+  await state.find('qr-scan-preview').props.onReveal(480);
+  assert.deepEqual(native.animations, [
+    {
+      scanId: native.starts[1].scanId,
+      fromScale: 1,
+      toScale: 1,
+      duration: 0,
+      easing: [0.22, 1, 0.36, 1],
+    },
+  ]);
+
+  state.rerender({active: false});
+  state.rerender();
+  await setImmediate();
+  state.rerender({active: true});
+  await setImmediate();
+  state.rerender();
+  assert.equal(state.find('qr-scan-preview').props.revealMode, 'zoom');
+  await state.find('qr-scan-preview').props.onReveal(480);
+  assert.equal(native.animations[1].fromScale, 0.5);
+  assert.equal(native.animations[1].duration, 480);
+  state.cleanup();
+  await setImmediate();
+  assert.deepEqual(state.errors, []);
+});
+
 test('header keywords wait for the preview transition, then an error appears without a retry button', async () => {
   const ready = deferred();
   const native = resetScanner({

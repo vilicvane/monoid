@@ -1,4 +1,4 @@
-import {type ReactNode, useEffect, useRef} from 'react';
+import {type ReactNode, useLayoutEffect, useRef} from 'react';
 import {styled} from 'styled-components';
 
 import {StandaloneLoadingSpinner} from './loading-spinner.js';
@@ -66,12 +66,14 @@ const BREATH_RETURN_END_HANDLE = 0.4;
 
 export function QrScanPreview({
   phase,
+  revealMode = 'zoom',
   showProcessingSpinner = true,
   onReveal,
   onCovered,
   onSettled,
 }: {
   phase: QrScanPreviewPhase;
+  revealMode?: 'zoom' | 'fade';
   showProcessingSpinner?: boolean;
   onReveal: (duration: number) => Promise<boolean>;
   onCovered: () => void;
@@ -82,11 +84,11 @@ export function QrScanPreview({
   const spinnerRef = useRef<HTMLSpanElement>(null);
   const callbacksRef = useRef({onReveal, onCovered, onSettled});
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     callbacksRef.current = {onReveal, onCovered, onSettled};
   }, [onReveal, onCovered, onSettled]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const aperture = apertureRef.current!;
     const cover = coverRef.current!;
     const spinner = spinnerRef.current;
@@ -122,10 +124,30 @@ export function QrScanPreview({
     const moveSpinner = (opacity: string, duration: number): Promise<void> =>
       spinner ? move(spinner, {opacity}, duration) : Promise.resolve();
 
+    const fading = revealMode === 'fade';
+    if (fading && (phase === 'starting' || phase === 'scanning')) {
+      // Restore the full frame before painting, including when a previous
+      // animation was interrupted. Keep it covered until the camera is ready.
+      Object.assign(aperture.style, FRAME, {backgroundColor: 'transparent'});
+      Object.assign(cover.style, {
+        borderRadius: FRAME.borderRadius,
+        backgroundColor: '#f0f0f0',
+        opacity: '1',
+      });
+      if (spinner) spinner.style.opacity = '0';
+    } else {
+      Object.assign(cover.style, {
+        borderRadius: '0px',
+        backgroundColor: 'var(--ion-color-primary-contrast)',
+      });
+    }
+
     callbacksRef.current.onSettled(undefined);
 
     void (async () => {
       if (phase === 'starting') {
+        if (fading) return;
+
         await Promise.all([
           move(cover, {opacity: '0'}, 160),
           moveSpinner('0', 160),
@@ -153,15 +175,19 @@ export function QrScanPreview({
         );
       } else if (phase === 'scanning') {
         const revealed = await callbacksRef.current.onReveal(
-          reducedMotion.matches ? 0 : SCAN_REVEAL_DURATION,
+          fading || reducedMotion.matches ? 0 : SCAN_REVEAL_DURATION,
         );
         if (!revealed || disposed) return;
 
-        await move(
-          aperture,
-          {...FRAME, backgroundColor: 'transparent'},
-          SCAN_REVEAL_DURATION,
-        );
+        if (fading) {
+          await move(cover, {opacity: '0'}, 160);
+        } else {
+          await move(
+            aperture,
+            {...FRAME, backgroundColor: 'transparent'},
+            SCAN_REVEAL_DURATION,
+          );
+        }
         if (!disposed) callbacksRef.current.onSettled(phase);
       } else if (phase === 'completing') {
         await Promise.all([
@@ -222,7 +248,7 @@ export function QrScanPreview({
       }
       reducedMotion.removeEventListener('change', onMotionChange);
     };
-  }, [phase, showProcessingSpinner]);
+  }, [phase, revealMode, showProcessingSpinner]);
 
   return (
     <>

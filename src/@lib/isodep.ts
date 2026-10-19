@@ -30,7 +30,7 @@ export function standbyIsoDep(
   callback: (sessionId: string) => Promise<void>,
   onError: (error: unknown) => void,
   onCleanup?: () => void,
-  onConnectionChange?: (connected: boolean) => void,
+  onConnectionChange?: (connected: boolean, sessionId?: string) => void,
   waitForRemoval?: () => boolean,
 ): () => Promise<void> {
   let disposed = false;
@@ -41,7 +41,7 @@ export function standbyIsoDep(
     const connected = sessionId !== undefined;
 
     if (connected !== wasConnected) {
-      onConnectionChange?.(connected);
+      onConnectionChange?.(connected, sessionId);
     }
   };
   let stop!: () => void;

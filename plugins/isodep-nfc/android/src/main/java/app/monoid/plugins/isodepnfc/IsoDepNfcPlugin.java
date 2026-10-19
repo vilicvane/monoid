@@ -155,6 +155,11 @@ public final class IsoDepNfcPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void setSessionMessage(PluginCall call) {
+        call.reject("Android NFC reader mode does not provide a system message sheet.", "UNSUPPORTED");
+    }
+
+    @PluginMethod
     public void startScan(PluginCall call) {
         main.post(() -> {
             String id = requiredId(call, "scanId", "startScan");

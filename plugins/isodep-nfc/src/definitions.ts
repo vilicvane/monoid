@@ -45,6 +45,12 @@ export type TransceiveResult = {
   data: number[];
 };
 
+export type SetSessionMessageOptions = {
+  sessionId: string;
+  /** Nonblank text displayed in the iOS NFC system sheet. */
+  message: string;
+};
+
 export type CloseSessionOptions = {
   sessionId: string;
   /** Keep discovery blocked until native removal detection. See platform notes. */
@@ -129,6 +135,12 @@ export type IsoDepNfcPlugin = {
 
   /** Exchange raw bytes. Concurrent exchanges reject BUSY without queuing. */
   transceive(options: TransceiveOptions): Promise<TransceiveResult>;
+
+  /**
+   * Update the iOS system sheet for the current connected session. Closed or
+   * stale sessions reject SESSION_CLOSED. Android rejects UNSUPPORTED.
+   */
+  setSessionMessage(options: SetSessionMessageOptions): Promise<void>;
 
   /**
    * Close one connection and await cleanup. Scanning continues.

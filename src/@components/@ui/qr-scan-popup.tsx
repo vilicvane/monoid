@@ -500,9 +500,9 @@ export function QrScanPopup({
       revealRef.current = duration =>
         QrScanner.animatePreview({
           scanId,
-          fromScale: 0.5,
+          fromScale: attempt > 0 ? 1 : 0.5,
           toScale: 1,
-          duration,
+          duration: attempt > 0 ? 0 : duration,
           easing: SCAN_REVEAL_CURVE,
         }).then(
           () => true,
@@ -562,6 +562,7 @@ export function QrScanPopup({
         >
           <QrScanPreview
             phase={phase}
+            revealMode={attempt > 0 ? 'fade' : 'zoom'}
             showProcessingSpinner={false}
             onReveal={duration =>
               revealRef.current?.(duration) ?? Promise.resolve(false)

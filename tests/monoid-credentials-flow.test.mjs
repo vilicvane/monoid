@@ -563,6 +563,35 @@ test('prompt: scan feedback follows the connection before greeting and before cl
   assert.equal(state.presenter.current.closing, false);
 });
 
+test('prompt: native session identity clears after a result and cannot leak into the next operation', async () => {
+  const state = mount({auth: false});
+  await state.flush();
+  const scan = state.scans.at(-1);
+  assert.equal(state.presenter.current.sessionId, undefined);
+  scan.presentationToken = state.presenter.current.token;
+  scan.onConnectionChange(true, 'first-native-session');
+  await state.flush();
+  assert.equal(state.presenter.current.sessionId, 'first-native-session');
+  await scan.callback(state.applet);
+  scan.callbackReturned = true;
+  scan.onConnectionChange(false);
+  await state.flush();
+  assert.equal(state.presenter.current.sessionId, undefined);
+  scan.onConnectionChange(true, 'late-native-session');
+  await state.flush();
+  assert.equal(state.presenter.current.sessionId, undefined);
+  scan.onCleanup();
+  await state.flush();
+  await state.finishExit();
+  state.start();
+  await state.flush();
+  assert.equal(state.presenter.current.sessionId, undefined);
+  const next = state.scans.at(-1);
+  next.onConnectionChange(true, 'second-native-session');
+  await state.flush();
+  assert.equal(state.presenter.current.sessionId, 'second-native-session');
+});
+
 test('prompt: late connection events cannot restart feedback during exit', async () => {
   const state = mount({auth: false});
   const scan = await state.tap();

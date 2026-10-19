@@ -5,7 +5,7 @@ description: Monoid NFC card sessions, Access/Safe PIN ownership, biometric vaul
 
 # Monoid card sessions
 
-Source: `../records.md`, especially records 29–32 and 34, and `../29.md`. Treat records
+Source: `../records.md`, especially records 29–32, 34 and 38, and `../29.md`. Treat records
 as authoritative and keep them up to date. Records 19–24 describe an older WIP;
 do not reintroduce their plain-storage design or assume those TODOs still exist.
 
@@ -26,6 +26,10 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
 - iOS Core NFC covers the WebView and has a system session limit. Errors close
   the sheet and return to the caller; no automatic iOS retry hides the error or
   replays an uncertain mutation. Cancellation remains quiet; timeout is explicit.
+- Mirror rendered scan stage/count text to the iOS sheet with session-bound
+  `setSessionMessage`; clear the presentation's session ID on disconnect. Stale
+  messages cannot overwrite removal or disconnect feedback, and message failures
+  must not change APDU outcomes. Public Core NFC does not expose spinner control.
 - Card sounds respect the iPhone Silent Mode switch, matching the user's final
   preference after checking the system NFC completion sound.
 - During an iOS APDU exchange, Core NFC response/retry errors count as `TAG_LOST`

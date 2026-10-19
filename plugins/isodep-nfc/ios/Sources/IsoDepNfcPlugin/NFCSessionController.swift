@@ -185,6 +185,14 @@ final class NFCSessionController: NFCScanEvents {
         }
     }
 
+    func setSessionMessage(id: String, message: String) throws {
+        guard let scan, scan.endCode == nil, let session = scan.session,
+              session.id == id, session.connected, !session.ended, !session.waitingForRemoval else {
+            throw NFCFailure(code: "SESSION_CLOSED", message: "The NFC session is closed.")
+        }
+        scan.reader.alertMessage = message
+    }
+
     func close(id: String, waitForRemoval: Bool, completion: @escaping Completion) {
         guard let scan, let session = scan.session, session.id == id else {
             if waitForRemoval && (scan == nil || scan?.removedSessionId != id) {
