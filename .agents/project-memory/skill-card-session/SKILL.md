@@ -27,7 +27,9 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   the sheet and return to the caller; no automatic iOS retry hides the error or
   replays an uncertain mutation. Cancellation remains quiet; timeout is explicit.
 - iOS requires the applet/card-manager AIDs in `Info.plist`. Keep them aligned with
-  the bundled CAP manifest. Native removal detection does not send probe APDUs.
+  both the bundled CAP manifest and actual SELECT bytes, including the normal
+  version-independent Monoid prefix `F06D6F6E6F69640201`. Native removal detection
+  does not send probe APDUs.
 - iOS vault access uses a fresh biometric authorization per explicit scope, at
   most 60 seconds, revoked on background/lock/close. Never weaken to passcode or
   general device-unlocked access. Missing/inaccessible credentials allow manual PIN.

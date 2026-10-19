@@ -108,9 +108,7 @@ export class Entrances {
 
   @entrance
   get monoidApplet() {
-    return createMonoidApplet(
-      Uint8Array.from([0xf0, 0x6d, 0x6f, 0x6e, 0x6f, 0x69, 0x64, 0x02, 0x01]),
-    );
+    return createMonoidApplet();
   }
 
   @entrance

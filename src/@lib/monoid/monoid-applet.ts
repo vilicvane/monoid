@@ -320,6 +320,11 @@ export const monoidCommandDefinitions = {
 } satisfies CBORCommandDefinitions;
 
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
-export function createMonoidApplet(aid: Uint8Array) {
+export function createMonoidApplet(
+  // Select by the version-independent prefix during normal card use.
+  aid: Uint8Array = Uint8Array.from([
+    0xf0, 0x6d, 0x6f, 0x6e, 0x6f, 0x69, 0x64, 0x02, 0x01,
+  ]),
+) {
   return CBORApplet.create(aid, monoidCommandDefinitions);
 }
