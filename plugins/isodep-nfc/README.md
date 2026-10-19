@@ -82,6 +82,12 @@ ends the scan. Cancellation, backgrounding and timeouts reject pending removal
 waits instead of reporting successful removal. As with Android, this is a native
 RF availability signal rather than proof of physical movement.
 
+During an APDU exchange, Core NFC response/retry errors also map to `TAG_LOST`
+when the connected tag is unavailable and the reader remains ready. An available
+tag's response error remains `IO_ERROR`; reader invalidation and other explicit
+errors keep their original classification. The failed APDU's outcome remains
+`unknown`, and the plugin does not retry it.
+
 Core NFC reports response data and SW1/SW2 separately; the plugin returns them
 concatenated in the same `data` array as Android, including unsuccessful status
 words. It does not consume GET RESPONSE, change the caller's command framing or

@@ -1,3 +1,4 @@
+import CoreNFC
 import Foundation
 import XCTest
 @testable import IsoDepNfcPlugin
@@ -276,6 +277,32 @@ final class NFCSessionTests: XCTestCase {
         XCTAssertFalse(fixture.controller.canDiscover(fixture.reader))
         XCTAssertTrue(fixture.close(id, wait: true).succeeded)
         XCTAssertEqual(fixture.reader.restarts, 1)
+    }
+
+    func testUnavailableCardResponseFailureEndsExchangeWithoutRetryOrKnownOutcome() {
+        let fixture = Fixture()
+        let id = fixture.open()
+        let exchange = fixture.exchange(id)
+        fixture.card.isAvailable = false
+        let error = NSError(domain: NFCErrorDomain, code: NFCReaderError.Code.readerTransceiveErrorTagResponseError.rawValue)
+        fixture.card.completions[0](.failure(CoreNFCReader.transceiveFailure(error, tagAvailable: fixture.card.isAvailable, readerReady: fixture.reader.isReady)))
+
+        XCTAssertEqual(exchange.code, "TAG_LOST")
+        XCTAssertEqual(exchange.outcome, "unknown")
+        XCTAssertEqual(fixture.reason("sessionEnded"), "tag-lost")
+        XCTAssertEqual(fixture.count("sessionEnded"), 1)
+        XCTAssertEqual(fixture.card.sent.count, 1)
+        XCTAssertEqual(fixture.exchange(id).code, "SESSION_CLOSED")
+        XCTAssertEqual(fixture.card.sent.count, 1)
+
+        let stopped = fixture.stop()
+        XCTAssertTrue(stopped.values.isEmpty)
+        fixture.reader.invalidateCallback()
+        fixture.card.completions[0](.success([0x90, 0]))
+        XCTAssertTrue(stopped.succeeded)
+        XCTAssertEqual(exchange.values.count, 1)
+        XCTAssertEqual(fixture.count("sessionEnded"), 1)
+        XCTAssertEqual(fixture.reader.restarts, 0)
     }
 
     func testConnectionErrorStaysReservedUntilExplicitCleanup() {

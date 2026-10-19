@@ -42,3 +42,7 @@
 
 32. [user] after checking the iOS system NFC completion sound, keep Monoid's card sounds consistent with Silent Mode: mute them when the phone is silent. This supersedes the earlier request to play in Silent Mode. audio behavior.
 33. [agent] the shared `MonoidUITests` scheme resets only `app.monoid` camera authorization, accepts its first-use prompt and verifies the preview stays active without page switching; physical validation exposed authorization callbacks preceding deactivation while both app and scene still report active, requiring an explicit subsequent app-activation barrier. See [29.md](29.md). camera permission UI regression.
+
+## 512c9fd
+
+34. [agent] physical iOS feedback fixes: bundled WAV fetches return readable `basic` responses with status 0, and card removal during APDU exchange can return Core NFC 102 while the tag is unavailable and reader ready. Accept the media response and classify only the corresponding unavailable-tag transfer failures as `TAG_LOST`, preserving Silent Mode, other error classes and unknown APDU outcomes. See [29.md](29.md). audio loading, NFC removal.

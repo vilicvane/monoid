@@ -41,6 +41,13 @@ async function fixture(t, options = {}) {
     linearRampToValueAtTime: t.mock.fn(),
     cancelAndHoldAtTime: t.mock.fn(),
   });
+  const readBody = t.mock.fn(async () => {
+    if (options.failure === 'body rejects') {
+      throw new Error('Interrupted response');
+    }
+
+    return assetBytes;
+  });
   const fetch = t.mock.fn(async url => {
     assert.ok(new URL(url).pathname.endsWith('/@assets/scan-prompt.wav'));
 
@@ -49,16 +56,14 @@ async function fixture(t, options = {}) {
     }
 
     await options.fetchPromise;
-    return {
-      ok: options.failure !== 'HTTP error',
-      status: options.failure === 'HTTP error' ? 503 : 200,
-      arrayBuffer: async () => {
-        if (options.failure === 'body rejects') {
-          throw new Error('Interrupted response');
-        }
+    const status =
+      options.responseStatus ?? (options.failure === 'HTTP error' ? 503 : 200);
 
-        return assetBytes;
-      },
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      type: options.responseType ?? 'basic',
+      arrayBuffer: readBody,
     };
   });
 
@@ -167,6 +172,7 @@ async function fixture(t, options = {}) {
     contexts,
     listeners,
     fetch,
+    readBody,
     assetBytes,
     hide: () => {
       document.hidden = true;
@@ -206,6 +212,48 @@ for (const phase of ['resume', 'fetch', 'decode']) {
       contexts[0].decodeAudioData.mock.callCount(),
       phase === 'decode' ? 1 : 0,
     );
+  });
+}
+
+test('readable iOS basic status-zero media responses decode and play', async t => {
+  const {playScanSound, contexts, listeners, readBody} = await fixture(t, {
+    responseStatus: 0,
+    responseType: 'basic',
+  });
+  const stop = playScanSound();
+  await flush();
+  const context = contexts[0];
+
+  assert.equal(readBody.mock.callCount(), 1);
+  assert.equal(context.decodeAudioData.mock.callCount(), 1);
+  assert.equal(context.sources.length, 1);
+  assert.equal(context.sources[0].start.mock.callCount(), 1);
+
+  stop();
+  context.finish();
+  await flush();
+
+  assert.equal(context.state, 'closed');
+  assert.equal(listeners.size, 0);
+});
+
+for (const responseType of ['opaque', 'error']) {
+  test(`${responseType} status-zero responses are rejected before decoding`, async t => {
+    const {playScanSound, contexts, listeners, readBody} = await fixture(t, {
+      responseStatus: 0,
+      responseType,
+    });
+    const stop = playScanSound();
+    await flush();
+    stop();
+    const context = contexts[0];
+
+    assert.equal(readBody.mock.callCount(), 0);
+    assert.equal(context.decodeAudioData.mock.callCount(), 0);
+    assert.equal(context.sources.length, 0);
+    assert.equal(context.close.mock.callCount(), 1);
+    assert.equal(context.state, 'closed');
+    assert.equal(listeners.size, 0);
   });
 }
 

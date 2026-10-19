@@ -5,7 +5,7 @@ description: Monoid app development basics, sibling firmware, Capacitor iOS/Andr
 
 # Monoid app development
 
-Source: `../records.md`, records 13, 14, 25–33. Treat these records as authoritative and keep them up to date.
+Source: `../records.md`, records 13, 14, 25–34. Treat these records as authoritative and keep them up to date.
 
 - The app (Ionic React + Capacitor, iOS and Android) drives the card applets of the sibling repo `monoid-javacard`, which owns the card protocol. The app mirrors its commands as x-value schemas in `src/@lib/monoid/monoid-applet.ts`, on top of the generic `CBORApplet`/`Applet` transport in `src/@lib`.
 - The project is old: point out whenever the user's choices conflict with the interactions its existing code implies.

@@ -5,7 +5,7 @@ description: Monoid NFC card sessions, Access/Safe PIN ownership, biometric vaul
 
 # Monoid card sessions
 
-Source: `../records.md`, especially records 29–32, and `../29.md`. Treat records
+Source: `../records.md`, especially records 29–32 and 34, and `../29.md`. Treat records
 as authoritative and keep them up to date. Records 19–24 describe an older WIP;
 do not reintroduce their plain-storage design or assume those TODOs still exist.
 
@@ -28,6 +28,9 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   replays an uncertain mutation. Cancellation remains quiet; timeout is explicit.
 - Card sounds respect the iPhone Silent Mode switch, matching the user's final
   preference after checking the system NFC completion sound.
+- During an iOS APDU exchange, Core NFC response/retry errors count as `TAG_LOST`
+  only when the tag is unavailable and the reader is still ready. Preserve other
+  errors and unknown APDU outcomes; lost connections cancel without replaying.
 - iOS requires the applet/card-manager AIDs in `Info.plist`. Keep them aligned with
   both the bundled CAP manifest and actual SELECT bytes, including the normal
   version-independent Monoid prefix `F06D6F6E6F69640201`. Native removal detection

@@ -3,9 +3,11 @@ import Foundation
 
 final class CoreNFCCard: NFCCard {
     let tag: NFCISO7816Tag
+    private weak var reader: NFCTagReaderSession?
 
-    init(_ tag: NFCISO7816Tag) {
+    init(_ tag: NFCISO7816Tag, reader: NFCTagReaderSession) {
         self.tag = tag
+        self.reader = reader
     }
 
     var identifier: [UInt8] { Array(tag.identifier) }
@@ -21,7 +23,7 @@ final class CoreNFCCard: NFCCard {
 
         tag.sendCommand(apdu: apdu) { data, sw1, sw2, error in
             if let error {
-                completion(.failure(CoreNFCReader.failure(error)))
+                completion(.failure(CoreNFCReader.transceiveFailure(error, tagAvailable: self.tag.isAvailable, readerReady: self.reader?.isReady == true)))
             } else {
                 completion(.success(Array(data) + [sw1, sw2]))
             }
@@ -90,7 +92,18 @@ final class CoreNFCReader: NSObject, NFCScanDriver, NFCTagReaderSessionDelegate 
             return
         }
         session.alertMessage = "Keep your card near the top of your iPhone."
-        events?.detected(self, card: CoreNFCCard(tag))
+        events?.detected(self, card: CoreNFCCard(tag, reader: session))
+    }
+
+    static func transceiveFailure(_ error: Error, tagAvailable: Bool, readerReady: Bool) -> NFCFailure {
+        // Core NFC can report a response/retry error when a connected card leaves
+        // the field. Require independent RF loss while the reader is still live;
+        // invalidating a reader also makes its tags unavailable.
+        if readerReady, !tagAvailable, let error = error as? NFCReaderError,
+           error.code == .readerTransceiveErrorTagResponseError || error.code == .readerTransceiveErrorRetryExceeded {
+            return NFCFailure(code: "TAG_LOST", message: "The card connection was lost.")
+        }
+        return failure(error)
     }
 
     static func failure(_ error: Error) -> NFCFailure {

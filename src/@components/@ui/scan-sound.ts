@@ -7,7 +7,10 @@ function loadEncodedSound(): Promise<ArrayBuffer> {
     new URL('../../@assets/scan-prompt.wav', import.meta.url),
   )
     .then(async response => {
-      if (!response.ok) {
+      // Capacitor serves bundled iOS media through a non-HTTP URLResponse:
+      // its readable basic response has status 0 despite containing the WAV.
+      const nativeMedia = response.status === 0 && response.type === 'basic';
+      if (!response.ok && !nativeMedia) {
         throw new Error('Could not load scan sound');
       }
 
