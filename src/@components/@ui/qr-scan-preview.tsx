@@ -66,11 +66,13 @@ const BREATH_RETURN_END_HANDLE = 0.4;
 
 export function QrScanPreview({
   phase,
+  showProcessingSpinner = true,
   onReveal,
   onCovered,
   onSettled,
 }: {
   phase: QrScanPreviewPhase;
+  showProcessingSpinner?: boolean;
   onReveal: (duration: number) => Promise<boolean>;
   onCovered: () => void;
   onSettled: (phase: QrScanPreviewPhase | undefined) => void;
@@ -87,8 +89,9 @@ export function QrScanPreview({
   useEffect(() => {
     const aperture = apertureRef.current!;
     const cover = coverRef.current!;
-    const spinner = spinnerRef.current!;
-    const elements = [aperture, cover, spinner];
+    const spinner = spinnerRef.current;
+    const elements: HTMLElement[] = [aperture, cover];
+    if (spinner) elements.push(spinner);
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     let disposed = false;
 
@@ -116,6 +119,8 @@ export function QrScanPreview({
       Object.assign(element.style, target);
       animation.cancel();
     };
+    const moveSpinner = (opacity: string, duration: number): Promise<void> =>
+      spinner ? move(spinner, {opacity}, duration) : Promise.resolve();
 
     callbacksRef.current.onSettled(undefined);
 
@@ -123,7 +128,7 @@ export function QrScanPreview({
       if (phase === 'starting') {
         await Promise.all([
           move(cover, {opacity: '0'}, 160),
-          move(spinner, {opacity: '0'}, 160),
+          moveSpinner('0', 160),
           move(aperture, {...CIRCLE, backgroundColor: '#f0f0f0'}, 280),
         ]);
         if (disposed || reducedMotion.matches) return;
@@ -162,7 +167,7 @@ export function QrScanPreview({
         await Promise.all([
           move(cover, {opacity: '1'}, SCAN_REVEAL_DURATION),
           move(aperture, CIRCLE, SCAN_REVEAL_DURATION),
-          move(spinner, {opacity: '1'}, SCAN_REVEAL_DURATION),
+          moveSpinner('1', SCAN_REVEAL_DURATION),
         ]);
         if (!disposed) callbacksRef.current.onCovered();
       } else if (phase === 'scanned') {
@@ -176,7 +181,7 @@ export function QrScanPreview({
             {...FRAME, backgroundColor: '#f0f0f0'},
             SCAN_REVEAL_DURATION,
           ),
-          move(spinner, {opacity: '0'}, 160),
+          moveSpinner('0', 160),
         ]);
         if (!disposed) callbacksRef.current.onSettled(phase);
       }
@@ -217,17 +222,19 @@ export function QrScanPreview({
       }
       reducedMotion.removeEventListener('change', onMotionChange);
     };
-  }, [phase]);
+  }, [phase, showProcessingSpinner]);
 
   return (
     <>
       <Aperture ref={apertureRef} aria-hidden="true" />
       {/* Cover the rounded mask edge too, avoiding a seam between two clips. */}
       <Cover ref={coverRef} aria-hidden="true" />
-      <Spinner
-        ref={spinnerRef}
-        paused={phase !== 'completing' && phase !== 'scanned'}
-      />
+      {showProcessingSpinner && (
+        <Spinner
+          ref={spinnerRef}
+          paused={phase !== 'completing' && phase !== 'scanned'}
+        />
+      )}
     </>
   );
 }

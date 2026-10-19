@@ -48,3 +48,8 @@
 ## 512c9fd
 
 34. [agent] physical iOS feedback fixes: bundled WAV fetches return readable `basic` responses with status 0, and card removal during APDU exchange can return Core NFC 102 while the tag is unavailable and reader ready. Accept the media response and classify only the corresponding unavailable-tag transfer failures as `TAG_LOST`, preserving Silent Mode, other error classes and unknown APDU outcomes. Preserve tag loss through cleanup so the system sheet ends with a disconnect message instead of a success checkmark; normal post-read removal remains successful. See [29.md](29.md). audio loading, NFC removal.
+
+## 3c16089
+
+35. [user] automatically resume both the main QR scanner and Bitcoin QR popup when returning to the app; remove the Bitcoin scanner's Cancel button, and do not show the loading spinner when cancelling a scan. The spinner belongs to the main scanner's link processing. QR foreground recovery, scanner presentation.
+36. [agent] QR foreground recovery creates a fresh scan ID only after the previous camera stops successfully and the app is active and visible. Share lifecycle coordination across both scanners, tolerate delayed native pause events, and limit recovery to one attempt per foreground transition; dismissed, leaving, accepted-result, permission-denied and hardware-error states do not resume. This camera behavior does not change NFC's no-replay policy. QR lifecycle ownership.

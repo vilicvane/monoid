@@ -8,6 +8,8 @@ let rendering;
 let scanner;
 let moduleVersion = 0;
 let platform = 'android';
+let foregrounds = [];
+const qrScanLifecycle = {closing: Promise.resolve()};
 
 const WALLET_CONNECT_URI = `wc:${'a'.repeat(64)}@2?relay-protocol=irn&symKey=${'b'.repeat(64)}`;
 
@@ -39,6 +41,69 @@ mock.module('capacitor-qr-scanner', {
         'updatePreviewBounds',
       ].map(name => [name, (...args) => scanner[name](...args)]),
     ),
+  },
+});
+// Coordinator event ordering is tested separately; this fixture controls its
+// foreground signal while exercising the view's real cleanup and live guards.
+mock.module('../.bld/app/@lib/qr-scanner.js', {
+  namedExports: {
+    qrScanLifecycle,
+    QrScanForeground: class {
+      requests = [];
+      active = false;
+      disposed = false;
+      generation = 0;
+      resumedGeneration = -1;
+
+      constructor(onError) {
+        this.onError = onError;
+        foregrounds.push(this);
+      }
+
+      requestResume(ready, canResume, resume) {
+        const request = {ready: false, cancelled: false, canResume, resume};
+        this.requests.push(request);
+        void ready.then(
+          () => {
+            request.ready = true;
+            this.flush();
+          },
+          () => {
+            request.cancelled = true;
+          },
+        );
+        return () => {
+          request.cancelled = true;
+        };
+      }
+
+      activate() {
+        if (!this.active) this.generation++;
+        this.active = true;
+        this.flush();
+      }
+
+      flush() {
+        for (const request of this.requests) {
+          if (
+            !this.disposed &&
+            this.active &&
+            this.resumedGeneration !== this.generation &&
+            request.ready &&
+            !request.cancelled &&
+            request.canResume()
+          ) {
+            request.cancelled = true;
+            this.resumedGeneration = this.generation;
+            request.resume();
+          }
+        }
+      }
+
+      dispose() {
+        this.disposed = true;
+      }
+    },
   },
 });
 mock.module('react', {
@@ -216,6 +281,8 @@ function deferred() {
 
 function resetScanner(overrides = {}) {
   globalThis.__scanViewHot = {data: {}};
+  foregrounds = [];
+  qrScanLifecycle.closing = Promise.resolve();
   scanner = {
     starts: [],
     animations: [],
@@ -369,6 +436,7 @@ for (const [code, status] of [
       assert.equal(state.status, status);
       assert.deepEqual(state.errors, []);
       assert.equal(native.stops.length, 1);
+      assert.deepEqual(foregrounds[0].requests, []);
     } finally {
       state.cleanup();
     }
@@ -478,6 +546,251 @@ for (const code of ['CANCELLED', 'APP_INACTIVE']) {
     state.cleanup();
     await setImmediate();
     assert.equal(native.stops.length, 1);
+  });
+}
+
+test('foreground recovery waits for native cleanup, uses a fresh scan ID and checks native readiness', async () => {
+  const closing = deferred();
+  const readiness = deferred();
+  let permissionRequests = 0;
+  const native = resetScanner({
+    stopScan: ({scanId}) => {
+      native.stops.push(scanId);
+      return closing.promise;
+    },
+    requestPermissions: () => {
+      permissionRequests++;
+      return readiness.promise;
+    },
+  });
+  const state = mount(await loadView());
+  await setImmediate();
+  const foreground = foregrounds[0];
+  const ended = native.listeners.find(
+    listener => listener.name === 'scanEnded',
+  );
+  const firstId = native.starts[0].scanId;
+  ended.callback({scanId: firstId, reason: 'app-paused'});
+  ended.callback({scanId: firstId, reason: 'app-paused'});
+  assert.equal(state.status, 'paused');
+  assert.equal(foreground.requests.length, 1);
+
+  foreground.activate();
+  await setImmediate();
+  state.rerender();
+  assert.equal(native.starts.length, 1);
+  assert.equal(permissionRequests, 0);
+
+  closing.resolve();
+  await setImmediate();
+  state.rerender();
+  await setImmediate();
+  assert.equal(permissionRequests, 1);
+  assert.equal(native.starts.length, 1);
+  readiness.resolve({camera: 'granted'});
+  await setImmediate();
+  assert.equal(state.status, 'scanning');
+  assert.equal(native.starts.length, 2);
+  assert.notEqual(native.starts[1].scanId, firstId);
+  assert.equal(foregrounds.length, 1);
+
+  ended.callback({scanId: firstId, reason: 'app-paused'});
+  foreground.activate();
+  state.rerender();
+  await setImmediate();
+  assert.equal(native.starts.length, 2);
+  assert.equal(state.status, 'scanning');
+  state.cleanup();
+  assert.equal(foreground.disposed, true);
+  await setImmediate();
+  assert.deepEqual(state.errors, []);
+});
+
+test('a delayed native pause still resumes when the foreground event arrived first', async () => {
+  const native = resetScanner();
+  const state = mount(await loadView());
+  await setImmediate();
+  foregrounds[0].activate();
+  native.listeners
+    .find(listener => listener.name === 'scanEnded')
+    .callback({scanId: native.starts[0].scanId, reason: 'app-paused'});
+  await setImmediate();
+  state.rerender();
+  await setImmediate();
+  assert.equal(native.starts.length, 2);
+  assert.equal(state.status, 'scanning');
+  state.cleanup();
+  await setImmediate();
+});
+
+test('failed native cleanup blocks automatic camera recovery', async () => {
+  const closing = deferred();
+  const failure = new Error('Could not close the camera');
+  const native = resetScanner({stopScan: () => closing.promise});
+  const state = mount(await loadView());
+  await setImmediate();
+  native.listeners
+    .find(listener => listener.name === 'scanEnded')
+    .callback({scanId: native.starts[0].scanId, reason: 'app-paused'});
+  foregrounds[0].activate();
+  closing.reject(failure);
+  await setImmediate();
+  state.rerender();
+  await setImmediate();
+  assert.equal(native.starts.length, 1);
+  assert.equal(state.status, 'paused');
+  assert.deepEqual(state.errors, [failure]);
+  state.cleanup();
+  await setImmediate();
+});
+
+for (const code of ['CANCELLED', 'APP_INACTIVE']) {
+  test(`${code} during startup resumes after returning to the foreground`, async () => {
+    const native = resetScanner({
+      async startScan(options) {
+        native.starts.push(options);
+        if (native.starts.length === 1) {
+          throw Object.assign(new Error(code), {code});
+        }
+      },
+    });
+    const state = mount(await loadView());
+    await setImmediate();
+    assert.equal(state.status, 'paused');
+    assert.equal(foregrounds[0].requests.length, 1);
+    foregrounds[0].activate();
+    await setImmediate();
+    state.rerender();
+    await setImmediate();
+    assert.equal(native.starts.length, 2);
+    assert.equal(state.status, 'scanning');
+    assert.deepEqual(state.errors, []);
+    state.cleanup();
+    await setImmediate();
+  });
+}
+
+test('initial camera permission does not schedule foreground recovery', async () => {
+  const permissions = deferred();
+  const native = resetScanner({
+    checkPermissions: async () => ({camera: 'prompt'}),
+    requestPermissions: () => permissions.promise,
+  });
+  const state = mount(await loadView());
+  await setImmediate();
+  foregrounds[0].activate();
+  state.rerender();
+  assert.deepEqual(native.starts, []);
+  assert.deepEqual(foregrounds[0].requests, []);
+
+  permissions.resolve({camera: 'granted'});
+  await setImmediate();
+  assert.equal(native.starts.length, 1);
+  assert.equal(state.status, 'scanning');
+  state.cleanup();
+  await setImmediate();
+});
+
+for (const departure of ['leave', 'unmount']) {
+  test(`pending foreground recovery cannot reopen the camera after ${departure}`, async () => {
+    const closing = deferred();
+    const native = resetScanner({stopScan: () => closing.promise});
+    const state = mount(await loadView());
+    await setImmediate();
+    native.listeners
+      .find(listener => listener.name === 'scanEnded')
+      .callback({scanId: native.starts[0].scanId, reason: 'app-paused'});
+    const foreground = foregrounds[0];
+    foreground.activate();
+    if (departure === 'leave') {
+      // Check the live route guard before React has cleaned up this attempt.
+      state.view.$leaving = true;
+      state.view.$match.$exact.$active = false;
+    } else {
+      state.cleanup();
+    }
+    closing.resolve();
+    await setImmediate();
+    if (departure === 'leave') state.rerender();
+    await setImmediate();
+    assert.equal(native.starts.length, 1);
+    assert.equal(foreground.requests[0].cancelled, true);
+    if (departure === 'leave') state.cleanup();
+    await setImmediate();
+  });
+}
+
+test('an accepted QR result remains terminal across pause and foreground notifications', async () => {
+  const native = resetScanner();
+  const state = mount(await loadView());
+  await setImmediate();
+  const scanId = native.starts[0].scanId;
+  native.listeners
+    .find(listener => listener.name === 'codesScanned')
+    .callback({scanId, values: [WALLET_CONNECT_URI]});
+  native.listeners
+    .find(listener => listener.name === 'scanEnded')
+    .callback({scanId, reason: 'app-paused'});
+  foregrounds[0].activate();
+  state.rerender();
+  await setImmediate();
+  assert.equal(state.status, 'completing');
+  assert.equal(native.starts.length, 1);
+  assert.deepEqual(foregrounds[0].requests, []);
+  state.cleanup();
+  await setImmediate();
+});
+
+test('a preview closing error does not swallow the later app-paused event', async () => {
+  const native = resetScanner({
+    animatePreview: async () => {
+      throw Object.assign(new Error('Preview closed'), {code: 'SCAN_CLOSED'});
+    },
+  });
+  const state = mount(await loadView());
+  await setImmediate();
+  const scanId = native.starts[0].scanId;
+  state.rerender();
+  await state.find('qr-scan-preview').props.onReveal(120);
+  assert.equal(state.status, 'paused');
+  assert.deepEqual(foregrounds[0].requests, []);
+  native.listeners
+    .find(listener => listener.name === 'scanEnded')
+    .callback({scanId, reason: 'app-paused'});
+  foregrounds[0].activate();
+  await setImmediate();
+  state.rerender();
+  await setImmediate();
+  assert.equal(native.starts.length, 2);
+  assert.equal(state.status, 'scanning');
+  assert.deepEqual(state.errors, []);
+  state.cleanup();
+  await setImmediate();
+});
+
+for (const reason of ['stopped', 'error']) {
+  test(`native ${reason} does not request automatic foreground recovery`, async () => {
+    const native = resetScanner();
+    const state = mount(await loadView());
+    await setImmediate();
+    const ended = native.listeners.find(
+      listener => listener.name === 'scanEnded',
+    );
+    const scanId = native.starts[0].scanId;
+    ended.callback({
+      scanId,
+      reason,
+      code: 'CAMERA_ERROR',
+      message: 'Camera failed',
+    });
+    ended.callback({scanId, reason: 'app-paused'});
+    foregrounds[0].activate();
+    state.rerender();
+    await setImmediate();
+    assert.equal(native.starts.length, 1);
+    assert.deepEqual(foregrounds[0].requests, []);
+    state.cleanup();
+    await setImmediate();
   });
 }
 

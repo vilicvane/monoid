@@ -84,7 +84,7 @@ Each native plugin is also an independent Swift package with an XCTest target.
 Run its tests from Xcode or `xcodebuild test` with an available iPhone simulator;
 see the plugin READMEs for the package schemes.
 
-To verify the first camera authorization on a physical iPhone, select the shared
+To verify camera authorization and foreground recovery on a physical iPhone, select the shared
 `MonoidUITests` scheme in Xcode and run Product > Test, or run:
 
 ```sh
@@ -98,9 +98,15 @@ xcodebuild test -project ios/App/App.xcodeproj -scheme MonoidUITests \
 Replace `DEVICE_UDID` with the connected iPhone's identifier. The test resets only
 `app.monoid`'s camera authorization, preserving application data and other privacy
 permissions. It opens Scan, verifies and accepts the camera permission alert, and
-checks that the first camera preview stays active without switching pages. It
-leaves camera access granted and saves authorization/preview screenshots in the
-Xcode test result. This camera test skips simulators.
+checks that the first camera preview stays active without switching pages. A
+second test backgrounds and reactivates the app twice, checks automatic camera
+recovery, then verifies that leaving Scan prevents it from reopening. The tests
+leave camera access granted and save authorization/preview screenshots in the
+Xcode test result. These camera tests skip simulators.
+
+The Bitcoin popup test also checks foreground recovery and outside dismissal. It
+uses an existing wallet with a spendable balance and skips if none is available;
+it does not create wallets or submit a transaction.
 
 See the [Capacitor environment requirements](https://capacitorjs.com/docs/getting-started/environment-setup),
 [Swift Package Manager setup](https://capacitorjs.com/docs/ios/spm) and

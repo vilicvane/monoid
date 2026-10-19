@@ -11,7 +11,7 @@ import type {RouteComponentProps} from 'routra-react';
 import {createGlobalStyle, styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
-import {qrScanLifecycle} from '../../@lib/qr-scanner.js';
+import {QrScanForeground, qrScanLifecycle} from '../../@lib/qr-scanner.js';
 import {parseWalletConnectUri} from '../../@lib/wallet-connect.js';
 import type {Router} from '../../@routes.js';
 import {Button} from '../@ui/button.js';
@@ -210,6 +210,7 @@ export const ScanView = observer(
     const completeRef = useRef<() => void>(undefined);
     const scannedUriRef = useRef<{uri: string; consumed: boolean}>(undefined);
     const pasteRef = useRef<AbortController>(undefined);
+    const foregroundRef = useRef<QrScanForeground>(undefined);
     const [pasting, setPasting] = useState(false);
     const [scanAttempt, setScanAttempt] = useState(0);
     const [status, setStatus] = useState<ScanStatus>('starting');
@@ -223,6 +224,23 @@ export const ScanView = observer(
     const cameraVisible =
       active ||
       (!!view.$leaving && (status === 'scanning' || status === 'completing'));
+
+    useEffect(() => {
+      if (
+        Capacitor.getPlatform() === 'web' ||
+        !Capacitor.isPluginAvailable('QrScanner')
+      )
+        return;
+
+      const foreground = new QrScanForeground(error => {
+        errorService.catch(Promise.reject(error));
+      });
+      foregroundRef.current = foreground;
+      return () => {
+        foreground.dispose();
+        foregroundRef.current = undefined;
+      };
+    }, [errorService]);
 
     const acceptUri = useCallback(
       (uri: string): void => {
@@ -323,16 +341,54 @@ export const ScanView = observer(
       const listeners: PluginListenerHandle[] = [];
       let disposed = false;
       let finished = false;
+      let terminal = false;
+      let awaitingScanEnd = false;
       let started = false;
       let stopped: Promise<void> | undefined;
+      let cancelResume: (() => void) | undefined;
 
       const stop = (): Promise<void> =>
         (stopped ??= QrScanner.stopScan({scanId}));
+      const canResume = (): boolean =>
+        !disposed &&
+        !terminal &&
+        !scannedUriRef.current &&
+        !view.$leaving &&
+        view.$match.$exact.$active;
+      const pause = (): void => {
+        if (!canResume()) return;
+
+        finished = true;
+        awaitingScanEnd = false;
+        setStatus('paused');
+        if (!cancelResume) {
+          const ready = stop();
+          errorService.catch(ready);
+          cancelResume = foregroundRef.current!.requestResume(
+            ready,
+            canResume,
+            () => setScanAttempt(attempt => attempt + 1),
+          );
+        }
+      };
       const fail = (error: unknown): void => {
-        if (!disposed && !finished && !scannedUriRef.current) {
-          finished = true;
+        if (
+          !disposed &&
+          (!finished || awaitingScanEnd) &&
+          !scannedUriRef.current
+        ) {
           const {code} = error as QrScannerError;
           if (code === 'CANCELLED' || code === 'APP_INACTIVE') {
+            pause();
+            return;
+          }
+
+          finished = true;
+          // A preview update can observe native teardown before scanEnded.
+          // Only the eventual app-paused event may authorize automatic resume.
+          awaitingScanEnd = code === 'SCAN_CLOSED';
+          terminal = !awaitingScanEnd;
+          if (awaitingScanEnd) {
             setStatus('paused');
           } else if (code === 'NO_CAMERA' || code === 'UNSUPPORTED') {
             setStatus('unsupported');
@@ -372,6 +428,8 @@ export const ScanView = observer(
         completeRef.current = undefined;
         if (disposed) return;
 
+        terminal = true;
+        cancelResume?.();
         finished = true;
         // Hide the camera only after the success cover is fully opaque.
         errorService.catch(
@@ -388,12 +446,14 @@ export const ScanView = observer(
         let permissions = await QrScanner.checkPermissions();
         if (disposed || finished || scannedUriRef.current) return;
 
-        if (permissions.camera !== 'granted') {
+        if (permissions.camera !== 'granted' || scanAttempt > 0) {
           permissions = await QrScanner.requestPermissions();
         }
         if (disposed || finished || scannedUriRef.current) return;
 
         if (permissions.camera !== 'granted') {
+          terminal = true;
+          finished = true;
           setStatus('denied');
           return;
         }
@@ -422,17 +482,20 @@ export const ScanView = observer(
 
         listeners.push(
           await QrScanner.addListener('scanEnded', event => {
-            if (
-              event.scanId !== scanId ||
-              disposed ||
-              finished ||
-              scannedUriRef.current
-            )
+            if (event.scanId !== scanId || disposed || scannedUriRef.current)
               return;
+
+            if (event.reason === 'app-paused') {
+              pause();
+              return;
+            }
+            if (finished && !awaitingScanEnd) return;
 
             if (event.reason === 'error') {
               fail(Object.assign(new Error(event.message), {code: event.code}));
             } else {
+              terminal = true;
+              awaitingScanEnd = false;
               finished = true;
               setStatus('paused');
             }
@@ -487,6 +550,7 @@ export const ScanView = observer(
 
       return () => {
         disposed = true;
+        cancelResume?.();
         revealRef.current = undefined;
         completeRef.current = undefined;
         observer.disconnect();

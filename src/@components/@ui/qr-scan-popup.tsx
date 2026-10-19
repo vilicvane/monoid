@@ -10,7 +10,7 @@ import {createPortal} from 'react-dom';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
-import {qrScanLifecycle} from '../../@lib/qr-scanner.js';
+import {QrScanForeground, qrScanLifecycle} from '../../@lib/qr-scanner.js';
 
 import {Button} from './button.js';
 import {CenteredPopup} from './centered-popup.js';
@@ -172,6 +172,7 @@ export function QrScanPopup({
   const revealRef = useRef<(duration: number) => Promise<boolean>>(undefined);
   const completeRef = useRef<() => void>(undefined);
   const dismissRef = useRef<() => void>(undefined);
+  const foregroundRef = useRef<QrScanForeground>(undefined);
   const [attempt, setAttempt] = useState(0);
   const [status, setStatus] = useState<ScanStatus>('starting');
   const [settledPhase, setSettledPhase] = useState<QrScanPreviewPhase>();
@@ -195,7 +196,25 @@ export function QrScanPopup({
   });
 
   useLayoutEffect(() => {
+    if (
+      Capacitor.getPlatform() === 'web' ||
+      !Capacitor.isPluginAvailable('QrScanner')
+    )
+      return;
+
+    const foreground = new QrScanForeground(error => {
+      errorService.catch(Promise.reject(error));
+    });
+    foregroundRef.current = foreground;
+    return () => {
+      foreground.dispose();
+      foregroundRef.current = undefined;
+    };
+  }, [errorService]);
+
+  useLayoutEffect(() => {
     setStatus('starting');
+    setSettledPhase(undefined);
     setValidationError(undefined);
     setClosing(false);
 
@@ -220,6 +239,8 @@ export function QrScanPopup({
     let dismissing = false;
     let paused = false;
     let started = false;
+    let awaitingScanEnd = false;
+    let cancelResume: (() => void) | undefined;
     let accepted: string | undefined;
     let stopped: Promise<void> | undefined;
     let aperture: ReturnType<typeof openCameraAperture> | undefined;
@@ -250,23 +271,54 @@ export function QrScanPopup({
       }
       return stopped;
     };
-    const fail = (error: unknown): void => {
-      if (disposed || finished) return;
+    const pause = (resumeOnForeground = true): void => {
+      if (disposed || paused) return;
+      const resumable = !finished && !dismissing && accepted === undefined;
+      paused = true;
       finished = true;
+      const stopping = stop();
+      errorService.catch(stopping.finally(resolveCovered));
+      if (!resumable) {
+        if (accepted !== undefined && !dismissing) {
+          setValidationError(undefined);
+          setStatus('paused');
+        }
+        return;
+      }
+
       setValidationError(undefined);
+      setStatus('paused');
+      if (!resumeOnForeground) return;
+      cancelResume = foregroundRef.current?.requestResume(
+        stopping,
+        () => !disposed && paused && !dismissing && accepted === undefined,
+        () => setAttempt(value => value + 1),
+      );
+    };
+    const fail = (error: unknown, fromNativeEnd = false): void => {
+      if (disposed || finished) return;
       const {code} = error as QrScannerError;
+      // Preview updates can observe native teardown before its scanEnded event.
+      // That event determines whether this is a recoverable pause or a failure.
+      if (code === 'SCAN_CLOSED' && !fromNativeEnd) {
+        awaitingScanEnd = true;
+        return;
+      }
+      if (code === 'CANCELLED' || code === 'APP_INACTIVE') {
+        pause();
+        return;
+      }
+      finished = true;
+      accepted = undefined;
+      setValidationError(undefined);
       setStatus(
-        code === 'CANCELLED' || code === 'APP_INACTIVE'
-          ? 'paused'
-          : code === 'PERMISSION_DENIED'
-            ? 'denied'
-            : code === 'NO_CAMERA' || code === 'UNSUPPORTED'
-              ? 'unsupported'
-              : 'error',
+        code === 'PERMISSION_DENIED'
+          ? 'denied'
+          : code === 'NO_CAMERA' || code === 'UNSUPPORTED'
+            ? 'unsupported'
+            : 'error',
       );
       if (
-        code !== 'CANCELLED' &&
-        code !== 'APP_INACTIVE' &&
         code !== 'NO_CAMERA' &&
         code !== 'UNSUPPORTED' &&
         code !== 'PERMISSION_DENIED'
@@ -274,15 +326,6 @@ export function QrScanPopup({
         errorService.catch(Promise.reject(error));
       }
       errorService.catch(stop());
-    };
-    const pause = (): void => {
-      if (disposed) return;
-      paused = true;
-      finished = true;
-      accepted = undefined;
-      setValidationError(undefined);
-      setStatus('paused');
-      errorService.catch(stop().finally(resolveCovered));
     };
     const measure = (): QrScannerPreviewBounds => {
       const {x, y, width, height} = previewRef.current!.getBoundingClientRect();
@@ -295,7 +338,7 @@ export function QrScanPopup({
     };
     let previousBounds = '';
     const trackBounds = (): void => {
-      if (disposed || finished || !started) return;
+      if (disposed || finished || awaitingScanEnd || !started) return;
       const previewBounds = measure();
       const serialized = JSON.stringify(previewBounds);
       if (previousBounds !== serialized) {
@@ -311,6 +354,7 @@ export function QrScanPopup({
       if (disposed || dismissing) return;
       dismissing = true;
       finished = true;
+      cancelResume?.();
       accepted = undefined;
       setClosing(true);
       const cover = aperture ? covered : Promise.resolve();
@@ -352,7 +396,6 @@ export function QrScanPopup({
     const visibilityChanged = (): void => {
       if (document.hidden) pause();
     };
-    document.addEventListener('visibilitychange', visibilityChanged);
 
     void (async () => {
       await qrScanLifecycle.closing;
@@ -364,7 +407,7 @@ export function QrScanPopup({
 
       let permissions = await QrScanner.checkPermissions();
       if (disposed || finished) return;
-      if (permissions.camera !== 'granted') {
+      if (permissions.camera !== 'granted' || attempt > 0) {
         permissions = await QrScanner.requestPermissions();
       }
       if (disposed || finished) return;
@@ -376,6 +419,11 @@ export function QrScanPopup({
 
       // iOS permission sheets temporarily deactivate the app. Observe pauses
       // after permission returns so accepting the first prompt can start scanning.
+      document.addEventListener('visibilitychange', visibilityChanged);
+      if (document.hidden) {
+        pause();
+        return;
+      }
       listeners.push(
         await App.addListener('appStateChange', ({isActive}) => {
           if (!isActive) pause();
@@ -389,6 +437,7 @@ export function QrScanPopup({
             event.scanId !== scanId ||
             disposed ||
             finished ||
+            awaitingScanEnd ||
             accepted !== undefined
           )
             return;
@@ -419,9 +468,12 @@ export function QrScanPopup({
           }
           if (finished) return;
           if (event.reason === 'error') {
-            fail(Object.assign(new Error(event.message), {code: event.code}));
+            fail(
+              Object.assign(new Error(event.message), {code: event.code}),
+              true,
+            );
           } else {
-            pause();
+            pause(false);
           }
         }),
       );
@@ -472,6 +524,7 @@ export function QrScanPopup({
 
     return () => {
       disposed = true;
+      cancelResume?.();
       resolveCovered();
       restore();
       revealRef.current = undefined;
@@ -500,10 +553,16 @@ export function QrScanPopup({
         <Preview
           ref={previewRef}
           $open={status === 'scanning' || status === 'completing'}
-          aria-label="Camera preview"
+          role="group"
+          aria-label={
+            status === 'scanning' && settledPhase === 'scanning'
+              ? 'Camera preview active'
+              : 'Camera preview'
+          }
         >
           <QrScanPreview
             phase={phase}
+            showProcessingSpinner={false}
             onReveal={duration =>
               revealRef.current?.(duration) ?? Promise.resolve(false)
             }
@@ -532,13 +591,6 @@ export function QrScanPopup({
               {status === 'paused' ? 'Resume' : 'Try again'}
             </Button>
           )}
-          <Button
-            color="neutral"
-            disabled={closing}
-            onClick={() => dismissRef.current?.()}
-          >
-            Cancel
-          </Button>
         </Controls>
       </Popup>
     </>
