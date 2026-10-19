@@ -45,4 +45,4 @@
 
 ## 512c9fd
 
-34. [agent] physical iOS feedback fixes: bundled WAV fetches return readable `basic` responses with status 0, and card removal during APDU exchange can return Core NFC 102 while the tag is unavailable and reader ready. Accept the media response and classify only the corresponding unavailable-tag transfer failures as `TAG_LOST`, preserving Silent Mode, other error classes and unknown APDU outcomes. See [29.md](29.md). audio loading, NFC removal.
+34. [agent] physical iOS feedback fixes: bundled WAV fetches return readable `basic` responses with status 0, and card removal during APDU exchange can return Core NFC 102 while the tag is unavailable and reader ready. Accept the media response and classify only the corresponding unavailable-tag transfer failures as `TAG_LOST`, preserving Silent Mode, other error classes and unknown APDU outcomes. Preserve tag loss through cleanup so the system sheet ends with a disconnect message instead of a success checkmark; normal post-read removal remains successful. See [29.md](29.md). audio loading, NFC removal.

@@ -26,7 +26,7 @@ protocol NFCScanDriver: AnyObject {
     func begin()
     func connect(_ card: NFCCard, completion: @escaping (NFCFailure?) -> Void)
     func restartPolling()
-    func invalidate()
+    func invalidate(errorMessage: String?)
 }
 
 /// All methods and driver callbacks run on the main queue. Only one native APDU
@@ -42,6 +42,7 @@ final class NFCSessionController: NFCScanEvents {
         var starting: Completion?
         var stopping: [Completion] = []
         var endCode: String?
+        var connectionLost = false
         var removedSessionId: String?
         var session: Session?
 
@@ -230,6 +231,9 @@ final class NFCSessionController: NFCScanEvents {
         guard !session.ended else { return }
         session.ended = true
         session.removed = code == "TAG_LOST"
+        // Keep the failed operation's presentation through cleanup and any
+        // rediscovery that races the caller's eventual stopScan.
+        if code == "TAG_LOST" { scan.connectionLost = true }
         session.cancelDeadline?()
         session.cancelDeadline = nil
         session.cancelRemovalCheck?()
@@ -260,7 +264,10 @@ final class NFCSessionController: NFCScanEvents {
         var event: [String: Any] = ["scanId": scan.id, "reason": reason]
         if reason != "stopped" { event["code"] = code }
         emit("scanEnded", event)
-        if invalidate { scan.reader.invalidate() }
+        if invalidate {
+            let errorMessage = reason == "stopped" && scan.connectionLost ? "Card connection lost." : nil
+            scan.reader.invalidate(errorMessage: errorMessage)
+        }
     }
 
     func invalidated(_ reader: NFCScanDriver, failure: NFCFailure) {

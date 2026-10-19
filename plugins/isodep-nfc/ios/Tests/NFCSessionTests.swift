@@ -39,12 +39,13 @@ private final class FakeReader: NFCScanDriver {
     var begun = 0
     var restarts = 0
     var invalidations = 0
+    var invalidationMessages: [String?] = []
     var connections: [(NFCFailure?) -> Void] = []
 
     func begin() { begun += 1 }
     func connect(_ card: NFCCard, completion: @escaping (NFCFailure?) -> Void) { connections.append(completion) }
     func restartPolling() { restarts += 1 }
-    func invalidate() { invalidations += 1; isReady = false }
+    func invalidate(errorMessage: String?) { invalidations += 1; invalidationMessages.append(errorMessage); isReady = false }
     func activate() { events?.activated(self) }
     func discover(_ card: NFCCard) { events?.detected(self, card: card) }
     func invalidateCallback(code: String = "CANCELLED") {
@@ -303,6 +304,93 @@ final class NFCSessionTests: XCTestCase {
         XCTAssertEqual(exchange.values.count, 1)
         XCTAssertEqual(fixture.count("sessionEnded"), 1)
         XCTAssertEqual(fixture.reader.restarts, 0)
+    }
+
+    func testTagLossSystemMessageSurvivesSessionCleanup() {
+        for cleanup in [nil, false, true] as [Bool?] {
+            let fixture = Fixture()
+            let id = fixture.open()
+            let exchange = fixture.exchange(id)
+            fixture.card.completions[0](.failure(NFCFailure(code: "TAG_LOST", message: "Lost")))
+            if let cleanup {
+                XCTAssertTrue(fixture.close(id, wait: cleanup).succeeded)
+            }
+
+            let stopped = fixture.stop()
+            let stoppedAgain = fixture.stop()
+            XCTAssertEqual(fixture.reader.invalidationMessages, ["Card connection lost."])
+            XCTAssertEqual(fixture.reader.invalidations, 1)
+            XCTAssertEqual(exchange.outcome, "unknown")
+            XCTAssertTrue(stopped.values.isEmpty)
+            fixture.reader.invalidateCallback()
+            XCTAssertTrue(stopped.succeeded)
+            XCTAssertTrue(stoppedAgain.succeeded)
+            XCTAssertEqual(fixture.count("sessionEnded"), 1)
+            XCTAssertEqual(fixture.reason("sessionEnded"), "tag-lost")
+            XCTAssertEqual(fixture.card.sent.count, 1)
+        }
+    }
+
+    func testSuccessfulExchangeAndRemovalKeepNormalSystemDismissal() {
+        for waitForRemoval in [false, true] {
+            let fixture = Fixture()
+            let id = fixture.open()
+            XCTAssertTrue(fixture.exchange(id).values.isEmpty)
+            fixture.card.completions[0](.success([0x90, 0]))
+            let closed = fixture.close(id, wait: waitForRemoval)
+            if waitForRemoval {
+                fixture.card.isAvailable = false
+                fixture.advance(250)
+            }
+            XCTAssertTrue(closed.succeeded)
+            fixture.stop()
+            XCTAssertEqual(fixture.reader.invalidationMessages, [nil])
+        }
+    }
+
+    func testRediscoveryCannotEraseTagLossMessageBeforeStop() {
+        let fixture = Fixture()
+        let id = fixture.open()
+        fixture.exchange(id)
+        fixture.card.completions[0](.failure(NFCFailure(code: "TAG_LOST", message: "Lost")))
+        fixture.close(id)
+
+        let nextCard = FakeCard()
+        fixture.reader.discover(nextCard)
+        fixture.reader.connections[1](nil)
+        fixture.stop()
+        XCTAssertEqual(fixture.reader.invalidationMessages, ["Card connection lost."])
+        XCTAssertTrue(nextCard.sent.isEmpty)
+    }
+
+    func testNewScanDoesNotInheritPreviousTagLossMessage() {
+        let fixture = Fixture()
+        let id = fixture.open()
+        fixture.exchange(id)
+        fixture.card.completions[0](.failure(NFCFailure(code: "TAG_LOST", message: "Lost")))
+        fixture.stop()
+        fixture.reader.invalidateCallback()
+
+        let nextReader = FakeReader()
+        let starting = Recorded<Void>()
+        fixture.controller.start(id: "next", timeoutMs: 10_000, reader: nextReader, completion: starting.complete)
+        nextReader.activate()
+        XCTAssertTrue(starting.succeeded)
+        fixture.stop("next")
+        XCTAssertEqual(nextReader.invalidationMessages, [nil])
+    }
+
+    func testTagLossDoesNotChangeSubsequentLifecycleDismissal() {
+        for (reason, code) in [("app-paused", "APP_INACTIVE"), ("timeout", "TIMEOUT")] {
+            let fixture = Fixture()
+            let id = fixture.open()
+            fixture.exchange(id)
+            fixture.card.completions[0](.failure(NFCFailure(code: "TAG_LOST", message: "Lost")))
+            fixture.close(id)
+            fixture.controller.terminate(reason: reason, code: code)
+            XCTAssertEqual(fixture.reader.invalidationMessages, [nil])
+            XCTAssertEqual(fixture.reason("scanEnded"), reason)
+        }
     }
 
     func testConnectionErrorStaysReservedUntilExplicitCleanup() {

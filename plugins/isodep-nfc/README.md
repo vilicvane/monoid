@@ -87,6 +87,11 @@ when the connected tag is unavailable and the reader remains ready. An available
 tag's response error remains `IO_ERROR`; reader invalidation and other explicit
 errors keep their original classification. The failed APDU's outcome remains
 `unknown`, and the plugin does not retry it.
+When the caller stops that scan, Core NFC displays its error indicator with
+"Card connection lost." instead of a success checkmark. The loss is retained
+through connection cleanup and rediscovery until that scan ends. Successfully
+waiting for card removal does not mark an operation as failed; normal completion,
+system cancellation and timeouts retain their existing presentation.
 
 Core NFC reports response data and SW1/SW2 separately; the plugin returns them
 concatenated in the same `data` array as Android, including unsuccessful status

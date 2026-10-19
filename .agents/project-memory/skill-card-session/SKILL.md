@@ -31,6 +31,8 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
 - During an iOS APDU exchange, Core NFC response/retry errors count as `TAG_LOST`
   only when the tag is unavailable and the reader is still ready. Preserve other
   errors and unknown APDU outcomes; lost connections cancel without replaying.
+  End the system sheet with a disconnect error for tag loss; successful post-read
+  removal retains the normal completion indication.
 - iOS requires the applet/card-manager AIDs in `Info.plist`. Keep them aligned with
   both the bundled CAP manifest and actual SELECT bytes, including the normal
   version-independent Monoid prefix `F06D6F6E6F69640201`. Native removal detection

@@ -58,7 +58,13 @@ final class CoreNFCReader: NSObject, NFCScanDriver, NFCTagReaderSessionDelegate 
     var isReady: Bool { reader.isReady }
 
     func begin() { reader.begin() }
-    func invalidate() { reader.invalidate() }
+    func invalidate(errorMessage: String?) {
+        if let errorMessage {
+            reader.invalidate(errorMessage: errorMessage)
+        } else {
+            reader.invalidate()
+        }
+    }
     func restartPolling() { reader.restartPolling() }
 
     func connect(_ card: NFCCard, completion: @escaping (NFCFailure?) -> Void) {
