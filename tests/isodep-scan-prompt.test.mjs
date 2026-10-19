@@ -166,7 +166,9 @@ test('iOS closes the native sheet before returning an operation error', async ()
   });
   await connect(run.scan);
   assert.equal(run.scan.waitingForRemoval, false);
-  assert.deepEqual(run.scan.closeOptions, {});
+  assert.deepEqual(run.scan.closeOptions, {
+    errorMessage: 'Card operation failed.',
+  });
   assert.notEqual(presenter.current.content, '');
   assert.equal(run.scan.stopCalls, 1);
   assert.equal(run.settled, false);

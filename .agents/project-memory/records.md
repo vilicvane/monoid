@@ -81,3 +81,7 @@
 ## 2880f00
 
 46. [user] after repeated HTTP WebView ID-generation regressions, record the constraint in project memory instead of adding a lint restriction. [agent] the physical Android app's HTTP development origin has `isSecureContext === false` and no `crypto.randomUUID`, while `crypto.getRandomValues` is available. Copy and Bundle use the shared `createFlowId()` helper in `src/@utils/miscellaneous.ts`; new flow IDs must reuse it. Do not reintroduce `crypto.randomUUID` in app code or assume desktop localhost and Node tests represent the phone's environment. Existing QR/NFC scan IDs already use `getRandomValues`; keep their HTTP compatibility. Regression tests must remove `randomUUID` and exercise the real route initializer, not only mock the button's router call. Web Crypto secure-context availability, silent navigation failure.
+
+## a4d5a46
+
+47. [agent] a rejected Access/Secret PIN or other application failure must end the iOS NFC sheet with its error indicator, even when the APDU transport succeeded. Carry trusted PIN/card text (generic fallback for other errors) through `closeSession.errorMessage`, retain it until `stopScan`, and preserve native cleanup before PIN input or app error handling. This presentation must not change transport events, consume extra PIN attempts, or replay operations; success retains an explicit completion message or otherwise clears its final text. See [29.md](29.md). NFC business-failure completion.

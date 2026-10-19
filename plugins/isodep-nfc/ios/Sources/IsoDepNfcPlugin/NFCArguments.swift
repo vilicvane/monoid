@@ -18,13 +18,22 @@ enum NFCArguments {
         return value
     }
 
-    static func message(_ options: [String: Any], allowEmpty: Bool = false) throws -> String {
-        guard let value = options["message"] as? String,
+    static func message(_ options: [String: Any], key: String = "message", allowEmpty: Bool = false) throws -> String {
+        guard let value = options[key] as? String,
               (allowEmpty && value.isEmpty) || !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             let requirement = allowEmpty ? "empty or a nonblank string" : "a nonblank string"
-            throw NFCFailure(code: "INVALID_ARGUMENT", message: "message must be \(requirement).")
+            throw NFCFailure(code: "INVALID_ARGUMENT", message: "\(key) must be \(requirement).")
         }
         return value
+    }
+
+    static func closeMessages(_ options: [String: Any]) throws -> (message: String?, errorMessage: String?) {
+        guard options["message"] == nil || options["errorMessage"] == nil else {
+            throw NFCFailure(code: "INVALID_ARGUMENT", message: "message and errorMessage cannot be combined.")
+        }
+        let finalMessage = options["message"] == nil ? nil : try message(options, allowEmpty: true)
+        let errorMessage = options["errorMessage"] == nil ? nil : try message(options, key: "errorMessage")
+        return (finalMessage, errorMessage)
     }
 
     static func bytes(_ options: [String: Any]) throws -> [UInt8] {

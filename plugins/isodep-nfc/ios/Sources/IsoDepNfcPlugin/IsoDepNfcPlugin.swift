@@ -125,8 +125,9 @@ public final class IsoDepNfcPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc public func closeSession(_ call: CAPPluginCall) {
         perform(call, idKey: "sessionId") { options, id, document in
             let waitForRemoval = try NFCArguments.waitForRemoval(options)
-            let message = options["message"] == nil ? nil : try NFCArguments.message(options, allowEmpty: true)
-            self.sessions.close(id: id, waitForRemoval: waitForRemoval, message: message) { [weak self] result in
+            let messages = try NFCArguments.closeMessages(options)
+            self.sessions.close(id: id, waitForRemoval: waitForRemoval,
+                                message: messages.message, errorMessage: messages.errorMessage) { [weak self] result in
                 self?.settle(call, result: result, idKey: "sessionId", id: id, document: document)
             }
         }

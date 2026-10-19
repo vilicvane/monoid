@@ -755,6 +755,9 @@ test('prompt: iOS returns errors after closing the sheet without silently reopen
   });
   const scan = await state.tap();
   assert.equal(scan.waitingForRemoval, false);
+  assert.deepEqual(scan.closeOptions, {
+    errorMessage: 'Card operation failed.',
+  });
   assert.equal(scan.stopRequested, true);
   assert.deepEqual(state.presentedErrors, []);
   assert.equal(state.outcome, undefined);
@@ -774,6 +777,112 @@ test('prompt: iOS dismisses the reader before asking for a missing PIN', async (
   await state.finishStop();
   assert.equal(state.inputs.length, 1);
 });
+
+for (const pinSource of ['saved Access', 'entered Access', 'Secret']) {
+  test(`prompt: iOS marks incorrect ${pinSource} PIN as failure before input, then clears a successful retry`, async () => {
+    platform = 'ios';
+    const secret = pinSource === 'Secret';
+    const saved = pinSource === 'saved Access';
+    const state = mount({
+      ...(secret && {allowSetup: true, accessPIN: false, secretPIN: 5}),
+      savedPINs: saved ? {[CARD_ID]: OLD_PIN} : {},
+      onAuthenticate: () => {
+        throw wrongPIN();
+      },
+    });
+    if (!saved) {
+      const missingPIN = await state.tap();
+      assert.deepEqual(missingPIN.closeOptions, {});
+      await state.finishExit();
+      await state.enterPIN(OLD_PIN);
+    }
+    const previousInputs = state.inputs.length;
+    const scan = await state.tap();
+    const errorMessage = `Incorrect ${secret ? 'Secret ' : ''}PIN, tries remaining: 4`;
+
+    assert.deepEqual(scan.closeOptions, {errorMessage});
+    assert.equal(scan.waitingForRemoval, false);
+    assert.equal(state.inputs.length, previousInputs);
+    assert.equal(state.businessCalls, 0);
+    assert.deepEqual(state.authenticated, [OLD_PIN]);
+    assert.deepEqual(state.authenticationRequests, [
+      secret ? {secret: true, pin: OLD_PIN} : {pin: OLD_PIN},
+    ]);
+    await state.finishAnimation();
+    assert.equal(state.inputs.length, previousInputs);
+    await state.finishStop();
+    assert.equal(state.inputs.length, previousInputs + 1);
+    assert.equal(state.notifications.at(-1).message, errorMessage);
+    assert.equal(state.removals.length, saved ? 1 : 0);
+    assert.deepEqual(state.writes, []);
+    assert.deepEqual(state.authenticated, [OLD_PIN]);
+
+    state.onAuthenticate = undefined;
+    await state.enterPIN(secret ? SECRET_PIN : PIN);
+    const retry = await state.tap();
+    assert.deepEqual(retry.closeOptions, {message: ''});
+    await state.finishExit();
+    assert.equal(state.businessCompleted, 1);
+    assert.equal(state.outcome, 'resolved');
+  });
+}
+
+for (const secret of [false, true]) {
+  test(`prompt: iOS marks exhausted ${secret ? 'Secret' : 'Access'} PIN as failure without another attempt`, async () => {
+    platform = 'ios';
+    const state = mount({
+      ...(secret && {allowSetup: true, accessPIN: false, secretPIN: 5}),
+      savedPINs: secret ? {} : {[CARD_ID]: PIN},
+      onAuthenticate: () => {
+        throw new CBORAppletError({code: 'INVALID_PIN', tries: 0});
+      },
+    });
+    if (secret) {
+      await state.tap();
+      await state.finishExit();
+      await state.enterPIN(SECRET_PIN);
+    }
+    const scan = await state.tap();
+    const errorMessage = `${secret ? 'Secret' : 'Access'} PIN blocked`;
+    assert.deepEqual(scan.closeOptions, {errorMessage});
+    assert.equal(scan.waitingForRemoval, false);
+    await state.finishExit();
+    assert.equal(state.errors[0].message, errorMessage);
+    assert.equal(state.authenticated.length, 1);
+    assert.equal(state.inputs.length, secret ? 1 : 0);
+    assert.equal(state.scans.length, secret ? 2 : 1);
+    assert.equal(state.businessCalls, 0);
+    assert.deepEqual(state.writes, []);
+  });
+}
+
+for (const [failure, errorMessage] of [
+  [
+    new MonoidCardError('Incorrect Secret PIN, tries remaining: 4'),
+    'Incorrect Secret PIN, tries remaining: 4',
+  ],
+  [new MonoidCardError('Secret PIN blocked'), 'Secret PIN blocked'],
+  [wrongPIN(), 'Incorrect PIN, tries remaining: 4'],
+  [new CBORAppletError({code: 'INVALID_PIN', tries: 0}), 'PIN blocked'],
+]) {
+  test(`prompt: iOS preserves business PIN failure (${errorMessage}) after native error completion`, async () => {
+    platform = 'ios';
+    const state = mount({
+      auth: false,
+      onBusiness: () => {
+        throw failure;
+      },
+    });
+    const scan = await state.tap();
+    assert.deepEqual(scan.closeOptions, {errorMessage});
+    assert.equal(state.outcome, undefined);
+    await state.finishExit();
+    assert.deepEqual(state.errors, [failure]);
+    assert.equal(state.businessCalls, 1);
+    assert.equal(state.scans.length, 1);
+    assert.equal(state.inputs.length, 0);
+  });
+}
 
 test('prompt: missing PIN exits without waiting for removal and prompts after cleanup', async () => {
   const state = mount();
@@ -869,7 +978,7 @@ for (const targetPlatform of ['ios', 'android']) {
   });
 }
 
-for (const [outcome, options, missingApplet] of [
+for (const [outcome, options, missingApplet, closeOptions = {}] of [
   ['Access PIN input', {}, false],
   [
     'Secret PIN input',
@@ -887,6 +996,7 @@ for (const [outcome, options, missingApplet] of [
       },
     },
     false,
+    {errorMessage: 'Card operation failed.'},
   ],
   [
     'tag loss',
@@ -899,14 +1009,14 @@ for (const [outcome, options, missingApplet] of [
     false,
   ],
 ]) {
-  test(`prompt: ${outcome} does not claim iOS scan completion`, async () => {
+  test(`prompt: ${outcome} does not clear the iOS message as a success`, async () => {
     platform = 'ios';
     const state = mount(options);
     const scan = missingApplet
       ? await state.missingApplet()
       : await state.tap();
 
-    assert.deepEqual(scan.closeOptions, {});
+    assert.deepEqual(scan.closeOptions, closeOptions);
     assert.notEqual(state.presenter.current.content, '');
     assert.equal(state.presenter.current.closing, true);
     await state.finishExit();

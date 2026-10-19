@@ -183,9 +183,13 @@ export function useIsoDepScanPrompt(): (
           () => {
             // Core NFC covers the WebView. Return the error after closing its sheet.
             if (Capacitor.getPlatform() === 'ios') {
-              return !finishing && result && 'success' in result
-                ? {message: ''}
-                : {};
+              if (finishing || !result) return {};
+              if ('success' in result) return {message: ''};
+
+              return result.error instanceof IsoDepScanError ||
+                isCredentialRequestCancelled(result.error)
+                ? {}
+                : {errorMessage: 'Card operation failed.'};
             }
 
             if (

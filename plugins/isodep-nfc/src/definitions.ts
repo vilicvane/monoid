@@ -60,8 +60,17 @@ export type CloseSessionOptions = {
    * An empty string clears the message; omit to preserve the current text.
    * Nonempty messages must contain non-whitespace text.
    * Ignored while waiting for removal, after session failure, or on Android.
+   * Cannot be combined with errorMessage.
    */
   message?: string;
+  /**
+   * Nonblank application-failure text for a healthy, idle connection on iOS.
+   * Reserves the scan for stopScan, which shows the system error indicator.
+   * Does not fail closeSession or change transport events; await stopScan.
+   * Ignored while waiting for removal, after session failure, or on Android.
+   * Cannot be combined with message.
+   */
+  errorMessage?: string;
 };
 
 export type SessionEndedReason =

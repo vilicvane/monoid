@@ -667,9 +667,41 @@ export function useMonoidScanPrompt({
         () => {
           // Core NFC covers the WebView. Close its sheet before presenting errors.
           if (Capacitor.getPlatform() === 'ios') {
-            return !disposed && !finishing && result?.type === 'success'
-              ? {message: result.message ?? ''}
-              : {};
+            if (disposed || finishing || !result) return {};
+            if (result.type === 'success') {
+              return {message: result.message ?? ''};
+            }
+
+            // A rejected PIN still has a healthy NFC connection. End the sheet
+            // as a failure before asking for another PIN, rather than checking it off.
+            if (result.type === 'input' && result.message) {
+              return {errorMessage: result.message};
+            }
+
+            if (
+              result.type === 'error' &&
+              !(result.error instanceof IsoDepScanError) &&
+              !isCredentialRequestCancelled(result.error)
+            ) {
+              const {error} = result;
+              let errorMessage = 'Card operation failed.';
+
+              if (error instanceof MonoidCardError) {
+                errorMessage = error.message;
+              } else if (
+                error instanceof CBORAppletError &&
+                MonoidAppletInvalidPINError.is(error.source)
+              ) {
+                errorMessage =
+                  error.source.tries === 0
+                    ? 'PIN blocked'
+                    : `Incorrect PIN, tries remaining: ${error.source.tries}`;
+              }
+
+              return {errorMessage};
+            }
+
+            return {};
           }
 
           if (!disposed && !finishing && result?.type === 'success') {

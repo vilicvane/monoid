@@ -43,6 +43,7 @@ final class NFCSessionController: NFCScanEvents {
         var stopping: [Completion] = []
         var endCode: String?
         var connectionLost = false
+        var completionErrorMessage: String?
         var removedSessionId: String?
         var session: Session?
 
@@ -107,11 +108,12 @@ final class NFCSessionController: NFCScanEvents {
 
     func canDiscover(_ reader: NFCScanDriver) -> Bool {
         guard let scan else { return false }
-        return scan.reader === reader && scan.endCode == nil && scan.session == nil
+        return scan.reader === reader && scan.endCode == nil && scan.completionErrorMessage == nil && scan.session == nil
     }
 
     func detected(_ reader: NFCScanDriver, card: NFCCard) {
-        guard let scan, scan.reader === reader, scan.endCode == nil, scan.session == nil else { return }
+        guard let scan, scan.reader === reader, scan.endCode == nil,
+              scan.completionErrorMessage == nil, scan.session == nil else { return }
         let session = Session(card: card)
         scan.session = session
         session.cancelDeadline = schedule(30_000) { [weak self, weak scan, weak session] in
@@ -193,7 +195,8 @@ final class NFCSessionController: NFCScanEvents {
         scan.reader.alertMessage = message
     }
 
-    func close(id: String, waitForRemoval: Bool, message: String? = nil, completion: @escaping Completion) {
+    func close(id: String, waitForRemoval: Bool, message: String? = nil,
+               errorMessage: String? = nil, completion: @escaping Completion) {
         guard let scan, let session = scan.session, session.id == id else {
             if waitForRemoval && (scan == nil || scan?.removedSessionId != id) {
                 completion(.failure(NFCFailure(code: "SESSION_CLOSED", message: "This NFC session is no longer available.")))
@@ -203,12 +206,18 @@ final class NFCSessionController: NFCScanEvents {
             return
         }
 
-        // Set the final text together with closing the connection, so late
-        // progress cannot replace it or turn failed/in-flight work into success.
-        if let message, scan.endCode == nil, !scan.connectionLost,
+        // Commit application completion with the connection close. A business
+        // failure is not a transport failure; keep normal cleanup and defer
+        // the system error indicator until the caller stops this scan.
+        if scan.endCode == nil, !scan.connectionLost, scan.completionErrorMessage == nil,
            session.connected, !session.ended, !session.working,
            !session.waitingForRemoval, !waitForRemoval {
-            scan.reader.alertMessage = message
+            if let errorMessage {
+                scan.completionErrorMessage = errorMessage
+                scan.reader.alertMessage = errorMessage
+            } else if let message {
+                scan.reader.alertMessage = message
+            }
         }
 
         if waitForRemoval {
@@ -281,7 +290,9 @@ final class NFCSessionController: NFCScanEvents {
         if reason != "stopped" { event["code"] = code }
         emit("scanEnded", event)
         if invalidate {
-            let errorMessage = reason == "stopped" && scan.connectionLost ? "Card connection lost." : nil
+            let errorMessage = reason == "stopped"
+                ? (scan.connectionLost ? "Card connection lost." : scan.completionErrorMessage)
+                : nil
             scan.reader.invalidate(errorMessage: errorMessage)
         }
     }
@@ -365,7 +376,7 @@ final class NFCSessionController: NFCScanEvents {
         if session.waitingForRemoval {
             scan.reader.alertMessage = "Hold your card near the top of your iPhone."
         }
-        scan.reader.restartPolling()
+        if scan.completionErrorMessage == nil { scan.reader.restartPolling() }
         for completion in session.removing { completion(.success(())) }
         session.removing.removeAll()
     }

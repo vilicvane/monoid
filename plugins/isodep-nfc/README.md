@@ -17,15 +17,15 @@ arbitrary ISO-DEP bytes.
 Import `IsoDepNfc` and the exported types from `capacitor-isodep-nfc` after adding
 this local package to an application.
 
-| Method                                                 | Result                                                       |
-| ------------------------------------------------------ | ------------------------------------------------------------ |
-| `getStatus()`                                          | `{supported, enabled}`                                       |
-| `openSettings()`                                       | Opens Android NFC settings; iOS rejects `UNSUPPORTED`        |
-| `startScan({scanId, transceiveTimeoutMs?})`            | Enables continuous scanning without waiting for a tag        |
-| `stopScan({scanId})`                                   | Stops the scan, cancels its pending work and awaits cleanup  |
-| `transceive({sessionId, data, timeoutMs?})`            | `{data}` with the unmodified response bytes                  |
-| `setSessionMessage({sessionId, message})`              | Updates the iOS system sheet; Android rejects `UNSUPPORTED`  |
-| `closeSession({sessionId, waitForRemoval?, message?})` | Closes one connection; optionally waits for detected removal |
+| Method                                                                | Result                                                       |
+| --------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `getStatus()`                                                         | `{supported, enabled}`                                       |
+| `openSettings()`                                                      | Opens Android NFC settings; iOS rejects `UNSUPPORTED`        |
+| `startScan({scanId, transceiveTimeoutMs?})`                           | Enables continuous scanning without waiting for a tag        |
+| `stopScan({scanId})`                                                  | Stops the scan, cancels its pending work and awaits cleanup  |
+| `transceive({sessionId, data, timeoutMs?})`                           | `{data}` with the unmodified response bytes                  |
+| `setSessionMessage({sessionId, message})`                             | Updates the iOS system sheet; Android rejects `UNSUPPORTED`  |
+| `closeSession({sessionId, waitForRemoval?, message?, errorMessage?})` | Closes one connection; optionally waits for detected removal |
 
 ## iOS integration and differences
 
@@ -75,6 +75,19 @@ failure and removal feedback remain intact. Non-string or whitespace-only text r
 `INVALID_ARGUMENT`. Android ignores this option. The message does not change
 cleanup, send an APDU, or stop the scan; await `stopScan` as usual.
 
+For an application failure such as an incorrect PIN response, pass a nonblank
+`errorMessage` instead of `message`. On a healthy, idle connection this records
+the failure and displays its text, then `stopScan` uses Core NFC's error indicator
+instead of a success checkmark. Closing still resolves normally and transport
+events remain unchanged: an unsuccessful application result may arrive in a
+successful APDU exchange. Await `stopScan` before presenting the application's
+PIN input or error UI. The pending failure blocks rediscovery and survives late
+progress or repeated close calls. It is scoped to that scan; tag loss takes
+precedence, and lifecycle cancellation or timeout keeps its existing behavior.
+The same session and removal restrictions apply as for `message`. Both fields
+together, blank error text or a non-string error reject `INVALID_ARGUMENT` on
+iOS. Android ignores these presentation options.
+
 The platform imposes its own reader-session time limit, normally 60 seconds.
 Longer `transceiveTimeoutMs` values cannot extend it. A system timeout emits
 `scanEnded` with `reason: 'timeout'` and `code: 'TIMEOUT'`; the open connection
@@ -88,8 +101,9 @@ new-document calls still wait for native cleanup before opening another reader.
 `stopScan` waits for Core NFC's invalidation callback, which is the transport
 cleanup barrier. Core NFC exposes no separate sheet-animation completion
 callback. Closing an idle connection normally calls `restartPolling`, invalidating
-the old tag and allowing discovery in the same system sheet. If a command or
-connect is still in flight, closing it or reaching the plugin deadline must
+the old tag and allowing discovery in the same system sheet; an application
+failure supplied through `errorMessage` instead reserves the reader for `stopScan`.
+If a command or connect is still in flight, closing it or reaching the plugin deadline must
 invalidate the entire reader; Core NFC cannot cancel one operation independently.
 New commands remain blocked until invalidation completes. No command is retried.
 

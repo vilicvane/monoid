@@ -5,7 +5,7 @@ description: Monoid NFC card sessions, Access/Safe PIN ownership, biometric vaul
 
 # Monoid card sessions
 
-Source: `../records.md`, especially records 29–32, 34 and 38–41, and `../29.md`. Treat records
+Source: `../records.md`, especially records 29–32, 34, 38–41 and 47, and `../29.md`. Treat records
 as authoritative and keep them up to date. Records 19–24 describe an older WIP;
 do not reintroduce their plain-storage design or assume those TODOs still exist.
 
@@ -31,11 +31,18 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   `setSessionMessage`; clear the presentation's session ID on disconnect. Stale
   messages cannot overwrite removal or disconnect feedback, and message failures
   must not change APDU outcomes. Public Core NFC does not expose spinner control.
-  Successful card operations clear their final text with `closeSession.message`
-  set to an empty string, written atomically before ending the connection. Omitted
+  Successful card operations default to clearing their final text with
+  `closeSession.message` set to an empty string; an explicit callback completion
+  message takes precedence. Both are written atomically before ending the connection. Omitted
   message preserves existing text; an empty string must not be treated as omitted.
   PIN input, redirects, cancellation and failure do not trigger this success-only
   clearing. Only an explicit removal gate restores the initial hold-card prompt.
+- A wrong PIN or other application failure can follow a successful APDU exchange.
+  Use `closeSession.errorMessage` to end the iOS sheet with an error indicator,
+  retaining trusted PIN/card text until `stopScan`; unknown errors use generic text.
+  This closes discovery without changing transport outcomes or firing scan-ended
+  events early. Still await native cleanup before PIN input or application errors.
+  Missing PIN input remains a normal handoff; failed PINs never retry automatically.
 - Card sounds respect the iPhone Silent Mode switch, matching the user's final
   preference after checking the system NFC completion sound.
 - During an iOS APDU exchange, Core NFC response/retry errors count as `TAG_LOST`
