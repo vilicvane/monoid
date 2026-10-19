@@ -20,8 +20,15 @@ public final class QrScannerPlugin: CAPPlugin, CAPBridgedPlugin {
     private var scans: QrScanController!
     private var notifications: [NSObjectProtocol] = []
     private var loadingObservation: NSKeyValueObservation?
-    private var permissionCalls: [CAPPluginCall] = []
-    private var permissionRequestInFlight = false
+    private lazy var permissions = QrCameraPermissions(
+        authorizationStatus: { AVCaptureDevice.authorizationStatus(for: .video) },
+        requestAccess: { completion in
+            AVCaptureDevice.requestAccess(for: .video) { _ in
+                DispatchQueue.main.async(execute: completion)
+            }
+        },
+        applicationState: { UIApplication.shared.applicationState },
+        sceneState: { [weak self] in self?.bridge?.webView?.window?.windowScene?.activationState })
     private var document = 0
     // Read and written only on Capacitor's serial bridge queue.
     private var workerDocument = 0
@@ -55,10 +62,10 @@ public final class QrScannerPlugin: CAPPlugin, CAPBridgedPlugin {
                 self.scans.pause()
             },
             center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-                self?.finishPermissionRequests()
+                self?.permissions.finishIfActive()
             },
             center.addObserver(forName: UIScene.didActivateNotification, object: nil, queue: .main) { [weak self] _ in
-                self?.finishPermissionRequests()
+                self?.permissions.finishIfActive()
             }
         ]
         // Capacitor reloads this same WebView when its renderer terminates.
@@ -74,25 +81,12 @@ public final class QrScannerPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc override public func checkPermissions(_ call: CAPPluginCall) {
-        dispatch(call) { [self] in call.resolve(["camera": permissionState]) }
+        dispatch(call) { [self] in call.resolve(["camera": permissions.state]) }
     }
 
     @objc override public func requestPermissions(_ call: CAPPluginCall) {
         dispatch(call) { [self] in
-            permissionCalls.append(call)
-            if AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined {
-                guard !permissionRequestInFlight else { return }
-                permissionRequestInFlight = true
-                AVCaptureDevice.requestAccess(for: .video) { [weak self] _ in
-                    DispatchQueue.main.async {
-                        guard let self else { return }
-                        self.permissionRequestInFlight = false
-                        self.finishPermissionRequests()
-                    }
-                }
-            } else {
-                finishPermissionRequests()
-            }
+            permissions.request { state in call.resolve(["camera": state]) }
         }
     }
 
@@ -100,7 +94,7 @@ public final class QrScannerPlugin: CAPPlugin, CAPBridgedPlugin {
         dispatch(call) { [self] in
             let id = try scanId(call)
             let bounds = try previewBounds(call)
-            guard isAppActive else {
+            guard permissions.isAppActive else {
                 throw QrScannerFailure(code: "APP_INACTIVE", message: "The app must be active to scan QR codes.")
             }
             guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
@@ -138,27 +132,6 @@ public final class QrScannerPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
-    private var permissionState: String {
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized: return "granted"
-        case .notDetermined: return "prompt"
-        default: return "denied"
-        }
-    }
-
-    private var isAppActive: Bool {
-        bridge?.webView?.window?.windowScene?.activationState == .foregroundActive
-    }
-
-    private func finishPermissionRequests() {
-        // Permission completion may precede the system sheet's dismissal. Wait for
-        // scene activation so a subsequent startScan can immediately open the camera.
-        guard !permissionRequestInFlight, isAppActive else { return }
-        let calls = permissionCalls
-        permissionCalls.removeAll()
-        for call in calls { call.resolve(["camera": permissionState]) }
-    }
-
     private func dispatch(_ call: CAPPluginCall, action: @escaping () throws -> Void) {
         let source = workerDocument
         DispatchQueue.main.async { [weak self] in
@@ -177,7 +150,7 @@ public final class QrScannerPlugin: CAPPlugin, CAPBridgedPlugin {
         document += 1
         let next = document
         scans.reset()
-        permissionCalls.removeAll()
+        permissions.resetDocument()
         // Old queued bridge calls retain their original document generation.
         (bridge as? CapacitorBridge)?.dispatchQueue.async { [weak self] in self?.workerDocument = next }
     }

@@ -96,8 +96,10 @@ ios:sync` from the repository root to register `QrScannerPlugin` and its local
 Swift package. CocoaPods metadata is included for consumers using that integration.
 No microphone, photo-library permission or external QR model is needed.
 
-`requestPermissions` resolves after the system prompt completes and the WebView's
-scene is active, so a chained `startScan` does not race the prompt's dismissal.
+`requestPermissions` resolves after the system prompt completes and both the
+application and the WebView's scene are active, so a chained `startScan` does not
+race the prompt's dismissal. A scene can still report active while the application
+is inactive for the permission sheet; activation notifications from both are checked.
 The page should subscribe to app-pause events after requesting permission; iOS
 also reports a temporary loss of app focus while showing that system prompt.
 
