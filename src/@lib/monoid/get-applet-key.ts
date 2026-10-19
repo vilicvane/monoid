@@ -34,7 +34,7 @@ export function getAppletKey(
   const index = hexToUint8Array(key.index);
   const curve = addressType === 'solana' ? 'ed25519' : 'secp256k1';
 
-  if (key.type === 'seed' || key.type === 'master') {
+  if (key.type === 'seed') {
     if (path === undefined) {
       throw new Error('A derived wallet requires a derivation path.');
     }

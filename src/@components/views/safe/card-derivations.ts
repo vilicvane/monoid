@@ -73,23 +73,22 @@ const CardDerivationPayload = x.tuple([
   x.array(CardDerivationGroup),
 ]);
 
-function getRootType(
-  index: SafeIndexHex,
-): 'seed' | 'master' | 'secp256k1' | 'ed25519' {
+export function getCardDerivationSourceType(
+  index: string,
+): 'seed' | 'secp256k1' | 'ed25519' {
   if (!/^[0-9a-f]{20}$/.test(index)) {
     throw new Error('Invalid derivation source');
   }
 
   if (index.startsWith('02')) return 'seed';
-  if (index.startsWith('03')) return 'master';
-  if (index.startsWith('0401')) return 'secp256k1';
-  if (index.startsWith('0501')) return 'ed25519';
+  if (index.startsWith('0301')) return 'secp256k1';
+  if (index.startsWith('0401')) return 'ed25519';
 
   throw new Error('Invalid derivation source');
 }
 
 export function getCardDerivationItemIndex(index: SafeIndexHex): SafeIndexHex {
-  getRootType(index);
+  getCardDerivationSourceType(index);
 
   return SafeIndexHex.satisfies(
     `${CARD_DERIVATIONS_TYPE.toString(16).padStart(4, '0')}${sha256(hexToUint8Array(index)).slice(2, 18)}`,
@@ -127,7 +126,7 @@ export function decodeCardDerivationRecord(
 ): CardDerivationRecord {
   const [, sourceIndex, groups] = CardDerivationPayload.decode(xCBOR, data);
   const index = SafeIndexHex.satisfies(uint8ArrayToHex(sourceIndex));
-  const rootType = getRootType(index);
+  const rootType = getCardDerivationSourceType(index);
   const wallets = groups.flatMap<WalletKeyWalletParameters>(
     ([type, addressType, paths]) => {
       const options = ADDRESS_TYPES[addressType];
@@ -176,7 +175,7 @@ export function decodeCardDerivationRecord(
 
         return {
           addressType,
-          seed: rootType === 'seed' ? options.seed : undefined,
+          seed: options.seed,
           curve: options.curve,
           path: BIP39PathString.satisfies(path),
         };
@@ -191,7 +190,7 @@ export function encodeCardDerivationRecord({
   index,
   wallets,
 }: CardDerivationRecord): Uint8Array {
-  const rootType = getRootType(index);
+  const rootType = getCardDerivationSourceType(index);
   const groups: x.TypeOf<typeof CardDerivationGroup>[] = [];
 
   for (const wallet of mergeCardDerivationWallets(wallets)) {
@@ -215,7 +214,7 @@ export function encodeCardDerivationRecord({
     if (
       !options ||
       path === undefined ||
-      seed !== (rootType === 'seed' ? options.seed : undefined) ||
+      seed !== options.seed ||
       curve !== options.curve
     ) {
       throw new Error('Invalid derivation parameters');
@@ -315,7 +314,7 @@ export async function writeCardDerivations(
     derivations: WalletKeyPublicKeyData[];
   }
 > {
-  if (getRootType(root.index) !== root.type) {
+  if (getCardDerivationSourceType(root.index) !== root.type) {
     throw new Error('Derivation source does not match');
   }
 

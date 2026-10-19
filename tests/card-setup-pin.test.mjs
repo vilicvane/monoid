@@ -90,12 +90,16 @@ function textOf(node) {
   return textOf(node.props?.children);
 }
 
-function mount({
-  accessPIN = false,
-  safePIN = false,
-  unlocked = false,
-  hello: initialHello,
-} = {}) {
+function assertConfirmedHello(state) {
+  assert.deepEqual(state.latestHellos, [
+    {
+      ...state.current,
+      pins: {access: 5, safe: 5},
+    },
+  ]);
+}
+
+function mount({accessPIN = false, safePIN = false, hello: initialHello} = {}) {
   const state = {
     inputs: [],
     scans: [],
@@ -109,14 +113,9 @@ function mount({
     hello: initialHello ?? {
       version: 0,
       id: bytes('11223344'),
-      pin: accessPIN,
-      features: {curves: []},
-      safe: {
-        id: bytes('aabbccdd'),
-        publicKey: bytes(`04${'12'.repeat(64)}`),
-        pin: safePIN,
-        unlocked,
-      },
+      publicKey: bytes(`04${'12'.repeat(64)}`),
+      bundle: false,
+      pins: {access: accessPIN, safe: safePIN},
     },
   };
   state.current = structuredClone(state.hello);
@@ -134,8 +133,11 @@ function mount({
       if (state.onHello) return state.onHello();
       return {
         ...state.current,
-        pin: state.current.pin === false ? 5 : state.current.pin,
-        safe: {...state.current.safe, pin: 5, unlocked: true},
+        pins: {
+          access:
+            state.current.pins.access === false ? 5 : state.current.pins.access,
+          safe: 5,
+        },
       };
     },
   };
@@ -240,16 +242,15 @@ test('a new card opens the Safe PIN prompt immediately and stores the verified d
 
   await state.answer(PIN);
   assert.deepEqual(state.scanOptions, {
-    safe: true,
     ensureSetup: false,
     auth: false,
     retryOnError: false,
   });
-  assert.equal(textOf(state.scans[0].label), 'Scan card aabbccdd');
+  assert.equal(textOf(state.scans[0].label), 'Scan card 11223344');
   await state.tap();
   assert.deepEqual(state.commands, [
     ['setPIN', {safe: true, pin: PIN}],
-    ['hello', {safe: true}],
+    ['hello', {}],
     ['authenticate', {pin: PIN}],
   ]);
   assert.deepEqual(state.results, []);
@@ -257,6 +258,7 @@ test('a new card opens the Safe PIN prompt immediately and stores the verified d
 
   await state.finishScan();
   assert.deepEqual(state.results, [true]);
+  assertConfirmedHello(state);
   assert.equal(state.saved.length, 1);
   assert.equal(state.saved[0].id, '11223344');
   assert.equal(state.saved[0].pin, PIN);
@@ -264,6 +266,19 @@ test('a new card opens the Safe PIN prompt immediately and stores the verified d
   assert.equal(state.saved[0].signal.aborted, false);
   assert.deepEqual(state.errors, []);
   assert.deepEqual(state.toasts, []);
+});
+
+test('an already initialized card returns its confirmed hello without prompting or scanning', async () => {
+  const state = mount({accessPIN: 5, safePIN: 5});
+  await state.finished.promise;
+
+  assert.deepEqual(state.results, [true]);
+  assertConfirmedHello(state);
+  assert.equal(state.latestHellos[0], state.hello);
+  assert.deepEqual(state.inputs, []);
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.commands, []);
+  assert.deepEqual(state.saved, []);
 });
 
 test('invalid PIN formats stay in the input flow without scanning', async () => {
@@ -290,7 +305,7 @@ for (const field of ['applet ID', 'Safe public key']) {
     await state.answer(PIN);
     const wrong = structuredClone(state.current);
     if (field === 'applet ID') wrong.id = bytes('55667788');
-    else wrong.safe.publicKey = bytes(`04${'34'.repeat(64)}`);
+    else wrong.publicKey = bytes(`04${'34'.repeat(64)}`);
 
     await assert.rejects(state.tap(wrong), MonoidWrongCardError);
     await state.finished.promise;
@@ -301,57 +316,65 @@ for (const field of ['applet ID', 'Safe public key']) {
   });
 }
 
-for (const accessPIN of [false, 5]) {
-  test(`an existing Safe PIN is requested to restore setup while ${accessPIN === false ? 'creating' : 'preserving'} the Access PIN`, async () => {
-    const state = mount({accessPIN, safePIN: 5});
-    assert.equal(
-      state.inputs[0].options.placeholder,
-      'Enter existing Safe PIN',
-    );
-    assert.equal(
-      textOf(state.inputs[0].options.description),
-      accessPIN === false
-        ? 'Will be used as initial Access PIN'
-        : 'Access PIN stays the same',
-    );
-    await state.answer(PIN);
-    await state.tap();
-    await state.finishScan();
-
-    assert.deepEqual(state.results, [true]);
-    assert.deepEqual(state.commands, [
-      ['authenticate', {safe: true, pin: PIN}],
-      ['setPIN', {safe: true, pin: PIN}],
-      ['hello', {safe: true}],
-      ...(accessPIN === false ? [['authenticate', {pin: PIN}]] : []),
-    ]);
-    assert.equal(state.saved.length, accessPIN === false ? 1 : 0);
+for (const blocked of ['accessPIN', 'safePIN']) {
+  test(`a blocked ${blocked} reports the error without opening a setup prompt`, async () => {
+    const state = mount({[blocked]: 0});
+    await state.finished.promise;
+    assert.deepEqual(state.inputs, []);
+    assert.deepEqual(state.scans, []);
+    assert.deepEqual(state.commands, []);
+    assert.deepEqual(state.results, [false]);
+    assert.equal(state.errors.length, 1);
+    assert.match(state.errors[0].message, /PIN blocked/);
   });
 }
+
+test('an existing Safe PIN initializes only the missing Access PIN', async () => {
+  const state = mount({accessPIN: false, safePIN: 5});
+  assert.equal(state.inputs[0].options.placeholder, 'Enter existing Safe PIN');
+  assert.equal(
+    textOf(state.inputs[0].options.description),
+    'Will be used as initial Access PIN',
+  );
+  await state.answer(PIN);
+  await state.tap();
+  await state.finishScan();
+
+  assert.equal(state.scans[0].contents[0], 'Setting Access PIN, hold tight...');
+  assert.deepEqual(state.results, [true]);
+  assertConfirmedHello(state);
+  assert.deepEqual(state.commands, [
+    ['authenticate', {safe: true, pin: PIN}],
+    ['setPIN', {pin: PIN}],
+    ['hello', {}],
+    ['authenticate', {pin: PIN}],
+  ]);
+  assert.equal(state.saved.length, 1);
+});
 
 test('a card initialized before the second scan succeeds without overwriting or saving the entered PIN', async () => {
   const state = mount();
   await state.answer(PIN);
   const initialized = {
     ...state.current,
-    pin: 5,
-    safe: {...state.current.safe, pin: 5, unlocked: true},
+    pins: {access: 5, safe: 5},
   };
   await state.tap(initialized);
   await state.finishScan();
 
   assert.deepEqual(state.results, [true]);
+  assertConfirmedHello(state);
+  assert.equal(state.latestHellos[0], initialized);
   assert.deepEqual(state.commands, []);
   assert.deepEqual(state.saved, []);
 });
 
-test('a newly set but locked Safe returns its fresh state so retry requests the existing PIN', async () => {
+test('a newly set Safe PIN returns its fresh state so retry initializes only the missing Access PIN', async () => {
   const state = mount();
   await state.answer(PIN);
   const changed = {
     ...state.current,
-    pin: 5,
-    safe: {...state.current.safe, pin: 5},
+    pins: {access: false, safe: 5},
   };
 
   await assert.rejects(state.tap(changed), {
@@ -370,13 +393,15 @@ test('a newly set but locked Safe returns its fresh state so retry requests the 
   await retry.finishScan();
 
   assert.deepEqual(retry.results, [true]);
+  assertConfirmedHello(retry);
   assert.deepEqual(retry.commands, [
     ['authenticate', {safe: true, pin: 'existing-pin'}],
-    ['setPIN', {safe: true, pin: 'existing-pin'}],
-    ['hello', {safe: true}],
+    ['setPIN', {pin: 'existing-pin'}],
+    ['hello', {}],
+    ['authenticate', {pin: 'existing-pin'}],
   ]);
-  assert.deepEqual(retry.saved, []);
-  assert.equal(retry.latestHellos[0].safe.unlocked, true);
+  assert.equal(retry.saved.length, 1);
+  assert.equal(retry.latestHellos[0].pins.access, 5);
 });
 
 test('cancelling before the second scan leaves setup available without writing or saving', async () => {
@@ -445,6 +470,7 @@ test('cancelling after verified initialization preserves success without startin
   await rejected;
   await state.finished.promise;
   assert.deepEqual(state.results, [true]);
+  assertConfirmedHello(state);
   assert.deepEqual(state.saved, []);
   assert.deepEqual(state.toasts, [
     {message: 'Access PIN was not saved on this device', color: 'warning'},
@@ -482,6 +508,7 @@ test('a local credential save failure warns without reversing the confirmed card
   await state.finishScan();
 
   assert.deepEqual(state.results, [true]);
+  assertConfirmedHello(state);
   assert.equal(state.saved.length, 1);
   assert.deepEqual(state.toasts, [
     {message: 'Access PIN was not saved on this device', color: 'warning'},

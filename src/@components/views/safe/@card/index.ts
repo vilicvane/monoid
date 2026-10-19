@@ -4,6 +4,7 @@ export * from './card-pin-update.js';
 export * from './card-setup-information.js';
 export * from './card-setup-pin.js';
 export * from './card-view.js';
+export * from './copy-items-state.js';
 export * from './copy-items-view.js';
 export * from './read-copy-destination.js';
 export * from './setup-card-view.js';

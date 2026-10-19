@@ -7,9 +7,9 @@ import {
 } from '../.bld/app/@components/views/safe/card-resource-groups.js';
 
 const SEED_INDEX = '02400000000000000001';
-const MASTER_INDEX = '03200000000000000001';
+const NATIVE_INDEX = '03010000000000000001';
 const seed = Object.freeze({index: SEED_INDEX, type: 'seed'});
-const master = Object.freeze({index: MASTER_INDEX, type: 'master'});
+const native = Object.freeze({index: NATIVE_INDEX, type: 'secp256k1'});
 
 function record(index, sourceIndex) {
   return Object.freeze({
@@ -25,14 +25,14 @@ test('an empty card has no resource groups', () => {
 
 test('attached records follow their source without changing representative order', () => {
   const seedRecord = record('0f010000000000000001', SEED_INDEX);
-  const masterRecord = record('0f010000000000000002', MASTER_INDEX);
+  const nativeRecord = record('0f010000000000000002', NATIVE_INDEX);
   const ordinary = Object.freeze({index: '12340000000000000003'});
   const resources = Object.freeze([
-    masterRecord,
+    nativeRecord,
     ordinary,
     seed,
     seedRecord,
-    master,
+    native,
   ]);
 
   const groups = getCardResourceGroups(resources);
@@ -40,21 +40,21 @@ test('attached records follow their source without changing representative order
   assert.deepEqual(groups, [
     {item: ordinary, items: [ordinary]},
     {item: seed, items: [seed, seedRecord]},
-    {item: master, items: [master, masterRecord]},
+    {item: native, items: [native, nativeRecord]},
   ]);
   assert.equal(groups[1].item, seed);
-  assert.equal(groups[2].items[1], masterRecord);
+  assert.equal(groups[2].items[1], nativeRecord);
   assert.deepEqual(resources, [
-    masterRecord,
+    nativeRecord,
     ordinary,
     seed,
     seedRecord,
-    master,
+    native,
   ]);
 });
 
 test('a record with no source on this card stays independently selectable', () => {
-  const orphan = record('0f010000000000000002', MASTER_INDEX);
+  const orphan = record('0f010000000000000002', NATIVE_INDEX);
 
   assert.deepEqual(getCardResourceGroups([seed, orphan]), [
     {item: seed, items: [seed]},
@@ -77,23 +77,23 @@ test('an arbitrary lookup key or unparsed app type does not imply an attachment'
   ]);
 });
 
-test('the complete source index distinguishes seed and master with the same index suffix', () => {
+test('the complete source index distinguishes seed and native keys with the same index suffix', () => {
   const seedRecord = record('0f010000000000000001', SEED_INDEX);
-  const masterRecord = record('0f010000000000000002', MASTER_INDEX);
+  const nativeRecord = record('0f010000000000000002', NATIVE_INDEX);
 
   assert.deepEqual(
-    getCardResourceGroups([seed, master, masterRecord, seedRecord]),
+    getCardResourceGroups([seed, native, nativeRecord, seedRecord]),
     [
       {item: seed, items: [seed, seedRecord]},
-      {item: master, items: [master, masterRecord]},
+      {item: native, items: [native, nativeRecord]},
     ],
   );
 });
 
 test('native address records, including empty ones, attach to their supported raw key', () => {
   for (const [type, index] of [
-    ['secp256k1', '04010000000000000001'],
-    ['ed25519', '05010000000000000001'],
+    ['secp256k1', '03010000000000000001'],
+    ['ed25519', '04010000000000000001'],
   ]) {
     const raw = {index, type};
     const attached = record('0f010000000000000001', index);
@@ -109,7 +109,7 @@ test('native address records, including empty ones, attach to their supported ra
 });
 
 test('P-256 does not attach wallet address records', () => {
-  const raw = {index: '04020000000000000001', type: 'secp256r1'};
+  const raw = {index: '03020000000000000001', type: 'secp256r1'};
   const unrelated = record('0f010000000000000001', raw.index);
 
   assert.deepEqual(getCardResourceGroups([raw, unrelated]), [
@@ -119,7 +119,7 @@ test('P-256 does not attach wallet address records', () => {
 });
 
 test('counts without attachments retain the ordinary count and progress form', () => {
-  const groups = getCardResourceGroups([seed, master]);
+  const groups = getCardResourceGroups([seed, native]);
 
   assert.equal(formatCardResourceCount([]), '0');
   assert.equal(
@@ -135,11 +135,11 @@ test('counts without attachments retain the ordinary count and progress form', (
 
 test('selection counts distinguish attached records while transfer progress combines them', () => {
   const seedRecord = record('0f010000000000000001', SEED_INDEX);
-  const masterRecord = record('0f010000000000000002', MASTER_INDEX);
+  const nativeRecord = record('0f010000000000000002', NATIVE_INDEX);
   const groups = getCardResourceGroups([
     seed,
-    master,
-    masterRecord,
+    native,
+    nativeRecord,
     seedRecord,
   ]);
 
@@ -153,7 +153,7 @@ test('selection counts distinguish attached records while transfer progress comb
     '1/4',
   );
   assert.equal(
-    formatCardResourceCount(groups, item => item !== masterRecord),
+    formatCardResourceCount(groups, item => item !== nativeRecord),
     '3/4',
   );
   assert.equal(
@@ -164,7 +164,7 @@ test('selection counts distinguish attached records while transfer progress comb
 
 test('an orphan record contributes to the primary count', () => {
   const linked = record('0f010000000000000001', SEED_INDEX);
-  const orphan = record('0f010000000000000002', MASTER_INDEX);
+  const orphan = record('0f010000000000000002', NATIVE_INDEX);
   const groups = getCardResourceGroups([seed, linked, orphan]);
 
   assert.equal(formatCardResourceCount(groups), '2+1');

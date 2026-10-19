@@ -161,10 +161,9 @@ function mount() {
     storage,
     cardStore: new CardStore(),
     hello: {
-      safe: {
-        id: bytes('aabbccdd'),
-        publicKey: bytes(`04${'12'.repeat(64)}`),
-      },
+      id: bytes('aabbccdd'),
+      publicKey: bytes(`04${'12'.repeat(64)}`),
+      bundle: false,
     },
     view: observable({
       index: INDEX,
@@ -293,7 +292,7 @@ test('Import scans again, appends only the requested address, and commits its fr
   assert.equal(state.button('Import').props.loading, true);
   assert.ok(
     state.scanOptions.every(
-      options => options.safe && options.pinSession === state.pinSession,
+      options => options.allowSetup && options.pinSession === state.pinSession,
     ),
   );
 
@@ -319,10 +318,8 @@ test('a wrong Safe with the same short ID is rejected before authentication or w
 
   await assert.rejects(
     state.tap({
-      safe: {
-        ...state.hello.safe,
-        publicKey: bytes(`04${'34'.repeat(64)}`),
-      },
+      ...state.hello,
+      publicKey: bytes(`04${'34'.repeat(64)}`),
     }),
     MonoidWrongCardError,
   );
@@ -509,10 +506,8 @@ test('a verified local preview binds the complete card identity across a write r
 
   await assert.rejects(
     state.tap({
-      safe: {
-        ...state.hello.safe,
-        publicKey: bytes(`04${'34'.repeat(64)}`),
-      },
+      ...state.hello,
+      publicKey: bytes(`04${'34'.repeat(64)}`),
     }),
     MonoidWrongCardError,
   );
@@ -573,8 +568,9 @@ test('deleting an address then importing another updates the card snapshot witho
   const deleted = toJS(state.storage.keys[0].wallets[0]);
   state.storage.deleteWallet(INDEX, deleted);
   const cached = state.cardStore.set({
-    id: Buffer.from(state.hello.safe.id).toString('hex'),
-    publicKey: Buffer.from(state.hello.safe.publicKey).toString('hex'),
+    id: Buffer.from(state.hello.id).toString('hex'),
+    publicKey: Buffer.from(state.hello.publicKey).toString('hex'),
+    bundle: false,
     items: [{index: INDEX, type: 'seed', secret: true, derivations: [deleted]}],
   });
   const write = state.write;
@@ -613,8 +609,9 @@ test('importing after an empty card record refreshes the card address preview', 
   const previous = toJS(state.storage.keys[0].wallets[0]);
   state.storage.deleteWallet(INDEX, previous);
   const cached = state.cardStore.set({
-    id: Buffer.from(state.hello.safe.id).toString('hex'),
-    publicKey: Buffer.from(state.hello.safe.publicKey).toString('hex'),
+    id: Buffer.from(state.hello.id).toString('hex'),
+    publicKey: Buffer.from(state.hello.publicKey).toString('hex'),
+    bundle: false,
     items: [{index: INDEX, type: 'seed', secret: true, derivations: []}],
   });
   await derive(state);

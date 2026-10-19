@@ -12,7 +12,7 @@ import {
 import {scanCardItems} from '../.bld/app/@components/views/safe/scan-card.js';
 
 const ROOT = '02000000000000000001';
-const MASTER = '03000000000000000001';
+const OTHER_SEED = '02400000000000000001';
 const ORPHAN = '02000000000000000002';
 const PUBLIC_KEY =
   '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
@@ -22,11 +22,11 @@ const SOLANA_KEY = '00'.repeat(32);
 const bytes = hex => Uint8Array.from(Buffer.from(hex, 'hex'));
 const hex = value => Buffer.from(value).toString('hex');
 
-function wallet(addressType, path, type = 'seed') {
+function wallet(addressType, path) {
   const options = ADDRESS_TYPES[addressType];
   return {
     addressType,
-    seed: type === 'seed' ? options.seed : undefined,
+    seed: options.seed,
     curve: options.curve,
     path,
   };
@@ -134,30 +134,30 @@ test('scan requests the Taproot output key for a stored Taproot wallet', async (
   assert.match(items[1].ref.address, /^bc1p/);
 });
 
-test('scan associates records by the full seed or master index', async () => {
+test('scan associates records by the full source index, including the type prefix', async () => {
   const seedRecord = metadata(ROOT, [wallet('evm', "m/44'/60'/0'/0/2")]);
-  const masterRecord = metadata(MASTER, [
-    wallet('solana', "m/44'/501'/3'/0'", 'master'),
+  const secondRecord = metadata(OTHER_SEED, [
+    wallet('solana', "m/44'/501'/3'/0'"),
   ]);
   const {applet, calls} = createApplet(
     [
       resource(ROOT, 'seed'),
-      resource(MASTER, 'master'),
-      masterRecord.item,
+      resource(OTHER_SEED, 'seed'),
+      secondRecord.item,
       seedRecord.item,
     ],
-    [seedRecord, masterRecord],
+    [seedRecord, secondRecord],
   );
 
   const items = await scanCardItems(applet, () => {});
 
   assert.equal(items[0].derivations[0].addressType, 'evm');
   assert.equal(items[1].derivations[0].addressType, 'solana');
-  assert.equal(items[1].derivations[0].seed, undefined);
-  assert.equal(calls.viewKey[1].type, 'master');
+  assert.equal(items[1].derivations[0].seed, 'ed25519 seed');
+  assert.equal(calls.viewKey[1].type, 'seed');
   assert.equal(calls.viewKey[1].derivation.type, 'slip10');
   assert.equal(calls.viewKey[1].derivation.curve, 'ed25519');
-  assert.equal(hex(calls.viewKey[1].index), MASTER);
+  assert.equal(hex(calls.viewKey[1].index), OTHER_SEED);
 });
 
 test('scan preserves orphan metadata and unrelated resources without applying orphan paths', async () => {
@@ -188,6 +188,24 @@ test('scan preserves orphan metadata and unrelated resources without applying or
     key: 'aabb',
     secret: false,
   });
+});
+
+test('malformed record source identifiers still fail before scanning supported keys', async () => {
+  for (const key of [undefined, new Uint8Array(), bytes('0240')]) {
+    const record = {
+      index: bytes('0f010000000000000003'),
+      type: CARD_DERIVATIONS_TYPE,
+      key,
+      secret: false,
+    };
+    const {applet, calls} = createApplet([resource(ROOT, 'seed'), record]);
+
+    await assert.rejects(
+      scanCardItems(applet, () => {}),
+      /Invalid derivation/,
+    );
+    assert.deepEqual(calls, {get: [], viewKey: []});
+  }
 });
 
 test('an empty record preserves an explicit empty list without reading a default address', async () => {
@@ -256,15 +274,15 @@ test('scan progress uses stable stages and counts every saved address, including
     wallet('bitcoin-segwit', path),
     wallet('evm', "m/44'/60'/0'/0/8"),
   ]);
-  const empty = metadata(MASTER, []);
+  const empty = metadata(OTHER_SEED, []);
   const {applet, calls} = createApplet(
     [
       resource(ROOT, 'seed'),
       record.item,
-      resource(MASTER, 'master'),
+      resource(OTHER_SEED, 'seed'),
       empty.item,
-      resource('04010000000000000001', 'secp256k1'),
-      resource('06010000000000000001', 'secp256r1'),
+      resource('03010000000000000001', 'secp256k1'),
+      resource('03020000000000000001', 'secp256r1'),
     ],
     [record, empty],
   );
@@ -310,7 +328,7 @@ for (const stage of ['list', 'records', 'saved-key', 'preview', 'p256']) {
         ? [resource(ROOT, 'seed'), record.item]
         : [
             resource(ROOT, stage === 'p256' ? 'secp256r1' : 'seed'),
-            resource(MASTER, 'master'),
+            resource(OTHER_SEED, 'seed'),
           ];
     const {applet, calls} = createApplet(resources, [record]);
     const method =

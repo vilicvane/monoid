@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {afterEach, mock, test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
 
+import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
+
 let fixture;
 let rendering;
 let platform = 'android';
@@ -67,6 +69,10 @@ mock.module('../.bld/app/@services/index.js', {
   },
 });
 
+mock.module('../.bld/app/@lib/monoid/index.js', {
+  namedExports: {MonoidCardError},
+});
+
 const {MonoidScanPromptPresenter} = await import(
   '../.bld/app/@services/monoid-scan-prompt-presenter.js'
 );
@@ -86,6 +92,7 @@ function deferred() {
 
 function setup() {
   const presenter = new MonoidScanPromptPresenter();
+  const presentedErrors = [];
   const owner = {
     slots: [],
     index: 0,
@@ -96,7 +103,10 @@ function setup() {
   };
   owners.push(owner);
   fixture = {
-    entrances: {monoidScanPromptPresenter: presenter},
+    entrances: {
+      monoidScanPromptPresenter: presenter,
+      errorService: {markPresented: error => presentedErrors.push(error)},
+    },
     scans: [],
   };
   rendering = owner;
@@ -121,7 +131,7 @@ function setup() {
     };
   };
 
-  return {presenter, owner, start, scans: fixture.scans};
+  return {presenter, owner, start, scans: fixture.scans, presentedErrors};
 }
 
 async function connect(scan) {
@@ -216,6 +226,32 @@ test('failure is displayed while waiting for removal and can be cancelled', asyn
   hide(presenter);
   assert.equal((await run.promise).error.code, 'CANCELLED');
 });
+
+for (const known of [true, false]) {
+  for (const targetPlatform of ['android', 'ios']) {
+    test(`${targetPlatform}: ${known ? 'known' : 'unexpected'} raw card errors are suppressed only after being shown and without needing details`, async () => {
+      platform = targetPlatform;
+      const {presenter, start, presentedErrors} = setup();
+      const failure = known
+        ? new MonoidCardError('Wrong card')
+        : new Error('INSTALL failed');
+      const run = start(async () => {
+        throw failure;
+      });
+      await connect(run.scan);
+      assert.deepEqual(
+        presentedErrors,
+        known && targetPlatform === 'android' ? [failure] : [],
+      );
+      if (targetPlatform === 'android') {
+        assert.equal(presenter.current.content, failure.message);
+      }
+      run.scan.stopped.resolve();
+      hide(presenter);
+      assert.equal((await run.promise).error, failure);
+    });
+  }
+}
 
 test('success waits for native stop and shared presentation exit', async () => {
   const {presenter, start} = setup();

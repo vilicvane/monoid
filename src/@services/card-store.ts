@@ -1,6 +1,6 @@
 import {makeAutoObservable, toJS} from 'mobx';
 
-import type {MonoidSafeIdHex, PublicKeyHex, SafeIndexHex} from '../@atomics.js';
+import type {MonoidIdHex, PublicKeyHex, SafeIndexHex} from '../@atomics.js';
 import type {
   ScannedCardData,
   ScannedCardItemData,
@@ -104,13 +104,15 @@ export class CardItem implements ScannedCardItemData {
 }
 
 export class CardState implements ScannedCardData {
-  readonly id: MonoidSafeIdHex;
+  readonly id: MonoidIdHex;
   readonly publicKey: PublicKeyHex;
+  bundle: string | false;
   items: CardItem[];
 
   constructor(card: ScannedCardData) {
     this.id = card.id;
     this.publicKey = card.publicKey;
+    this.bundle = card.bundle;
     this.items = card.items.map(item => new CardItem(item));
     makeAutoObservable(this, {id: false, publicKey: false});
   }
@@ -132,6 +134,7 @@ export class CardState implements ScannedCardData {
     return {
       id: this.id,
       publicKey: this.publicKey,
+      bundle: this.bundle,
       items: this.items.map(item => ({
         index: item.index,
         ...(item.type !== undefined && {type: item.type}),
@@ -166,6 +169,7 @@ export class CardStore {
     const existing = this.get(card);
 
     if (existing) {
+      existing.bundle = card.bundle;
       existing.items = card.items.map(item => new CardItem(item));
       return existing;
     }

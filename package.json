@@ -11,13 +11,15 @@
   "scripts": {
     "3": "npm install && npm dedupe && npm install",
     "postinstall": "npm --prefix plugins/isodep-nfc run build && npm --prefix plugins/biometric-vault run build && npm --prefix plugins/qr-scanner run build",
+    "prepare:applets": "node scripts/prepare-applets.mjs ../monoid-javacard/build/javacard && prettier --write src/@lib/monoid/@applet-bundle.ts src/@assets/applets/manifest.json",
     "build": "rimraf ./.bld && tsc --build",
-    "build:web": "npm run build && vite build",
+    "build:web": "npm run prepare:applets && npm run build && vite build",
     "dev": "vite",
     "lint": "eslint --no-error-on-unmatched-pattern --report-unused-disable-directives . && run-in-every eslint-project --parallel --echo -- eslint --no-error-on-unmatched-pattern --report-unused-disable-directives .",
     "lint-prettier": "prettier --check .",
     "test": "npm run lint-prettier && npm run build && npm run lint",
     "android": "ionic cap run android --livereload --external",
+    "ionic:build": "npm run build:web",
     "ios": "npm run ios:sync && cap open ios",
     "ios:sync": "npm run build:web && cap sync ios",
     "ios:open": "cap open ios"

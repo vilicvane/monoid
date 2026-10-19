@@ -5,7 +5,7 @@ import {AppletISOError} from '../../../../@lib/applet.js';
 import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {
   type MonoidApplet,
-  type MonoidAppletHelloWithSafe,
+  type MonoidAppletHello,
   MonoidAppletInvalidPINError,
   MonoidCardError,
   MonoidWrongCardError,
@@ -22,6 +22,7 @@ import type {ScannedCardData, ScannedCardItemData} from '../common.js';
 export type CardBackupIdentity = {
   id: string;
   publicKey: string;
+  bundle: string | false;
 };
 
 export type CardBackupItem = Pick<
@@ -59,11 +60,10 @@ function createBackup(
 ): CardBackup {
   if (
     !/^[0-9a-f]{8}$/i.test(source.id) ||
-    !/^04[0-9a-f]{128}$/i.test(source.publicKey)
+    !/^04[0-9a-f]{128}$/i.test(source.publicKey) ||
+    (source.bundle !== false && !/^[0-9a-f]{64}$/i.test(source.bundle))
   ) {
-    throw new MonoidCardError(
-      'This card did not provide a valid Safe identity.',
-    );
+    throw new MonoidCardError('This card did not provide a valid identity.');
   }
 
   const selectedIndexes =
@@ -113,6 +113,7 @@ function createBackup(
     source: {
       id: source.id.toLowerCase(),
       publicKey: source.publicKey.toLowerCase(),
+      bundle: source.bundle === false ? false : source.bundle.toLowerCase(),
     },
     items: groupedItems,
     targets: [],
@@ -123,45 +124,61 @@ function createBackup(
 }
 
 export function readBackupCardIdentity(
-  hello: MonoidAppletHelloWithSafe,
+  hello: MonoidAppletHello,
 ): CardBackupIdentity {
-  const {id, publicKey} = hello.safe;
+  const {id, publicKey, bundle} = hello;
 
-  if (id.length !== 4 || publicKey.length !== 65 || publicKey[0] !== 0x04) {
-    throw new MonoidCardError(
-      'This card did not provide a valid Safe identity.',
-    );
+  if (
+    id.length !== 4 ||
+    publicKey.length !== 65 ||
+    publicKey[0] !== 0x04 ||
+    (bundle !== false && bundle.length !== 32)
+  ) {
+    throw new MonoidCardError('This card did not provide a valid identity.');
   }
 
-  return {id: uint8ArrayToHex(id), publicKey: uint8ArrayToHex(publicKey)};
+  return {
+    id: uint8ArrayToHex(id),
+    publicKey: uint8ArrayToHex(publicKey),
+    bundle: bundle === false ? false : uint8ArrayToHex(bundle),
+  };
 }
 
 export function getBackupCardIdentity(
-  hello: MonoidAppletHelloWithSafe,
+  hello: MonoidAppletHello,
 ): CardBackupIdentity {
   const identity = readBackupCardIdentity(hello);
 
   assertBackupPINsNotBlocked(hello);
 
-  if (hello.pin === false || hello.safe.pin === false || !hello.safe.unlocked) {
+  if (hello.pins.access === false || hello.pins.safe === false) {
     throw new MonoidCardError('Initialize card from Safe');
   }
 
   return identity;
 }
 
-function assertBackupPINsNotBlocked(hello: MonoidAppletHelloWithSafe): void {
-  if (hello.safe.pin === 0) {
+export function assertBackupBundle(
+  source: CardBackupIdentity,
+  target: CardBackupIdentity,
+): void {
+  if (source.bundle !== false && target.bundle !== source.bundle) {
+    throw new MonoidCardError('Use a card in the same bundle');
+  }
+}
+
+function assertBackupPINsNotBlocked(hello: MonoidAppletHello): void {
+  if (hello.pins.safe === 0) {
     throw new MonoidCardError('Safe PIN blocked');
   }
 
-  if (hello.pin === 0) {
+  if (hello.pins.access === 0) {
     throw new MonoidCardError('Access PIN blocked');
   }
 }
 
 export function assertBackupCard(
-  hello: MonoidAppletHelloWithSafe,
+  hello: MonoidAppletHello,
   expected: CardBackupIdentity,
 ): void {
   if (readBackupCardIdentity(hello).publicKey !== expected.publicKey) {
@@ -181,11 +198,11 @@ function throwIfCancelled(signal: AbortSignal): void {
 
 export async function initializeBackupTarget(
   applet: MonoidApplet,
-  hello: MonoidAppletHelloWithSafe,
-  expected: MonoidAppletHelloWithSafe,
+  hello: MonoidAppletHello,
+  expected: MonoidAppletHello,
   pin: string,
   signal: AbortSignal,
-): Promise<MonoidAppletHelloWithSafe> {
+): Promise<MonoidAppletHello> {
   const identity = readBackupCardIdentity(hello);
   const expectedIdentity = readBackupCardIdentity(expected);
 
@@ -196,7 +213,11 @@ export async function initializeBackupTarget(
   assertBackupPINsNotBlocked(hello);
   throwIfCancelled(signal);
 
-  if (expected.safe.pin === false && hello.safe.pin !== false) {
+  if (hello.pins.access !== false && hello.pins.safe !== false) {
+    return hello;
+  }
+
+  if (expected.pins.safe === false && hello.pins.safe !== false) {
     throw new MonoidCardError(
       'This card has already been initialized. Add it again to continue.',
     );
@@ -336,7 +357,7 @@ export class CardBackupSession {
 
   readSource(
     applet: MonoidApplet,
-    hello: MonoidAppletHelloWithSafe,
+    hello: MonoidAppletHello,
     signal: AbortSignal,
     sourceIndexes?: readonly string[],
     onProgress?: (current: number, total: number) => void,
@@ -378,10 +399,11 @@ export class CardBackupSession {
     });
   }
 
-  addTarget(hello: MonoidAppletHelloWithSafe): Promise<void> {
+  addTarget(hello: MonoidAppletHello): Promise<void> {
     return this.exclusive(() => {
       const backup = this.requireEditableBackup();
       const target = getBackupCardIdentity(hello);
+      assertBackupBundle(backup.source, target);
 
       if (target.publicKey === backup.source.publicKey) {
         throw new MonoidCardError('Use a different card');
@@ -452,7 +474,7 @@ export class CardBackupSession {
 
   exportItems(
     applet: MonoidApplet,
-    hello: MonoidAppletHelloWithSafe,
+    hello: MonoidAppletHello,
     pin: string,
     signal: AbortSignal,
     onProgress: (current: number, total: number) => void,
@@ -460,12 +482,15 @@ export class CardBackupSession {
     return this.exclusive(async () => {
       const backup = this.requireBackup();
       assertBackupCard(hello, backup.source);
+      if (readBackupCardIdentity(hello).bundle !== backup.source.bundle) {
+        throw new MonoidCardError('Card bundle changed, scan source again');
+      }
 
       if (!backup.targetsConfirmed) {
         throw new MonoidCardError('Confirm the destination cards first.');
       }
 
-      if (hello.safe.pin === 0) {
+      if (hello.pins.safe === 0) {
         throw new MonoidCardError('Safe PIN blocked');
       }
 
@@ -510,7 +535,7 @@ export class CardBackupSession {
           throwIfCancelled(signal);
           const exported = await applet.exportItem({
             index: SafeIndex.satisfies(hexToUint8Array(item.index)),
-            recipientPublicKey,
+            ...(backup.source.bundle === false && {recipientPublicKey}),
           });
 
           // Each target receives its own encrypted artifact. Its metadata must
@@ -536,7 +561,7 @@ export class CardBackupSession {
 
   importItems(
     applet: MonoidApplet,
-    hello: MonoidAppletHelloWithSafe,
+    hello: MonoidAppletHello,
     signal: AbortSignal,
     onProgress: (
       current: number,
@@ -563,6 +588,7 @@ export class CardBackupSession {
       }
 
       assertBackupCard(hello, target);
+      assertBackupBundle(backup.source, identity);
       const selected = target.items;
 
       if (!selected.length || selected.some(item => !item.exported)) {
@@ -587,7 +613,7 @@ export class CardBackupSession {
         throwIfCancelled(signal);
         const request = {
           index: SafeIndex.satisfies(hexToUint8Array(item.index)),
-          senderPublicKey,
+          ...(backup.source.bundle === false && {senderPublicKey}),
           ...(exported.key !== undefined && {
             key: hexToUint8Array(exported.key),
           }),

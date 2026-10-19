@@ -23,19 +23,14 @@ const hex = bytes => Buffer.from(bytes).toString('hex');
 const bytes = value => Uint8Array.from(Buffer.from(value, 'hex'));
 const index = number => bytes(`1234000000000000000${number}`);
 
-function hello(identity, overrides = {}) {
+function hello(identity, {accessPIN = 5, safePIN = 5, ...overrides} = {}) {
   return {
     version: 1,
-    id: bytes(`0000000${identity}`),
-    features: {curves: []},
-    pin: 5,
-    safe: {
-      id: bytes(`1000000${identity}`),
-      publicKey: Uint8Array.from([4, ...new Array(64).fill(identity)]),
-      pin: 5,
-      unlocked: true,
-      ...overrides,
-    },
+    id: bytes(`1000000${identity}`),
+    publicKey: Uint8Array.from([4, ...new Array(64).fill(identity)]),
+    bundle: false,
+    pins: {access: accessPIN, safe: safePIN},
+    ...overrides,
   };
 }
 
@@ -140,10 +135,108 @@ async function ready({multiple = false} = {}) {
   return {source, target, session, ...rest};
 }
 
+for (const targetBundle of [false, new Uint8Array(32).fill(2)]) {
+  test(`a bundled source rejects a ${targetBundle === false ? 'non-bundled' : 'different-bundle'} destination before export`, async () => {
+    const {source, target} = fixture();
+    source.hello.bundle = new Uint8Array(32).fill(1);
+    target.hello.bundle = targetBundle;
+    const session = new CardBackupSession();
+    await session.readSource(source, source.hello, signal());
+
+    await assert.rejects(session.addTarget(target.hello), /same bundle/);
+    assert.deepEqual(session.backup.targets, []);
+    assert.equal(session.backup.source.bundle, '01'.repeat(32));
+    assert.equal(session.busy, false);
+    assert.deepEqual(
+      source.calls.map(([name]) => name),
+      ['list'],
+    );
+  });
+}
+
+test('an asymmetric source can copy into an enrolled destination using its public key', async () => {
+  const {source, target} = fixture();
+  target.hello.bundle = new Uint8Array(32).fill(2);
+  const session = new CardBackupSession();
+  await session.readSource(source, source.hello, signal());
+  await session.addTarget(target.hello);
+  await session.confirmTargets();
+  await session.exportItems(source, source.hello, PIN, signal(), progress);
+  await session.importItems(target, target.hello, signal(), progress);
+
+  assert.equal(session.backup.complete, true);
+  assert.equal(session.backup.source.bundle, false);
+  assert.equal(session.backup.targets[0].bundle, '02'.repeat(32));
+  for (const [name, request] of source.calls) {
+    if (name === 'exportItem')
+      assert.deepEqual(request.recipientPublicKey, target.hello.publicKey);
+  }
+  for (const [name, request] of target.calls) {
+    if (name === 'importItem')
+      assert.deepEqual(request.senderPublicKey, source.hello.publicKey);
+  }
+});
+
+test('a same-bundle transfer omits asymmetric keys and verifies the live destination bundle before importing', async () => {
+  const {source, target, items} = fixture();
+  source.hello.bundle = new Uint8Array(32).fill(1);
+  target.hello.bundle = new Uint8Array(32).fill(1);
+  source.exportItem = async request => {
+    source.calls.push(['exportItem', request]);
+    return {data: Uint8Array.of(2, 3, 4)};
+  };
+  target.importItem = async request => {
+    target.calls.push(['importItem', request]);
+    target.records.set(hex(request.index), request);
+  };
+  const session = new CardBackupSession(cardSnapshot(source, items));
+  await session.addTarget(target.hello);
+  await session.confirmTargets();
+  await session.exportItems(source, source.hello, PIN, signal(), progress);
+
+  for (const [name, request] of source.calls) {
+    if (name === 'exportItem')
+      assert.equal('recipientPublicKey' in request, false);
+  }
+  target.hello.bundle = new Uint8Array(32).fill(2);
+  await assert.rejects(
+    session.importItems(target, target.hello, signal(), progress),
+    /same bundle/,
+  );
+  assert.deepEqual(target.calls, []);
+  target.hello.bundle = new Uint8Array(32).fill(1);
+  await session.importItems(target, target.hello, signal(), progress);
+  for (const [name, request] of target.calls) {
+    if (name === 'importItem')
+      assert.equal('senderPublicKey' in request, false);
+  }
+  assert.equal(session.backup.complete, true);
+});
+
+test('a changed source bundle is rejected before authentication or export', async () => {
+  const {session, source} = await ready();
+  source.hello.bundle = new Uint8Array(32).fill(1);
+  await assert.rejects(
+    session.exportItems(source, source.hello, PIN, signal(), progress),
+    /bundle changed/,
+  );
+  assert.deepEqual(
+    source.calls.map(([name]) => name),
+    ['list'],
+  );
+  assert.ok(
+    session.backup.targets.every(target =>
+      target.items.every(item => !item.exported),
+    ),
+  );
+  assert.equal(session.busy, false);
+});
+
 function cardSnapshot(source, items) {
   return {
-    id: hex(source.hello.safe.id),
-    publicKey: hex(source.hello.safe.publicKey),
+    id: hex(source.hello.id),
+    publicKey: hex(source.hello.publicKey),
+    bundle: source.hello.bundle === false ? false : hex(source.hello.bundle),
     items: items.map(item => ({
       index: hex(item.index),
       ...(item.type !== undefined && {type: item.type}),
@@ -193,7 +286,7 @@ test('copy selection and the scanned Card snapshot do not share mutable item sta
   assert.equal(Object.hasOwn(session.backup.items[0], 'ref'), false);
   const copy = structuredClone(session.backup);
   snapshot.id = 'ffffffff';
-  snapshot.publicKey = hex(hello(3).safe.publicKey);
+  snapshot.publicKey = hex(hello(3).publicKey);
   snapshot.items[0].alias = 'Changed outside copy';
   snapshot.items[0].secret = false;
   snapshot.items[0].index = hex(index(4));
@@ -203,7 +296,7 @@ test('copy selection and the scanned Card snapshot do not share mutable item sta
 
 function groupedFixture({type = 'seed', wallets} = {}) {
   const state = fixture();
-  const prefix = {seed: '0240', secp256k1: '0401', ed25519: '0501'}[type];
+  const prefix = {seed: '0240', secp256k1: '0301', ed25519: '0401'}[type];
   const rootIndex = `${prefix}0000000000000001`;
   const orphanRootIndex = `${prefix}0000000000000002`;
   const wallet = {
@@ -449,10 +542,10 @@ for (const [type, addressType] of [
     await session.exportItems(source, source.hello, PIN, signal(), progress);
     const existing = {
       index: companion.index,
-      senderPublicKey: source.hello.safe.publicKey,
+      senderPublicKey: source.hello.publicKey,
       key: root.index,
       data: Uint8Array.from([
-        target.hello.safe.publicKey[1],
+        target.hello.publicKey[1],
         ...encodeCardDerivationRecord({
           index: hex(root.index),
           wallets: [
@@ -571,7 +664,7 @@ test('snapshot identity is checked with the full public key before the first sou
   const session = new CardBackupSession(snapshot);
   await session.addTarget(target.hello);
   await session.confirmTargets();
-  const wrong = hello(3, {id: source.hello.safe.id});
+  const wrong = hello(3, {id: source.hello.id});
   await assert.rejects(
     session.exportItems(source, wrong, PIN, signal(), progress),
     /Wrong card/i,
@@ -636,10 +729,10 @@ test('backup preserves all item types and exact Export metadata within the page 
   assert.equal(session.backup.items[1].type, undefined);
   assert.equal(session.backup.items[2].type, 0x1234);
   for (const request of target.records.values()) {
-    const exported = artifact(request.index, target.hello.safe.publicKey);
+    const exported = artifact(request.index, target.hello.publicKey);
     assert.deepEqual(request, {
       index: request.index,
-      senderPublicKey: source.hello.safe.publicKey,
+      senderPublicKey: source.hello.publicKey,
       ...exported,
     });
   }
@@ -696,7 +789,7 @@ test('an explicitly empty Card selection stays empty and cannot be confirmed', a
     source.calls.map(([method]) => method),
     ['list'],
   );
-  await session.removeTarget(hex(target.hello.safe.publicKey));
+  await session.removeTarget(hex(target.hello.publicKey));
   await session.addTarget(target.hello);
   assert.ok(session.backup.items.every(item => !item.selected));
   await assert.rejects(session.confirmTargets(), /select|item/i);
@@ -729,7 +822,7 @@ test('a requested item missing from the card rejects the whole handoff without c
 
 test('same display ID with another public key is rejected before any authentication or import', async () => {
   const {session, source, target} = await ready();
-  const wrongSource = hello(3, {id: source.hello.safe.id, unlocked: false});
+  const wrongSource = hello(3, {id: source.hello.id});
   assert.throws(
     () => assertBackupCard(wrongSource, session.backup.source),
     /Wrong card/,
@@ -741,7 +834,7 @@ test('same display ID with another public key is rejected before any authenticat
   assert.equal(source.calls.length, 1);
 
   await session.exportItems(source, source.hello, PIN, signal(), progress);
-  const wrongTarget = hello(3, {id: target.hello.safe.id});
+  const wrongTarget = hello(3, {id: target.hello.id});
   await assert.rejects(
     session.importItems(target, wrongTarget, signal(), progress),
     /Wrong card/,
@@ -752,31 +845,43 @@ test('same display ID with another public key is rejected before any authenticat
 test('identity validation rejects invalid, uninitialized, and blocked source or destination cards', async () => {
   assert.throws(
     () => getBackupCardIdentity(hello(1, {publicKey: new Uint8Array(65)})),
-    /valid Safe identity/,
+    /valid identity/,
   );
   assert.throws(
-    () => getBackupCardIdentity(hello(1, {pin: false})),
+    () => getBackupCardIdentity(hello(1, {safePIN: false})),
     /Initialize/,
   );
   assert.throws(
-    () => getBackupCardIdentity(hello(1, {unlocked: false})),
+    () => getBackupCardIdentity(hello(1, {accessPIN: false})),
     /Initialize/,
   );
-  assert.throws(() => getBackupCardIdentity({...hello(1), pin: 0}), /blocked/i);
-  assert.throws(() => getBackupCardIdentity(hello(1, {pin: 0})), /blocked/i);
+  assert.throws(
+    () => getBackupCardIdentity(hello(1, {accessPIN: 0})),
+    /blocked/i,
+  );
+  assert.throws(
+    () => getBackupCardIdentity(hello(1, {safePIN: 0})),
+    /blocked/i,
+  );
   const {session, source, target} = await ready();
   await assert.rejects(
-    session.exportItems(source, hello(1, {pin: 0}), PIN, signal(), progress),
+    session.exportItems(
+      source,
+      hello(1, {safePIN: 0}),
+      PIN,
+      signal(),
+      progress,
+    ),
     /blocked/,
   );
   assert.equal(source.calls.length, 1);
   await session.exportItems(source, source.hello, PIN, signal(), progress);
   await assert.rejects(
-    session.importItems(target, hello(2, {pin: 0}), signal(), progress),
+    session.importItems(target, hello(2, {safePIN: 0}), signal(), progress),
     /blocked/i,
   );
   await assert.rejects(
-    session.importItems(target, {...hello(2), pin: 0}, signal(), progress),
+    session.importItems(target, hello(2, {accessPIN: 0}), signal(), progress),
     /blocked/i,
   );
   assert.equal(target.calls.length, 0);
@@ -784,10 +889,7 @@ test('identity validation rejects invalid, uninitialized, and blocked source or 
 });
 
 function uninitializedTarget({hasSafePIN = false} = {}) {
-  const first = {
-    ...hello(2, {pin: hasSafePIN ? 5 : false, unlocked: false}),
-    pin: false,
-  };
+  const first = hello(2, {safePIN: hasSafePIN ? 5 : false, accessPIN: false});
   const state = {
     first,
     fresh: structuredClone(first),
@@ -824,19 +926,18 @@ test('a new destination sets only the Safe PIN and verifies initialized Access P
 
   assert.deepEqual(state.calls, [
     ['setPIN', {safe: true, pin: PIN}],
-    ['hello', {safe: true}],
+    ['hello', {}],
   ]);
-  assert.equal(result.pin, 5);
-  assert.equal(result.safe.pin, 5);
-  assert.equal(result.safe.unlocked, true);
-  assert.deepEqual(result.safe.publicKey, state.first.safe.publicKey);
+  assert.equal(result.pins.access, 5);
+  assert.equal(result.pins.safe, 5);
+  assert.deepEqual(result.publicKey, state.first.publicKey);
   assert.deepEqual(
     getBackupCardIdentity(result),
     getBackupCardIdentity(state.result),
   );
 });
 
-test('restoring an initialized Safe authenticates before setting its PIN to restore Access PIN and unlock state', async () => {
+test('initializing a missing Access PIN authenticates with the existing Safe PIN without changing it', async () => {
   const state = uninitializedTarget({hasSafePIN: true});
   const result = await initializeBackupTarget(
     state.applet,
@@ -848,16 +949,16 @@ test('restoring an initialized Safe authenticates before setting its PIN to rest
 
   assert.deepEqual(state.calls, [
     ['authenticate', {safe: true, pin: PIN}],
-    ['setPIN', {safe: true, pin: PIN}],
-    ['hello', {safe: true}],
+    ['setPIN', {pin: PIN}],
+    ['hello', {}],
   ]);
-  assert.equal(result.pin, 5);
-  assert.equal(result.safe.unlocked, true);
+  assert.equal(result.pins.access, 5);
+  assert.equal(result.pins.safe, 5);
 });
 
 test('initialization rejects a different full public key before authentication or mutation even with the same display ID', async () => {
   const state = uninitializedTarget({hasSafePIN: true});
-  const wrong = hello(3, {id: state.first.safe.id, unlocked: false});
+  const wrong = hello(3, {id: state.first.id});
   await assert.rejects(
     initializeBackupTarget(state.applet, wrong, state.first, PIN, signal()),
     /Wrong card/i,
@@ -867,7 +968,7 @@ test('initialization rejects a different full public key before authentication o
 
 test('a Safe PIN configured after the first scan is never overwritten by the initialization flow', async () => {
   const state = uninitializedTarget();
-  state.fresh.safe.pin = 5;
+  state.fresh.pins.safe = 5;
   await assert.rejects(
     initializeBackupTarget(
       state.applet,
@@ -952,22 +1053,19 @@ for (const invalidResult of [
   'access-unset',
   'access-blocked',
   'safe-unset',
-  'safe-locked',
   'safe-blocked',
   'identity-changed',
   'monoid-id-changed',
 ]) {
   test(`initialization cannot succeed when final Hello reports ${invalidResult}`, async () => {
     const state = uninitializedTarget();
-    if (invalidResult === 'access-unset') state.result.pin = false;
-    else if (invalidResult === 'access-blocked') state.result.pin = 0;
-    else if (invalidResult === 'safe-unset') state.result.safe.pin = false;
-    else if (invalidResult === 'safe-locked')
-      state.result.safe.unlocked = false;
-    else if (invalidResult === 'safe-blocked') state.result.safe.pin = 0;
+    if (invalidResult === 'access-unset') state.result.pins.access = false;
+    else if (invalidResult === 'access-blocked') state.result.pins.access = 0;
+    else if (invalidResult === 'safe-unset') state.result.pins.safe = false;
+    else if (invalidResult === 'safe-blocked') state.result.pins.safe = 0;
     else if (invalidResult === 'monoid-id-changed')
       state.result.id = hello(3).id;
-    else state.result.safe.publicKey = hello(3).safe.publicKey;
+    else state.result.publicKey = hello(3).publicKey;
 
     await assert.rejects(
       initializeBackupTarget(
@@ -1003,11 +1101,11 @@ test('shared initialization preserves an invalid Safe PIN error for interactive 
 for (const invalidState of ['access-blocked', 'safe-blocked', 'safe-unset']) {
   test(`shared initialization starts no commands when ${invalidState}`, async () => {
     const state = uninitializedTarget({hasSafePIN: true});
-    if (invalidState === 'access-blocked') state.fresh.pin = 0;
-    else if (invalidState === 'safe-blocked') state.fresh.safe.pin = 0;
+    if (invalidState === 'access-blocked') state.fresh.pins.access = 0;
+    else if (invalidState === 'safe-blocked') state.fresh.pins.safe = 0;
     else {
-      state.fresh.pin = 5;
-      state.fresh.safe.pin = false;
+      state.fresh.pins.access = 5;
+      state.fresh.pins.safe = false;
     }
 
     await assert.rejects(
@@ -1027,9 +1125,9 @@ test('shared initialization rejects invalid PIN formats before writing a new Saf
   assert.deepEqual(state.calls, []);
 });
 
-test('shared initialization restores a locked Safe without separately setting an existing Access PIN', async () => {
+test('shared initialization returns a card with both PINs set without any commands', async () => {
   const state = uninitializedTarget({hasSafePIN: true});
-  state.fresh.pin = 5;
+  state.fresh.pins.access = 5;
   const result = await initializeMonoidCard(
     state.applet,
     state.fresh,
@@ -1037,12 +1135,8 @@ test('shared initialization restores a locked Safe without separately setting an
     signal(),
   );
 
-  assert.deepEqual(state.calls, [
-    ['authenticate', {safe: true, pin: PIN}],
-    ['setPIN', {safe: true, pin: PIN}],
-    ['hello', {safe: true}],
-  ]);
-  assert.equal(result.safe.unlocked, true);
+  assert.deepEqual(state.calls, []);
+  assert.equal(result, state.fresh);
 });
 
 test('wrong Safe PIN is attempted once and never exports or retains the PIN', async () => {
@@ -1325,7 +1419,7 @@ test('no state mutation is allowed while an operation is waiting for the card', 
       /already in progress/,
     );
     await assert.rejects(
-      session.removeTarget(hex(target.hello.safe.publicKey)),
+      session.removeTarget(hex(target.hello.publicKey)),
       /already in progress/,
     );
   } finally {
@@ -1347,7 +1441,7 @@ test('the initial selection remains fixed through destination changes and the so
   await session.confirmTargets();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
   await session.addTarget(secondTarget.hello);
-  await session.removeTarget(hex(secondTarget.hello.safe.publicKey));
+  await session.removeTarget(hex(secondTarget.hello.publicKey));
   assert.equal(session.backup.targetsConfirmed, false);
   assert.equal(session.backup.targets[0].items.length, 0);
   assert.deepEqual(
@@ -1388,7 +1482,7 @@ test('multiple destinations receive their own ciphertext and can finish in eithe
       exports
         .filter(
           ([, request]) =>
-            hex(request.recipientPublicKey) === hex(card.hello.safe.publicKey),
+            hex(request.recipientPublicKey) === hex(card.hello.publicKey),
         )
         .map(([, request]) => hex(request.index))
         .sort(),
@@ -1430,8 +1524,8 @@ test('multiple destinations receive their own ciphertext and can finish in eithe
     for (const request of card.records.values()) {
       assert.deepEqual(request, {
         index: request.index,
-        senderPublicKey: source.hello.safe.publicKey,
-        ...artifact(request.index, card.hello.safe.publicKey),
+        senderPublicKey: source.hello.publicKey,
+        ...artifact(request.index, card.hello.publicKey),
       });
     }
   }
@@ -1446,7 +1540,7 @@ test('destination duplicates use the complete public key, while equal display ID
     session.addTarget(hello(2, {id: bytes('ffffffff')})),
     /already|duplicate/i,
   );
-  secondTarget.hello.safe.id = target.hello.safe.id;
+  secondTarget.hello.id = target.hello.id;
   await session.addTarget(secondTarget.hello);
   assert.equal(session.backup.targets.length, 2);
   assert.equal(session.backup.targets[0].id, session.backup.targets[1].id);
@@ -1490,7 +1584,7 @@ test('removing a destination before confirmation excludes it from export and imp
   await session.readSource(source, source.hello, signal());
   await session.addTarget(target.hello);
   await session.addTarget(secondTarget.hello);
-  await session.removeTarget(hex(target.hello.safe.publicKey));
+  await session.removeTarget(hex(target.hello.publicKey));
   await session.confirmTargets();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
   const exports = source.calls.filter(([method]) => method === 'exportItem');
@@ -1498,8 +1592,7 @@ test('removing a destination before confirmation excludes it from export and imp
   assert.ok(
     exports.every(
       ([, request]) =>
-        hex(request.recipientPublicKey) ===
-        hex(secondTarget.hello.safe.publicKey),
+        hex(request.recipientPublicKey) === hex(secondTarget.hello.publicKey),
     ),
   );
   await assert.rejects(
@@ -1520,8 +1613,7 @@ test('an interrupted export for a later destination preserves earlier destinatio
   const {session, source, target, secondTarget} = await ready({multiple: true});
   source.onExport = request => {
     if (
-      hex(request.recipientPublicKey) ===
-        hex(secondTarget.hello.safe.publicKey) &&
+      hex(request.recipientPublicKey) === hex(secondTarget.hello.publicKey) &&
       hex(request.index) === hex(index(2))
     ) {
       throw new Error('Tag lost');
@@ -1549,8 +1641,7 @@ test('an interrupted export for a later destination preserves earlier destinatio
   assert.ok(
     retriedExports.every(
       ([, request]) =>
-        hex(request.recipientPublicKey) ===
-        hex(secondTarget.hello.safe.publicKey),
+        hex(request.recipientPublicKey) === hex(secondTarget.hello.publicKey),
     ),
   );
   assert.deepEqual(
@@ -1641,7 +1732,7 @@ test('adding a destination after a partial export clears previous artifacts befo
       exports
         .filter(
           ([, request]) =>
-            hex(request.recipientPublicKey) === hex(card.hello.safe.publicKey),
+            hex(request.recipientPublicKey) === hex(card.hello.publicKey),
         )
         .map(([, request]) => hex(request.index))
         .sort(),
@@ -1655,7 +1746,7 @@ test('adding a destination after a partial export clears previous artifacts befo
 test('removing a destination after export clears artifacts and reexports only to the remaining card', async () => {
   const {session, source, target, secondTarget} = await ready({multiple: true});
   await session.exportItems(source, source.hello, PIN, signal(), progress);
-  await session.removeTarget(hex(target.hello.safe.publicKey));
+  await session.removeTarget(hex(target.hello.publicKey));
   assertExportsCleared(session);
   assert.equal(session.backup.targets.length, 1);
   const start = source.calls.length;
@@ -1668,8 +1759,7 @@ test('removing a destination after export clears artifacts and reexports only to
   assert.ok(
     exports.every(
       ([, request]) =>
-        hex(request.recipientPublicKey) ===
-        hex(secondTarget.hello.safe.publicKey),
+        hex(request.recipientPublicKey) === hex(secondTarget.hello.publicKey),
     ),
   );
   await assert.rejects(
@@ -1693,7 +1783,7 @@ test('invalid destination edits preserve confirmed artifacts', async () => {
   for (const operation of [
     () => session.addTarget(target.hello),
     () => session.addTarget(source.hello),
-    () => session.removeTarget(hex(hello(4).safe.publicKey)),
+    () => session.removeTarget(hex(hello(4).publicKey)),
   ]) {
     await assert.rejects(operation());
     assert.deepEqual(session.backup, before);
@@ -1722,7 +1812,7 @@ test('wrong-card and cancelled import preflight leave destinations editable', as
   assert.equal(target.calls.length, 0);
   assert.equal(session.backup.importStarted, false);
   await session.addTarget(secondTarget.hello);
-  await session.removeTarget(hex(target.hello.safe.publicKey));
+  await session.removeTarget(hex(target.hello.publicKey));
   assertExportsCleared(session);
 });
 
@@ -1753,7 +1843,7 @@ for (const failure of ['before-acknowledgement', 'after-card-commit']) {
     const before = structuredClone(session.backup);
     for (const operation of [
       () => session.addTarget(secondTarget.hello),
-      () => session.removeTarget(hex(target.hello.safe.publicKey)),
+      () => session.removeTarget(hex(target.hello.publicKey)),
     ]) {
       await assert.rejects(operation(), /import|started|locked/i);
       assert.deepEqual(session.backup, before);

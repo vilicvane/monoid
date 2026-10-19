@@ -56,7 +56,7 @@ export class BitcoinBroadcastError extends Error {
   }
 }
 
-class BitcoinHttpError extends Error {
+export class BitcoinHttpError extends Error {
   constructor(readonly status: number) {
     super(`Bitcoin service returned HTTP ${status}.`);
   }

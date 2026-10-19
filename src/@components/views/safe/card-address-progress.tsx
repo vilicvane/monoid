@@ -15,7 +15,6 @@ export function CardAddressProgress({
     <MonoidScanStatePromptProgress
       current={progress.current}
       total={progress.total}
-      showCount
     >
       {progress.stage === 'reading' ? 'Reading addresses' : 'Saving addresses'}
     </MonoidScanStatePromptProgress>

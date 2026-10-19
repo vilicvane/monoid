@@ -26,6 +26,7 @@ import {
   ViewFab,
   ViewHeader,
   ViewHeaderTitle,
+  ViewPlaceholder,
   useViewActive,
 } from '../../../@view/index.js';
 import type {ScannedCardData} from '../common.js';
@@ -76,7 +77,7 @@ export const SafeView = observer(
     );
 
     const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
-      safe: true,
+      allowSetup: true,
       allowInstallRedirect: true,
       auth: 'access',
       retryOnError: true,
@@ -98,7 +99,6 @@ export const SafeView = observer(
                   <MonoidScanStatePromptProgress
                     current={current}
                     total={total}
-                    showCount
                   >
                     {stage === 'records'
                       ? 'Reading address records'
@@ -110,8 +110,9 @@ export const SafeView = observer(
             );
 
             scannedCard = {
-              id: uint8ArrayToHex(hello.safe.id),
-              publicKey: uint8ArrayToHex(hello.safe.publicKey),
+              id: uint8ArrayToHex(hello.id),
+              publicKey: uint8ArrayToHex(hello.publicKey),
+              bundle: hello.bundle && uint8ArrayToHex(hello.bundle),
               items,
             };
           },
@@ -132,48 +133,52 @@ export const SafeView = observer(
             <ViewHeaderTitle>Safe</ViewHeaderTitle>
           </ViewHeader>
           <ViewContent>
-            <KeyList ref={listRef} tabIndex={-1}>
-              {walletStorageService.keys.map(key => (
-                <SwipeableItem
-                  key={key.index}
-                  open={openKey === key.index}
-                  onOpenChange={open =>
-                    setOpenKey(current =>
-                      open
-                        ? key.index
-                        : current === key.index
-                          ? undefined
-                          : current,
-                    )
-                  }
-                  actions={
-                    <SwipeAction
-                      type="button"
-                      $color="var(--ion-color-danger)"
-                      onClick={event => deleteKey(event, key)}
-                    >
-                      <SwipeActionIcon>
-                        <AppIcon icon={trash} aria-hidden="true" />
-                      </SwipeActionIcon>
-                      Delete
-                    </SwipeAction>
-                  }
-                >
-                  <KeyItem
-                    data={key}
-                    onClick={() => {
-                      if (openKey) {
-                        setOpenKey(undefined);
-                      } else if (key.type === 'seed' || key.type === 'master') {
-                        router.safe.derivableKey({index: key.index}).$push();
-                      } else {
-                        router.safe.rawKey({index: key.index}).$push();
-                      }
-                    }}
-                  />
-                </SwipeableItem>
-              ))}
-            </KeyList>
+            {!walletStorageService.keys.length ? (
+              <ViewPlaceholder>No keys</ViewPlaceholder>
+            ) : (
+              <KeyList ref={listRef} tabIndex={-1}>
+                {walletStorageService.keys.map(key => (
+                  <SwipeableItem
+                    key={key.index}
+                    open={openKey === key.index}
+                    onOpenChange={open =>
+                      setOpenKey(current =>
+                        open
+                          ? key.index
+                          : current === key.index
+                            ? undefined
+                            : current,
+                      )
+                    }
+                    actions={
+                      <SwipeAction
+                        type="button"
+                        $color="var(--ion-color-danger)"
+                        onClick={event => deleteKey(event, key)}
+                      >
+                        <SwipeActionIcon>
+                          <AppIcon icon={trash} aria-hidden="true" />
+                        </SwipeActionIcon>
+                        Delete
+                      </SwipeAction>
+                    }
+                  >
+                    <KeyItem
+                      data={key}
+                      onClick={() => {
+                        if (openKey) {
+                          setOpenKey(undefined);
+                        } else if (key.type === 'seed') {
+                          router.safe.derivableKey({index: key.index}).$push();
+                        } else {
+                          router.safe.rawKey({index: key.index}).$push();
+                        }
+                      }}
+                    />
+                  </SwipeableItem>
+                ))}
+              </KeyList>
+            )}
           </ViewContent>
           <ViewFab view={view} transition={transition}>
             <IonFabButton

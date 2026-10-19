@@ -105,7 +105,7 @@ export const KeyWalletList = observer(
     const [openWallet, setOpenWallet] = useState<string>();
     const [receiveWallet, setReceiveWallet] = useState<WalletKeyWalletData>();
     const listRef = useRef<HTMLDivElement>(null);
-    const derivable = data.type === 'seed' || data.type === 'master';
+    const derivable = data.type === 'seed';
     const availableWallets = getKeyWallets(data);
     const wallets = derivable
       ? availableWallets

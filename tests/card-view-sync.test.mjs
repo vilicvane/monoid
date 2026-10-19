@@ -22,7 +22,7 @@ let rendering;
 const owners = [];
 const INDEX = '02400000000000000001';
 const SECOND_INDEX = '02400000000000000002';
-const CREATED_INDEX = '04010000000000000003';
+const CREATED_INDEX = '03010000000000000003';
 const PUBLIC_KEY =
   '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
 const OTHER_PUBLIC_KEY =
@@ -392,12 +392,13 @@ function mount({items, keys = []}) {
     },
   };
   state.cardStore = new CardStore();
-  state.card = state.cardStore.set({...state.view.card, items});
+  state.card = state.cardStore.set({...state.view.card, bundle: false, items});
   state.hello = {
-    safe: {
-      id: bytes(state.view.card.id),
-      publicKey: bytes(state.view.card.publicKey),
-    },
+    version: 0,
+    id: bytes(state.view.card.id),
+    publicKey: bytes(state.view.card.publicKey),
+    bundle: false,
+    pins: {access: 5, safe: 5},
   };
   state.applet = {
     async createRandomKey(request) {
@@ -584,7 +585,8 @@ test('deletion rejects a mismatched full Safe identity before authentication and
 
   await assert.rejects(
     state.tap({
-      safe: {...state.hello.safe, publicKey: bytes(`04${'34'.repeat(64)}`)},
+      ...state.hello,
+      publicKey: bytes(`04${'34'.repeat(64)}`),
     }),
     MonoidWrongCardError,
   );
@@ -811,6 +813,28 @@ test('Copy passes selected logical key indexes with their full card snapshot for
   assert.deepEqual(state.writes, []);
 });
 
+test('Copy opens distinct flows in HTTP WebViews without crypto.randomUUID', t => {
+  const webCrypto = globalThis.crypto;
+  t.mock.getter(globalThis, 'crypto', () => ({
+    getRandomValues: webCrypto.getRandomValues.bind(webCrypto),
+  }));
+  const state = mount({items: cardItems(INDEX, [wallet(0)])});
+  state.select(INDEX);
+
+  state.click('Copy');
+  state.click('Copy');
+
+  assert.equal(state.copies.length, 2);
+  for (const copy of state.copies) {
+    assert.equal(typeof copy.copyId, 'string');
+    assert.ok(copy.copyId.length > 0);
+    assert.deepEqual(copy.sourceIndexes, [INDEX]);
+    assert.deepEqual(copy.sourceCard, state.card.snapshot());
+  }
+  assert.notEqual(state.copies[0].copyId, state.copies[1].copyId);
+  assert.deepEqual(state.scans, []);
+});
+
 test('orphan derivations and unknown resources retain independent Copy selection across filters', () => {
   const orphan = metadata(SECOND_INDEX, [wallet(1)]);
   const unknown = {index: '90000000000000000003', type: 0x9000, secret: false};
@@ -993,20 +1017,15 @@ test('a single update exposes address progress and counts completion only after 
     .map(renderProgress)
     .filter(node => node.props?.children === 'Reading addresses');
   assert.deepEqual(
-    reading.map(node => [
-      node.props.current,
-      node.props.total,
-      node.props.showCount,
-    ]),
+    reading.map(node => [node.props.current, node.props.total]),
     [
-      [0, 2, true],
-      [1, 2, true],
-      [2, 2, true],
+      [0, 2],
+      [1, 2],
+      [2, 2],
     ],
   );
   assert.equal(state.progressUpdates.at(-1).props.current, 0);
   assert.equal(state.progressUpdates.at(-1).props.total, 1);
-  assert.equal(state.progressUpdates.at(-1).props.showCount, true);
   release.resolve();
   await tapping;
   await state.finish();
@@ -1025,7 +1044,7 @@ test('a single derived address remains at zero until its read finishes', async (
   state.click('Derive');
   const tapping = state.tap();
   assert.equal(state.progressUpdates.at(-1).props.current, 0);
-  assert.equal(state.progressUpdates.at(-1).props.showCount, true);
+  assert.equal(state.progressUpdates.at(-1).props.total, 1);
   release.resolve();
   await tapping;
   await state.finish();
@@ -1177,7 +1196,7 @@ test('a card change after choosing upload retains the chosen snapshot and leaves
 });
 
 test('native addresses have the same explicit replacement semantics as derived addresses', async () => {
-  const index = '04010000000000000004';
+  const index = '03010000000000000004';
   const evm = {
     addressType: 'evm',
     seed: undefined,
@@ -1377,7 +1396,7 @@ test('an acknowledged first import remains saved and the second can retry after 
   assert.equal(state.visible('Back to Safe'), true);
   assert.ok(
     state.scanOptions.every(
-      options => options.safe && options.pinSession === state.pinSession,
+      options => options.allowSetup && options.pinSession === state.pinSession,
     ),
   );
 });
@@ -1392,10 +1411,8 @@ test('card update rejects a different full Safe identity before authentication',
 
   await assert.rejects(
     state.tap({
-      safe: {
-        ...state.hello.safe,
-        publicKey: bytes(`04${'34'.repeat(64)}`),
-      },
+      ...state.hello,
+      publicKey: bytes(`04${'34'.repeat(64)}`),
     }),
     MonoidWrongCardError,
   );
@@ -1477,7 +1494,7 @@ for (const source of ['card', 'phone']) {
 }
 
 test('a new raw key records and imports only the previewed address before showing completion', async () => {
-  const index = '04010000000000000003';
+  const index = '03010000000000000003';
   const ref = {addressType: 'evm', publicKey: PUBLIC_KEY};
   const state = mount({
     items: [
@@ -1513,10 +1530,11 @@ test('Create key offers a dismissible second menu on an empty card without a Bac
   state.menuButton().props.onClick();
   state.popupButton('Create key').props.onClick();
 
-  for (const label of ['seed', 'master', 'secp256k1', 'secp256r1', 'ed25519']) {
+  for (const label of ['seed', 'secp256k1', 'secp256r1', 'ed25519']) {
     assert.ok(state.popupButton(label), `${label} should be available`);
   }
   assert.equal(state.popupButton('Back'), undefined);
+  assert.equal(state.popupButton('master'), undefined);
   state.popup().props.onDismiss();
   assert.equal(state.popup(), undefined);
   assert.deepEqual(state.scans, []);
@@ -1534,34 +1552,22 @@ test('the optional network filter limits key types without creating anything and
         node.type === 'segmented' && node.props['aria-label'] === 'Key network',
     );
   const available = () =>
-    ['seed', 'master', 'secp256k1', 'secp256r1', 'ed25519'].filter(label =>
+    ['seed', 'secp256k1', 'secp256r1', 'ed25519'].filter(label =>
       state.popupButton(label),
     );
 
   assert.equal(network().props.value, undefined);
   assert.equal(network().props.allowDeselect, true);
-  assert.deepEqual(available(), [
-    'seed',
-    'master',
-    'secp256k1',
-    'secp256r1',
-    'ed25519',
-  ]);
+  assert.deepEqual(available(), ['seed', 'secp256k1', 'secp256r1', 'ed25519']);
   for (const chain of ['evm', 'bitcoin']) {
     network().props.onChange(chain);
     assert.equal(network().props.value, chain);
-    assert.deepEqual(available(), ['seed', 'master', 'secp256k1']);
+    assert.deepEqual(available(), ['seed', 'secp256k1']);
   }
   network().props.onChange('solana');
-  assert.deepEqual(available(), ['seed', 'master', 'ed25519']);
+  assert.deepEqual(available(), ['seed', 'ed25519']);
   network().props.onChange(undefined);
-  assert.deepEqual(available(), [
-    'seed',
-    'master',
-    'secp256k1',
-    'secp256r1',
-    'ed25519',
-  ]);
+  assert.deepEqual(available(), ['seed', 'secp256k1', 'secp256r1', 'ed25519']);
 
   network().props.onChange('solana');
   state.popup().props.onDismiss();
@@ -1620,7 +1626,7 @@ test('creating a key on an empty card reads it and adds the canonical and displa
   assert.equal(state.menuButton().props.disabled, true);
   assert.equal(scan.options.retryOnError, false);
   assert.equal(scan.options.pinSession, state.pinSession);
-  assert.equal(scan.options.safe, true);
+  assert.equal(scan.options.allowSetup, true);
   assert.equal(scan.options.auth, 'access');
   await state.tap();
   assert.equal(state.item(CREATED_INDEX).props.selected, false);
@@ -1650,7 +1656,6 @@ test('creating a key on an empty card reads it and adds the canonical and displa
 
 for (const [label, request, addressType] of [
   ['seed', {type: 'seed', length: 64}, 'evm'],
-  ['master', {type: 'master', length: 32}, 'evm'],
   ['ed25519', {type: 'ed25519'}, 'solana'],
 ]) {
   test(`creating ${label} reads its default address with the matching key type`, async () => {
@@ -1678,7 +1683,7 @@ for (const [label, request, addressType] of [
 }
 
 test('adding a key preserves existing selections, the resource filter and a switched address preview', async () => {
-  const existingIndex = '04010000000000000001';
+  const existingIndex = '03010000000000000001';
   const ref = {addressType: 'evm', publicKey: PUBLIC_KEY};
   const unknown = {index: '90000000000000000003', type: 0x9000, secret: false};
   const state = mount({
@@ -1788,13 +1793,11 @@ test('leaving after key reads finish does not automatically select the new key',
 
 test('Create key rejects another full Safe identity before authentication or mutation', async () => {
   const state = mount({items: []});
-  state.createKey('master');
+  state.createKey('seed');
   await assert.rejects(
     state.tap({
-      safe: {
-        ...state.hello.safe,
-        publicKey: bytes(`04${'34'.repeat(64)}`),
-      },
+      ...state.hello,
+      publicKey: bytes(`04${'34'.repeat(64)}`),
     }),
     MonoidWrongCardError,
   );

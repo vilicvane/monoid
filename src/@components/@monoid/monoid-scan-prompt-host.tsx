@@ -94,7 +94,9 @@ function MonoidScanPromptLayer({
     }
 
     // Read the committed content, including text rendered by progress components.
-    const message = stateContentRef.current!.innerText.trim();
+    const message = stateContentRef
+      .current!.innerText.trim()
+      .replace(/\s*\n\s*/g, ' ');
     if (
       !message ||
       (nativeMessageRef.current?.sessionId === sessionId &&

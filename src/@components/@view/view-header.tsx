@@ -6,7 +6,7 @@ import type {HTMLAttributes, ReactNode} from 'react';
 import {useContext} from 'react';
 import {css, styled} from 'styled-components';
 
-import type {MonoidSafeIdHex, SafeIndexHex} from '../../@atomics.js';
+import type {MonoidIdHex, SafeIndexHex} from '../../@atomics.js';
 import {AppIcon} from '../@ui/app-icon.js';
 import {IconButton} from '../@ui/icon-button.js';
 import {WhiteTag, leadingIconTagCSS} from '../@ui/tag.js';
@@ -132,7 +132,7 @@ export const ViewHeaderIdentifier = ({
   identifier:
     | {
         type: 'card';
-        id: MonoidSafeIdHex;
+        id: MonoidIdHex;
       }
     | {
         type: 'safe-item';

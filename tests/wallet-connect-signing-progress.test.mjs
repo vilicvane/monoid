@@ -117,12 +117,12 @@ function mount(kind, {separateCards = false} = {}) {
   const solana = kind.startsWith('solana');
   const keys = [
     solana
-      ? nativeKey('ed25519', '05010000000000000001', '01'.repeat(32))
-      : nativeKey('secp256k1', '04010000000000000001', EVM_PUBLIC_KEY),
+      ? nativeKey('ed25519', '04010000000000000001', '01'.repeat(32))
+      : nativeKey('secp256k1', '03010000000000000001', EVM_PUBLIC_KEY),
   ];
   if (kind === 'authentication' && separateCards) {
     keys.push(
-      nativeKey('secp256k1', '04010000000000000002', SECOND_EVM_PUBLIC_KEY),
+      nativeKey('secp256k1', '03010000000000000002', SECOND_EVM_PUBLIC_KEY),
     );
   }
   const addresses = keys.map(key => getKeyWallets(key)[0].address);
@@ -298,7 +298,6 @@ function progress(state) {
     .map(content => {
       assert.equal(content.type, 'progress');
       assert.equal(content.props.children, 'Signing');
-      assert.equal(content.props.showCount, true);
       return [content.props.current, content.props.total];
     });
 }

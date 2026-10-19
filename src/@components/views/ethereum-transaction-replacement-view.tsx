@@ -316,7 +316,7 @@ const TransactionReplacementContent = observer(
               };
               check();
               setContent(
-                <MonoidScanStatePromptProgress current={0} total={1} showCount>
+                <MonoidScanStatePromptProgress current={0} total={1}>
                   Signing
                 </MonoidScanStatePromptProgress>,
               );
@@ -335,7 +335,7 @@ const TransactionReplacementContent = observer(
               );
               check();
               setContent(
-                <MonoidScanStatePromptProgress current={1} total={1} showCount>
+                <MonoidScanStatePromptProgress current={1} total={1}>
                   Signing
                 </MonoidScanStatePromptProgress>,
               );

@@ -1,7 +1,7 @@
 import type {
   BIP39PathString,
   CurveName,
-  MonoidSafeIdHex,
+  MonoidIdHex,
   PublicKeyHex,
   SafeIndexHex,
   SafeKnownType,
@@ -26,8 +26,9 @@ export type ScannedCardKeyData = {
 };
 
 export type ScannedCardData = {
-  id: MonoidSafeIdHex;
+  id: MonoidIdHex;
   publicKey: PublicKeyHex;
+  bundle: string | false;
   items: ScannedCardItemData[];
 };
 
@@ -49,7 +50,6 @@ export function isCardKeyItem(
   switch (item.type) {
     case 'entropy':
     case 'seed':
-    case 'master':
     case 'secp256k1':
     case 'secp256r1':
     case 'ed25519':

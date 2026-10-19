@@ -185,7 +185,9 @@ test('a completed scan stores every resource and routes to Card with only its id
     ...Array.from({length: 64}, (_, index) => index),
   ]);
   await state.onScan(applet, () => {}, {
-    safe: {id: new Uint8Array([1, 2, 3, 4]), publicKey},
+    id: new Uint8Array([1, 2, 3, 4]),
+    publicKey,
+    bundle: new Uint8Array(32).fill(0x42),
   });
   state.resolveScan();
   await state.finished;
@@ -195,6 +197,7 @@ test('a completed scan stores every resource and routes to Card with only its id
     {
       id: '01020304',
       publicKey: Buffer.from(publicKey).toString('hex'),
+      bundle: '42'.repeat(32),
       items: state.scannedItems,
     },
   ]);
@@ -218,10 +221,9 @@ test('a successful scan finishing after unmount neither overwrites the store nor
   ];
   state.cleanup();
   await state.onScan({}, () => {}, {
-    safe: {
-      id: new Uint8Array([1, 2, 3, 4]),
-      publicKey: new Uint8Array([4, 1, 2, 3]),
-    },
+    id: new Uint8Array([1, 2, 3, 4]),
+    publicKey: new Uint8Array([4, 1, 2, 3]),
+    bundle: false,
   });
   state.resolveScan();
   await state.finished;
@@ -232,7 +234,7 @@ test('a successful scan finishing after unmount neither overwrites the store nor
   assert.deepEqual(state.errors, []);
 });
 
-test('scan progress displays completed single-item counts and forwards cancellation', async () => {
+test('scan progress forwards completed counts and cancellation', async () => {
   const state = mount();
   state.progress = [
     [0, 1, 'records'],
@@ -245,7 +247,7 @@ test('scan progress displays completed single-item counts and forwards cancellat
   await state.onScan(
     {},
     value => content.push(value),
-    {safe: {id: new Uint8Array([1]), publicKey: new Uint8Array([4])}},
+    {id: new Uint8Array([1]), publicKey: new Uint8Array([4]), bundle: false},
     controller.signal,
   );
 
@@ -257,7 +259,6 @@ test('scan progress displays completed single-item counts and forwards cancellat
     state.progress.map(([current, total, stage]) => ({
       current,
       total,
-      showCount: true,
       children:
         stage === 'records' ? 'Reading address records' : 'Reading keys',
     })),

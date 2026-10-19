@@ -9,13 +9,10 @@ import {
 } from '../global-platform/install.js';
 
 import {appletBundle} from './@applet-bundle.js';
-import {
-  MonoidAppletHelloWithSafe,
-  createMonoidApplet,
-} from './monoid-applet.js';
+import {MonoidAppletHello, createMonoidApplet} from './monoid-applet.js';
 
 export type BundledApplet = {
-  stage: 'identity' | 'safe' | 'monoid';
+  stage: 'identity' | 'monoid';
   packageAid: string;
   appletAid: string;
   codeURL: URL;
@@ -36,7 +33,7 @@ export async function installMonoidApplets(
   sessionId: string,
   onProgress: (update: AppletInstallProgress) => void,
   signal?: AbortSignal,
-): Promise<MonoidAppletHelloWithSafe> {
+): Promise<MonoidAppletHello> {
   signal?.throwIfAborted();
 
   if (!appletBundle) {
@@ -44,10 +41,9 @@ export async function installMonoidApplets(
   }
 
   if (
-    appletBundle.length !== 3 ||
+    appletBundle.length !== 2 ||
     appletBundle[0].stage !== 'identity' ||
-    appletBundle[1].stage !== 'safe' ||
-    appletBundle[2].stage !== 'monoid'
+    appletBundle[1].stage !== 'monoid'
   ) {
     throw new Error('The applet installation package is incomplete.');
   }
@@ -115,14 +111,14 @@ export async function installMonoidApplets(
   signal?.throwIfAborted();
 
   // SELECT ends the GP secure channel. This checks availability and the hello
-  // schema, not hardware crypto support; features are firmware declarations.
-  const monoid = await createMonoidApplet(packages[2].appletAid).openSession(
+  // schema, not hardware crypto support.
+  const monoid = await createMonoidApplet(packages[1].appletAid).openSession(
     sessionId,
   );
   signal?.throwIfAborted();
 
-  const hello = await monoid.hello({safe: true});
+  const hello = await monoid.hello({});
   signal?.throwIfAborted();
 
-  return MonoidAppletHelloWithSafe.satisfies(hello);
+  return MonoidAppletHello.satisfies(hello);
 }

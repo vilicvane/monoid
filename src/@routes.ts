@@ -92,12 +92,16 @@ export const ROUTE_SCHEMA = {
     scanCard: true,
     copyItems: {
       $state: undefined! as {
+        copyId: string;
         sourceCard?: ScannedCardData;
         sourceIndexes?: SafeIndexHex[];
       },
     },
     setupCard: {
-      $state: undefined! as {cardInformation?: CardInformation},
+      $state: undefined! as {
+        cardInformation?: CardInformation;
+        copyId?: string;
+      },
     },
     card: {
       $state: undefined! as {

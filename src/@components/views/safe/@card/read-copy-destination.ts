@@ -1,18 +1,24 @@
 import {AppletNotFoundError} from '../../../../@lib/applet.js';
 import {
-  type AppletInstallProgress,
+  type CardInformation,
+  readCardInformation,
+} from '../../../../@lib/global-platform/card-information.js';
+import {
   type MonoidApplet,
-  MonoidAppletHelloWithSafe,
-  installMonoidApplets,
+  MonoidAppletHello,
 } from '../../../../@lib/monoid/index.js';
 
-/** Only the first destination scan may install missing applets. */
+export type CopyDestination =
+  | {type: 'ready'; hello: MonoidAppletHello}
+  | {type: 'setup'; cardInformation: CardInformation};
+
+/** Read an installed destination or collect information for the setup page. */
 export async function readCopyDestination(
   sessionId: string,
   monoidApplet: MonoidApplet,
-  onProgress: (update: AppletInstallProgress) => void,
+  onStatus: (content: string) => void,
   signal: AbortSignal,
-): Promise<MonoidAppletHelloWithSafe> {
+): Promise<CopyDestination> {
   signal.throwIfAborted();
   let applet: MonoidApplet;
 
@@ -24,12 +30,17 @@ export async function readCopyDestination(
       throw error;
     }
 
-    return installMonoidApplets(sessionId, onProgress, signal);
+    onStatus('Reading card information, hold tight...');
+    signal.throwIfAborted();
+    const cardInformation = await readCardInformation(sessionId, signal);
+    signal.throwIfAborted();
+
+    return {type: 'setup', cardInformation};
   }
 
   signal.throwIfAborted();
-  const hello = await applet.hello({safe: true});
+  const hello = await applet.hello({});
   signal.throwIfAborted();
 
-  return MonoidAppletHelloWithSafe.satisfies(hello);
+  return {type: 'ready', hello: MonoidAppletHello.satisfies(hello)};
 }

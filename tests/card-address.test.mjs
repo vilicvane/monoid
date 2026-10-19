@@ -56,7 +56,7 @@ const PRESETS = [
 test('card key address choices match the key capabilities', () => {
   const all = ['evm', 'solana', 'bitcoin-segwit', 'bitcoin-taproot'];
   assert.deepEqual(getCardKeyAddressTypes('seed'), all);
-  assert.deepEqual(getCardKeyAddressTypes('master'), all);
+  assert.deepEqual(getCardKeyAddressTypes('master'), []);
   assert.deepEqual(getCardKeyAddressTypes('secp256k1'), [
     'evm',
     'bitcoin-segwit',
@@ -68,46 +68,44 @@ test('card key address choices match the key capabilities', () => {
   assert.equal(WalletKeyKnownType.is('ed25519'), true);
 });
 
-for (const keyType of ['seed', 'master']) {
-  test(`${keyType} addresses use their preset path and request a fresh public key`, async () => {
-    for (const [addressType, curve, path, publicKey, address] of PRESETS) {
-      const requests = [];
-      const applet = {
-        async viewKey(request) {
-          requests.push(request);
-          return {publicKey: bytes(publicKey)};
-        },
-      };
-      const ref = await readCardKeyAddress(
-        applet,
-        {type: keyType, index: INDEX},
-        addressType,
-      );
-      const seed = curve === 'ed25519' ? 'ed25519 seed' : 'Bitcoin seed';
+test('seed addresses use their preset path and request a fresh public key', async () => {
+  for (const [addressType, curve, path, publicKey, address] of PRESETS) {
+    const requests = [];
+    const applet = {
+      async viewKey(request) {
+        requests.push(request);
+        return {publicKey: bytes(publicKey)};
+      },
+    };
+    const ref = await readCardKeyAddress(
+      applet,
+      {type: 'seed', index: INDEX},
+      addressType,
+    );
+    const seed = curve === 'ed25519' ? 'ed25519 seed' : 'Bitcoin seed';
 
-      assert.deepEqual(requests, [
-        {
-          type: keyType,
-          index: bytes(INDEX),
-          derivation: {
-            type: curve === 'ed25519' ? 'slip10' : 'bip32',
-            ...(curve === 'ed25519' && {curve}),
-            path: parseDerivationPath(path),
-          },
-          ...(addressType === 'bitcoin-taproot' && {taproot: true}),
+    assert.deepEqual(requests, [
+      {
+        type: 'seed',
+        index: bytes(INDEX),
+        derivation: {
+          type: curve === 'ed25519' ? 'slip10' : 'bip32',
+          ...(curve === 'ed25519' && {curve}),
+          path: parseDerivationPath(path),
         },
-      ]);
-      assert.deepEqual(ref, {
-        addressType,
-        ...(keyType === 'seed' && {seed}),
-        curve,
-        path,
-        publicKey,
-        address,
-      });
-    }
-  });
-}
+        ...(addressType === 'bitcoin-taproot' && {taproot: true}),
+      },
+    ]);
+    assert.deepEqual(ref, {
+      addressType,
+      seed,
+      curve,
+      path,
+      publicKey,
+      address,
+    });
+  }
+});
 
 test('raw keys omit all derivation options, while raw Taproot still requests a tweak', async () => {
   for (const [addressType, curve, , publicKey, address] of PRESETS) {
@@ -163,6 +161,8 @@ test('unsupported selections reject before talking to the card', async () => {
     ['secp256k1', 'solana'],
     ['secp256r1', 'evm'],
     ['unknown', 'evm'],
+    ['master', 'evm'],
+    ['master', 'solana'],
   ]) {
     await assert.rejects(
       readCardKeyAddress(applet, {type, index: INDEX}, addressType),
@@ -206,7 +206,7 @@ test('local conversion reuses ordinary raw public keys and never reinterprets a 
 });
 
 test('card scans retain metadata, wallet addresses and native P-256 public keys separately', async () => {
-  const walletTypes = ['seed', 'master', 'secp256k1', 'ed25519'];
+  const walletTypes = ['seed', 'secp256k1', 'ed25519'];
   const items = walletTypes.map((type, index) => ({
     type,
     index: new Uint8Array([index + 1]),
@@ -262,12 +262,11 @@ test('card scans retain metadata, wallet addresses and native P-256 public keys 
   );
 
   assert.deepEqual(progress, [
-    [0, 5, 'keys'],
-    [1, 5, 'keys'],
-    [2, 5, 'keys'],
-    [3, 5, 'keys'],
-    [4, 5, 'keys'],
-    [5, 5, 'keys'],
+    [0, 4, 'keys'],
+    [1, 4, 'keys'],
+    [2, 4, 'keys'],
+    [3, 4, 'keys'],
+    [4, 4, 'keys'],
   ]);
   assert.equal(scanned.length, items.length);
   for (const [position, item] of items.entries()) {
@@ -276,10 +275,7 @@ test('card scans retain metadata, wallet addresses and native P-256 public keys 
       publicKey,
       item.type === 'secp256r1' ? P256_PUBLIC_KEY : undefined,
     );
-    assert.deepEqual(
-      derivations,
-      item.type === 'seed' || item.type === 'master' ? [] : undefined,
-    );
+    assert.deepEqual(derivations, item.type === 'seed' ? [] : undefined);
     assert.deepEqual(metadata, {
       index: Buffer.from(item.index).toString('hex'),
       ...(item.type !== undefined && {type: item.type}),
@@ -292,29 +288,29 @@ test('card scans retain metadata, wallet addresses and native P-256 public keys 
     if (position >= walletTypes.length) assert.equal(ref, undefined);
   }
   assert.deepEqual(
-    scanned.slice(0, 4).map(key => key.ref.addressType),
-    ['evm', 'evm', 'evm', 'solana'],
+    scanned.slice(0, 3).map(key => key.ref.addressType),
+    ['evm', 'evm', 'solana'],
   );
-  assert.deepEqual(scanned[3], {
+  assert.deepEqual(scanned[2], {
     type: 'ed25519',
-    index: '04',
-    alias: 'Key 3',
-    secret: false,
+    index: '03',
+    alias: 'Key 2',
+    secret: true,
     ref: {
       addressType: 'solana',
       publicKey: '00'.repeat(32),
       address: '1'.repeat(32),
     },
   });
-  assert.deepEqual(requests[3], {
+  assert.deepEqual(requests[2], {
     type: 'ed25519',
-    index: new Uint8Array([4]),
+    index: new Uint8Array([3]),
   });
-  assert.deepEqual(requests[4], {
+  assert.deepEqual(requests[3], {
     type: 'secp256r1',
     index: new Uint8Array([6]),
   });
-  assert.equal(requests.length, 5);
+  assert.equal(requests.length, 4);
 });
 
 test('initial scans retain unsupported wallet keys without an address but propagate other errors', async () => {
@@ -380,9 +376,8 @@ test('initial scans retain unsupported wallet keys without an address but propag
 
 for (const [type, index] of [
   ['seed', '02400000000000000001'],
-  ['master', '03200000000000000001'],
-  ['secp256k1', '04010000000000000001'],
-  ['ed25519', '05010000000000000001'],
+  ['secp256k1', '03010000000000000001'],
+  ['ed25519', '04010000000000000001'],
 ]) {
   test(`an explicit empty ${type} address record suppresses default address previews`, async () => {
     const recordIndex = getCardDerivationItemIndex(index);
@@ -418,8 +413,8 @@ for (const [type, index] of [
 }
 
 for (const [type, index, addressType, publicKey] of [
-  ['secp256k1', '04010000000000000001', 'bitcoin-segwit', PUBLIC_KEY],
-  ['ed25519', '05010000000000000001', 'solana', '00'.repeat(32)],
+  ['secp256k1', '03010000000000000001', 'bitcoin-segwit', PUBLIC_KEY],
+  ['ed25519', '04010000000000000001', 'solana', '00'.repeat(32)],
 ]) {
   test(`scanning ${type} uses only the addresses in its native record`, async () => {
     const wallets = [
@@ -453,22 +448,15 @@ for (const [type, index, addressType, publicKey] of [
   });
 }
 
-test('all six card key types are classified independently of secrecy or address availability', () => {
+test('all five supported card key types are classified independently of secrecy or address availability', () => {
   const ref = {addressType: 'evm', publicKey: PUBLIC_KEY, address: EVM_ADDRESS};
-  for (const type of [
-    'entropy',
-    'seed',
-    'master',
-    'secp256k1',
-    'secp256r1',
-    'ed25519',
-  ]) {
+  for (const type of ['entropy', 'seed', 'secp256k1', 'secp256r1', 'ed25519']) {
     for (const secret of [false, true]) {
       assert.equal(isCardKeyItem({type, index: INDEX, secret}), true);
       assert.equal(isCardKeyItem({type, index: INDEX, secret, ref}), true);
     }
   }
-  for (const type of [undefined, 'note', 'unknown', 123]) {
+  for (const type of [undefined, 'master', 'note', 'unknown', 123]) {
     assert.equal(isCardKeyItem({type, index: INDEX, secret: true, ref}), false);
   }
 });

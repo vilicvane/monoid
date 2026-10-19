@@ -62,7 +62,7 @@ export const DeriveKeyView = observer(
     );
 
     const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
-      safe: true,
+      allowSetup: true,
       auth: 'access',
       retryOnError: true,
       pinSession,
@@ -121,7 +121,7 @@ export const DeriveKeyView = observer(
 
     const step = wallet ? 2 : 1;
 
-    if (!key) {
+    if (key?.type !== 'seed') {
       return null;
     }
 
@@ -130,7 +130,7 @@ export const DeriveKeyView = observer(
         ? undefined
         : getLocalCardWalletDerivation(key.wallets, {
             addressType,
-            seed: key.type === 'seed' ? options.seed : undefined,
+            seed: options.seed,
             curve: options.curve,
             path: effectivePath,
           });
@@ -194,14 +194,14 @@ export const DeriveKeyView = observer(
               result = {
                 wallet: {
                   addressType,
-                  seed: key.type === 'seed' ? options.seed : undefined,
+                  seed: options.seed,
                   curve: options.curve,
                   path: effectivePath,
                   publicKey: uint8ArrayToHex(publicKey),
                 },
                 card: {
-                  id: uint8ArrayToHex(hello.safe.id),
-                  publicKey: uint8ArrayToHex(hello.safe.publicKey),
+                  id: uint8ArrayToHex(hello.id),
+                  publicKey: uint8ArrayToHex(hello.publicKey),
                 },
               };
             }
@@ -245,8 +245,8 @@ export const DeriveKeyView = observer(
                 }
 
                 card = {
-                  id: uint8ArrayToHex(hello.safe.id),
-                  publicKey: uint8ArrayToHex(hello.safe.publicKey),
+                  id: uint8ArrayToHex(hello.id),
+                  publicKey: uint8ArrayToHex(hello.publicKey),
                 };
               }
 

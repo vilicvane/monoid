@@ -9,16 +9,10 @@ import {unzipSync} from 'fflate';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const targets = [
   {
-    name: 'monoidsafeidentity',
+    name: 'monoididentity',
     stage: 'identity',
     packageAid: 'f06d6f6e6f696400',
     appletAid: 'f06d6f6e6f696400010000',
-  },
-  {
-    name: 'monoidsafe',
-    stage: 'safe',
-    packageAid: 'f06d6f6e6f696401',
-    appletAid: 'f06d6f6e6f696401010000',
   },
   {
     name: 'monoid',
@@ -94,7 +88,7 @@ export function readAppletPackage(cap, target) {
 }
 
 export async function prepareApplets(sourceDirectory) {
-  // Read all three before writing anything: never combine new CAPs with old ones.
+  // Read both before writing anything: never combine new CAPs with old ones.
   const bundle = await Promise.all(
     targets.map(async target => {
       const cap = await readFile(

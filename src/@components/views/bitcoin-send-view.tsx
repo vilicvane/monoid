@@ -370,7 +370,6 @@ export const BitcoinSendView = observer(
                   <MonoidScanStatePromptProgress
                     current={current}
                     total={total}
-                    showCount
                   >
                     Signing
                   </MonoidScanStatePromptProgress>,

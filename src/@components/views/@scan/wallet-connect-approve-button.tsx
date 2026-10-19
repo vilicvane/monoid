@@ -123,7 +123,6 @@ export function WalletConnectApproveButton({
                 <MonoidScanStatePromptProgress
                   current={signed.size + completed.length}
                   total={tasks.length}
-                  showCount
                 >
                   Signing
                 </MonoidScanStatePromptProgress>,

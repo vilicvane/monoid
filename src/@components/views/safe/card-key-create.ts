@@ -12,7 +12,6 @@ import type {ScannedCardItemData} from './common.js';
 
 export const CARD_KEY_TYPES = [
   'seed',
-  'master',
   'secp256k1',
   'secp256r1',
   'ed25519',
@@ -41,11 +40,7 @@ export async function createCardKey(
   const {index} = await applet
     .createRandomKey({
       type,
-      ...(type === 'seed'
-        ? {length: 64}
-        : type === 'master'
-          ? {length: 32}
-          : {}),
+      ...(type === 'seed' && {length: 64}),
     })
     .catch(error => {
       if (error instanceof CBORAppletError) throw error;
@@ -61,7 +56,7 @@ export async function createCardKey(
     index: uint8ArrayToHex(index),
     type,
     secret: true,
-    ...((type === 'seed' || type === 'master') && {derivations: []}),
+    ...(type === 'seed' && {derivations: []}),
   };
   // Keep the acknowledged key even if reading it or closing the scan fails.
   onUpdated(item);

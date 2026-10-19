@@ -20,7 +20,7 @@ const {AppletNotFoundError} = await import('../.bld/app/@lib/applet.js');
 // Public fixture: secp256k1 scalar 1, also used by the message signing tests.
 const signingKey = new SigningKey(`0x${'1'.padStart(64, '0')}`);
 const address = computeAddress(signingKey.publicKey);
-const key = {type: 'secp256k1', index: getBytes('0x04010000000000000001')};
+const key = {type: 'secp256k1', index: getBytes('0x03010000000000000001')};
 
 // Official Mail vector: https://eips.ethereum.org/EIPS/eip-712
 const domain = {

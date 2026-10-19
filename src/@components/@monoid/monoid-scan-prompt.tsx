@@ -14,7 +14,6 @@ import {IsoDepScanError} from '../../@lib/isodep.js';
 import {
   type MonoidApplet,
   type MonoidAppletHello,
-  MonoidAppletHelloWithSafe,
   MonoidAppletInvalidPINError,
   MonoidCardError,
   MonoidWrongCardError,
@@ -39,13 +38,13 @@ export function MonoidScanStatePromptProgress({
   children,
   current,
   total,
-  showCount = total > 1,
 }: {
   children: string;
   current: number;
   total: number;
-  showCount?: boolean;
 }): ReactNode {
+  const showCount = total > 1;
+
   return (
     <>
       {children}
@@ -67,8 +66,8 @@ export type MonoidScanPromptSetStateContentCallback = (
   content: ReactNode,
 ) => void;
 
-export type MonoidScanPromptOptions<TSafe extends boolean = boolean> = {
-  safe?: TSafe;
+export type MonoidScanPromptOptions = {
+  allowSetup?: boolean;
   ensureSetup?: boolean;
   allowInstallRedirect?: boolean;
   auth?: 'access' | false;
@@ -76,24 +75,18 @@ export type MonoidScanPromptOptions<TSafe extends boolean = boolean> = {
   pinSession?: MonoidPINSession;
 };
 
-type MonoidScanPromptHello<TSafe extends boolean> = TSafe extends true
-  ? MonoidAppletHelloWithSafe
-  : MonoidAppletHello;
-
-type MonoidScanPromptCallback<TSafe extends boolean> = (
+type MonoidScanPromptCallback = (
   applet: MonoidApplet,
   setStateContent: MonoidScanPromptSetStateContentCallback,
-  hello: MonoidScanPromptHello<TSafe>,
+  hello: MonoidAppletHello,
   signal: AbortSignal,
 ) => Promise<void>;
 
-type MonoidScanPromptValidateCard<TSafe extends boolean> = (
-  hello: MonoidScanPromptHello<TSafe>,
-) => void;
+type MonoidScanPromptValidateCard = (hello: MonoidAppletHello) => void;
 
 type PINRequest =
   | {type: 'access'; id: MonoidIdHex}
-  | {type: 'setup'; hello: MonoidAppletHelloWithSafe};
+  | {type: 'setup'; hello: MonoidAppletHello};
 
 /** The scan ended quietly because another page will handle the card. */
 export class MonoidScanRedirectError extends Error {
@@ -105,19 +98,19 @@ export class MonoidScanRedirectError extends Error {
   }
 }
 
-export function useMonoidScanPrompt<TSafe extends boolean = false>({
-  safe: includeSafe,
+export function useMonoidScanPrompt({
+  allowSetup = false,
   ensureSetup = true,
   allowInstallRedirect = false,
   auth = false,
   retryOnError = false,
   pinSession,
-}: MonoidScanPromptOptions<TSafe> = {}): [
+}: MonoidScanPromptOptions = {}): [
   ReactNode,
   (
     initialStateContent: ReactNode,
-    appletCallback: MonoidScanPromptCallback<TSafe>,
-    validateCard?: MonoidScanPromptValidateCard<TSafe>,
+    appletCallback: MonoidScanPromptCallback,
+    validateCard?: MonoidScanPromptValidateCard,
   ) => Promise<void>,
 ] {
   const {
@@ -136,9 +129,9 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
     useState<
       [
         ReactNode,
-        MonoidScanPromptCallback<TSafe>,
+        MonoidScanPromptCallback,
         {resolve: () => void; reject: (error: unknown) => void},
-        MonoidScanPromptValidateCard<TSafe> | undefined,
+        MonoidScanPromptValidateCard | undefined,
         MonoidPINSession,
       ]
     >();
@@ -194,9 +187,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
 
     let retryStateContent = initialStateContent;
     let enteredPIN: {id: MonoidIdHex; pin: MonoidPIN} | undefined;
-    let setupPIN:
-      | {hello: MonoidAppletHelloWithSafe; pin: MonoidPIN}
-      | undefined;
+    let setupPIN: {hello: MonoidAppletHello; pin: MonoidPIN} | undefined;
     let update:
       | {type: 'set' | 'remove'; id: MonoidIdHex; pin: MonoidPIN}
       | undefined;
@@ -250,12 +241,12 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
         ...(request.type === 'setup'
           ? getPINInputPlaceholder(
               'Safe',
-              request.hello.safe.pin === false ? 'Set' : 'Enter existing',
+              request.hello.pins.safe === false ? 'Set' : 'Enter existing',
             )
           : getPINInputPlaceholder('Access')),
         description:
           request.type === 'setup'
-            ? request.hello.pin === false
+            ? request.hello.pins.access === false
               ? 'Will be used as initial Access PIN'
               : 'Access PIN stays the same'
             : undefined,
@@ -392,13 +383,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
 
           setStateContent('Greeting to monoid, hold tight...');
 
-          let hello = (
-            includeSafe
-              ? MonoidAppletHelloWithSafe.satisfies(
-                  await applet.hello({safe: true}),
-                )
-              : await applet.hello({})
-          ) as MonoidScanPromptHello<TSafe>;
+          let hello = await applet.hello({});
 
           if (disposed) {
             return;
@@ -408,65 +393,60 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
           validateCard?.(hello);
 
           const id = uint8ArrayToHex(hello.id);
-          const safe = includeSafe ? hello.safe : undefined;
 
-          // A setup PIN belongs to the exact applet and Safe seen before input.
+          // A setup PIN belongs to the exact Identity seen before input.
           if (
             setupPIN &&
             (id !== uint8ArrayToHex(setupPIN.hello.id) ||
-              !safe ||
-              uint8ArrayToHex(safe.publicKey) !==
-                uint8ArrayToHex(setupPIN.hello.safe.publicKey))
+              uint8ArrayToHex(hello.publicKey) !==
+                uint8ArrayToHex(setupPIN.hello.publicKey))
           ) {
-            throw new MonoidWrongCardError(
-              uint8ArrayToHex(setupPIN.hello.safe.id),
-            );
+            throw new MonoidWrongCardError(uint8ArrayToHex(setupPIN.hello.id));
           }
 
           const setup = setupPIN;
           setupPIN = undefined;
 
-          retryStateContent = safe ? (
+          retryStateContent = (
             <>
               Scan card{' '}
               <MonoidScanStatePromptContentHighlight>
-                {uint8ArrayToHex(safe.id)}
+                {id}
               </MonoidScanStatePromptContentHighlight>{' '}
               again
             </>
-          ) : (
-            'Scan card again'
           );
 
           let initializedAccessPIN = false;
 
           if (
             ensureSetup &&
-            (hello.pin === false ||
-              (safe && (safe.pin === false || !safe.unlocked)))
+            (hello.pins.access === false || hello.pins.safe === false)
           ) {
-            if (!safe) {
+            if (!allowSetup) {
               result = {type: 'uninitialized'};
               return;
             }
 
-            if (safe.pin === 0 || hello.pin === 0) {
+            if (hello.pins.safe === 0 || hello.pins.access === 0) {
               result = {
                 type: 'error',
                 error: new MonoidCardError(
-                  safe.pin === 0 ? 'Safe PIN blocked' : 'Access PIN blocked',
+                  hello.pins.safe === 0
+                    ? 'Safe PIN blocked'
+                    : 'Access PIN blocked',
                 ),
                 retry: false,
               };
               return;
             }
 
-            const setupHello = MonoidAppletHelloWithSafe.satisfies(hello);
+            const setupHello = hello;
 
             // Re-prompt if another operation initialized the Safe since input.
             if (
               !setup ||
-              (setup.hello.safe.pin === false && safe.pin !== false)
+              (setup.hello.pins.safe === false && hello.pins.safe !== false)
             ) {
               result = {
                 type: 'input',
@@ -476,20 +456,20 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
             }
 
             setStateContent(
-              safe.pin === false
+              hello.pins.safe === false
                 ? 'Setting Safe PIN, hold tight...'
-                : 'Unlocking safe, hold tight...',
+                : 'Setting Access PIN, hold tight...',
             );
 
-            const needsAccessPIN = hello.pin === false;
+            const needsAccessPIN = hello.pins.access === false;
 
             try {
-              hello = (await initializeMonoidCard(
+              hello = await initializeMonoidCard(
                 applet,
                 setupHello,
                 setup.pin,
                 credentialsRequest.signal,
-              )) as MonoidScanPromptHello<TSafe>;
+              );
             } catch (error) {
               if (disposed) return;
 
@@ -514,7 +494,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
                     type: 'setup',
                     hello: {
                       ...setupHello,
-                      safe: {...safe, pin: error.source.tries},
+                      pins: {...setupHello.pins, safe: error.source.tries},
                     },
                   },
                   message: `Incorrect Safe PIN, tries remaining: ${error.source.tries}`,
@@ -725,7 +705,9 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
                 String(result.error)
               ),
             );
-            result.error = errorService.markPresented(result.error);
+            if (result.error instanceof MonoidCardError) {
+              errorService.markPresented(result.error);
+            }
           }
 
           return {waitForRemoval: true};
@@ -789,7 +771,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
     monoidScanPromptPresenter,
     owner,
     errorService,
-    includeSafe,
+    allowSetup,
     ensureSetup,
     allowInstallRedirect,
     auth,

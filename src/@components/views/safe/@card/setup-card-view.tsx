@@ -10,7 +10,8 @@ import {
   readCardInformation,
 } from '../../../../@lib/global-platform/card-information.js';
 import {
-  type MonoidAppletHelloWithSafe,
+  type MonoidAppletHello,
+  MonoidCardError,
   hasAppletBundle,
   installMonoidApplets,
 } from '../../../../@lib/monoid/index.js';
@@ -42,17 +43,22 @@ import {CardSetupPIN} from './card-setup-pin.js';
 
 export const SetupCardView = observer(
   ({view}: RouteComponentProps<Router['safe']['setupCard']>): ReactNode => {
-    const {router, errorService} = useEntrances();
+    const {router, errorService, copyItemsStore} = useEntrances();
+    const [copyFlow] = useState(() =>
+      view.copyId ? copyItemsStore.get(view.copyId) : undefined,
+    );
     const isViewActive = useViewActive(view);
     const scanPrompt = useIsoDepScanPrompt();
     const mounted = useRef(true);
-    const operationState = useRef<'idle' | 'working' | 'installed'>('idle');
+    const operationState = useRef<
+      'idle' | 'working' | 'installed' | 'completing' | 'complete'
+    >('idle');
     const [busy, setBusy] = useState(false);
     const [complete, setComplete] = useState(false);
     const [interrupted, setInterrupted] = useState(false);
     const [information, setInformation] = useState(() => view.cardInformation);
     const [showDetails, setShowDetails] = useState(false);
-    const [pendingPIN, setPendingPIN] = useState<MonoidAppletHelloWithSafe>();
+    const [pendingPIN, setPendingPIN] = useState<MonoidAppletHello>();
     const [showPINSetup, setShowPINSetup] = useState(false);
 
     useEffect(() => {
@@ -76,6 +82,30 @@ export const SetupCardView = observer(
 
     const isActive = (): boolean => mounted.current && isViewActive();
 
+    const completeSetup = async (hello: MonoidAppletHello): Promise<void> => {
+      if (
+        !isActive() ||
+        operationState.current === 'completing' ||
+        operationState.current === 'complete'
+      )
+        return;
+
+      operationState.current = 'completing';
+      setPendingPIN(hello);
+      try {
+        await copyFlow?.session.addTarget(hello);
+        operationState.current = 'complete';
+        if (mounted.current) {
+          setPendingPIN(undefined);
+          setComplete(true);
+        }
+      } finally {
+        if (operationState.current === 'completing') {
+          operationState.current = 'installed';
+        }
+      }
+    };
+
     const scan = async (): Promise<void> => {
       const installing = information !== undefined;
 
@@ -93,7 +123,7 @@ export const SetupCardView = observer(
 
       try {
         let scannedInformation: CardInformation | undefined;
-        let installed: MonoidAppletHelloWithSafe | undefined;
+        let installed: MonoidAppletHello | undefined;
 
         await scanPrompt(
           installing ? 'Scan the card to install applets' : 'Scan a card',
@@ -118,7 +148,7 @@ export const SetupCardView = observer(
                   expected.icType !== actual.icType ||
                   expected.icSerialNumber !== actual.icSerialNumber)
               ) {
-                throw new Error('Wrong card');
+                throw new MonoidCardError('Wrong card');
               }
 
               installed = await installMonoidApplets(
@@ -145,14 +175,12 @@ export const SetupCardView = observer(
           setShowDetails(false);
           if (
             installed &&
-            (installed.pin === false ||
-              installed.safe.pin === false ||
-              !installed.safe.unlocked)
+            (installed.pins.access === false || installed.pins.safe === false)
           ) {
             setPendingPIN(installed);
             setShowPINSetup(true);
-          } else {
-            setComplete(true);
+          } else if (installed) {
+            await completeSetup(installed);
           }
         } else {
           setInformation(scannedInformation);
@@ -162,7 +190,7 @@ export const SetupCardView = observer(
           return;
         }
 
-        setInterrupted(installing);
+        setInterrupted(installing && operationState.current !== 'installed');
 
         if (!isCredentialRequestCancelled(error)) {
           throw error;
@@ -178,8 +206,11 @@ export const SetupCardView = observer(
       }
     };
 
-    const backToSafe = complete
-      ? router.$backTo(router.safe.$exact)
+    const backToCopy = complete
+      ? router.$backTo(router.safe.copyItems.$exact)
+      : undefined;
+    const back = complete
+      ? (backToCopy ?? router.$backTo(router.safe.$exact))
       : undefined;
 
     return (
@@ -200,14 +231,18 @@ export const SetupCardView = observer(
         <ViewContent
           footer={
             complete ? (
-              backToSafe && (
-                <Button color="neutral" onClick={() => backToSafe()}>
-                  Back to Safe
+              back && (
+                <Button color="neutral" onClick={() => back()}>
+                  {backToCopy ? 'Back to Copy' : 'Back to Safe'}
                 </Button>
               )
             ) : pendingPIN ? (
               <Button onClick={() => setShowPINSetup(true)}>
-                {pendingPIN.safe.pin === false ? 'Set Safe PIN' : 'Unlock safe'}
+                {pendingPIN.pins.safe === false
+                  ? 'Set Safe PIN'
+                  : pendingPIN.pins.access === false
+                    ? 'Set Access PIN'
+                    : 'Continue'}
               </Button>
             ) : (
               <Button
@@ -240,11 +275,6 @@ export const SetupCardView = observer(
                   Applet package not available yet
                 </InfoSectionItemLabel>
               )}
-              {interrupted && (
-                <InfoSectionItemLabel role="status">
-                  Installation interrupted. Scan again to continue
-                </InfoSectionItemLabel>
-              )}
             </>
           )}
         </ViewContent>
@@ -262,15 +292,15 @@ export const SetupCardView = observer(
         {showPINSetup && pendingPIN && isActive() && (
           <CardSetupPIN
             hello={pendingPIN}
-            onFinished={(initialized, current) => {
+            onFinished={errorService.catch(async (initialized, current) => {
+              if (!isActive()) return;
               setShowPINSetup(false);
-              if (initialized) {
-                setPendingPIN(undefined);
-                setComplete(true);
+              if (initialized && current) {
+                await completeSetup(current);
               } else if (current) {
                 setPendingPIN(current);
               }
-            }}
+            })}
           />
         )}
       </View>

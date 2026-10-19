@@ -7,12 +7,18 @@ let fixture;
 
 mock.module('../.bld/app/@lib/monoid/install.js', {
   namedExports: {
-    installMonoidApplets: async (sessionId, onProgress, signal) => {
-      fixture.installs.push(sessionId);
+    installMonoidApplets: () => assert.fail('Copy must not install applets'),
+  },
+});
+
+mock.module('../.bld/app/@lib/global-platform/card-information.js', {
+  namedExports: {
+    readCardInformation: async (sessionId, signal) => {
+      fixture.informationReads.push(sessionId);
       assert.equal(signal, fixture.controller.signal);
-      if (fixture.installError) throw fixture.installError;
-      for (const update of fixture.updates) onProgress(update);
-      return fixture.hello;
+      if (fixture.informationPending) await fixture.informationPending.promise;
+      if (fixture.informationError) throw fixture.informationError;
+      return fixture.cardInformation;
     },
   },
 });
@@ -25,20 +31,19 @@ beforeEach(() => {
   fixture = {
     controller: new AbortController(),
     sessions: [],
-    installs: [],
+    informationReads: [],
     hellos: [],
-    updates: [],
+    cardInformation: {
+      cardManagerAid: 'a000000151000000',
+      secureChannels: ['SCP03'],
+      javaCardVersion: '3.0.5',
+    },
     hello: {
       version: 1,
       id: Uint8Array.of(1, 2, 3, 4),
-      pin: false,
-      features: {curves: []},
-      safe: {
-        id: Uint8Array.of(5, 6, 7, 8),
-        publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(7)),
-        pin: false,
-        unlocked: false,
-      },
+      publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(7)),
+      bundle: false,
+      pins: {access: false, safe: false},
     },
     applet: {
       async openSession(sessionId) {
@@ -58,47 +63,48 @@ beforeEach(() => {
   };
 });
 
-test('an installed destination reads Safe metadata without installing anything', async () => {
-  const hello = await readCopyDestination(
+test('an installed destination reads its identity and PIN metadata without reading GP information', async () => {
+  const result = await readCopyDestination(
     'destination',
     fixture.applet,
-    () => assert.fail('Unexpected installation progress'),
+    () => assert.fail('Unexpected setup status'),
     fixture.controller.signal,
   );
 
-  assert.deepEqual(hello, fixture.hello);
+  assert.deepEqual(result, {type: 'ready', hello: fixture.hello});
   assert.deepEqual(fixture.sessions, ['destination']);
-  assert.deepEqual(fixture.hellos, [{safe: true}]);
-  assert.deepEqual(fixture.installs, []);
+  assert.deepEqual(fixture.hellos, [{}]);
+  assert.deepEqual(fixture.informationReads, []);
 });
 
-test('a missing Monoid applet installs in the same NFC session and returns the verified hello', async () => {
+test('a missing Monoid applet reads GP information in the same NFC session for Setup', async () => {
   fixture.selectError = new AppletNotFoundError(new Uint8Array());
-  fixture.updates = [
-    {stage: 'identity', phase: 'uploading', progress: 0.4},
-    {stage: 'identity', phase: 'configuring'},
-    {stage: 'verifying'},
-  ];
-  const updates = [];
-  const hello = await readCopyDestination(
+  const statuses = [];
+  const result = await readCopyDestination(
     'destination',
     fixture.applet,
-    update => updates.push(update),
+    status => {
+      assert.deepEqual(fixture.informationReads, []);
+      statuses.push(status);
+    },
     fixture.controller.signal,
   );
 
-  assert.equal(hello, fixture.hello);
+  assert.deepEqual(result, {
+    type: 'setup',
+    cardInformation: fixture.cardInformation,
+  });
   assert.deepEqual(fixture.sessions, ['destination']);
-  assert.deepEqual(fixture.installs, ['destination']);
+  assert.deepEqual(fixture.informationReads, ['destination']);
   assert.deepEqual(fixture.hellos, []);
-  assert.deepEqual(updates, fixture.updates);
+  assert.deepEqual(statuses, ['Reading card information, hold tight...']);
 });
 
 for (const error of [
   new AppletISOError('Selection failed', 0x6999, new Uint8Array()),
   Object.assign(new Error('Card lost'), {code: 'TAG_LOST'}),
 ]) {
-  test(`a SELECT ${error.code ?? error.sw.toString(16)} failure does not install`, async () => {
+  test(`a SELECT ${error.code ?? error.sw.toString(16)} failure does not read GP information`, async () => {
     fixture.selectError = error;
 
     await assert.rejects(
@@ -110,12 +116,12 @@ for (const error of [
       ),
       value => value === error,
     );
-    assert.deepEqual(fixture.installs, []);
+    assert.deepEqual(fixture.informationReads, []);
     assert.deepEqual(fixture.hellos, []);
   });
 }
 
-test('a hello error never triggers applet installation, even if it reports a missing applet', async () => {
+test('a hello error never triggers setup, even if it reports a missing applet', async () => {
   fixture.helloError = new AppletNotFoundError(new Uint8Array());
 
   await assert.rejects(
@@ -127,11 +133,11 @@ test('a hello error never triggers applet installation, even if it reports a mis
     ),
     error => error === fixture.helloError,
   );
-  assert.deepEqual(fixture.installs, []);
+  assert.deepEqual(fixture.informationReads, []);
 });
 
-test('invalid Safe metadata is rejected without trying to install', async () => {
-  delete fixture.hello.safe;
+test('invalid identity metadata is rejected without trying to read GP information', async () => {
+  delete fixture.hello.publicKey;
 
   await assert.rejects(
     readCopyDestination(
@@ -141,12 +147,12 @@ test('invalid Safe metadata is rejected without trying to install', async () => 
       fixture.controller.signal,
     ),
   );
-  assert.deepEqual(fixture.installs, []);
+  assert.deepEqual(fixture.informationReads, []);
 });
 
-test('an interrupted installation is returned to the caller without automatic retry', async () => {
+test('a GP read error is returned to the caller without retry or installation', async () => {
   fixture.selectError = new AppletNotFoundError(new Uint8Array());
-  fixture.installError = Object.assign(new Error('Card lost'), {
+  fixture.informationError = Object.assign(new Error('Card lost'), {
     code: 'TAG_LOST',
   });
 
@@ -157,9 +163,9 @@ test('an interrupted installation is returned to the caller without automatic re
       () => {},
       fixture.controller.signal,
     ),
-    error => error === fixture.installError,
+    error => error === fixture.informationError,
   );
-  assert.deepEqual(fixture.installs, ['destination']);
+  assert.deepEqual(fixture.informationReads, ['destination']);
   assert.deepEqual(fixture.hellos, []);
 });
 
@@ -179,7 +185,7 @@ function cancel() {
   return error;
 }
 
-test('an already cancelled destination scan never selects or installs an applet', async () => {
+test('an already cancelled destination scan never selects an applet or reads GP information', async () => {
   const reason = cancel();
 
   await assert.rejects(
@@ -192,11 +198,11 @@ test('an already cancelled destination scan never selects or installs an applet'
     error => error === reason,
   );
   assert.deepEqual(fixture.sessions, []);
-  assert.deepEqual(fixture.installs, []);
+  assert.deepEqual(fixture.informationReads, []);
   assert.deepEqual(fixture.hellos, []);
 });
 
-test('a late missing-applet SELECT after cancellation cannot start installation', async () => {
+test('a late missing-applet SELECT after cancellation cannot start reading GP information', async () => {
   fixture.selectPending = deferred();
   const reading = readCopyDestination(
     'destination',
@@ -209,7 +215,7 @@ test('a late missing-applet SELECT after cancellation cannot start installation'
 
   await assert.rejects(reading, error => error === reason);
   assert.deepEqual(fixture.sessions, ['destination']);
-  assert.deepEqual(fixture.installs, []);
+  assert.deepEqual(fixture.informationReads, []);
   assert.deepEqual(fixture.hellos, []);
 });
 
@@ -225,7 +231,7 @@ test('a late successful SELECT after cancellation cannot start reading hello', a
   fixture.selectPending.resolve();
 
   await assert.rejects(reading, error => error === reason);
-  assert.deepEqual(fixture.installs, []);
+  assert.deepEqual(fixture.informationReads, []);
   assert.deepEqual(fixture.hellos, []);
 });
 
@@ -238,10 +244,66 @@ test('a hello returning after cancellation cannot report a destination', async (
     fixture.controller.signal,
   );
   await Promise.resolve();
-  assert.deepEqual(fixture.hellos, [{safe: true}]);
+  assert.deepEqual(fixture.hellos, [{}]);
   const reason = cancel();
   fixture.helloPending.resolve();
 
   await assert.rejects(reading, error => error === reason);
-  assert.deepEqual(fixture.installs, []);
+  assert.deepEqual(fixture.informationReads, []);
+});
+
+test('cancellation during the setup status update prevents reading GP information', async () => {
+  fixture.selectError = new AppletNotFoundError(new Uint8Array());
+  let reason;
+
+  await assert.rejects(
+    readCopyDestination(
+      'destination',
+      fixture.applet,
+      () => {
+        reason = cancel();
+      },
+      fixture.controller.signal,
+    ),
+    error => error === reason,
+  );
+  assert.deepEqual(fixture.informationReads, []);
+  assert.deepEqual(fixture.hellos, []);
+});
+
+test('GP information returning after cancellation cannot request setup', async () => {
+  fixture.selectError = new AppletNotFoundError(new Uint8Array());
+  fixture.informationPending = deferred();
+  const reading = readCopyDestination(
+    'destination',
+    fixture.applet,
+    () => {},
+    fixture.controller.signal,
+  );
+  await Promise.resolve();
+  assert.deepEqual(fixture.informationReads, ['destination']);
+  const reason = cancel();
+  fixture.informationPending.resolve();
+
+  await assert.rejects(reading, error => error === reason);
+  assert.deepEqual(fixture.hellos, []);
+});
+
+test('a late GP read failure cannot request setup or retry the read', async () => {
+  fixture.selectError = new AppletNotFoundError(new Uint8Array());
+  fixture.informationPending = deferred();
+  const reading = readCopyDestination(
+    'destination',
+    fixture.applet,
+    () => {},
+    fixture.controller.signal,
+  );
+  await Promise.resolve();
+  cancel();
+  const error = Object.assign(new Error('Card lost'), {code: 'TAG_LOST'});
+  fixture.informationPending.reject(error);
+
+  await assert.rejects(reading, value => value === error);
+  assert.deepEqual(fixture.informationReads, ['destination']);
+  assert.deepEqual(fixture.hellos, []);
 });

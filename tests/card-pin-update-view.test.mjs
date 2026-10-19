@@ -82,18 +82,20 @@ function mount(kind = 'Access') {
     errors: [],
     done: false,
     finished: deferred(),
-    card: {id: 'aabbccdd', publicKey: `04${'12'.repeat(64)}`, items: []},
+    card: {
+      id: 'aabbccdd',
+      publicKey: `04${'12'.repeat(64)}`,
+      bundle: false,
+      items: [],
+    },
     view: observable({$leaving: false, $match: {$exact: {$active: true}}}),
   };
   state.hello = {
-    id: bytes('11223344'),
-    pin: 5,
-    safe: {
-      id: bytes(state.card.id),
-      publicKey: bytes(state.card.publicKey),
-      pin: 5,
-      unlocked: true,
-    },
+    version: 0,
+    id: bytes(state.card.id),
+    publicKey: bytes(state.card.publicKey),
+    bundle: false,
+    pins: {access: 5, safe: 5},
   };
   state.applet = {
     authenticate: async request => {
@@ -104,7 +106,7 @@ function mount(kind = 'Access') {
     },
   };
   state.store = {
-    getPINs: async () => ({11223344: 'old-access'}),
+    getPINs: async () => ({[state.card.id]: 'old-access'}),
     setPIN: async (id, pin) => {
       state.saved.push({id, pin});
       return {[id]: pin};
@@ -166,7 +168,7 @@ function mount(kind = 'Access') {
 afterEach(() => owners.splice(0).forEach(state => state.cleanup?.()));
 
 for (const kind of ['Access', 'Safe']) {
-  test(`${kind} PIN flow confirms input, validates the card and stores only Access PIN under the applet ID`, async () => {
+  test(`${kind} PIN flow confirms input, validates the card and stores only Access PIN under the Identity ID`, async () => {
     const state = mount(kind);
     await state.prepare();
     assert.deepEqual(
@@ -191,7 +193,7 @@ for (const kind of ['Access', 'Safe']) {
     await assert.rejects(
       state.tap({
         ...state.hello,
-        safe: {...state.hello.safe, publicKey: bytes(`04${'34'.repeat(64)}`)},
+        publicKey: bytes(`04${'34'.repeat(64)}`),
       }),
       MonoidWrongCardError,
     );
@@ -205,7 +207,7 @@ for (const kind of ['Access', 'Safe']) {
     ]);
     assert.deepEqual(
       state.saved,
-      kind === 'Access' ? [{id: '11223344', pin: 'new-pin'}] : [],
+      kind === 'Access' ? [{id: state.card.id, pin: 'new-pin'}] : [],
     );
     assert.deepEqual(state.toasts, [{message: `${kind} PIN updated`}]);
   });
@@ -253,7 +255,9 @@ test('a failed local save reports the committed card update once and keeps the r
   await state.prepare();
   await state.tap();
   await state.finishScan();
-  assert.deepEqual(await state.pinSession.getPINs(), {11223344: 'new-pin'});
+  assert.deepEqual(await state.pinSession.getPINs(), {
+    [state.card.id]: 'new-pin',
+  });
   assert.deepEqual(state.toasts, [
     {
       message: 'Access PIN updated, but not saved on this device',
@@ -283,7 +287,9 @@ test('dismissing during setPIN waits for the ACK, retains the new cached PIN, an
   release.resolve();
   await tapping;
   await state.finished.promise;
-  assert.deepEqual(await state.pinSession.getPINs(), {11223344: 'new-pin'});
+  assert.deepEqual(await state.pinSession.getPINs(), {
+    [state.card.id]: 'new-pin',
+  });
   assert.deepEqual(state.saved, []);
   assert.equal(state.toasts.length, 1);
   assert.equal(state.toasts[0].color, 'warning');

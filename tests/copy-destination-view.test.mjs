@@ -8,6 +8,7 @@ import {
 } from '../.bld/app/@lib/monoid/card-error.js';
 import {
   CardBackupSession,
+  assertBackupBundle,
   assertBackupCard,
   getBackupCardIdentity,
   readBackupCardIdentity,
@@ -124,12 +125,14 @@ mock.module(
   '../.bld/app/@components/views/safe/@card/read-copy-destination.js',
   {
     namedExports: {
-      readCopyDestination: async (sessionId, applet, onProgress, signal) => {
+      readCopyDestination: async (sessionId, applet, onStatus, signal) => {
         fixture.reads.push({sessionId, applet, signal});
-        onProgress({stage: 'monoid', phase: 'uploading', progress: 0.4});
+        onStatus('Reading card information, hold tight...');
         return fixture.readPending
           ? fixture.readPending.promise
-          : fixture.hello;
+          : fixture.needsSetup
+            ? {type: 'setup', cardInformation: fixture.cardInformation}
+            : {type: 'ready', hello: fixture.hello};
       },
     },
   },
@@ -143,6 +146,7 @@ mock.module('../.bld/app/@components/views/safe/@card/card-backup-session.js', {
       }
     },
     assertBackupCard,
+    assertBackupBundle,
     getBackupCardIdentity,
     readBackupCardIdentity,
     initializeBackupTarget: async (...args) => {
@@ -171,7 +175,6 @@ const {useViewActive} = await import(
   '../.bld/app/@components/@view/use-view-active.js'
 );
 for (const [path, names] of [
-  ['@monoid/applet-install-progress', ['AppletInstallProgressContent']],
   ['@monoid/monoid-card', ['MonoidCard', 'MonoidCardFrame']],
   ['@ui/app-icon', ['AppIcon']],
   ['@ui/button', ['Button', 'Buttons']],
@@ -216,6 +219,9 @@ for (const [path, names] of [
 const {CopyItemsView} = await import(
   '../.bld/app/@components/views/safe/@card/copy-items-view.js'
 );
+const {CopyItemsStore} = await import(
+  '../.bld/app/@services/copy-items-store.js'
+);
 
 function deferred() {
   let resolve;
@@ -238,20 +244,26 @@ function find(node, predicate) {
   }
 }
 
-function hello(number, initialized = true) {
+function hello(number, initialized = true, bundle = false) {
   return {
     id: Uint8Array.of(0, 0, 0, number),
-    pin: initialized ? 5 : false,
-    safe: {
-      id: Uint8Array.of(1, 0, 0, number),
-      publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(number)),
-      pin: initialized ? 5 : false,
-      unlocked: initialized,
-    },
+    publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(number)),
+    bundle,
+    pins: {access: initialized ? 5 : false, safe: initialized ? 5 : false},
   };
 }
 
-function mount({initialized = true, source = true, items} = {}) {
+function mount({
+  initialized = true,
+  source = true,
+  items,
+  sourceIndexes,
+  copyId = 'copy-flow',
+  copyItemsStore = new CopyItemsStore(),
+  needsSetup = false,
+  sourceBundle = false,
+  destinationBundle = false,
+} = {}) {
   const state = {
     slots: [],
     index: 0,
@@ -261,17 +273,23 @@ function mount({initialized = true, source = true, items} = {}) {
     reads: [],
     inputs: [],
     initializations: [],
+    routes: [],
+    pinSessions: [],
     errors: [],
     toasts: [],
     progress: [],
-    hello: hello(2, initialized),
-    initializedHello: hello(2),
+    hello: hello(2, initialized, destinationBundle),
+    initializedHello: hello(2, true, destinationBundle),
+    needsSetup,
+    cardInformation: {cardManagerAid: 'a000000151000000'},
     view: {
       $leaving: false,
       $match: {$exact: {$active: true}},
+      copyId,
+      sourceIndexes,
       sourceCard: source
         ? {
-            ...readBackupCardIdentity(hello(1)),
+            ...readBackupCardIdentity(hello(1, true, sourceBundle)),
             items: items ?? [
               {index: '02400000000000000001', type: 'seed', secret: true},
             ],
@@ -320,9 +338,27 @@ function mount({initialized = true, source = true, items} = {}) {
   };
   state.view.$match.$view = () => ({$entries: [state.view]});
   state.entrances = {
-    router: {$backTo: () => undefined, safe: {$exact: {}}},
+    router: {
+      $backTo: () => undefined,
+      safe: {
+        $exact: {},
+        setupCard: data => ({
+          $push() {
+            state.routes.push({type: 'setup', ...data});
+            state.view.$match.$exact.$active = false;
+          },
+        }),
+      },
+    },
+    copyItemsStore,
     monoidApplet: {},
-    monoidCredentialsStore: {createPINSession: () => ({clear() {}})},
+    monoidCredentialsStore: {
+      createPINSession() {
+        const session = {clear: mock.fn()};
+        state.pinSessions.push(session);
+        return session;
+      },
+    },
     errorService: {
       catch: promise => promise.catch(error => state.errors.push(error)),
     },
@@ -342,7 +378,7 @@ test('adding a destination waits for scan cleanup and preserves the current Copy
   await state.tapRaw();
   assert.equal(session.backup.targets.length, 1);
   assert.equal(state.inputs.length, 0);
-  assert.equal(state.progress[0].type, 'AppletInstallProgressContent');
+  assert.deepEqual(state.progress, ['Reading card information, hold tight...']);
 
   state.rawScans[0].finished.resolve();
   await state.flush();
@@ -362,7 +398,215 @@ test('adding a destination waits for scan cleanup and preserves the current Copy
   assert.deepEqual(state.errors, []);
 });
 
-test('a newly installed destination continues its PIN initialization on the same Copy page', async () => {
+test('an uninstalled destination opens Setup only after scan cleanup and preserves Copy across remounts', async () => {
+  const selectedIndex = '02400000000000000001';
+  const state = mount({
+    needsSetup: true,
+    items: [
+      {index: selectedIndex, type: 'seed', secret: true},
+      {index: '03010000000000000002', type: 'secp256k1', secret: true},
+    ],
+    sourceIndexes: [selectedIndex],
+  });
+  const session = state.sessions[0];
+  await session.addTarget(hello(3));
+  const backup = session.backup;
+  const source = backup.source;
+  const target = backup.targets[0];
+  state.click('Scan another card');
+  await state.tapRaw();
+
+  assert.deepEqual(state.routes, []);
+  assert.deepEqual(state.inputs, []);
+  assert.equal(session.backup, backup);
+  assert.equal(
+    find(
+      state.tree,
+      node =>
+        node.type === 'Button' && node.props.children === 'Continue to export',
+    ).props.loading,
+    true,
+  );
+
+  state.rawScans[0].finished.resolve();
+  await state.flush();
+  assert.deepEqual(state.routes, [
+    {
+      type: 'setup',
+      cardInformation: state.cardInformation,
+      copyId: state.view.copyId,
+    },
+  ]);
+  assert.deepEqual(state.initializations, []);
+  assert.deepEqual(state.monoidScans, []);
+  state.unmount();
+  assert.ok(state.pinSessions[0].clear.mock.callCount() > 0);
+
+  // Setup hands the verified card to its originating flow before returning.
+  const flow = state.entrances.copyItemsStore.get(state.routes[0].copyId);
+  assert.equal(flow.session.backup, backup);
+  await flow.session.addTarget(state.initializedHello);
+
+  state.view.$match.$exact.$active = true;
+  state.render();
+  assert.equal(state.sessions.length, 1);
+  assert.equal(state.pinSessions.length, 2);
+  assert.notEqual(state.pinSessions[0], state.pinSessions[1]);
+  assert.equal(session.backup.source, source);
+  assert.deepEqual(session.backup.targets[0], target);
+  assert.equal(session.backup.targets.length, 2);
+  assert.deepEqual(
+    session.backup.items.map(item => [item.index, item.selected]),
+    [
+      [selectedIndex, true],
+      ['03010000000000000002', false],
+    ],
+  );
+  assert.equal(
+    find(
+      state.tree,
+      node =>
+        node.type === 'Button' && node.props.children === 'Continue to export',
+    ).props.loading,
+    false,
+  );
+
+  assert.equal(state.rawScans.length, 1);
+  assert.equal(state.monoidScans.length, 0);
+  assert.equal(
+    session.backup.targets[1].publicKey,
+    readBackupCardIdentity(state.initializedHello).publicKey,
+  );
+  assert.equal(state.sessions.length, 1);
+  assert.deepEqual(state.errors, []);
+});
+
+test('a separate Copy route uses its own session while the original flow remains available', async () => {
+  const first = mount({copyId: 'first-copy'});
+  const firstSession = first.sessions[0];
+  await firstSession.addTarget(hello(3));
+  first.unmount();
+
+  const second = mount({
+    copyId: 'second-copy',
+    copyItemsStore: first.entrances.copyItemsStore,
+  });
+  const secondSession = second.sessions[0];
+  assert.notEqual(firstSession, secondSession);
+  assert.equal(secondSession.backup.targets.length, 0);
+  await secondSession.addTarget(hello(4));
+
+  first.render();
+  assert.equal(first.sessions.length, 1);
+  assert.deepEqual(
+    firstSession.backup.targets.map(target => target.id),
+    [readBackupCardIdentity(hello(3)).id],
+  );
+  assert.deepEqual(
+    secondSession.backup.targets.map(target => target.id),
+    [readBackupCardIdentity(hello(4)).id],
+  );
+});
+
+for (const phase of ['reading', 'cleanup']) {
+  test(`cancelling an uninstalled destination during ${phase} does not open Setup and leaves Copy usable`, async () => {
+    const state = mount({needsSetup: true});
+    if (phase === 'reading') state.readPending = deferred();
+    state.click('Scan destination card');
+    const tapping = state.tapRaw();
+    if (phase === 'cleanup') await tapping;
+
+    const reason = Object.assign(new Error('Cancelled'), {code: 'CANCELLED'});
+    state.rawScans[0].controller.abort(reason);
+    state.rawScans[0].finished.reject(reason);
+    state.readPending?.resolve({
+      type: 'setup',
+      cardInformation: state.cardInformation,
+    });
+    await tapping;
+    await state.flush();
+
+    assert.deepEqual(state.routes, []);
+    assert.deepEqual(state.inputs, []);
+    assert.equal(state.sessions[0].backup.targets.length, 0);
+    assert.deepEqual(state.errors, []);
+    assert.equal(
+      find(
+        state.tree,
+        node =>
+          node.type === 'Button' &&
+          node.props.children === 'Scan destination card',
+      ).props.loading,
+      false,
+    );
+    state.readPending = undefined;
+    state.click('Scan destination card');
+    assert.equal(state.rawScans.length, 2);
+    state.rawScans[1].finished.reject(reason);
+    await state.flush();
+  });
+}
+
+for (const destination of ['leaving', 'inactive', 'unmounted']) {
+  test(`a destination needing Setup cannot navigate when Copy is ${destination}`, async () => {
+    const state = mount({needsSetup: true});
+    state.click('Scan destination card');
+    await state.tapRaw();
+    if (destination === 'leaving') state.view.$leaving = true;
+    if (destination === 'inactive') state.view.$match.$exact.$active = false;
+    if (destination === 'unmounted') state.unmount();
+    state.rawScans[0].finished.resolve();
+    await setImmediate();
+
+    assert.deepEqual(state.routes, []);
+    assert.deepEqual(state.inputs, []);
+    assert.equal(state.sessions[0].backup.targets.length, 0);
+    state.view.$leaving = false;
+    state.view.$match.$exact.$active = true;
+    state.render();
+    assert.equal(
+      find(
+        state.tree,
+        node =>
+          node.type === 'Button' &&
+          node.props.children === 'Scan destination card',
+      ).props.loading,
+      false,
+    );
+    assert.equal(state.sessions.length, 1);
+  });
+}
+
+test('remounting while scan cleanup is pending ignores the old redirect and resets local busy state', async () => {
+  const state = mount({needsSetup: true});
+  state.click('Scan destination card');
+  await state.tapRaw();
+  state.unmount();
+  state.render();
+  assert.equal(
+    find(
+      state.tree,
+      node =>
+        node.type === 'Button' &&
+        node.props.children === 'Scan destination card',
+    ).props.loading,
+    false,
+  );
+  state.rawScans[0].finished.resolve();
+  await state.flush();
+  assert.deepEqual(state.routes, []);
+  assert.equal(state.sessions.length, 1);
+
+  state.needsSetup = false;
+  state.click('Scan destination card');
+  await state.tapRaw();
+  state.rawScans[1].finished.resolve();
+  await state.flush();
+  assert.equal(state.sessions[0].backup.targets.length, 1);
+  assert.deepEqual(state.errors, []);
+});
+
+test('an installed destination continues its PIN initialization on the same Copy page', async () => {
   const state = mount({initialized: false});
   state.click('Scan destination card');
   await state.tapRaw();
@@ -390,7 +634,7 @@ test('a newly installed destination continues its PIN initialization on the same
   assert.deepEqual(state.errors, []);
 });
 
-test('a failed destination installation preserves previously added cards and the source selection', async () => {
+test('a failed destination read preserves previously added cards and the source selection', async () => {
   const state = mount();
   const session = state.sessions[0];
   await session.addTarget(hello(3));
@@ -418,7 +662,7 @@ for (const initialized of [true, false]) {
     const reason = Object.assign(new Error('Cancelled'), {code: 'CANCELLED'});
     state.rawScans[0].controller.abort(reason);
     state.rawScans[0].finished.reject(reason);
-    state.readPending.resolve(state.hello);
+    state.readPending.resolve({type: 'ready', hello: state.hello});
     await tapping;
     await state.flush();
 
@@ -456,6 +700,25 @@ test('a source card is rejected in the scan overlay without modifying Copy', asy
   assert.equal(state.rawScans[0].error.message, 'Use a different card');
   assert.equal(state.sessions[0].backup.targets.length, 0);
   assert.deepEqual(state.inputs, []);
+  assert.deepEqual(state.errors, []);
+});
+
+test('a different destination bundle is rejected in the scan overlay before initialization', async () => {
+  const state = mount({
+    initialized: false,
+    sourceBundle: new Uint8Array(32).fill(1),
+    destinationBundle: new Uint8Array(32).fill(2),
+  });
+  state.click('Scan destination card');
+  await state.tapRaw();
+
+  assert.equal(
+    state.rawScans[0].error.message,
+    'Use a card in the same bundle',
+  );
+  assert.equal(state.sessions[0].backup.targets.length, 0);
+  assert.deepEqual(state.inputs, []);
+  assert.deepEqual(state.monoidScans, []);
   assert.deepEqual(state.errors, []);
 });
 

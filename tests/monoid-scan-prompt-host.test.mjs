@@ -183,14 +183,14 @@ function mount(t, options = {}) {
   return {state, messages, errors};
 }
 
-test('iOS sends committed rendered progress text with line breaks and counts', async t => {
+test('iOS sends committed rendered progress text on one line with counts', async t => {
   const progress = {type: () => null, props: {current: 2, total: 5}};
   const {state, messages, errors} = mount(t, {
     presentation: {content: progress},
     text: '  Reading addresses, hold tight...\n2/5  ',
   });
   assert.deepEqual(messages, [
-    {sessionId: 'session-a', message: 'Reading addresses, hold tight...\n2/5'},
+    {sessionId: 'session-a', message: 'Reading addresses, hold tight... 2/5'},
   ]);
   state.render(
     {content: {...progress, props: {current: 3, total: 5}}},
@@ -198,7 +198,7 @@ test('iOS sends committed rendered progress text with line breaks and counts', a
   );
   assert.deepEqual(messages.at(-1), {
     sessionId: 'session-a',
-    message: 'Reading addresses, hold tight...\n3/5',
+    message: 'Reading addresses, hold tight... 3/5',
   });
   await setImmediate();
   assert.deepEqual(errors, []);

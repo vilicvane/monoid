@@ -13,15 +13,15 @@ import {styled} from 'styled-components';
 
 import {MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
+import type {CardInformation} from '../../../../@lib/global-platform/card-information.js';
 import {
-  type MonoidAppletHelloWithSafe,
+  type MonoidAppletHello,
   MonoidCardError,
   MonoidWrongCardError,
 } from '../../../../@lib/monoid/index.js';
 import type {Router} from '../../../../@routes.js';
 import {isCredentialRequestCancelled} from '../../../../@services/index.js';
 import {popOutAnimationCSS} from '../../../@animations.js';
-import {AppletInstallProgressContent} from '../../../@monoid/applet-install-progress.js';
 import {MonoidCard, MonoidCardFrame} from '../../../@monoid/monoid-card.js';
 import {
   MonoidScanStatePromptContentHighlight,
@@ -69,13 +69,14 @@ import {CardResourceItem, CardResourceList} from './@resource-item.js';
 import {
   type CardBackupIdentity,
   type CardBackupItem,
-  CardBackupSession,
   type CardBackupTarget,
+  assertBackupBundle,
   assertBackupCard,
   getBackupCardIdentity,
   initializeBackupTarget,
   readBackupCardIdentity,
 } from './card-backup-session.js';
+import {CopyItemsState} from './copy-items-state.js';
 import {readCopyDestination} from './read-copy-destination.js';
 
 const Description = styled.p`
@@ -278,44 +279,45 @@ const DestinationCards = ({
 
 export const CopyItemsView = observer(
   ({view}: RouteComponentProps<Router['safe']['copyItems']>): ReactNode => {
-    const {router, errorService, monoidApplet, monoidCredentialsStore} =
-      useEntrances();
+    const {
+      router,
+      errorService,
+      monoidApplet,
+      monoidCredentialsStore,
+      copyItemsStore,
+    } = useEntrances();
     const isViewActive = useViewActive(view);
     const toast = useToast();
-    const [routeSource] = useState(() => ({
-      card: view.sourceCard,
-      indexes: view.sourceIndexes,
-    }));
-    const [session] = useState(
-      () => new CardBackupSession(routeSource.card, routeSource.indexes),
+    const [copyState] = useState(() =>
+      copyItemsStore.getOrCreate(
+        view.copyId,
+        () => new CopyItemsState(view.sourceCard, view.sourceIndexes),
+      ),
     );
+    const {
+      session,
+      notice,
+      failed,
+      stepsExited,
+      interruptedCards,
+      startedImports,
+    } = copyState;
     const [pinSession] = useState(() =>
       monoidCredentialsStore.createPINSession(),
     );
     const backup = session.backup;
     const [workingStep, setWorkingStep] = useState<number>();
-    const [stepsExited, setStepsExited] = useState(false);
     const working = workingStep !== undefined;
-    const [notice, setNotice] = useState<string>();
-    const [failed, setFailed] = useState(false);
     const [confirmRestart, setConfirmRestart] = useState(false);
     const [details, setDetails] = useState<'items' | CardBackupIdentity>();
     const [destination, setDestination] = useState<CardBackupIdentity>();
-    const [interruptedCards, setInterruptedCards] = useState<Set<string>>(
-      () => new Set(),
-    );
-    const [startedImports, setStartedImports] = useState<Set<string>>(
-      () => new Set(),
-    );
     const [safePINInput, showSafePINInput] = useInputModal();
     const [accessPINInput, scanWithAccess] = useMonoidScanPrompt({
-      safe: true,
       auth: 'access',
       ensureSetup: false,
       pinSession,
     });
     const [scanContent, scan] = useMonoidScanPrompt({
-      safe: true,
       ensureSetup: false,
     });
     const scanRawDestination = useIsoDepScanPrompt();
@@ -375,33 +377,22 @@ export const CopyItemsView = observer(
 
     useEffect(() => {
       if (!backup?.targetsConfirmed) {
-        setInterruptedCards(current => (current.size ? new Set() : current));
-        setStartedImports(current => (current.size ? new Set() : current));
+        copyState.clearProgress();
       }
-    }, [backup?.targetsConfirmed]);
-
-    const markCardInterrupted = (
-      publicKey: string,
-      interrupted: boolean,
-    ): void => {
-      setInterruptedCards(current => {
-        const next = new Set(current);
-        if (interrupted) {
-          next.add(publicKey);
-        } else {
-          next.delete(publicKey);
-        }
-        return next;
-      });
-    };
+    }, [backup?.targetsConfirmed, copyState]);
 
     const run = async (operation: () => Promise<void>): Promise<void> => {
-      if (running.current || session.busy) return;
+      if (
+        running.current ||
+        session.busy ||
+        !mounted.current ||
+        !isViewActive()
+      )
+        return;
 
       running.current = true;
       setWorkingStep(step);
-      setNotice(undefined);
-      setFailed(false);
+      copyState.setNotice(undefined);
 
       try {
         await operation();
@@ -410,11 +401,11 @@ export const CopyItemsView = observer(
           const cancelled =
             isCredentialRequestCancelled(error) ||
             (error instanceof Error && error.name === 'AbortError');
-          setFailed(!cancelled);
-          setNotice(
+          copyState.setNotice(
             cancelled
               ? 'Interrupted. You can continue on this page.'
               : `${error instanceof Error ? error.message : 'Copy interrupted.'} Try again to continue.`,
+            !cancelled,
           );
         }
       } finally {
@@ -439,50 +430,58 @@ export const CopyItemsView = observer(
     };
 
     const scanDestination = async (): Promise<void> => {
-      let scanned: MonoidAppletHelloWithSafe | undefined;
+      let scanned: MonoidAppletHello | undefined;
+      let cardInformation: CardInformation | undefined;
       await scanRawDestination(
         'Scan a destination card',
         async (sessionId, setStateContent, signal) => {
-          const hello = await readCopyDestination(
+          const result = await readCopyDestination(
             sessionId,
             monoidApplet,
-            update =>
-              setStateContent(<AppletInstallProgressContent update={update} />),
+            setStateContent,
             signal,
           );
           signal.throwIfAborted();
+          if (result.type === 'setup') {
+            cardInformation = result.cardInformation;
+            return;
+          }
+          const {hello} = result;
           const identity = readBackupCardIdentity(hello);
+          assertBackupBundle(backup!.source, identity);
           if (identity.publicKey === backup!.source.publicKey) {
             throw new MonoidCardError('Use a different card');
           }
           if (targets.some(target => target.publicKey === identity.publicKey)) {
             throw new MonoidCardError('Card already added');
           }
-          if (hello.safe.pin === 0)
+          if (hello.pins.safe === 0)
             throw new MonoidCardError('Safe PIN blocked');
-          if (hello.pin === 0) throw new MonoidCardError('Access PIN blocked');
+          if (hello.pins.access === 0)
+            throw new MonoidCardError('Access PIN blocked');
           scanned = hello;
         },
       );
-      if (!scanned || !mounted.current || !isViewActive()) return;
+      if (!mounted.current || !isViewActive()) return;
+      if (cardInformation) {
+        router.safe.setupCard({cardInformation, copyId: view.copyId}).$push();
+        return;
+      }
+      if (!scanned) return;
 
-      if (
-        scanned.pin !== false &&
-        scanned.safe.pin !== false &&
-        scanned.safe.unlocked
-      ) {
+      if (scanned.pins.access !== false && scanned.pins.safe !== false) {
         await session.addTarget(scanned);
         return;
       }
 
       const expected = scanned;
       const identity = readBackupCardIdentity(expected);
-      const isNew = expected.safe.pin === false;
+      const isNew = expected.pins.safe === false;
       let pin = await showSafePINInput({
         type: 'password',
         ...getPINInputPlaceholder('Safe', isNew ? 'Set' : 'Enter existing'),
         description:
-          expected.pin === false ? (
+          expected.pins.access === false ? (
             <>
               Will be used as initial <PINKind kind="Access" /> PIN
             </>
@@ -529,7 +528,7 @@ export const CopyItemsView = observer(
               setState(
                 isNew
                   ? 'Setting Safe PIN, hold tight...'
-                  : 'Unlocking safe, hold tight...',
+                  : 'Setting Access PIN, hold tight...',
               );
               const initialized = await initializeBackupTarget(
                 applet,
@@ -571,7 +570,7 @@ export const CopyItemsView = observer(
               applet,
               hello,
               signal,
-              routeSource.indexes,
+              copyState.sourceIndexes,
               (current, total) => {
                 setState(
                   <CopyProgress value={`${current}/${total}`}>
@@ -610,7 +609,7 @@ export const CopyItemsView = observer(
         }
 
         try {
-          markCardInterrupted(backup.source.publicKey, false);
+          copyState.markInterrupted(backup.source.publicKey, false);
           await scan(
             <>
               Scan source card{' '}
@@ -638,7 +637,7 @@ export const CopyItemsView = observer(
               target.items.some(item => !item.exported),
             )
           ) {
-            markCardInterrupted(backup.source.publicKey, true);
+            copyState.markInterrupted(backup.source.publicKey, true);
           }
           throw error;
         } finally {
@@ -650,10 +649,8 @@ export const CopyItemsView = observer(
           await scanWithAccess(
             'Scan a destination card',
             async (applet, setState, hello, signal) => {
-              markCardInterrupted(target!.publicKey, false);
-              setStartedImports(current =>
-                new Set(current).add(target!.publicKey),
-              );
+              copyState.markInterrupted(target!.publicKey, false);
+              copyState.startImport(target!.publicKey);
               await session.importItems(
                 applet,
                 hello,
@@ -703,7 +700,7 @@ export const CopyItemsView = observer(
             card => card.publicKey === target?.publicKey,
           );
           if (interruptedTarget && !interruptedTarget.complete) {
-            markCardInterrupted(interruptedTarget.publicKey, true);
+            copyState.markInterrupted(interruptedTarget.publicKey, true);
           }
           throw error;
         }
@@ -833,7 +830,7 @@ export const CopyItemsView = observer(
                 $exiting={!!complete}
                 onAnimationEnd={event => {
                   if (complete && event.target === event.currentTarget) {
-                    setStepsExited(true);
+                    copyState.exitSteps();
                   }
                 }}
               >
@@ -914,7 +911,7 @@ export const CopyItemsView = observer(
                   <CardResourceItem
                     key={item.index}
                     data={item}
-                    resources={routeSource.card?.items ?? backup?.items}
+                    resources={copyState.sourceCard?.items ?? backup?.items}
                   />
                 ))}
               </CardResourceList>
@@ -967,7 +964,7 @@ export const CopyItemsView = observer(
                   setConfirmRestart(false);
                   void run(async () => {
                     pinSession.clear();
-                    await session.reset(routeSource.card, routeSource.indexes);
+                    await copyState.restart();
                   });
                 }}
               >

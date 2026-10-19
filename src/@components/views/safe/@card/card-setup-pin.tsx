@@ -3,7 +3,7 @@ import {type ReactNode, useEffect, useRef} from 'react';
 import {type MonoidIdHex, MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import {
-  type MonoidAppletHelloWithSafe,
+  type MonoidAppletHello,
   MonoidCardError,
   MonoidWrongCardError,
   initializeMonoidCard,
@@ -35,13 +35,12 @@ function waitForOperation<T>(
   });
 }
 
-function isInitialized(hello: MonoidAppletHelloWithSafe): boolean {
+function isInitialized(hello: MonoidAppletHello): boolean {
   return (
-    hello.pin !== false &&
-    hello.pin !== 0 &&
-    hello.safe.pin !== false &&
-    hello.safe.pin !== 0 &&
-    hello.safe.unlocked
+    hello.pins.access !== false &&
+    hello.pins.access !== 0 &&
+    hello.pins.safe !== false &&
+    hello.pins.safe !== 0
   );
 }
 
@@ -49,17 +48,13 @@ export function CardSetupPIN({
   hello,
   onFinished,
 }: {
-  hello: MonoidAppletHelloWithSafe;
-  onFinished: (
-    initialized: boolean,
-    latestHello?: MonoidAppletHelloWithSafe,
-  ) => void;
+  hello: MonoidAppletHello;
+  onFinished: (initialized: boolean, latestHello?: MonoidAppletHello) => void;
 }): ReactNode {
   const {errorService, monoidCredentialsStore} = useEntrances();
   const toast = useToast();
   const [input, showInput] = useInputModal();
   const [scanInput, scan] = useMonoidScanPrompt({
-    safe: true,
     ensureSetup: false,
     auth: false,
     retryOnError: false,
@@ -74,14 +69,14 @@ export function CardSetupPIN({
     let pin: MonoidPIN | undefined;
     let writing: Promise<void> | undefined;
     let initialized = false;
-    let latestHello: MonoidAppletHelloWithSafe | undefined;
+    let latestHello: MonoidAppletHello | undefined;
     let accessPINId: MonoidIdHex | undefined;
     let accessPINAuthenticated = false;
     let scanCompleted = false;
 
     const readPIN = async (): Promise<MonoidPIN | undefined> => {
       let description: ReactNode =
-        hello.pin === false ? (
+        hello.pins.access === false ? (
           <>
             Will be used as initial <PINKind kind="Access" /> PIN
           </>
@@ -98,7 +93,7 @@ export function CardSetupPIN({
             type: 'password',
             ...getPINInputPlaceholder(
               'Safe',
-              hello.safe.pin === false ? 'Set' : 'Enter existing',
+              hello.pins.safe === false ? 'Set' : 'Enter existing',
             ),
             description,
             center: true,
@@ -114,9 +109,14 @@ export function CardSetupPIN({
     const run = async (): Promise<void> => {
       try {
         if (isInitialized(hello)) {
+          latestHello = hello;
           initialized = true;
           return;
         }
+        if (hello.pins.safe === 0)
+          throw new MonoidCardError('Safe PIN blocked');
+        if (hello.pins.access === 0)
+          throw new MonoidCardError('Access PIN blocked');
 
         pin = await readPIN();
         if (pin === undefined) return;
@@ -128,7 +128,7 @@ export function CardSetupPIN({
               <>
                 Scan card{' '}
                 <MonoidScanStatePromptContentHighlight>
-                  {uint8ArrayToHex(hello.safe.id)}
+                  {uint8ArrayToHex(hello.id)}
                 </MonoidScanStatePromptContentHighlight>
               </>,
               async (applet, setState, current, scanSignal) => {
@@ -140,13 +140,14 @@ export function CardSetupPIN({
                   signal.throwIfAborted();
                   writing = (async () => {
                     if (isInitialized(current)) {
+                      latestHello = current;
                       initialized = true;
                       return;
                     }
 
                     if (
-                      hello.safe.pin === false &&
-                      current.safe.pin !== false
+                      hello.pins.safe === false &&
+                      current.pins.safe !== false
                     ) {
                       throw new MonoidCardError(
                         'Safe PIN already set, enter existing PIN',
@@ -154,9 +155,9 @@ export function CardSetupPIN({
                     }
 
                     setState(
-                      current.safe.pin === false
+                      current.pins.safe === false
                         ? 'Setting Safe PIN, hold tight...'
-                        : 'Unlocking safe, hold tight...',
+                        : 'Setting Access PIN, hold tight...',
                     );
                     const result = await initializeMonoidCard(
                       applet,
@@ -168,7 +169,7 @@ export function CardSetupPIN({
                     initialized = true;
                     signal.throwIfAborted();
 
-                    if (current.pin === false) {
+                    if (current.pins.access === false) {
                       accessPINId = uint8ArrayToHex(result.id);
                       setState('Authenticating, hold tight...');
                       await applet.authenticate({pin: pin!});
@@ -185,12 +186,10 @@ export function CardSetupPIN({
                 signal.throwIfAborted();
                 if (
                   uint8ArrayToHex(current.id) !== uint8ArrayToHex(hello.id) ||
-                  uint8ArrayToHex(current.safe.publicKey) !==
-                    uint8ArrayToHex(hello.safe.publicKey)
+                  uint8ArrayToHex(current.publicKey) !==
+                    uint8ArrayToHex(hello.publicKey)
                 ) {
-                  throw new MonoidWrongCardError(
-                    uint8ArrayToHex(hello.safe.id),
-                  );
+                  throw new MonoidWrongCardError(uint8ArrayToHex(hello.id));
                 }
                 latestHello = current;
               },

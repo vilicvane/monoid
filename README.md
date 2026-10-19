@@ -12,8 +12,30 @@ npm ci
 npm run dev
 ```
 
-`npm run build` checks and compiles TypeScript. `npm run build:web` also builds the
-Vite app into `dist`, which Capacitor copies into the native projects.
+`npm run build` checks and compiles TypeScript. `npm run build:web` first prepares
+the bundled applets from `../monoid-javacard/build/javacard`, then builds the Vite
+app into `dist`, which Capacitor copies into the native projects. Build the
+JavaCard project first; missing or invalid CAPs stop the app build. Ionic builds
+and `npm run ios:sync` use this same preparation step. To refresh only the bundled
+applets, run `npm run prepare:applets`.
+
+## Card API
+
+The app follows the current protocol in `../monoid-javacard`. Hello takes `{}`
+and returns `{version, id, publicKey, bundle, pins: {access, safe}}`. The ID and
+public key belong to the persistent Identity; the same ID identifies the card
+in the UI and its remembered Access PIN. Algorithm features come from System
+Information.
+
+Initialization sets missing PINs. Setting the first Safe PIN also initializes
+Access PIN; completing a missing Access PIN authenticates with the existing Safe
+PIN and sets only Access PIN. Ordinary operations use Access authentication;
+exports and PIN changes require Safe authentication.
+
+Copy preserves the source card's Bundle membership. A source without a Bundle
+exports for each destination's public key; a source with a Bundle exports only
+for destinations with the same complete Bundle hash. Membership is checked again
+when scanning for export and import.
 
 ## iOS development
 

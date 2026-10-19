@@ -7,7 +7,6 @@ import {
   CurveName,
   MonoidId,
   MonoidPIN,
-  MonoidSafeId,
   PublicKey,
   SafeIndex,
   SafeKnownType,
@@ -21,7 +20,6 @@ const SafeItemType = x.union([SafeKnownType, SafeUnknownType]);
 const SafeItemKeyType = x.union([
   x.literal('entropy'),
   x.literal('seed'),
-  x.literal('master'),
   x.literal('secp256k1'),
   x.literal('secp256r1'),
   x.literal('ed25519'),
@@ -36,39 +34,26 @@ const Features = x.object({
   ),
 });
 
-const SafeInformation = x.object({
-  id: MonoidSafeId,
-  publicKey: PublicKey,
-  pin: x.union([x.number, x.literal(false)]),
-  unlocked: x.boolean,
-});
-
 export const MonoidAppletHello = x.object({
   version: x.number,
   id: MonoidId,
-  features: Features,
-  pin: x.union([x.number, x.literal(false)]),
-  safe: SafeInformation.optional(),
+  publicKey: PublicKey,
+  bundle: x.union([XUint8Array, x.literal(false)]),
+  pins: x.object({
+    access: x.union([x.number, x.literal(false)]),
+    safe: x.union([x.number, x.literal(false)]),
+  }),
 });
 export type MonoidAppletHello = x.TypeOf<typeof MonoidAppletHello>;
 
-export const MonoidAppletHelloWithSafe = x.intersection([
-  MonoidAppletHello,
-  x.object({safe: SafeInformation}),
-]);
-export type MonoidAppletHelloWithSafe = x.TypeOf<
-  typeof MonoidAppletHelloWithSafe
->;
-
 const KeyIndex = x.object({index: SafeIndex});
-const DerivableKeyType = x.union([x.literal('seed'), x.literal('master')]);
 
 const KeySECP256K1 = x.intersection([
   KeyIndex,
   x.union([
     x.object({type: x.literal('secp256k1')}),
     x.object({
-      type: DerivableKeyType,
+      type: x.literal('seed'),
       derivation: x.object({
         type: x.literal('bip32'),
         path: BIP39Path,
@@ -82,7 +67,7 @@ const KeyED25519 = x.intersection([
   x.union([
     x.object({type: x.literal('ed25519')}),
     x.object({
-      type: DerivableKeyType,
+      type: x.literal('seed'),
       derivation: x.object({
         type: x.literal('slip10'),
         curve: x.literal('ed25519'),
@@ -97,7 +82,7 @@ const KeySECP256R1 = x.intersection([
   x.union([
     x.object({type: x.literal('secp256r1')}),
     x.object({
-      type: DerivableKeyType,
+      type: x.literal('seed'),
       derivation: x.object({
         type: x.literal('monoid-001'),
         context: XUint8Array,
@@ -135,9 +120,7 @@ export type MonoidApplet = ReturnType<typeof createMonoidApplet>;
 export const monoidCommandDefinitions = {
   hello: {
     ins: 0x20,
-    request: x.object({
-      safe: x.boolean.optional(),
-    }),
+    request: x.object({}),
     response: MonoidAppletHello,
   },
 
@@ -242,12 +225,13 @@ export const monoidCommandDefinitions = {
     response: x.object({}),
   },
 
-  // Requires Safe authentication; data is encrypted for recipientPublicKey.
+  // Safe authentication is required. Enrolled cards export for their Bundle;
+  // otherwise recipientPublicKey is required for asymmetric transfer.
   exportItem: {
     ins: 0x36,
     request: x.object({
       index: SafeIndex,
-      recipientPublicKey: PublicKey,
+      recipientPublicKey: PublicKey.optional(),
     }),
     response: x.object({
       key: XUint8Array.optional(),
@@ -261,7 +245,7 @@ export const monoidCommandDefinitions = {
     ins: 0x37,
     request: x.object({
       index: SafeIndex,
-      senderPublicKey: PublicKey,
+      senderPublicKey: PublicKey.optional(),
       key: XUint8Array.optional(),
       alias: x.string.optional(),
       data: XUint8Array,

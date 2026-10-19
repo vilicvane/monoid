@@ -3,7 +3,10 @@ import {type ReactNode, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
 import {useEntrances} from '../../@entrances.js';
-import type {BitcoinTransaction} from '../../@lib/bitcoin-api.js';
+import {
+  BitcoinHttpError,
+  type BitcoinTransaction,
+} from '../../@lib/bitcoin-api.js';
 import {getBitcoinWalletSigningAccount} from '../../@lib/bitcoin-wallet.js';
 import type {Router} from '../../@routes.js';
 import {WalletAccountFieldset} from '../@key/wallet-account-fieldset.js';
@@ -17,7 +20,11 @@ import {
   InfoSectionRow,
 } from '../@ui/info-section.js';
 import {InteractiveAddress} from '../@ui/interactive-address.js';
-import {ErrorMessage, WarningMessage} from '../@ui/message-content.js';
+import {
+  ErrorMessage,
+  InfoMessage,
+  WarningMessage,
+} from '../@ui/message-content.js';
 import {NativeAmount} from '../@ui/native-amount.js';
 import {TransactionDetailsPanel} from '../@ui/transaction-details-panel.js';
 import {TransactionHeaderStatus} from '../@ui/transaction-status.js';
@@ -53,6 +60,7 @@ export const BitcoinTransactionView = observer(
       tip: number;
     }>();
     const [error, setError] = useState<string>();
+    const [notFound, setNotFound] = useState(false);
     const [loading, setLoading] = useState(true);
     const [sending, setSending] = useState(false);
     const [attempt, setAttempt] = useState(0);
@@ -68,26 +76,33 @@ export const BitcoinTransactionView = observer(
         setLoading(true);
         try {
           const [transaction, tip] = await Promise.all([
-            bitcoinWalletService.api.getTransaction(
-              view.txid,
-              controller.signal,
-            ),
+            bitcoinWalletService.api
+              .getTransaction(view.txid, controller.signal)
+              .catch((cause: unknown) => {
+                if (cause instanceof BitcoinHttpError && cause.status === 404)
+                  return undefined;
+                throw cause;
+              }),
             bitcoinWalletService.api.getTipHeight(controller.signal),
           ]);
           if (controller.signal.aborted) return;
-          setLoaded({transaction, tip});
+          setNotFound(!transaction);
           setError(undefined);
+          if (!transaction) return;
+          setLoaded({transaction, tip});
           await bitcoinWalletService.updateSubmissionStatus(
             view.txid,
             transaction.status.confirmed ? 'confirmed' : 'submitted',
           );
         } catch (cause) {
-          if (!controller.signal.aborted)
+          if (!controller.signal.aborted) {
+            setNotFound(false);
             setError(
               cause instanceof Error
                 ? cause.message
                 : 'Could not check this transaction.',
             );
+          }
         } finally {
           pending = false;
           if (!controller.signal.aborted) setLoading(false);
@@ -111,7 +126,7 @@ export const BitcoinTransactionView = observer(
       : submission?.status === 'confirmed';
     const observed = !!transaction || !!cached;
     const staleStatus =
-      !!error &&
+      (!!error || notFound) &&
       (observed ||
         submission?.status === 'confirmed' ||
         submission?.status === 'submitted');
@@ -150,9 +165,11 @@ export const BitcoinTransactionView = observer(
             ? 'Broadcast unconfirmed'
             : submission
               ? 'Signed'
-              : error
-                ? 'Status unavailable'
-                : 'Checking transaction';
+              : notFound
+                ? 'Not found yet'
+                : error
+                  ? 'Status unavailable'
+                  : 'Checking transaction';
 
     const retry = async (): Promise<void> => {
       if (!submission || broadcast.current || !active) return;
@@ -308,6 +325,7 @@ export const BitcoinTransactionView = observer(
             submission.status !== 'unknown' && (
               <WarningMessage>{submission.error}</WarningMessage>
             )}
+          {notFound && <InfoMessage>Transaction not found yet.</InfoMessage>}
           {error && <ErrorMessage>{error}</ErrorMessage>}
         </ViewContent>
       </View>

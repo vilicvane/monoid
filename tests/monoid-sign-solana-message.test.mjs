@@ -33,7 +33,7 @@ const {address, publicKey} = signingKey;
 const message = new TextEncoder().encode('Sign in to Monoid: 登录 👋');
 const rawKey = {
   type: 'ed25519',
-  index: new Uint8Array(Buffer.from('05010000000000000001', 'hex')),
+  index: new Uint8Array(Buffer.from('04010000000000000001', 'hex')),
 };
 const derivedKey = {
   type: 'seed',
@@ -85,14 +85,19 @@ test('signs the exact message bytes with pure Ed25519 and returns base58', async
   }
 });
 
-test('preserves raw, seed and master key references in both card operations', async () => {
-  const masterKey = {
+test('preserves raw and distinct seed key references in both card operations', async () => {
+  const otherDerivedKey = {
     ...derivedKey,
-    type: 'master',
-    index: new Uint8Array(Buffer.from('03400000000000000003', 'hex')),
+    index: new Uint8Array(Buffer.from('02400000000000000003', 'hex')),
+    derivation: {
+      ...derivedKey.derivation,
+      path: new Uint8Array(
+        Buffer.from('8000002c800001f58000000280000000', 'hex'),
+      ),
+    },
   };
 
-  for (const key of [rawKey, derivedKey, masterKey]) {
+  for (const key of [rawKey, derivedKey, otherDerivedKey]) {
     const applet = createApplet();
     const calls = [];
     applet.viewKey = async request => {

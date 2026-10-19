@@ -277,7 +277,6 @@ export function getDefaultWallet(
 
 export const WalletKeyKnownType = x.union([
   x.literal('seed').nominal<'safe known type'>(),
-  x.literal('master').nominal<'safe known type'>(),
   x.literal('secp256k1').nominal<'safe known type'>(),
   x.literal('ed25519').nominal<'safe known type'>(),
 ]);

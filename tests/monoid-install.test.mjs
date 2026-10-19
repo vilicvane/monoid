@@ -79,24 +79,19 @@ beforeEach(() => {
     hello: {
       version: 0,
       id: Uint8Array.of(1, 2, 3, 4),
-      pin: false,
-      features: {curves: []},
-      safe: {
-        id: Uint8Array.of(5, 6, 7, 8),
-        publicKey: Uint8Array.from([4, ...new Uint8Array(64)]),
-        pin: false,
-        unlocked: false,
-      },
+      publicKey: Uint8Array.from([4, ...new Uint8Array(64)]),
+      bundle: false,
+      pins: {access: false, safe: false},
     },
   };
   const code = Uint8Array.of(1, 2, 3);
   bundle.splice(
     0,
     bundle.length,
-    ...['identity', 'safe', 'monoid'].map((stage, index) => ({
+    ...['identity', 'monoid'].map((stage, index) => ({
       stage,
-      packageAid: `f06d6f6e6f69640${index}`,
-      appletAid: `f06d6f6e6f69640${index}010000`,
+      packageAid: `f06d6f6e6f69640${index * 2}`,
+      appletAid: `f06d6f6e6f69640${index * 2}010000`,
       codeURL: new URL(
         `data:application/octet-stream;base64,${Buffer.from(code).toString('base64')}`,
       ),
@@ -105,7 +100,7 @@ beforeEach(() => {
   );
 });
 
-test('installation processes Identity, Safe and Monoid in order and verifies safe-aware hello in the same session', async () => {
+test('installation processes Identity and merged Monoid in order and verifies the full hello in the same session', async () => {
   const hello = await installMonoidApplets('connection', update =>
     fixture.progress.push(update),
   );
@@ -113,7 +108,6 @@ test('installation processes Identity, Safe and Monoid in order and verifies saf
   assert.deepEqual(fixture.events, [
     'open GP',
     'identity',
-    'safe',
     'monoid',
     'SELECT Monoid',
     'hello',
@@ -121,7 +115,7 @@ test('installation processes Identity, Safe and Monoid in order and verifies saf
   assert(fixture.commands.every(command => command.sessionId === 'connection'));
   assert.deepEqual(fixture.progress, [
     {stage: 'checking'},
-    ...['identity', 'safe', 'monoid'].flatMap(stage => [
+    ...['identity', 'monoid'].flatMap(stage => [
       {stage, phase: 'checking'},
       {stage, phase: 'uploading', progress: 0.4},
       {stage, phase: 'uploading', progress: 1},
@@ -131,11 +125,12 @@ test('installation processes Identity, Safe and Monoid in order and verifies saf
   ]);
   assert.deepEqual(
     fixture.commands[0].data.slice(5),
-    Array.from(Buffer.from(bundle[2].appletAid, 'hex')),
+    Array.from(Buffer.from(bundle[1].appletAid, 'hex')),
   );
-  assert.deepEqual(decode(Uint8Array.from(fixture.commands[1].data.slice(5))), {
-    safe: true,
-  });
+  assert.deepEqual(
+    decode(Uint8Array.from(fixture.commands[1].data.slice(5))),
+    {},
+  );
 });
 
 test('bundle integrity is checked before authenticating or writing to the card', async () => {
@@ -187,7 +182,7 @@ test('a bundle with reordered dependencies stops before card access', async () =
   assert.deepEqual(fixture.events, []);
 });
 
-test('a failed Identity installation never loads Safe or Monoid', async () => {
+test('a failed Identity installation never loads Monoid', async () => {
   fixture.failStage = 'identity';
   await assert.rejects(
     installMonoidApplets('connection', () => {}),
@@ -196,23 +191,24 @@ test('a failed Identity installation never loads Safe or Monoid', async () => {
   assert.deepEqual(fixture.events, ['open GP', 'identity']);
 });
 
-test('a failed Safe installation never loads Monoid or reports verification', async () => {
-  fixture.failStage = 'safe';
+test('a failed Monoid installation never reports verification or retries', async () => {
+  fixture.failStage = 'monoid';
   await assert.rejects(
     installMonoidApplets('connection', () => {}),
     /Card lost/,
   );
-  assert.deepEqual(fixture.events, ['open GP', 'identity', 'safe']);
+  assert.deepEqual(fixture.events, ['open GP', 'identity', 'monoid']);
+  assert.deepEqual(fixture.commands, []);
 });
 
 test('post-install hello must satisfy the app protocol before reporting success', async () => {
-  fixture.hello.safe = undefined;
+  fixture.hello.publicKey = undefined;
   await assert.rejects(installMonoidApplets('connection', () => {}));
   assert.equal(fixture.events.at(-1), 'hello');
 });
 
 test('opening an existing session selects on a separate applet object without binding its template', async () => {
-  const template = createMonoidApplet(Buffer.from(bundle[2].appletAid, 'hex'));
+  const template = createMonoidApplet(Buffer.from(bundle[1].appletAid, 'hex'));
   const session = await template.openSession('existing');
   assert.notEqual(session, template);
   assert.deepEqual(await session.hello({}), fixture.hello);
@@ -317,7 +313,7 @@ test('cancellation when verification starts prevents selecting the installed app
     ),
     error => error === reason,
   );
-  assert.deepEqual(fixture.events, ['open GP', 'identity', 'safe', 'monoid']);
+  assert.deepEqual(fixture.events, ['open GP', 'identity', 'monoid']);
   assert.deepEqual(fixture.commands, []);
 });
 

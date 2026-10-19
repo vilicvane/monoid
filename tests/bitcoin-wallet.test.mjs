@@ -44,7 +44,7 @@ const EVM_SOURCE = {
 function key(type, fields = {}) {
   return {
     type,
-    index: '02400000000000000001',
+    index: type === 'seed' ? '02400000000000000001' : '03010000000000000001',
     alias: 'Bitcoin key',
     wallets: [],
     ...fields,
@@ -57,11 +57,17 @@ function raw(source) {
 
 test('Home requires an explicitly imported BTC address', () => {
   assert.equal(hasBitcoinWallet([]), false);
-  for (const type of ['seed', 'master']) {
-    assert.equal(hasBitcoinWallet([key(type)]), false);
-    assert.equal(hasBitcoinWallet([key(type, {wallets: [EVM_SOURCE]})]), false);
+  for (const index of ['02400000000000000001', '02200000000000000002']) {
+    assert.equal(hasBitcoinWallet([key('seed', {index})]), false);
+    assert.equal(
+      hasBitcoinWallet([key('seed', {index, wallets: [EVM_SOURCE]})]),
+      false,
+    );
     for (const source of [SEGWIT_SOURCE, TAPROOT_SOURCE]) {
-      assert.equal(hasBitcoinWallet([key(type, {wallets: [source]})]), true);
+      assert.equal(
+        hasBitcoinWallet([key('seed', {index, wallets: [source]})]),
+        true,
+      );
     }
   }
   assert.equal(hasBitcoinWallet([key('secp256k1')]), false);
@@ -80,8 +86,9 @@ test('Home requires an explicitly imported BTC address', () => {
 });
 
 test('derived BTC signing keeps the selected source public key and BIP32 path', () => {
-  for (const type of ['seed', 'master']) {
-    const storedKey = key(type, {
+  for (const index of ['02400000000000000001', '02200000000000000002']) {
+    const storedKey = key('seed', {
+      index,
       wallets: [EVM_SOURCE, SEGWIT_SOURCE, TAPROOT_SOURCE],
     });
     for (const source of [SEGWIT_SOURCE, TAPROOT_SOURCE]) {
@@ -93,7 +100,7 @@ test('derived BTC signing keeps the selected source public key and BIP32 path', 
       assert.equal(account.wallet.addressType, source.addressType);
       assert.equal(account.wallet.publicKey, source.publicKey);
       assert.deepEqual(account.reference, {
-        type,
+        type: 'seed',
         index: Uint8Array.from(Buffer.from(storedKey.index, 'hex')),
         derivation: {type: 'bip32', path: parseDerivationPath(source.path)},
       });

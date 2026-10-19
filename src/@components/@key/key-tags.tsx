@@ -28,12 +28,6 @@ export const keyTypeColorsCSS = css`
     border-color: var(--color-seed-light-shade);
     color: var(--color-seed-light-contrast);
   }
-
-  &.master {
-    background-color: var(--color-master-light);
-    border-color: var(--color-master-light-shade);
-    color: var(--color-master-light-contrast);
-  }
 `;
 
 export const KeyTypeTag = styled(KeyTag)`

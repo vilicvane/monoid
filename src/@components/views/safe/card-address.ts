@@ -31,7 +31,6 @@ const SECP256K1_ADDRESS_TYPES = [
 export function getCardKeyAddressTypes(type: string): readonly AddressType[] {
   switch (type) {
     case 'seed':
-    case 'master':
       return DERIVABLE_ADDRESS_TYPES;
     case 'secp256k1':
       return SECP256K1_ADDRESS_TYPES;
@@ -56,9 +55,7 @@ export async function readCardKeyAddress(
 
   const options = ADDRESS_TYPES[addressType];
   const path =
-    key.type === 'seed' || key.type === 'master'
-      ? (derivationPath ?? options.path(0))
-      : undefined;
+    key.type === 'seed' ? (derivationPath ?? options.path(0)) : undefined;
   const seed = key.type === 'seed' ? options.seed : undefined;
   const {publicKey} = await applet.viewKey({
     ...getAppletKey(key, addressType, path),

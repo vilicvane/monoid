@@ -123,7 +123,7 @@ export const KeyItem = observer(
     onChangeSyncDirection?: () => void;
   }): ReactNode => {
     const path =
-      type === 'seed' || type === 'master'
+      type === 'seed'
         ? (derivedPath ?? ADDRESS_TYPES[addressType].path(0))
         : undefined;
     const canChangeAddressType =

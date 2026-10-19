@@ -119,7 +119,7 @@ export async function scanCardItems(
       continue;
     }
 
-    if (type === 'seed' || type === 'master') {
+    if (type === 'seed') {
       item.derivations = [];
     }
 

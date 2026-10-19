@@ -13,7 +13,13 @@ const CARD = {id: '01234567', publicKey: `04${'12'.repeat(64)}`};
 const bytes = hex => Uint8Array.from(Buffer.from(hex, 'hex'));
 
 function hello(card = CARD) {
-  return {safe: {id: bytes(card.id), publicKey: bytes(card.publicKey)}};
+  return {
+    version: 0,
+    id: bytes(card.id),
+    publicKey: bytes(card.publicKey),
+    bundle: false,
+    pins: {access: 5, safe: 5},
+  };
 }
 
 function createApplet(onSet = async () => {}) {

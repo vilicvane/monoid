@@ -1,7 +1,7 @@
 import type {SafeIndexHex} from '../../../@atomics.js';
 import {
   type MonoidApplet,
-  type MonoidAppletHelloWithSafe,
+  type MonoidAppletHello,
   MonoidWrongCardError,
 } from '../../../@lib/monoid/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../@utils/index.js';
@@ -9,12 +9,12 @@ import {hexToUint8Array, uint8ArrayToHex} from '../../../@utils/index.js';
 import type {ScannedCardData} from './common.js';
 
 export function assertCardForUpdate(
-  hello: MonoidAppletHelloWithSafe,
+  hello: MonoidAppletHello,
   card: Pick<ScannedCardData, 'id' | 'publicKey'>,
 ): void {
   if (
-    uint8ArrayToHex(hello.safe.id) !== card.id ||
-    uint8ArrayToHex(hello.safe.publicKey) !== card.publicKey
+    uint8ArrayToHex(hello.id) !== card.id ||
+    uint8ArrayToHex(hello.publicKey) !== card.publicKey
   ) {
     throw new MonoidWrongCardError(card.id);
   }

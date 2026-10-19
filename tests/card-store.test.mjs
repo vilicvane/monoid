@@ -7,7 +7,7 @@ import {CardStore} from '../.bld/app/@services/card-store.js';
 import {getWalletData} from '../.bld/app/@services/wallet-storage-service.js';
 
 const INDEX = '02400000000000000001';
-const SECOND_INDEX = '04010000000000000002';
+const SECOND_INDEX = '03010000000000000002';
 const PUBLIC_KEY =
   '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
 const IDENTITY = {id: 'aabbccdd', publicKey: `04${'12'.repeat(64)}`};
@@ -35,9 +35,10 @@ test('the global card store distinguishes the full Safe identity and publishes a
   });
 
   try {
-    const original = store.set({...IDENTITY, items: []});
+    const original = store.set({...IDENTITY, bundle: false, items: []});
     const other = store.set({
       ...otherIdentity,
+      bundle: false,
       items: [{index: INDEX, type: 'seed', secret: true}],
     });
 
@@ -56,6 +57,7 @@ test('an authoritative scan replaces cached items while retaining the shared car
   const store = new CardStore();
   const card = store.set({
     ...IDENTITY,
+    bundle: false,
     items: [{index: INDEX, type: 'seed', secret: true, ref: ref(wallet(0))}],
   });
   const old = card.items[0];
@@ -65,22 +67,28 @@ test('an authoritative scan replaces cached items while retaining the shared car
 
   const scanned = store.set({
     ...IDENTITY,
+    bundle: 'ab'.repeat(32),
     items: [{index: SECOND_INDEX, type: 'secp256k1', secret: true}],
   });
 
   assert.equal(scanned, card);
   assert.equal(store.get(IDENTITY), card);
+  assert.equal(card.bundle, 'ab'.repeat(32));
+  assert.equal(card.snapshot().bundle, 'ab'.repeat(32));
   assert.deepEqual(
     card.items.map(item => item.index),
     [SECOND_INDEX],
   );
   assert.equal(card.items.includes(old), false);
+  assert.equal(store.set({...card.snapshot(), bundle: false}), card);
+  assert.equal(card.snapshot().bundle, false);
 });
 
 test('upsert preserves unrelated item objects and publishes acknowledged metadata and ref on one item', () => {
   const store = new CardStore();
   const card = store.set({
     ...IDENTITY,
+    bundle: false,
     items: [{index: INDEX, type: 'seed', secret: true, ref: ref(wallet(0))}],
   });
   const original = card.items[0];
@@ -118,6 +126,7 @@ test('the selected ref reacts to the preview cache without changing recorded der
   const preview = wallet(3);
   const card = store.set({
     ...IDENTITY,
+    bundle: false,
     items: [
       {
         index: INDEX,
@@ -158,6 +167,7 @@ test('Copy snapshots contain the selected ref and detached record data without U
   const store = new CardStore();
   const card = store.set({
     ...IDENTITY,
+    bundle: false,
     items: [
       {
         index: INDEX,
@@ -176,6 +186,7 @@ test('Copy snapshots contain the selected ref and detached record data without U
   });
   const snapshot = card.snapshot();
 
+  assert.equal(snapshot.bundle, false);
   assert.equal(snapshot.items[0].ref.path, wallet(2).path);
   assert.equal(snapshot.items[0].derivations[0].path, wallet(0).path);
   assert.equal('refs' in snapshot.items[0], false);
@@ -195,6 +206,7 @@ test('acknowledged address replacement keeps a recorded selection and clears rem
   const store = new CardStore();
   const card = store.set({
     ...IDENTITY,
+    bundle: false,
     items: [{index: INDEX, type: 'seed', secret: true, ref: ref(wallet(2))}],
   });
   const item = card.items[0];

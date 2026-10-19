@@ -27,12 +27,12 @@ export const DerivableKeyView = observer(
     const key = walletStorageService.indexToKeyMap.get(index);
 
     useEffect(() => {
-      if (!key) {
+      if (key?.type !== 'seed') {
         router.safe.$reset();
       }
     }, [key, router.safe]);
 
-    if (!key) {
+    if (key?.type !== 'seed') {
       return null;
     }
 

@@ -4,6 +4,7 @@ import {useCallback, useLayoutEffect, useRef} from 'react';
 
 import {useEntrances} from '../../@entrances.js';
 import {IsoDepScanError, standbyIsoDep} from '../../@lib/isodep.js';
+import {MonoidCardError} from '../../@lib/monoid/index.js';
 import {isCredentialRequestCancelled} from '../../@services/index.js';
 
 type ScanCallback = (
@@ -22,7 +23,7 @@ export function useIsoDepScanPrompt(): (
   initialContent: ReactNode,
   callback: ScanCallback,
 ) => Promise<void> {
-  const {monoidScanPromptPresenter: presenter} = useEntrances();
+  const {monoidScanPromptPresenter: presenter, errorService} = useEntrances();
   const mounted = useRef(true);
   const active = useRef<{cancel: () => void} | undefined>(undefined);
 
@@ -204,11 +205,14 @@ export function useIsoDepScanPrompt(): (
                 ? result.error.message
                 : String(result.error);
             show();
+            if (result.error instanceof MonoidCardError) {
+              errorService.markPresented(result.error);
+            }
             return {waitForRemoval: true};
           },
         );
       });
     },
-    [presenter],
+    [presenter, errorService],
   );
 }

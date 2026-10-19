@@ -2,7 +2,7 @@ import {type MonoidIdHex, MonoidPIN} from '../../../@atomics.js';
 import {CBORAppletError} from '../../../@lib/cbor-applet.js';
 import {
   type MonoidApplet,
-  type MonoidAppletHelloWithSafe,
+  type MonoidAppletHello,
   MonoidAppletInvalidPINError,
   MonoidCardError,
 } from '../../../@lib/monoid/index.js';
@@ -15,7 +15,7 @@ export type CardPINKind = 'Access' | 'Safe';
 
 export async function updateCardPIN(
   applet: MonoidApplet,
-  hello: MonoidAppletHelloWithSafe,
+  hello: MonoidAppletHello,
   card: Pick<ScannedCardData, 'id' | 'publicKey'>,
   kind: CardPINKind,
   currentSafePIN: MonoidPIN,
@@ -24,8 +24,8 @@ export async function updateCardPIN(
 ): Promise<MonoidIdHex> {
   assertCardForUpdate(hello, card);
   signal.throwIfAborted();
-  if (hello.safe.pin === 0) throw new MonoidCardError('Safe PIN blocked');
-  if (hello.safe.pin === false) throw new MonoidCardError('Safe PIN not set');
+  if (hello.pins.safe === 0) throw new MonoidCardError('Safe PIN blocked');
+  if (hello.pins.safe === false) throw new MonoidCardError('Safe PIN not set');
   if (!MonoidPIN.is(currentSafePIN) || !MonoidPIN.is(newPIN)) {
     throw new MonoidCardError('PIN must contain 6 to 16 characters');
   }

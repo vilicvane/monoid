@@ -17,6 +17,7 @@ import {
   BitcoinWalletService,
   CardStore,
   ChainService,
+  CopyItemsStore,
   ErrorService,
   EvmCallHistoryService,
   EvmCalldataService,
@@ -119,6 +120,11 @@ export class Entrances {
   @entrance
   get cardStore() {
     return new CardStore();
+  }
+
+  @entrance
+  get copyItemsStore() {
+    return new CopyItemsStore();
   }
 
   @entrance

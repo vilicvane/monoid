@@ -190,7 +190,6 @@ export function WalletConnectSignButton({
                   <MonoidScanStatePromptProgress
                     current={signed.filter(Boolean).length}
                     total={payload.transactions.length}
-                    showCount
                   >
                     Signing
                   </MonoidScanStatePromptProgress>,
@@ -292,7 +291,7 @@ export function WalletConnectSignButton({
             };
             check();
             setContent(
-              <MonoidScanStatePromptProgress current={0} total={1} showCount>
+              <MonoidScanStatePromptProgress current={0} total={1}>
                 Signing
               </MonoidScanStatePromptProgress>,
             );
@@ -340,7 +339,7 @@ export function WalletConnectSignButton({
             }
             check();
             setContent(
-              <MonoidScanStatePromptProgress current={1} total={1} showCount>
+              <MonoidScanStatePromptProgress current={1} total={1}>
                 Signing
               </MonoidScanStatePromptProgress>,
             );

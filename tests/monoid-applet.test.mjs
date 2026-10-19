@@ -20,7 +20,7 @@ mock.module('capacitor-isodep-nfc', {
   },
 });
 
-const {createMonoidApplet, MonoidAppletHelloWithSafe} = await import(
+const {createMonoidApplet, MonoidAppletHello} = await import(
   '../.bld/app/@lib/monoid/monoid-applet.js'
 );
 const {CBORAppletError} = await import('../.bld/app/@lib/cbor-applet.js');
@@ -37,10 +37,9 @@ const aid = bytes('f06d6f6e6f696402010000');
 const index = bytes('02400000000000000001');
 const indexes = {
   seed: index,
-  master: bytes('03200000000000000001'),
-  secp256k1: bytes('04010000000000000001'),
-  secp256r1: bytes('04020000000000000001'),
-  ed25519: bytes('05010000000000000001'),
+  secp256k1: bytes('03010000000000000001'),
+  secp256r1: bytes('03020000000000000001'),
+  ed25519: bytes('04010000000000000001'),
 };
 const path = bytes('8000002c8000003c800000000000000000000000');
 const digest = new Uint8Array(32).fill(0x12);
@@ -125,33 +124,21 @@ function assertRequest(commands, ins, expected) {
   return decoded;
 }
 
-test('Hello includes Safe identity only when requested and preserves false PIN states', async () => {
-  const basic = {version: 1, id: bytes('01020304'), features, pin: false};
-  const safe = {
-    id: bytes('05060708'),
-    publicKey: identityPublicKey,
-    pin: false,
-    unlocked: false,
-  };
-
-  for (const request of [{}, {safe: false}, {safe: true}]) {
-    const response = request.safe ? {...basic, safe} : basic;
+test('Hello always includes the stable Identity, Bundle and both PIN states', async () => {
+  for (const bundle of [false, new Uint8Array(32).fill(0x42)]) {
+    const response = {
+      version: 1,
+      id: bytes('01020304'),
+      publicKey: identityPublicKey,
+      bundle,
+      pins: {access: false, safe: 0},
+    };
     const {applet, commands} = await createSession(response);
 
-    assert.deepEqual(await applet.hello(request), response);
-    assertRequest(commands, 0x20, request);
-
-    if (request.safe) {
-      assert.deepEqual(MonoidAppletHelloWithSafe.satisfies(response), response);
-    } else {
-      assert.throws(() => MonoidAppletHelloWithSafe.satisfies(response));
-    }
+    assert.deepEqual(await applet.hello({}), response);
+    assertRequest(commands, 0x20, {});
+    assert.deepEqual(MonoidAppletHello.satisfies(response), response);
   }
-
-  const legacySafe = {id: safe.id, pin: false, unlocked: false};
-  const {applet} = await createSession({...basic, safe: legacySafe});
-
-  await assert.rejects(applet.hello({safe: true}));
 });
 
 test('System information uses the numeric transient memory values emitted by the card', async () => {
@@ -179,12 +166,12 @@ test('raw key requests include their explicit curve type', async () => {
   }
 });
 
-test('seed and master requests encode each explicit derivation scheme', async () => {
+test('seed requests encode each explicit derivation scheme', async () => {
   const context = new TextEncoder().encode('example.com');
   const chainCode = new Uint8Array(32).fill(0x78);
 
-  for (const type of ['seed', 'master']) {
-    const index = indexes[type];
+  for (const index of [indexes.seed, bytes('02200000000000000002')]) {
+    const type = 'seed';
 
     for (const [derivation, expected, response] of [
       [
@@ -359,6 +346,42 @@ test('invalid derivation schemes and cipher combinations fail before NFC transmi
   assert.equal(commands.length, 0);
 });
 
+test('master key creation, viewing and signing fail before NFC transmission', async () => {
+  const {applet, commands} = await createSession({index, publicKey, signature});
+
+  await assert.rejects(applet.createRandomKey({type: 'master', length: 32}));
+
+  for (const [derivation, signing] of [
+    [
+      {type: 'bip32', path},
+      {cipher: 'ecdsa', digest},
+    ],
+    [
+      {type: 'bip32', path},
+      {cipher: 'bip340', digest, taproot: true},
+    ],
+    [
+      {type: 'slip10', curve: 'ed25519', path},
+      {cipher: 'ed25519', message: digest},
+    ],
+    [
+      {type: 'monoid-001', context: new Uint8Array()},
+      {cipher: 'ecdsa', digest},
+    ],
+  ]) {
+    const key = {
+      index: bytes('03200000000000000001'),
+      type: 'master',
+      derivation,
+    };
+
+    await assert.rejects(applet.viewKey(key));
+    await assert.rejects(applet.sign({...key, ...signing}));
+  }
+
+  assert.equal(commands.length, 0);
+});
+
 test('List encodes its filters and accepts custom items without a type name', async () => {
   const keyPrefix = bytes('010203');
   const response = {
@@ -502,6 +525,18 @@ test('Export and Import preserve opaque data and absent versus empty metadata', 
   }
 });
 
+test('Bundle transfer omits asymmetric keys and preserves the encrypted envelope', async () => {
+  const data = Uint8Array.of(2, ...new Uint8Array(94));
+  const source = await createSession({data});
+  const exported = await source.applet.exportItem({index});
+  assert.deepEqual(exported, {data});
+  assertRequest(source.commands, 0x36, {index});
+
+  const target = await createSession({});
+  await target.applet.importItem({index, ...exported});
+  assertRequest(target.commands, 0x37, {index, data});
+});
+
 test('Import chains a large encrypted envelope without changing its metadata or bytes', async () => {
   const data = Uint8Array.from({length: 700}, (_, index) => index % 256);
   const key = bytes('00ff');
@@ -533,7 +568,7 @@ test('Import chains a large encrypted envelope without changing its metadata or 
 
 test('CreateRandomKey covers explicit byte lengths and fixed-length curves', async () => {
   for (const request of [
-    ...['entropy', 'seed', 'master'].map(type => ({type, length: 32})),
+    ...['entropy', 'seed'].map(type => ({type, length: 32})),
     ...['secp256k1', 'secp256r1', 'ed25519'].map(type => ({type})),
   ]) {
     const {applet, commands} = await createSession({index});
@@ -612,8 +647,8 @@ test('wallet key selection, wire commands and EVM signature recovery use the sam
   const customPath = "m/44'/60'/7'/1/23";
   const encodedPath = bytes('8000002c8000003c800000070000000100000017');
 
-  for (const type of ['seed', 'master']) {
-    const index = indexes[type];
+  for (const index of [indexes.seed, bytes('02200000000000000002')]) {
+    const type = 'seed';
     const reference = getAppletKey(
       {type, index: Buffer.from(index).toString('hex')},
       'evm',

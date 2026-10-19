@@ -18,7 +18,6 @@ export function getCardResourceGroups<T extends CardResourceData>(
   for (const item of items) {
     if (
       item.type === 'seed' ||
-      item.type === 'master' ||
       item.type === 'secp256k1' ||
       item.type === 'ed25519'
     ) {

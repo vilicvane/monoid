@@ -27,7 +27,7 @@ export const ScanCardView = ({
   const isViewActive = useViewActive(view);
   const isViewPresent = useViewActive(view, {allowEntering: true});
   const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
-    safe: true,
+    allowSetup: true,
     allowInstallRedirect: true,
     auth: 'access',
     retryOnError: true,
@@ -54,7 +54,6 @@ export const ScanCardView = ({
                     <MonoidScanStatePromptProgress
                       current={current}
                       total={total}
-                      showCount
                     >
                       {stage === 'records'
                         ? 'Reading address records'
@@ -66,8 +65,9 @@ export const ScanCardView = ({
               );
 
               scannedCard = {
-                id: uint8ArrayToHex(hello.safe.id),
-                publicKey: uint8ArrayToHex(hello.safe.publicKey),
+                id: uint8ArrayToHex(hello.id),
+                publicKey: uint8ArrayToHex(hello.publicKey),
+                bundle: hello.bundle && uint8ArrayToHex(hello.bundle),
                 items,
               };
             },

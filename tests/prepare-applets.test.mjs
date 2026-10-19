@@ -70,7 +70,7 @@ function capFixture({packageAid: packageHex, appletAid: appletHex} = target) {
     zipSync(
       Object.fromEntries(
         Object.entries(data).map(([name, bytes]) => [
-          `monoidsafe/javacard/${name}.cap`,
+          `monoid/javacard/${name}.cap`,
           bytes,
         ]),
       ),
@@ -124,13 +124,13 @@ test('CAP without optional Export remains loadable', () => {
   assert(readAppletPackage(zip(), target).code.length > 0);
 });
 
-test('preparation bundles Identity, Safe and Monoid with their current AIDs in dependency order', async t => {
+test('preparation bundles Identity and merged Monoid with their current AIDs in dependency order', async t => {
   t.mock.method(process.stdout, 'write', () => true);
-  const names = ['monoidsafeidentity', 'monoidsafe', 'monoid'];
+  const names = ['monoididentity', 'monoid'];
   const applets = names.map((name, index) => ({
     name,
-    packageAid: `f06d6f6e6f69640${index}`,
-    appletAid: `f06d6f6e6f69640${index}010000`,
+    packageAid: `f06d6f6e6f69640${index * 2}`,
+    appletAid: `f06d6f6e6f69640${index * 2}010000`,
   }));
 
   for (const applet of applets) {
@@ -152,9 +152,11 @@ test('preparation bundles Identity, Safe and Monoid with their current AIDs in d
     [
       ...writtenFiles.get('@applet-bundle.ts').matchAll(/stage: '([^']+)'/g),
     ].map(match => match[1]),
-    ['identity', 'safe', 'monoid'],
+    ['identity', 'monoid'],
   );
   assert(names.every(name => writtenFiles.has(`${name}.bin`)));
+  assert(!writtenFiles.has('monoidsafe.cap'));
+  assert(!writtenFiles.has('monoidsafe.bin'));
 
   writtenFiles.clear();
   sourceFiles.delete('monoid.cap');

@@ -25,7 +25,10 @@ import {
   KeyTags,
   KeyTypeTag,
 } from '../../../@key/key-tags.js';
-import {isCardDerivationItem} from '../card-derivations.js';
+import {
+  getCardDerivationSourceType,
+  isCardDerivationItem,
+} from '../card-derivations.js';
 import type {ScannedCardItemData} from '../common.js';
 
 export const CardResourceList = styled(KeyList)`
@@ -114,13 +117,8 @@ export const CardResourceItem = observer(
       : undefined;
     const sourceType =
       source?.type ??
-      (sourceIndex?.startsWith('02')
-        ? 'seed'
-        : sourceIndex?.startsWith('03')
-          ? 'master'
-          : sourceIndex?.startsWith('0401')
-            ? 'secp256k1'
-            : 'ed25519');
+      (sourceIndex && getCardDerivationSourceType(sourceIndex)) ??
+      'item';
 
     return (
       <KeyListItem as={onSelect ? 'label' : 'div'}>

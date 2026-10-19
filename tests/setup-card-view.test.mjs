@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {afterEach, mock, test} from 'node:test';
 
+import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
+
 let fixture;
 let rendering;
 const owners = [];
@@ -189,6 +191,7 @@ const install = async (sessionId, onProgress, signal) => {
 };
 const pendingBundle = mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    MonoidCardError,
     APPLET_NAMES,
     describeAppletInstallProgress,
     hasAppletBundle: false,
@@ -201,6 +204,7 @@ const {SetupCardView: PendingSetupView} = await import(
 pendingBundle.restore();
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    MonoidCardError,
     APPLET_NAMES,
     describeAppletInstallProgress,
     hasAppletBundle: true,
@@ -255,6 +259,13 @@ const CARD_INFORMATION = {
   },
 };
 
+function initializedHello(hello) {
+  return {
+    ...hello,
+    pins: {access: 5, safe: 5},
+  };
+}
+
 function mount(Component = SetupCardView, viewOptions = {}) {
   const state = {
     slots: [],
@@ -266,19 +277,20 @@ function mount(Component = SetupCardView, viewOptions = {}) {
     reads: [],
     scans: [],
     routes: [],
+    copyFlowLookups: [],
+    copyAddAttempts: [],
+    copyAdditions: [],
     backAvailable: true,
+    backToCopyAvailable: false,
     backToLookups: [],
     promptContents: [],
     cardInformation: structuredClone(CARD_INFORMATION),
     scanFinished: deferred(),
     hello: {
       id: new Uint8Array([1, 2, 3, 4]),
-      pin: 5,
-      safe: {
-        id: new Uint8Array([5, 6, 7, 8]),
-        pin: 5,
-        unlocked: true,
-      },
+      publicKey: new Uint8Array([4, ...new Uint8Array(64).fill(5)]),
+      bundle: false,
+      pins: {access: 5, safe: 5},
     },
     view: {
       $leaving: false,
@@ -327,25 +339,61 @@ function mount(Component = SetupCardView, viewOptions = {}) {
       state.slots.splice(0).forEach(slot => slot.cleanup?.());
     },
   };
+  const copyFlows = new Map(
+    ['source-copy', 'other-copy'].map(copyId => [
+      copyId,
+      {
+        session: {
+          async addTarget(hello) {
+            assert.notEqual(hello.pins.access, false);
+            assert.notEqual(hello.pins.safe, false);
+            assert.notEqual(hello.pins.access, 0);
+            assert.notEqual(hello.pins.safe, 0);
+            state.copyAddAttempts.push({copyId, hello});
+            if (state.copyAddFailure) throw state.copyAddFailure;
+            await state.copyAddPending?.promise;
+            state.copyAdditions.push({copyId, hello});
+          },
+        },
+      },
+    ]),
+  );
   state.view.$match.$view = () => ({$entries: [state.view]});
   state.entrances = {
+    copyItemsStore: {
+      get(copyId) {
+        state.copyFlowLookups.push(copyId);
+        return copyFlows.get(copyId);
+      },
+    },
     router: {
       $backTo: target => {
         state.backToLookups.push(target);
+        if (target === state.entrances.router.safe.copyItems.$exact) {
+          return state.backToCopyAvailable
+            ? () => state.routes.push({type: 'back-to-copy'})
+            : undefined;
+        }
+        assert.equal(target, state.entrances.router.safe.$exact);
         return state.backAvailable
           ? () => state.routes.push({type: 'back-to-safe'})
           : undefined;
       },
       safe: {
         $exact: {},
+        copyItems: {$exact: {}},
         scanCard: {$replace: () => state.routes.push({type: 'scan'})},
       },
     },
     errorService: {
-      catch: callback => () => {
-        state.finished = callback().catch(error => state.errors.push(error));
-        return state.finished;
-      },
+      catch:
+        callback =>
+        (...args) => {
+          state.finished = callback(...args).catch(error =>
+            state.errors.push(error),
+          );
+          return state.finished;
+        },
     },
   };
   owners.push(state);
@@ -620,6 +668,7 @@ for (const difference of [
     assert.deepEqual(state.routes, []);
     assert.equal(state.errors.length, 1);
     assert.equal(state.errors[0].message, 'Wrong card');
+    assert.ok(state.errors[0] instanceof MonoidCardError);
     assert.equal(
       find(state.render(), node => node.type === 'button').props.children,
       'Try again',
@@ -665,8 +714,7 @@ test('rapid duplicate clicks start one scan and keep the first operation active'
 });
 
 for (const [stage, name] of [
-  ['identity', 'Monoid Safe Identity Applet'],
-  ['safe', 'Monoid Safe Applet'],
+  ['identity', 'Monoid Identity Applet'],
   ['monoid', 'Monoid Applet'],
 ]) {
   test(`${name} shows progress only in the scan prompt and clears the percentage while configuring`, async () => {
@@ -720,8 +768,7 @@ test('existing applets can complete after checking without showing an upload per
   );
 
   for (const [stage, name] of [
-    ['identity', 'Monoid Safe Identity Applet'],
-    ['safe', 'Monoid Safe Applet'],
+    ['identity', 'Monoid Identity Applet'],
     ['monoid', 'Monoid Applet'],
   ]) {
     state.onProgress({stage, phase: 'checking'});
@@ -750,17 +797,15 @@ test('existing applets can complete after checking without showing an upload per
   await state.finished;
 });
 
-for (const [name, pin, safePIN, unlocked, setupLabel] of [
-  ['initialized card', 5, 5, true, undefined],
-  ['new Safe', false, false, false, 'Set Safe PIN'],
-  ['locked Safe', 5, 5, false, 'Unlock safe'],
-  ['unset Access PIN', false, 5, true, 'Unlock safe'],
+for (const [name, pin, safePIN, setupLabel] of [
+  ['initialized card', 5, 5, undefined],
+  ['new Safe', false, false, 'Set Safe PIN'],
+  ['unset Access PIN', false, 5, 'Set Access PIN'],
 ]) {
   test(`setup completes after scan exit and required PIN initialization (${name})`, async () => {
     const state = mount();
-    state.hello.pin = pin;
-    state.hello.safe.pin = safePIN;
-    state.hello.safe.unlocked = unlocked;
+    state.hello.pins.access = pin;
+    state.hello.pins.safe = safePIN;
     find(state.tree, node => node.type === 'header-button').props.onClick();
     state.render();
     assert.ok(find(state.tree, node => node.type === 'details-popup'));
@@ -833,7 +878,7 @@ for (const [name, pin, safePIN, unlocked, setupLabel] of [
           state.tree,
           node =>
             node.type === 'button' &&
-            ['Set Safe PIN', 'Unlock safe'].includes(node.props.children),
+            ['Set Safe PIN', 'Set Access PIN'].includes(node.props.children),
         ),
         undefined,
       );
@@ -842,7 +887,8 @@ for (const [name, pin, safePIN, unlocked, setupLabel] of [
     await installClick();
     assert.equal(state.scans.length, 1);
     assert.deepEqual(state.installs, ['native-session']);
-    if (pinSetup) pinSetup.props.onFinished(true);
+    if (pinSetup)
+      await pinSetup.props.onFinished(true, initializedHello(state.hello));
     state.render();
     assert.ok(find(state.tree, node => node.type === 'operation-complete'));
     assert.equal(
@@ -868,17 +914,259 @@ for (const [name, pin, safePIN, unlocked, setupLabel] of [
       find(back, node => node.type === 'icon'),
       undefined,
     );
-    assert.ok(
-      state.backToLookups.every(
-        target => target === state.entrances.router.safe.$exact,
-      ),
-    );
+    assert.deepEqual(state.backToLookups.slice(-2), [
+      state.entrances.router.safe.copyItems.$exact,
+      state.entrances.router.safe.$exact,
+    ]);
     back.props.onClick();
     assert.deepEqual(state.routes, [{type: 'back-to-safe'}]);
   });
 }
 
-test('completed installation hides Back to Safe when the route has no Safe history', async () => {
+for (const safeAvailable of [true, false]) {
+  test(`completed setup prioritizes Copy history and waits for a return click (Safe history: ${safeAvailable})`, async () => {
+    const state = mount();
+    state.backToCopyAvailable = true;
+    state.backAvailable = safeAvailable;
+    state.hello.pins.safe = false;
+    state.click();
+    await state.connect();
+    state.scanFinished.resolve();
+    await state.finished;
+
+    const pinSetup = find(
+      state.render(),
+      node => node.type === 'card-setup-pin',
+    );
+    assert.ok(pinSetup);
+    assert.deepEqual(state.backToLookups, []);
+    assert.deepEqual(state.routes, []);
+    assert.equal(
+      find(
+        state.tree,
+        node =>
+          node.type === 'button' && node.props.children === 'Back to Copy',
+      ),
+      undefined,
+    );
+
+    await pinSetup.props.onFinished(true, initializedHello(state.hello));
+    state.render();
+    assert.ok(find(state.tree, node => node.type === 'operation-complete'));
+    const back = find(state.tree, node => node.type === 'button');
+    assert.equal(back.props.children, 'Back to Copy');
+    assert.equal(back.props.color, 'neutral');
+    assert.deepEqual(state.backToLookups, [
+      state.entrances.router.safe.copyItems.$exact,
+    ]);
+    assert.deepEqual(state.routes, []);
+
+    back.props.onClick();
+    assert.deepEqual(state.routes, [{type: 'back-to-copy'}]);
+  });
+}
+
+test('PIN completion adds the final initialized card to the originating Copy before showing Complete', async () => {
+  const state = mount(SetupCardView, {copyId: 'source-copy'});
+  state.backToCopyAvailable = true;
+  state.hello.pins.access = false;
+  state.hello.pins.safe = false;
+  state.click();
+  await state.connect();
+  state.scanFinished.resolve();
+  await state.finished;
+
+  const pinSetup = find(state.render(), node => node.type === 'card-setup-pin');
+  assert.ok(pinSetup);
+  assert.deepEqual(state.copyAdditions, []);
+  assert.deepEqual(state.copyFlowLookups, ['source-copy']);
+  const current = initializedHello(state.hello);
+  state.copyAddPending = deferred();
+  const finishing = pinSetup.props.onFinished(true, current);
+  await pinSetup.props.onFinished(true, current);
+  assert.equal(state.copyAddAttempts.length, 1);
+  assert.equal(
+    find(state.render(), node => node.type === 'operation-complete'),
+    undefined,
+  );
+  assert.deepEqual(state.routes, []);
+  state.copyAddPending.resolve();
+  await finishing;
+
+  assert.deepEqual(state.copyAdditions, [
+    {copyId: 'source-copy', hello: current},
+  ]);
+  assert.equal(state.copyAdditions[0].hello, current);
+  assert.notEqual(state.copyAdditions[0].hello, state.hello);
+  assert.ok(find(state.render(), node => node.type === 'operation-complete'));
+  await pinSetup.props.onFinished(true, current);
+  assert.equal(state.copyAddAttempts.length, 1);
+  const back = find(state.tree, node => node.type === 'button');
+  assert.equal(back.props.children, 'Back to Copy');
+  assert.deepEqual(state.routes, []);
+  back.props.onClick();
+  state.render();
+  assert.deepEqual(state.routes, [{type: 'back-to-copy'}]);
+  assert.equal(state.copyAdditions.length, 1);
+  assert.equal(state.scans.length, 1);
+  assert.deepEqual(state.errors, []);
+});
+
+test('an already initialized installation result is added only to the captured Copy flow', async () => {
+  const state = mount(SetupCardView, {copyId: 'source-copy'});
+  state.click();
+  await state.connect();
+  assert.deepEqual(state.copyAdditions, []);
+  // The mounted Setup retains its original owner instead of looking up another flow later.
+  state.view.copyId = 'other-copy';
+  state.scanFinished.resolve();
+  await state.finished;
+
+  assert.deepEqual(state.copyFlowLookups, ['source-copy']);
+  assert.deepEqual(state.copyAdditions, [
+    {copyId: 'source-copy', hello: state.hello},
+  ]);
+  assert.ok(find(state.render(), node => node.type === 'operation-complete'));
+  assert.equal(
+    find(state.tree, node => node.type === 'card-setup-pin'),
+    undefined,
+  );
+  assert.equal(state.scans.length, 1);
+  assert.deepEqual(state.routes, []);
+  assert.deepEqual(state.errors, []);
+});
+
+test('adding an installed card to Copy can be retried without reinstalling or losing the initialized Hello', async () => {
+  const state = mount(SetupCardView, {copyId: 'source-copy'});
+  const failure = new Error('Destination could not be added');
+  state.copyAddFailure = failure;
+  state.click();
+  await state.connect();
+  state.scanFinished.resolve();
+  await state.finished;
+
+  assert.deepEqual(state.errors, [failure]);
+  assert.equal(state.copyAddAttempts.length, 1);
+  assert.deepEqual(state.copyAdditions, []);
+  assert.equal(
+    find(state.render(), node => node.type === 'operation-complete'),
+    undefined,
+  );
+  assert.equal(
+    find(state.tree, node => node.props?.role === 'status'),
+    undefined,
+  );
+  const retry = find(state.tree, node => node.type === 'button');
+  assert.equal(retry.props.children, 'Continue');
+  retry.props.onClick();
+  const pinSetup = find(state.render(), node => node.type === 'card-setup-pin');
+  assert.equal(pinSetup.props.hello, state.hello);
+
+  state.copyAddFailure = undefined;
+  await pinSetup.props.onFinished(true, state.hello);
+  assert.deepEqual(state.copyAdditions, [
+    {copyId: 'source-copy', hello: state.hello},
+  ]);
+  assert.equal(state.copyAddAttempts.length, 2);
+  assert.equal(state.scans.length, 1);
+  assert.deepEqual(state.installs, ['native-session']);
+  assert.ok(find(state.render(), node => node.type === 'operation-complete'));
+});
+
+test('a cancelled leaving gesture retains completion when the destination was added during the gesture', async () => {
+  const state = mount(SetupCardView, {copyId: 'source-copy'});
+  state.copyAddPending = deferred();
+  state.click();
+  await state.connect();
+  state.scanFinished.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(state.copyAddAttempts.length, 1);
+  state.view.$leaving = true;
+  state.copyAddPending.resolve();
+  await state.finished;
+
+  state.view.$leaving = false;
+  assert.ok(find(state.render(), node => node.type === 'operation-complete'));
+  assert.deepEqual(state.copyAdditions, [
+    {copyId: 'source-copy', hello: state.hello},
+  ]);
+  assert.deepEqual(state.routes, []);
+  state.render();
+  assert.equal(state.copyAddAttempts.length, 1);
+  assert.equal(state.scans.length, 1);
+});
+
+for (const copyId of [undefined, 'missing-copy']) {
+  test(`Setup does not alter another Copy flow when its origin is ${copyId ?? 'absent'}`, async () => {
+    const state = mount(SetupCardView, {copyId});
+    state.click();
+    await state.connect();
+    state.scanFinished.resolve();
+    await state.finished;
+
+    assert.deepEqual(state.copyAdditions, []);
+    assert.ok(find(state.render(), node => node.type === 'operation-complete'));
+    assert.deepEqual(state.errors, []);
+  });
+}
+
+for (const result of ['cancelled', 'access-unset', 'missing-hello']) {
+  test(`a ${result} PIN result does not add a destination to Copy`, async () => {
+    const state = mount(SetupCardView, {copyId: 'source-copy'});
+    state.hello.pins.safe = false;
+    state.click();
+    await state.connect();
+    state.scanFinished.resolve();
+    await state.finished;
+
+    const pinSetup = find(
+      state.render(),
+      node => node.type === 'card-setup-pin',
+    );
+    const current =
+      result === 'access-unset'
+        ? {
+            ...initializedHello(state.hello),
+            pins: {access: false, safe: 5},
+          }
+        : undefined;
+    await pinSetup.props.onFinished(result === 'missing-hello', current);
+    assert.deepEqual(state.copyAdditions, []);
+    assert.equal(
+      find(state.render(), node => node.type === 'operation-complete'),
+      undefined,
+    );
+    assert.deepEqual(state.routes, []);
+    assert.deepEqual(state.errors, []);
+  });
+}
+
+for (const destination of ['leaving', 'inactive', 'unmounted']) {
+  test(`a late successful PIN result cannot add to Copy after Setup is ${destination}`, async () => {
+    const state = mount(SetupCardView, {copyId: 'source-copy'});
+    state.hello.pins.safe = false;
+    state.click();
+    await state.connect();
+    state.scanFinished.resolve();
+    await state.finished;
+    const pinSetup = find(
+      state.render(),
+      node => node.type === 'card-setup-pin',
+    );
+
+    if (destination === 'leaving') state.view.$leaving = true;
+    if (destination === 'inactive') state.view.$match.$exact.$active = false;
+    if (destination === 'unmounted') state.unmount();
+    await pinSetup.props.onFinished(true, initializedHello(state.hello));
+
+    assert.deepEqual(state.copyAdditions, []);
+    assert.deepEqual(state.routes, []);
+    assert.deepEqual(state.errors, []);
+  });
+}
+
+test('completed installation hides the return button without Copy or Safe history', async () => {
   const state = mount();
   state.backAvailable = false;
   state.click();
@@ -896,13 +1184,16 @@ test('completed installation hides Back to Safe when the route has no Safe histo
     undefined,
   );
   assert.deepEqual(state.routes, []);
+  assert.deepEqual(state.backToLookups.slice(-2), [
+    state.entrances.router.safe.copyItems.$exact,
+    state.entrances.router.safe.$exact,
+  ]);
 });
 
 test('a cancelled or unsuccessful PIN flow stays incomplete and can reopen without reinstalling', async () => {
   const state = mount();
-  state.hello.pin = false;
-  state.hello.safe.pin = false;
-  state.hello.safe.unlocked = false;
+  state.hello.pins.access = false;
+  state.hello.pins.safe = false;
   state.click();
   await state.connect();
   state.scanFinished.resolve();
@@ -910,7 +1201,7 @@ test('a cancelled or unsuccessful PIN flow stays incomplete and can reopen witho
 
   const pinSetup = find(state.render(), node => node.type === 'card-setup-pin');
   assert.ok(pinSetup);
-  pinSetup.props.onFinished(false);
+  await pinSetup.props.onFinished(false);
   state.render();
   assert.equal(
     find(state.tree, node => node.type === 'card-setup-pin'),
@@ -942,7 +1233,7 @@ test('a cancelled or unsuccessful PIN flow stays incomplete and can reopen witho
   assert.equal(state.scans.length, 1);
   assert.deepEqual(state.routes, []);
 
-  retried.props.onFinished(true);
+  await retried.props.onFinished(true, initializedHello(state.hello));
   state.render();
   assert.equal(
     find(state.tree, node => node.type === 'card-setup-pin'),
@@ -953,7 +1244,7 @@ test('a cancelled or unsuccessful PIN flow stays incomplete and can reopen witho
       state.tree,
       node =>
         node.type === 'button' &&
-        ['Set Safe PIN', 'Unlock safe'].includes(node.props.children),
+        ['Set Safe PIN', 'Set Access PIN'].includes(node.props.children),
     ),
     undefined,
   );
@@ -967,11 +1258,10 @@ test('a cancelled or unsuccessful PIN flow stays incomplete and can reopen witho
   assert.deepEqual(state.installs, ['native-session']);
 });
 
-test('a newly initialized but locked Safe updates the retry entry and reopens with its verified current state', async () => {
+test('a Safe with an unset Access PIN updates the retry entry and reopens with its verified current state', async () => {
   const state = mount();
-  state.hello.pin = false;
-  state.hello.safe.pin = false;
-  state.hello.safe.unlocked = false;
+  state.hello.pins.access = false;
+  state.hello.pins.safe = false;
   state.click();
   await state.connect();
   state.scanFinished.resolve();
@@ -980,8 +1270,7 @@ test('a newly initialized but locked Safe updates the retry entry and reopens wi
   const pinSetup = find(state.render(), node => node.type === 'card-setup-pin');
   const current = {
     ...state.hello,
-    pin: 5,
-    safe: {...state.hello.safe, pin: 5, unlocked: false},
+    pins: {access: false, safe: 5},
   };
   assert.ok(
     find(
@@ -989,7 +1278,7 @@ test('a newly initialized but locked Safe updates the retry entry and reopens wi
       node => node.type === 'button' && node.props.children === 'Set Safe PIN',
     ),
   );
-  pinSetup.props.onFinished(false, current);
+  await pinSetup.props.onFinished(false, current);
   state.render();
 
   assert.equal(
@@ -1005,7 +1294,7 @@ test('a newly initialized but locked Safe updates the retry entry and reopens wi
   );
   const reopen = find(
     state.tree,
-    node => node.type === 'button' && node.props.children === 'Unlock safe',
+    node => node.type === 'button' && node.props.children === 'Set Access PIN',
   );
   assert.ok(reopen);
   assert.equal(
@@ -1034,8 +1323,7 @@ test('a newly initialized but locked Safe updates the retry entry and reopens wi
 test('required PIN setup remains available when there is no Safe history', async () => {
   const state = mount();
   state.backAvailable = false;
-  state.hello.safe.pin = false;
-  state.hello.safe.unlocked = false;
+  state.hello.pins.safe = false;
   state.click();
   await state.connect();
   state.scanFinished.resolve();
@@ -1061,9 +1349,10 @@ test('required PIN setup remains available when there is no Safe history', async
   );
   assert.deepEqual(state.routes, []);
 
-  find(state.tree, node => node.type === 'card-setup-pin').props.onFinished(
-    true,
-  );
+  await find(
+    state.tree,
+    node => node.type === 'card-setup-pin',
+  ).props.onFinished(true, initializedHello(state.hello));
   assert.equal(
     find(state.render(), node => node.type === 'button'),
     undefined,
@@ -1078,8 +1367,7 @@ test('required PIN setup remains available when there is no Safe history', async
 for (const destination of ['leaving', 'inactive']) {
   test(`leaving the pending Setup page (${destination}) closes PIN entry until explicitly reopened`, async () => {
     const state = mount();
-    state.hello.safe.pin = false;
-    state.hello.safe.unlocked = false;
+    state.hello.pins.safe = false;
     state.click();
     await state.connect();
     state.scanFinished.resolve();
@@ -1125,8 +1413,7 @@ for (const destination of ['leaving', 'inactive']) {
 
 test('failed scan cleanup after installation does not start the PIN flow', async () => {
   const state = mount();
-  state.hello.safe.pin = false;
-  state.hello.safe.unlocked = false;
+  state.hello.pins.safe = false;
   state.click();
   await state.connect();
   const failure = new Error('Native scan cleanup failed');
@@ -1164,8 +1451,7 @@ for (const destination of ['unmounted', 'leaving', 'inactive']) {
 
   test(`completion is ignored when the installation page is ${destination}`, async () => {
     const state = mount();
-    state.hello.safe.pin = false;
-    state.hello.safe.unlocked = false;
+    state.hello.pins.safe = false;
     state.click();
     await state.connect();
     if (destination === 'unmounted') state.unmount();
@@ -1256,7 +1542,10 @@ test('quiet scan cancellation leaves an interrupted state and permits explicit r
     find(state.tree, node => node.type === 'operation-complete'),
     undefined,
   );
-  assert.ok(find(state.tree, node => node.props?.role === 'status'));
+  assert.equal(
+    find(state.tree, node => node.props?.role === 'status'),
+    undefined,
+  );
   assert.deepEqual(state.routes, []);
   assert.deepEqual(state.errors, []);
   assert.deepEqual(state.installs, []);

@@ -157,6 +157,12 @@ export const selectionTransition = {
   easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
 };
 
+export const pressScaleTransition = {
+  scale: 1.12,
+  duration: 100,
+  easing: 'ease-out',
+};
+
 export const navigationTransition = {
   duration: 200,
   easing: 'ease-out',

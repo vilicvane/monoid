@@ -17,9 +17,9 @@ import {
 import {ADDRESS_TYPES} from '../.bld/app/@lib/wallet-address.js';
 
 const SEED = {index: '02400000000000000001', type: 'seed'};
-const MASTER = {index: '03200000000000000001', type: 'master'};
-const SECP256K1 = {index: '04010000000000000001', type: 'secp256k1'};
-const ED25519 = {index: '05010000000000000001', type: 'ed25519'};
+const OTHER_SEED = {index: '02400000000000000002', type: 'seed'};
+const SECP256K1 = {index: '03010000000000000001', type: 'secp256k1'};
+const ED25519 = {index: '04010000000000000001', type: 'ed25519'};
 const SECP_PUBLIC_KEY =
   '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
 const bytes = hex => Uint8Array.from(Buffer.from(hex, 'hex'));
@@ -28,7 +28,7 @@ const signal = () => new AbortController().signal;
 
 function wallet(addressType = 'evm', account = 0, root = SEED) {
   const options = ADDRESS_TYPES[addressType];
-  const derived = root.type === 'seed' || root.type === 'master';
+  const derived = root.type === 'seed';
 
   return {
     addressType,
@@ -56,7 +56,7 @@ function createApplet(initial = []) {
     async view(request) {
       calls.push(['view', request]);
       assert.ok(
-        [SEED, MASTER, SECP256K1, ED25519].some(
+        [SEED, OTHER_SEED, SECP256K1, ED25519].some(
           root => root.index === hex(request.index),
         ),
       );
@@ -118,7 +118,7 @@ test('metadata indexes hash the complete source index and are independent of par
   assert.equal(CARD_DERIVATIONS_TYPE, 0x0f01);
   assert.equal(getCardDerivationItemIndex(SEED.index), expected);
   assert.equal(bytes(expected).length, 10);
-  assert.notEqual(getCardDerivationItemIndex(MASTER.index), expected);
+  assert.notEqual(getCardDerivationItemIndex(OTHER_SEED.index), expected);
   assert.equal(isCardDerivationItem({index: expected}), true);
   assert.equal(isCardDerivationItem({index: '0f010000000000000000'}), true);
   assert.equal(isCardDerivationItem({index: '0fff0000000000000000'}), false);
@@ -126,8 +126,31 @@ test('metadata indexes hash the complete source index and are independent of par
   assert.equal(isCardDerivationItem({index: SEED.index}), false);
   assert.notEqual(getCardDerivationItemIndex(SECP256K1.index), expected);
   assert.notEqual(getCardDerivationItemIndex(ED25519.index), expected);
-  assert.throws(() => getCardDerivationItemIndex('04020000000000000001'));
+  assert.throws(() => getCardDerivationItemIndex('03020000000000000001'));
   assert.throws(() => getCardDerivationItemIndex('0240'));
+});
+
+test('unsupported master roots cannot be encoded, decoded or synchronized', async () => {
+  const root = {index: '03200000000000000001', type: 'master'};
+  const applet = createApplet();
+
+  assert.throws(
+    () => getCardDerivationItemIndex(root.index),
+    /Invalid derivation source/,
+  );
+  assert.throws(
+    () => encodeCardDerivationRecord({index: root.index, wallets: []}),
+    /Invalid derivation source/,
+  );
+  assert.throws(
+    () => decodeCardDerivationRecord(encode([1, bytes(root.index), []])),
+    /Invalid derivation source/,
+  );
+  await assert.rejects(
+    writeCardDerivations(applet, root, [], signal()),
+    /Invalid derivation source/,
+  );
+  assert.deepEqual(applet.calls, []);
 });
 
 for (const [root, addressTypes] of [
@@ -164,7 +187,7 @@ for (const [root, addressTypes] of [
 }
 
 test('zero groups retain an explicit empty address list for derived and native roots', () => {
-  for (const root of [SEED, MASTER, SECP256K1, ED25519]) {
+  for (const root of [SEED, OTHER_SEED, SECP256K1, ED25519]) {
     const record = {index: root.index, wallets: []};
     const data = encodeCardDerivationRecord(record);
     assert.deepEqual(decode(data), [1, bytes(root.index), []]);
@@ -194,8 +217,8 @@ test('native groups reject derivation fields, foreign address algorithms and uns
     [SECP256K1.index, ['secp256k1', 'solana', []]],
     [ED25519.index, ['ed25519', 'evm', []]],
     [SEED.index, ['secp256k1', 'evm', []]],
-    [MASTER.index, ['ed25519', 'solana', []]],
-    ['04020000000000000001', ['secp256k1', 'evm', []]],
+    [OTHER_SEED.index, ['ed25519', 'solana', []]],
+    ['03020000000000000001', ['secp256k1', 'evm', []]],
     ['01000000000000000001', ['ed25519', 'solana', []]],
   ]) {
     assert.throws(() =>
@@ -204,35 +227,31 @@ test('native groups reject derivation fields, foreign address algorithms and uns
   }
 });
 
-for (const root of [SEED, MASTER]) {
-  test(`${root.type} records round-trip every supported wallet using card derivation parameters`, () => {
-    const wallets = Object.keys(ADDRESS_TYPES).map(type =>
-      wallet(type, 3, root),
-    );
-    const record = {index: root.index, wallets};
-    const data = encodeCardDerivationRecord(record);
-    const payload = decode(data);
+test('seed records round-trip every supported wallet using card derivation parameters', () => {
+  const wallets = Object.keys(ADDRESS_TYPES).map(type => wallet(type, 3));
+  const record = {index: SEED.index, wallets};
+  const data = encodeCardDerivationRecord(record);
+  const payload = decode(data);
 
-    assert.deepEqual(decodeCardDerivationRecord(data), record);
-    assert.equal(payload.length, 3);
-    assert.equal(payload[0], 1);
-    assert.deepEqual(payload[1], bytes(root.index));
-    assert.deepEqual(payload[2], [
-      ['bip32', 'evm', [bytes('8000002c8000003c800000000000000000000003')]],
-      ['slip10-ed25519', 'solana', [bytes('8000002c800001f58000000380000000')]],
-      [
-        'bip32',
-        'bitcoin-segwit',
-        [bytes('8000005480000000800000000000000000000003')],
-      ],
-      [
-        'bip32',
-        'bitcoin-taproot',
-        [bytes('8000005680000000800000000000000000000003')],
-      ],
-    ]);
-  });
-}
+  assert.deepEqual(decodeCardDerivationRecord(data), record);
+  assert.equal(payload.length, 3);
+  assert.equal(payload[0], 1);
+  assert.deepEqual(payload[1], bytes(SEED.index));
+  assert.deepEqual(payload[2], [
+    ['bip32', 'evm', [bytes('8000002c8000003c800000000000000000000003')]],
+    ['slip10-ed25519', 'solana', [bytes('8000002c800001f58000000380000000')]],
+    [
+      'bip32',
+      'bitcoin-segwit',
+      [bytes('8000005480000000800000000000000000000003')],
+    ],
+    [
+      'bip32',
+      'bitcoin-taproot',
+      [bytes('8000005680000000800000000000000000000003')],
+    ],
+  ]);
+});
 
 test('grouped paths omit repeated parameters and phone-local defaults', () => {
   const first = wallet('evm', 0);
@@ -350,7 +369,7 @@ test('unknown versions, tuple fields, algorithms and malformed binary paths are 
     [2, index, groups],
     [version, index, groups, 0],
     [version, index],
-    [version, bytes('04010000000000000001'), groups],
+    [version, bytes('03010000000000000001'), groups],
     [version, bytes('0240'), groups],
     [version, hex(index), groups],
     [version, index, [[type, addressType, paths, bytes('01')]]],
@@ -383,7 +402,7 @@ test('read validates the payload, immutable lookup key and stable index together
   for (const invalid of [
     {...item, secret: true},
     {...item, key: undefined},
-    {...item, key: MASTER.index},
+    {...item, key: OTHER_SEED.index},
     {...item, index: '0f010000000000000000'},
   ]) {
     applet.calls.length = 0;
@@ -391,7 +410,7 @@ test('read validates the payload, immutable lookup key and stable index together
     assert.equal(applet.calls.length, 0);
   }
 
-  applet.items.get(item.index).data = recordItem(MASTER).data;
+  applet.items.get(item.index).data = recordItem(OTHER_SEED).data;
   await assert.rejects(
     readCardDerivationRecord(applet, item),
     /does not match/,

@@ -10,7 +10,11 @@ import {
 } from 'react';
 import {css, styled} from 'styled-components';
 
-import {popInAnimation} from '../@animations.js';
+import {
+  popInAnimation,
+  pressScaleTransition,
+  selectionTransition,
+} from '../@animations.js';
 
 import './swipeable-item.css';
 
@@ -95,6 +99,7 @@ export const SwipeAction = styled.button<{$color?: string}>`
   font-size: 11px;
   line-height: 14px;
   white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
 
   display: flex;
   flex-direction: column;
@@ -119,6 +124,22 @@ export const SwipeActionIcon = styled.span`
   display: flex;
   align-items: center;
   justify-content: center;
+
+  transition: transform ${selectionTransition.duration}ms
+    ${selectionTransition.easing};
+
+  ${SwipeAction}:active:not(:disabled) & {
+    transform: scale(${pressScaleTransition.scale});
+    transition: transform ${pressScaleTransition.duration}ms
+      ${pressScaleTransition.easing};
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    &,
+    ${SwipeAction}:active:not(:disabled) & {
+      transition: none;
+    }
+  }
 
   .lucide {
     width: 18px;

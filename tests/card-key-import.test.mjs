@@ -42,6 +42,10 @@ function scannedKey(ref, type = 'secp256k1') {
   return {type, index: INDEX, alias: 'Test key', ref};
 }
 
+test('master keys cannot be imported as wallet keys', () => {
+  assert.throws(() => getCardKeyData(scannedKey(EVM_REF, 'master')));
+});
+
 function displayedAddresses(key) {
   return getKeyWallets(key).map(({addressType, address}) => [
     addressType,

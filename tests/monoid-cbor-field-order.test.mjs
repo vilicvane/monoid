@@ -37,7 +37,7 @@ const keyFamilies = [
 ];
 
 const fixtures = {
-  hello: [{}, {safe: false}, {safe: true}],
+  hello: [{}],
   authenticate: [{pin: '123456'}, {safe: true, pin: '123456'}],
   setPIN: [{pin: '123456'}, {pin: '123456', safe: true}],
   systemInformation: [{}],
@@ -57,8 +57,9 @@ const fixtures = {
     {data: context, key: new Uint8Array(), alias: '', secret: false, index},
   ],
   remove: [{index}],
-  exportItem: [{index, recipientPublicKey: identityPublicKey}],
+  exportItem: [{index}, {index, recipientPublicKey: identityPublicKey}],
   importItem: [
+    {index, data: context},
     {index, senderPublicKey: identityPublicKey, data: context},
     {
       index,
@@ -69,7 +70,7 @@ const fixtures = {
     },
   ],
   createRandomKey: [
-    ...['entropy', 'seed', 'master'].map(type => ({type, length: 32})),
+    ...['entropy', 'seed'].map(type => ({type, length: 32})),
     ...['secp256k1', 'secp256r1', 'ed25519'].map(type => ({type})),
   ],
   viewKey: [],
@@ -80,7 +81,6 @@ for (const {type, derivation, cipher} of keyFamilies) {
   const keys = [
     {index, type},
     {index, type: 'seed', derivation},
-    {index, type: 'master', derivation},
   ];
 
   for (const key of keys) {

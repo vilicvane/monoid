@@ -49,7 +49,6 @@ export const CardPINUpdate = observer(
     const toast = useToast();
     const [input, showInput] = useInputModal();
     const [scanInput, scan] = useMonoidScanPrompt({
-      safe: true,
       ensureSetup: false,
       auth: false,
       retryOnError: false,

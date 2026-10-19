@@ -99,16 +99,6 @@ const CreateKeyButton = styled(Button)`
       transparent
     );
   }
-
-  &.master {
-    color: white;
-    border-color: var(--color-master-light);
-    background-color: color-mix(
-      in srgb,
-      var(--color-master-light) 20%,
-      transparent
-    );
-  }
 `;
 
 export const CardView = observer(
@@ -188,13 +178,13 @@ const CardContent = observer(
       monoidCredentialsStore.createPINSession(),
     );
     const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
-      safe: true,
+      allowSetup: true,
       auth: 'access',
       retryOnError: true,
       pinSession,
     });
     const [createScanContent, createScan] = useMonoidScanPrompt({
-      safe: true,
+      allowSetup: true,
       auth: 'access',
       retryOnError: false,
       pinSession,
@@ -495,7 +485,6 @@ const CardContent = observer(
                 <MonoidScanStatePromptProgress
                   current={current}
                   total={missing.length}
-                  showCount
                 >
                   Deriving addresses
                 </MonoidScanStatePromptProgress>,
@@ -573,7 +562,6 @@ const CardContent = observer(
                 <MonoidScanStatePromptProgress
                   current={total - pending.size - pendingDerivations.size}
                   total={total}
-                  showCount
                 >
                   Updating card
                 </MonoidScanStatePromptProgress>,
@@ -838,7 +826,6 @@ const CardContent = observer(
                 <MonoidScanStatePromptProgress
                   current={total - pending.size}
                   total={total}
-                  showCount
                 >
                   Deleting items
                 </MonoidScanStatePromptProgress>,
@@ -964,6 +951,9 @@ const CardContent = observer(
                 onClick={() => {
                   router.safe
                     .copyItems({
+                      copyId: crypto
+                        .getRandomValues(new Uint32Array(4))
+                        .join('-'),
                       sourceCard: card.snapshot(),
                       sourceIndexes: selectedResources.map(item => item.index),
                     })
@@ -1085,10 +1075,7 @@ const CardContent = observer(
                     ? getLocalCardKeyAddress(ordinaryRef, addressType)
                     : undefined);
 
-                if (
-                  !localRef &&
-                  (item.type === 'seed' || item.type === 'master')
-                ) {
+                if (!localRef && item.type === 'seed') {
                   const options = ADDRESS_TYPES[addressType];
                   const wallet = getLocalCardWalletDerivation(
                     [
@@ -1106,7 +1093,7 @@ const CardContent = observer(
                     ],
                     {
                       addressType,
-                      seed: item.type === 'seed' ? options.seed : undefined,
+                      seed: options.seed,
                       curve: options.curve,
                       path: options.path(0),
                     },
