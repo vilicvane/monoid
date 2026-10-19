@@ -5,7 +5,7 @@ description: Monoid NFC card sessions, Access/Safe PIN ownership, biometric vaul
 
 # Monoid card sessions
 
-Source: `../records.md`, especially records 29–31, and `../29.md`. Treat records
+Source: `../records.md`, especially records 29–32, and `../29.md`. Treat records
 as authoritative and keep them up to date. Records 19–24 describe an older WIP;
 do not reintroduce their plain-storage design or assume those TODOs still exist.
 
@@ -26,6 +26,8 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
 - iOS Core NFC covers the WebView and has a system session limit. Errors close
   the sheet and return to the caller; no automatic iOS retry hides the error or
   replays an uncertain mutation. Cancellation remains quiet; timeout is explicit.
+- Card sounds respect the iPhone Silent Mode switch, matching the user's final
+  preference after checking the system NFC completion sound.
 - iOS requires the applet/card-manager AIDs in `Info.plist`. Keep them aligned with
   both the bundled CAP manifest and actual SELECT bytes, including the normal
   version-independent Monoid prefix `F06D6F6E6F69640201`. Native removal detection

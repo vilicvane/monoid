@@ -9,6 +9,7 @@ final class QrCameraPermissions {
     private let sceneState: () -> UIScene.ActivationState?
     private var completions: [(String) -> Void] = []
     private var requesting = false
+    private var awaitingPromptActivation = false
 
     init(authorizationStatus: @escaping () -> AVAuthorizationStatus,
          requestAccess: @escaping (@escaping () -> Void) -> Void,
@@ -34,11 +35,19 @@ final class QrCameraPermissions {
         applicationState() == .active && sceneState() == .foregroundActive
     }
 
+    var canStartScan: Bool {
+        !requesting && !awaitingPromptActivation && isAppActive
+    }
+
     func request(completion: @escaping (String) -> Void) {
         completions.append(completion)
         if authorizationStatus() == .notDetermined {
             guard !requesting else { return }
             requesting = true
+            // Activity snapshots are insufficient here: the camera
+            // authorization callback can precede the prompt's deactivation events.
+            // Arm before presenting it and wait for the following app activation.
+            awaitingPromptActivation = true
             requestAccess { [weak self] in
                 guard let self else { return }
                 self.requesting = false
@@ -50,11 +59,16 @@ final class QrCameraPermissions {
     }
 
     func finishIfActive() {
-        guard !requesting, isAppActive else { return }
+        guard canStartScan else { return }
         let pending = completions
         completions.removeAll()
         let state = state
         for completion in pending { completion(state) }
+    }
+
+    func applicationDidBecomeActive() {
+        awaitingPromptActivation = false
+        finishIfActive()
     }
 
     func resetDocument() {

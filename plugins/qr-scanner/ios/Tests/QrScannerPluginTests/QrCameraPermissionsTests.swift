@@ -1,9 +1,30 @@
 import AVFoundation
+import Capacitor
 import UIKit
 import XCTest
 @testable import QrScannerPlugin
 
 final class QrCameraPermissionsTests: XCTestCase {
+    func testCameraLessSimulatorRejectsPermissionRequestWithoutWaitingForActivation() throws {
+        #if targetEnvironment(simulator)
+        guard AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) == nil else {
+            throw XCTSkip("This simulator provides a camera.")
+        }
+        let rejected = expectation(description: "A camera-less device cannot present a scanner permission prompt")
+        let plugin = QrScannerPlugin()
+        let call = try XCTUnwrap(CAPPluginCall(callbackId: "permission", methodName: "requestPermissions", options: [:],
+            success: { _, _ in XCTFail("Permission request should report no camera") },
+            error: { error in
+                XCTAssertEqual(error?.code, "NO_CAMERA")
+                rejected.fulfill()
+            }))
+        plugin.requestPermissions(call)
+        withExtendedLifetime(plugin) { wait(for: [rejected], timeout: 5) }
+        #else
+        throw XCTSkip("Camera-less simulator behavior only")
+        #endif
+    }
+
     func testPermissionReplyWhileSceneIsActiveWaitsForApplicationActivation() {
         let fixture = Fixture()
         fixture.permissions.request { fixture.replies.append($0) }
@@ -17,7 +38,7 @@ final class QrCameraPermissionsTests: XCTestCase {
         XCTAssertTrue(fixture.replies.isEmpty)
 
         fixture.applicationState = .active
-        fixture.permissions.finishIfActive()
+        fixture.permissions.applicationDidBecomeActive()
         XCTAssertEqual(fixture.replies, ["granted"])
         XCTAssertTrue(fixture.permissions.isAppActive)
         fixture.permissions.finishIfActive()
@@ -29,7 +50,7 @@ final class QrCameraPermissionsTests: XCTestCase {
         fixture.permissions.request { fixture.replies.append($0) }
         fixture.sceneState = .foregroundInactive
         fixture.completeRequest(.authorized)
-        fixture.permissions.finishIfActive()
+        fixture.permissions.applicationDidBecomeActive()
 
         XCTAssertFalse(fixture.permissions.isAppActive)
         XCTAssertTrue(fixture.replies.isEmpty)
@@ -41,7 +62,7 @@ final class QrCameraPermissionsTests: XCTestCase {
     func testActivationBeforeAuthorizationReplyDoesNotResolveEarly() {
         let fixture = Fixture()
         fixture.permissions.request { fixture.replies.append($0) }
-        fixture.permissions.finishIfActive()
+        fixture.permissions.applicationDidBecomeActive()
         XCTAssertTrue(fixture.replies.isEmpty)
 
         fixture.completeRequest(.authorized)
@@ -59,7 +80,7 @@ final class QrCameraPermissionsTests: XCTestCase {
         XCTAssertTrue(fixture.replies.isEmpty)
 
         fixture.applicationState = .active
-        fixture.permissions.finishIfActive()
+        fixture.permissions.applicationDidBecomeActive()
         XCTAssertTrue(fixture.replies.isEmpty)
         fixture.sceneState = .foregroundActive
         fixture.permissions.finishIfActive()
@@ -75,7 +96,7 @@ final class QrCameraPermissionsTests: XCTestCase {
         fixture.completeRequest(.denied)
         XCTAssertTrue(fixture.replies.isEmpty)
         fixture.applicationState = .active
-        fixture.permissions.finishIfActive()
+        fixture.permissions.applicationDidBecomeActive()
         XCTAssertEqual(fixture.replies, ["denied", "denied"])
 
         fixture.permissions.request { fixture.replies.append($0) }
@@ -91,7 +112,54 @@ final class QrCameraPermissionsTests: XCTestCase {
         XCTAssertEqual(fixture.requestCount, 1)
 
         fixture.completeRequest(.authorized)
+        fixture.permissions.applicationDidBecomeActive()
         XCTAssertEqual(fixture.replies, ["granted"])
+    }
+
+    func testAuthorizationCallbackBeforePromptDeactivationCannotStartCamera() {
+        let fixture = Fixture()
+        fixture.permissions.request { fixture.replies.append($0) }
+        fixture.completeRequest(.authorized)
+
+        // Real iPhone order: the authorization callback initially sees both
+        // application and scene active; the prompt deactivates them afterward.
+        XCTAssertTrue(fixture.permissions.isAppActive)
+        XCTAssertEqual(fixture.permissions.state, "granted")
+        XCTAssertFalse(fixture.permissions.canStartScan)
+        fixture.permissions.finishIfActive()
+        XCTAssertTrue(fixture.replies.isEmpty)
+
+        // A second caller can already observe granted permission in this gap.
+        fixture.permissions.request { fixture.replies.append($0) }
+        XCTAssertEqual(fixture.requestCount, 1)
+        XCTAssertTrue(fixture.replies.isEmpty)
+
+        fixture.sceneState = .foregroundInactive
+        fixture.applicationState = .inactive
+        fixture.permissions.finishIfActive()
+        XCTAssertFalse(fixture.permissions.canStartScan)
+        fixture.sceneState = .foregroundActive
+        fixture.permissions.finishIfActive()
+        XCTAssertTrue(fixture.replies.isEmpty)
+
+        fixture.applicationState = .active
+        fixture.permissions.applicationDidBecomeActive()
+        XCTAssertEqual(fixture.replies, ["granted", "granted"])
+        XCTAssertTrue(fixture.permissions.canStartScan)
+    }
+
+    func testReloadAfterGrantStillWaitsForTheOutstandingPromptActivation() {
+        let fixture = Fixture()
+        fixture.permissions.request { _ in XCTFail("Reply belongs to the old document") }
+        fixture.completeRequest(.authorized)
+        fixture.permissions.resetDocument()
+        fixture.permissions.request { fixture.replies.append($0) }
+
+        XCTAssertTrue(fixture.replies.isEmpty)
+        XCTAssertFalse(fixture.permissions.canStartScan)
+        fixture.permissions.applicationDidBecomeActive()
+        XCTAssertEqual(fixture.replies, ["granted"])
+        XCTAssertEqual(fixture.requestCount, 1)
     }
 
     func testGrantedPermissionDoesNotBypassAppOrSceneActivity() {

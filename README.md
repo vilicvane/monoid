@@ -84,6 +84,24 @@ Each native plugin is also an independent Swift package with an XCTest target.
 Run its tests from Xcode or `xcodebuild test` with an available iPhone simulator;
 see the plugin READMEs for the package schemes.
 
+To verify the first camera authorization on a physical iPhone, select the shared
+`MonoidUITests` scheme in Xcode and run Product > Test, or run:
+
+```sh
+npm run ios:sync
+xcrun devicectl list devices
+xcodebuild test -project ios/App/App.xcodeproj -scheme MonoidUITests \
+  -destination 'platform=iOS,id=DEVICE_UDID' \
+  -allowProvisioningUpdates -parallel-testing-enabled NO
+```
+
+Replace `DEVICE_UDID` with the connected iPhone's identifier. The test resets only
+`app.monoid`'s camera authorization, preserving application data and other privacy
+permissions. It opens Scan, verifies and accepts the camera permission alert, and
+checks that the first camera preview stays active without switching pages. It
+leaves camera access granted and saves authorization/preview screenshots in the
+Xcode test result. This camera test skips simulators.
+
 See the [Capacitor environment requirements](https://capacitorjs.com/docs/getting-started/environment-setup),
 [Swift Package Manager setup](https://capacitorjs.com/docs/ios/spm) and
 [UIScene migration guide](https://capacitorjs.com/docs/updating/8-5).

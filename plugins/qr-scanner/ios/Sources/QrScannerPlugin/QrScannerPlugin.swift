@@ -62,7 +62,7 @@ public final class QrScannerPlugin: CAPPlugin, CAPBridgedPlugin {
                 self.scans.pause()
             },
             center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-                self?.permissions.finishIfActive()
+                self?.permissions.applicationDidBecomeActive()
             },
             center.addObserver(forName: UIScene.didActivateNotification, object: nil, queue: .main) { [weak self] _ in
                 self?.permissions.finishIfActive()
@@ -86,6 +86,9 @@ public final class QrScannerPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc override public func requestPermissions(_ call: CAPPluginCall) {
         dispatch(call) { [self] in
+            guard AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) != nil else {
+                throw QrScannerFailure(code: "NO_CAMERA", message: "No rear camera is available.")
+            }
             permissions.request { state in call.resolve(["camera": state]) }
         }
     }
@@ -94,7 +97,7 @@ public final class QrScannerPlugin: CAPPlugin, CAPBridgedPlugin {
         dispatch(call) { [self] in
             let id = try scanId(call)
             let bounds = try previewBounds(call)
-            guard permissions.isAppActive else {
+            guard permissions.canStartScan else {
                 throw QrScannerFailure(code: "APP_INACTIVE", message: "The app must be active to scan QR codes.")
             }
             guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
