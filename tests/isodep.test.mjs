@@ -1001,7 +1001,8 @@ for (const [reason, code] of [
   ['cancelled', 'CANCELLED'],
   ['timeout', 'TIMEOUT'],
 ]) {
-  test(`iOS ${reason} stops scanning without retry and preserves its public code`, async () => {
+  test(`iOS ${reason} before any card connection quietly cancels without retry`, async () => {
+    platform = 'ios';
     device.standby(async () => assert.fail('No card was connected'));
     await until(() => device.starts.length === 1);
     device.emit('scanEnded', {scanId: device.scanId, reason});
@@ -1009,12 +1010,13 @@ for (const [reason, code] of [
     await until(() => device.listenerRemovals.length === 5);
 
     assert.ok(device.errors[0] instanceof IsoDepScanError);
-    assert.equal(device.errors[0].code, code);
+    assert.equal(device.errors[0].code, 'CANCELLED');
     assert.equal(device.starts.length, 1);
     assert.equal(device.cleanupCount, 1);
   });
 
   test(`iOS ${reason} during a card operation reports the scan failure before cleanup`, async () => {
+    platform = 'ios';
     const operation = deferred();
     device.standby(() => operation.promise);
     await until(() => device.starts.length === 1);
@@ -1025,6 +1027,146 @@ for (const [reason, code] of [
     await until(() => device.listenerRemovals.length === 5);
     assert.equal(device.errors[0].code, code);
     assert.equal(device.cleanupCount, 1);
+    assert.equal(device.starts.length, 1);
+  });
+}
+
+test('an idle iOS timeout waits for native cleanup and does not restart scanning', async () => {
+  platform = 'ios';
+  const stopped = deferred();
+  device.onStop = () => stopped.promise;
+  const dispose = device.standby(async () =>
+    assert.fail('No card was connected'),
+  );
+  await until(() => device.starts.length === 1);
+  device.emit('scanEnded', {scanId: device.scanId, reason: 'timeout'});
+  await until(() => device.stops.length === 1);
+
+  assert.equal(device.errors.length, 0);
+  assert.equal(device.cleanupCount, 0);
+  assert.equal(device.listenerRemovals.length, 0);
+  assert.equal(device.starts.length, 1);
+  stopped.resolve();
+  await until(() => device.listenerRemovals.length === 5);
+  await dispose();
+  assert.equal(device.errors.length, 1);
+  assert.equal(device.errors[0].code, 'CANCELLED');
+  assert.equal(device.cleanupCount, 1);
+  assert.equal(device.starts.length, 1);
+  assert.deepEqual(device.closes, []);
+});
+
+test('an Android timeout without a card retains TIMEOUT', async () => {
+  device.standby(async () => assert.fail('No card was connected'));
+  await until(() => device.starts.length === 1);
+  device.emit('scanEnded', {scanId: device.scanId, reason: 'timeout'});
+  await until(() => device.errors.length === 1);
+  assert.equal(device.errors[0].code, 'TIMEOUT');
+  assert.equal(device.starts.length, 1);
+});
+
+test('an iOS timeout after a completed card session retains TIMEOUT', async () => {
+  platform = 'ios';
+  device.standby(async () => {});
+  await until(() => device.starts.length === 1);
+  device.tap('completed');
+  await until(() => device.cleanupCount === 1);
+  device.emit('scanEnded', {scanId: device.scanId, reason: 'timeout'});
+  await until(() => device.errors.length === 1);
+  assert.equal(device.errors[0].code, 'TIMEOUT');
+  assert.equal(device.starts.length, 1);
+});
+
+test('an iOS connect timeout before sessionOpened retains TIMEOUT', async () => {
+  platform = 'ios';
+  const closed = deferred();
+  device.onClose = () => closed.promise;
+  device.standby(async () => assert.fail('The connection did not succeed'));
+  await until(() => device.starts.length === 1);
+  device.emit('sessionEnded', {
+    scanId: device.scanId,
+    sessionId: 'unconnected',
+    reason: 'connect-timeout',
+    code: 'TIMEOUT',
+  });
+  device.emit('scanEnded', {scanId: device.scanId, reason: 'timeout'});
+  await until(() => device.closes.length === 1 && device.stops.length === 1);
+  assert.equal(device.errors.length, 0);
+  closed.resolve();
+  await until(() => device.errors.length === 1);
+  assert.equal(device.errors[0].code, 'TIMEOUT');
+  assert.equal(device.cleanupCount, 1);
+  assert.equal(device.starts.length, 1);
+});
+
+test('an iOS timeout after a failed connection is not treated as idle', async () => {
+  platform = 'ios';
+  device.standby(async () => assert.fail('The connection did not succeed'));
+  await until(() => device.starts.length === 1);
+  device.emit('sessionEnded', {
+    scanId: device.scanId,
+    sessionId: 'unconnected',
+    reason: 'io-error',
+    code: 'IO_ERROR',
+  });
+  await until(() => device.cleanupCount === 1);
+  assert.equal(device.errors[0].code, 'IO_ERROR');
+  device.emit('scanEnded', {scanId: device.scanId, reason: 'timeout'});
+  await until(() => device.errors.length === 2);
+  assert.equal(device.errors[1].code, 'TIMEOUT');
+  assert.equal(device.starts.length, 1);
+});
+
+for (const [failureCode, emitsTimeout, expectedCode] of [
+  ['TIMEOUT', true, 'CANCELLED'],
+  ['TIMEOUT', false, 'TIMEOUT'],
+  ['IO_ERROR', true, 'IO_ERROR'],
+]) {
+  test(`iOS startup ${failureCode} with${emitsTimeout ? '' : 'out'} a reader timeout preserves ${expectedCode}`, async () => {
+    platform = 'ios';
+    device.onStart = async () => {
+      if (emitsTimeout) {
+        device.emit('scanEnded', {scanId: device.scanId, reason: 'timeout'});
+      }
+      throw Object.assign(new Error('Reader activation failed'), {
+        code: failureCode,
+      });
+    };
+    device.standby(async () => assert.fail('No card was connected'));
+    await until(() => device.errors.length === 1);
+    assert.equal(device.errors[0].code, expectedCode);
+    assert.equal(device.stops.length, 1);
+    assert.equal(device.starts.length, 1);
+    assert.equal(device.cleanupCount, 1);
+  });
+}
+
+for (const failedCleanup of ['stopScan', 'listener']) {
+  test(`an idle iOS timeout does not suppress ${failedCleanup} cleanup failure`, async () => {
+    platform = 'ios';
+    const failure = Object.assign(new Error('Native cleanup failed'), {
+      code: 'TIMEOUT',
+    });
+    if (failedCleanup === 'stopScan') {
+      device.onStop = async () => {
+        throw failure;
+      };
+    } else {
+      device.onRemove = async name => {
+        if (name === 'sessionOpened') throw failure;
+      };
+    }
+    const dispose = device.standby(async () =>
+      assert.fail('No card was connected'),
+    );
+    await until(() => device.starts.length === 1);
+    device.emit('scanEnded', {scanId: device.scanId, reason: 'timeout'});
+    await until(() => device.listenerRemovals.length === 5);
+    await assert.rejects(dispose(), error => error === failure);
+    if (failedCleanup === 'stopScan') {
+      assert.equal(device.errors.length, 1);
+      assert.equal(device.errors[0].cause, failure);
+    }
     assert.equal(device.starts.length, 1);
   });
 }

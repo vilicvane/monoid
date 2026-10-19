@@ -352,7 +352,11 @@ final class NFCSessionController: NFCScanEvents {
         session.cancelRemovalCheck = nil
         if session.removed { scan.removedSessionId = session.id }
         scan.session = nil
-        scan.reader.alertMessage = "Hold your card near the top of your iPhone."
+        // Keep progress visible while the caller closes the scan. Only an
+        // explicit removal gate asks for another tap.
+        if session.waitingForRemoval {
+            scan.reader.alertMessage = "Hold your card near the top of your iPhone."
+        }
         scan.reader.restartPolling()
         for completion in session.removing { completion(.success(())) }
         session.removing.removeAll()

@@ -261,11 +261,20 @@ export function standbyIsoDep(
           throw cleanupFailure.error;
         }
 
-        if (scanFailure !== undefined) {
+        const reason = (scanEnded as ScanEndedEvent | undefined)?.reason;
+        // Expiring the iOS sheet before any card connection is a quiet dismissal.
+        // Failed connection attempts also register a session and retain TIMEOUT.
+        const idleTimeout =
+          reason === 'timeout' &&
+          Capacitor.getPlatform() === 'ios' &&
+          knownSessionIds.size === 0;
+
+        if (
+          scanFailure !== undefined &&
+          !(idleTimeout && (scanFailure as IsoDepNfcError).code === 'TIMEOUT')
+        ) {
           throw scanFailure;
         }
-
-        const reason = (scanEnded as ScanEndedEvent | undefined)?.reason;
 
         if (reason !== undefined && !canResumeScan(reason)) {
           if (reason === 'app-paused') {
@@ -280,13 +289,14 @@ export function standbyIsoDep(
           }
 
           if (reason === 'cancelled' || reason === 'timeout') {
+            const cancelled = reason === 'cancelled' || idleTimeout;
             throw Object.assign(
               new Error(
-                reason === 'cancelled'
+                cancelled
                   ? 'Card scanning was cancelled.'
                   : 'Card scanning timed out. Please scan the card again.',
               ),
-              {code: reason === 'cancelled' ? 'CANCELLED' : 'TIMEOUT'},
+              {code: cancelled ? 'CANCELLED' : 'TIMEOUT'},
             );
           }
 

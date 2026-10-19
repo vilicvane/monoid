@@ -166,6 +166,29 @@ final class NFCSessionTests: XCTestCase {
         XCTAssertEqual(fixture.card.sent.count, 1)
     }
 
+    func testSessionCleanupPreservesProgressThroughScanDismissal() throws {
+        let fixture = Fixture()
+        let id = fixture.open()
+        let exchange = fixture.exchange(id)
+        fixture.card.completions[0](.success([0x90, 0]))
+        XCTAssertTrue(exchange.succeeded)
+        let message = "Reading card…\n4 of 4 records"
+        try fixture.controller.setSessionMessage(id: id, message: message)
+
+        XCTAssertTrue(fixture.close(id).succeeded)
+        XCTAssertEqual(fixture.reader.alertMessage, message)
+        XCTAssertEqual(fixture.reader.restarts, 1)
+        XCTAssertThrowsError(try fixture.controller.setSessionMessage(id: id, message: "Late progress"))
+        let stopped = fixture.stop()
+        XCTAssertEqual(fixture.reader.alertMessage, message)
+        XCTAssertEqual(fixture.reader.invalidationMessages, [nil])
+        XCTAssertTrue(stopped.values.isEmpty)
+        fixture.reader.invalidateCallback()
+        XCTAssertTrue(stopped.succeeded)
+        XCTAssertEqual(fixture.reader.alertMessage, message)
+        XCTAssertEqual(fixture.card.sent.count, 1)
+    }
+
     func testSessionMessageUpdatesDoNotSendCommandsOrExtendExchangeDeadline() throws {
         let fixture = Fixture()
         let id = fixture.open()
@@ -225,6 +248,7 @@ final class NFCSessionTests: XCTestCase {
         XCTAssertEqual(exchange.code, "TAG_LOST")
         XCTAssertEqual(exchange.outcome, "unknown")
         fixture.close(id)
+        XCTAssertEqual(fixture.reader.alertMessage, "Reading card…")
         fixture.stop()
         XCTAssertThrowsError(try fixture.controller.setSessionMessage(id: id, message: "Late completion")) { error in
             XCTAssertEqual((error as? NFCFailure)?.code, "SESSION_CLOSED")
@@ -346,11 +370,13 @@ final class NFCSessionTests: XCTestCase {
         XCTAssertTrue(fixture.card.sent.isEmpty)
         XCTAssertEqual(fixture.reader.restarts, 0)
         XCTAssertFalse(fixture.controller.canDiscover(fixture.reader))
+        XCTAssertEqual(fixture.reader.alertMessage, "Remove the card before scanning it again.")
         fixture.card.isAvailable = false
         fixture.advance(250)
         XCTAssertTrue(first.succeeded)
         XCTAssertTrue(second.succeeded)
         XCTAssertEqual(fixture.reader.restarts, 1)
+        XCTAssertEqual(fixture.reader.alertMessage, "Hold your card near the top of your iPhone.")
         XCTAssertTrue(fixture.close(id, wait: true).succeeded)
     }
 

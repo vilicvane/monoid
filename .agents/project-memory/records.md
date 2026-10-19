@@ -58,3 +58,7 @@
 
 37. [user] resuming QR scanning should keep the full preview size and fade out its cover once the camera is ready, without repeating the entry zoom animation. QR recovery motion.
 38. [agent] Core NFC exposes dynamic system-sheet text but no public spinner/progress-animation control. Mirror the rendered scan prompt's real stage/count text through a session-bound `setSessionMessage` API; only the current connected session accepts updates, and late updates cannot replace removal/disconnection messages. This is presentation only and must not send/replay APDUs or affect operation results. See [29.md](29.md). NFC progress feedback.
+
+## d099e17
+
+39. [user] after confirming the iOS NFC system sheet updates its text, keep it from reverting to the initial hold-card prompt when finishing; timing out without a card tap should close quietly without an app error. NFC dismissal feedback, idle timeout.
