@@ -1,4 +1,6 @@
---- 37a3b83 ---
+# Project Memory Records
+
+## 37a3b83
 
 1. [user] integrate card unlock (safe PIN), authentication (access PIN) and similar redirects into `useMonoidApplet`, so later card operations can reuse them. monoid card session flow, setup card redirect, WIP.
 2. [agent] card auth state only lives within one NFC session (`CLEAR_ON_DESELECT` since javacard `31cf60a`), so `useMonoidApplet` has to `authenticate` on every tap. session-scoped auth, applet select.

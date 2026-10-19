@@ -1,7 +1,7 @@
 import {type ReactNode, useEffect, useRef} from 'react';
 import {styled} from 'styled-components';
 
-import {LoadingSpinner} from './loading-spinner.js';
+import {StandaloneLoadingSpinner} from './loading-spinner.js';
 import {SCAN_REVEAL_DURATION, SCAN_REVEAL_EASING} from './scan-motion.js';
 
 export const SCAN_CIRCLE_INSET = 40;
@@ -24,13 +24,10 @@ const Cover = styled.div`
   pointer-events: none;
 `;
 
-const Spinner = styled(LoadingSpinner)`
+const Spinner = styled(StandaloneLoadingSpinner)`
   position: absolute;
   inset: 0;
   margin: auto;
-  width: 28px;
-  height: 28px;
-  color: var(--ion-color-primary);
   opacity: 0;
 `;
 

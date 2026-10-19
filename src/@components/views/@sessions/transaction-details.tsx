@@ -63,8 +63,8 @@ export const TransactionDetails = observer(function TransactionDetails({
     getWalletSigningAccount(walletStorageService.keys, transaction.from) &&
     (!!detail.submission || (status === 'pending' && !confirmation.nonceUsed));
   const replace = (kind: 'speed-up' | 'cancel'): void => {
-    router.transactions
-      .wallet({address: transaction.from, addressType: 'evm'})
+    router.ethereum
+      .wallet({address: transaction.from})
       .transaction({chainId, hash})
       .replace({kind})
       .$push();
@@ -90,8 +90,8 @@ export const TransactionDetails = observer(function TransactionDetails({
           <Button
             color="neutral"
             onClick={() =>
-              router.transactions
-                .wallet({address: transaction.from, addressType: 'evm'})
+              router.ethereum
+                .wallet({address: transaction.from})
                 .transaction({chainId, hash: confirmation.replacementHash})
                 .$push()
             }

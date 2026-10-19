@@ -65,6 +65,7 @@ export const InfoFieldset = styled(InfoSection).attrs({as: 'fieldset'})<{
 export const InfoLegend = styled(Tag).attrs({as: 'legend'})`
   position: relative;
   z-index: 1;
+  width: fit-content;
   max-width: 100%;
   margin-left: calc(
     var(--info-fieldset-label-inset) - var(--info-fieldset-padding) - var(

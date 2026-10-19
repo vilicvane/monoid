@@ -194,7 +194,7 @@ export const KeyItem = observer(
                 <AppIcon icon={arrowLeftRight} aria-hidden="true" />
               </AddressTypeSwitch>
             )}
-            {syncDirection === 'download' && (
+            {state === 'outdated' && syncDirection === 'download' && (
               <KeyUpdateTag
                 as={syncButtonProps ? 'button' : undefined}
                 {...syncButtonProps}

@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import {mock, test} from 'node:test';
 
 import {observable, runInAction} from 'mobx';
+import {routra} from 'routra';
+
+// eslint-disable-next-line @mufan/scoped-modules -- Exercise the app's routes without initializing platform services.
+import {ROUTE_SCHEMA} from '../.bld/app/@routes.js';
 
 let entrances;
 let dispose;
@@ -47,7 +51,7 @@ function fixture(context) {
   Object.defineProperty(sessions, 'request', {value: request});
   sessions.transaction = route();
   sessions.solanaTransaction = route();
-  const transactions = Object.assign(route(), {
+  const ethereum = Object.assign(route(), {
     wallet: Object.assign(route(), {
       transaction: Object.assign(route(), {replace: route()}),
     }),
@@ -62,7 +66,10 @@ function fixture(context) {
         wallet: Object.assign(route(), {send: route()}),
       }),
       sessions,
-      transactions,
+      ethereum,
+      solana: Object.assign(route(), {
+        wallet: Object.assign(route(), {transaction: route()}),
+      }),
       scan: Object.assign(route(), {connection: route()}),
       safe: route(),
     },
@@ -92,7 +99,7 @@ test('a settled feature hub presents a new request once', context => {
   assert.deepEqual(pushed, [1]);
 });
 
-for (const feature of ['features', 'transactions', 'bitcoin']) {
+for (const feature of ['features', 'ethereum', 'solana', 'bitcoin']) {
   for (const transition of ['$transition', '$switching']) {
     test(`${feature} ${transition} delays automatic request navigation until settled`, context => {
       const {router, requests, pushed} = fixture(context);
@@ -111,7 +118,7 @@ for (const feature of ['features', 'transactions', 'bitcoin']) {
   }
 }
 
-for (const feature of ['transactions', 'bitcoin']) {
+for (const feature of ['ethereum', 'solana', 'bitcoin']) {
   test(`browsing ${feature} allows new requests to open`, context => {
     const {router, requests, pushed} = fixture(context);
     runInAction(() => {
@@ -150,22 +157,74 @@ test('bitcoin send review keeps incoming requests manual after returning to the 
   assert.deepEqual(pushed, [3]);
 });
 
-test('speed up and cancel review keep new requests queued', context => {
+test('Ethereum speed up and cancel review keep new requests queued', context => {
   const {router, requests, pushed} = fixture(context);
   runInAction(() => {
-    router.transactions.$matched = true;
-    router.transactions.wallet.transaction.replace.$matched = true;
+    router.ethereum.$matched = true;
+    router.ethereum.wallet.transaction.replace.$matched = true;
   });
   WalletConnectRequests();
   runInAction(() => requests.set(1, {id: 1}));
   assert.deepEqual(pushed, []);
   runInAction(() => {
-    router.transactions.wallet.transaction.replace.$matched = false;
+    router.ethereum.wallet.transaction.replace.$matched = false;
   });
   assert.deepEqual(pushed, []);
   runInAction(() => requests.set(2, {id: 2}));
   assert.deepEqual(pushed, [2]);
 });
+
+for (const feature of ['ethereum', 'solana']) {
+  test(`${feature} request navigation waits for an actual cancelled back gesture`, async context => {
+    const {requests} = fixture(context);
+    const router = routra(ROUTE_SCHEMA, {});
+    entrances.router = router;
+    await router.features.$reset().$completed;
+    await router[feature].$push().$completed;
+    await router[feature].wallet({address: 'wallet-address'}).$push()
+      .$completed;
+    WalletConnectRequests();
+
+    const swipe = router.$back.$switch({progress: 0.4});
+    runInAction(() => requests.set(1, {id: 1}));
+    assert.equal(router.sessions.request.$matched, false);
+    assert.equal(router[feature].wallet.$exact.$active, true);
+
+    swipe.$abort();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(router.sessions.request.$exact.$active, true);
+    assert.equal(router.$state.id, 1);
+
+    await router.$back().$completed;
+    assert.equal(router[feature].wallet.$exact.$active, true);
+    assert.deepEqual({...router.$state}, {address: 'wallet-address'});
+  });
+}
+
+for (const kind of ['speed-up', 'cancel']) {
+  test(`actual Ethereum ${kind} review keeps incoming requests manual on exit`, async context => {
+    const {requests} = fixture(context);
+    const router = routra(ROUTE_SCHEMA, {});
+    entrances.router = router;
+    await router.ethereum
+      .wallet({address: 'wallet-address'})
+      .transaction({chainId: 'eip155:1', hash: 'transaction-hash'})
+      .$reset().$completed;
+    await router.ethereum.wallet.transaction.replace({kind}).$push().$completed;
+    WalletConnectRequests();
+
+    runInAction(() => requests.set(1, {id: 1}));
+    assert.equal(router.sessions.request.$matched, false);
+    await router.$back().$completed;
+    assert.equal(router.ethereum.wallet.transaction.$exact.$active, true);
+    assert.equal(router.sessions.request.$matched, false);
+
+    runInAction(() => requests.set(2, {id: 2}));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(router.sessions.request.$exact.$active, true);
+    assert.equal(router.$state.id, 2);
+  });
+}
 
 test('requests received during review remain manual after reaching the result', context => {
   const {router, requests, state, pushed} = fixture(context);

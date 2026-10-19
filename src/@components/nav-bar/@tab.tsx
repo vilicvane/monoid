@@ -1,5 +1,4 @@
 import classNames from 'classNames';
-import type {LucideIcon} from 'lucide-react';
 import {observer} from 'mobx-react-lite';
 import type {ReactNode} from 'react';
 import type {RouteClass__} from 'routra';
@@ -7,7 +6,7 @@ import {styled} from 'styled-components';
 
 import {navigationTransition} from '../@animations.js';
 import {useAnimationHint} from '../@hooks/use-animation-hint.js';
-import {AppIcon} from '../@ui/app-icon.js';
+import {AppIcon, type AppIconSource} from '../@ui/app-icon.js';
 import {IndicatorDot} from '../@ui/indicator-dot.js';
 import {NumberBadge} from '../@ui/number-badge.js';
 import {RippleEffect as RippleEffect_} from '../@ui/ripple-effect.js';
@@ -109,7 +108,7 @@ export const Tab = observer(
     activity,
   }: {
     className?: string;
-    icon: LucideIcon;
+    icon: AppIconSource;
     label: string;
     badge?: number;
     route: RouteClass__;

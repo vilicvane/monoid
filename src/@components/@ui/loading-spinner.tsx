@@ -35,3 +35,9 @@ export function LoadingSpinner({
     </Container>
   );
 }
+
+export const StandaloneLoadingSpinner = styled(LoadingSpinner)`
+  width: 28px;
+  height: 28px;
+  color: var(--ion-color-primary);
+`;

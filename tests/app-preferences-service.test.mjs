@@ -53,10 +53,18 @@ function startupRouter(preferences, ref = '/') {
 }
 
 test('missing and unknown preferences fall back to Home without rewriting storage', async context => {
-  for (const initial of [undefined, null, 'removed-feature', {}, 1]) {
+  for (const initial of [
+    undefined,
+    null,
+    'transactions',
+    'removed-feature',
+    {},
+    1,
+  ]) {
     const storage = storageFixture(context, initial);
     const service = await AppPreferencesService.create(storage);
     assert.equal(service.defaultFeature, undefined);
+    assert.equal(startupRouter(service).router.features.$exact.$active, true);
     assert.equal(storage.set.mock.callCount(), 0);
     assert.equal(storage.remove.mock.callCount(), 0);
   }
@@ -71,10 +79,10 @@ test('a changed default feature survives reopening and clearing removes the pref
   const reopened = await AppPreferencesService.create(storage);
   assert.equal(reopened.defaultFeature, 'sessions');
 
-  await reopened.setDefaultFeature('transactions');
+  await reopened.setDefaultFeature('ethereum');
   assert.equal(
     (await AppPreferencesService.create(storage)).defaultFeature,
-    'transactions',
+    'ethereum',
   );
 
   await reopened.setDefaultFeature(undefined);
@@ -118,7 +126,7 @@ test('failed writes and removals retain the committed choice and allow later cha
     throw failure;
   });
 
-  await assert.rejects(service.setDefaultFeature('transactions'), failure);
+  await assert.rejects(service.setDefaultFeature('solana'), failure);
   assert.equal(service.defaultFeature, 'sessions');
   assert.equal(await storage.get('defaultFeature'), 'sessions');
 
@@ -129,12 +137,12 @@ test('failed writes and removals retain the committed choice and allow later cha
   assert.equal(service.defaultFeature, 'sessions');
   assert.deepEqual(changes, []);
 
-  await service.setDefaultFeature('transactions');
-  assert.equal(service.defaultFeature, 'transactions');
-  assert.deepEqual(changes, ['transactions']);
+  await service.setDefaultFeature('solana');
+  assert.equal(service.defaultFeature, 'solana');
+  assert.deepEqual(changes, ['solana']);
   assert.equal(
     (await AppPreferencesService.create(storage)).defaultFeature,
-    'transactions',
+    'solana',
   );
 });
 
@@ -160,7 +168,7 @@ test('rapid changes persist in order and become observable only after each succe
   });
 
   const first = service.setDefaultFeature('sessions');
-  const second = service.setDefaultFeature('transactions');
+  const second = service.setDefaultFeature('ethereum');
   const cleared = service.setDefaultFeature(undefined);
   await started[0].promise;
   assert.equal(storage.set.mock.callCount(), 1);
@@ -177,7 +185,7 @@ test('rapid changes persist in order and become observable only after each succe
 
   release[1].resolve();
   await Promise.all([second, cleared]);
-  assert.deepEqual(changes, ['sessions', 'transactions', undefined]);
+  assert.deepEqual(changes, ['sessions', 'ethereum', undefined]);
   assert.equal(service.defaultFeature, undefined);
   assert.equal(
     (await AppPreferencesService.create(storage)).defaultFeature,
@@ -193,7 +201,7 @@ test('a queued preference change still completes after an earlier queued write f
     throw failure;
   });
 
-  const failed = service.setDefaultFeature('transactions');
+  const failed = service.setDefaultFeature('solana');
   const recovered = service.setDefaultFeature(undefined);
   await Promise.all([assert.rejects(failed, failure), recovered]);
   assert.equal(service.defaultFeature, undefined);
@@ -204,7 +212,7 @@ test('a queued preference change still completes after an earlier queued write f
   );
 });
 
-for (const saved of [undefined, 'sessions', 'transactions']) {
+for (const saved of [undefined, 'sessions', 'ethereum', 'solana', 'bitcoin']) {
   test(`startup default ${saved ?? 'Home'} applies only to the root URL and preserves explicit deep links`, async context => {
     const preferences = await AppPreferencesService.create(
       storageFixture(context, saved),
@@ -218,17 +226,34 @@ for (const saved of [undefined, 'sessions', 'transactions']) {
 
     const address = '0x3535353535353535353535353535353535353535';
     const hash = `0x${'1'.repeat(64)}`;
-    const walletRef = `/transactions/wallet:address=${address}`;
+    const walletRef = `/ethereum/wallet:address=${address}`;
     const detailRef = `${walletRef}/transaction:chainId=eip155%3A1&hash=${hash}`;
+    const solanaAddress = '11111111111111111111111111111111';
+    const solanaChainId = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
+    const solanaWalletRef = `/solana/wallet:address=${solanaAddress}`;
+    const solanaDetailRef = `${solanaWalletRef}/transaction:chainId=${encodeURIComponent(solanaChainId)}&id=signature`;
 
     for (const [ref, path, state] of [
       ['/features', ['features'], {}],
       ['/sessions', ['sessions'], {}],
-      [walletRef, ['transactions', 'wallet'], {address}],
+      ['/ethereum', ['ethereum'], {}],
+      ['/solana', ['solana'], {}],
+      [walletRef, ['ethereum', 'wallet'], {address}],
       [
         detailRef,
-        ['transactions', 'wallet', 'transaction'],
+        ['ethereum', 'wallet', 'transaction'],
         {address, chainId: 'eip155:1', hash},
+      ],
+      [
+        `${detailRef}/replace:kind=cancel`,
+        ['ethereum', 'wallet', 'transaction', 'replace'],
+        {address, chainId: 'eip155:1', hash, kind: 'cancel'},
+      ],
+      [solanaWalletRef, ['solana', 'wallet'], {address: solanaAddress}],
+      [
+        solanaDetailRef,
+        ['solana', 'wallet', 'transaction'],
+        {address: solanaAddress, chainId: solanaChainId, id: 'signature'},
       ],
     ]) {
       const explicit = startupRouter(preferences, ref).router;
@@ -243,12 +268,12 @@ test('changing the saved choice on Home affects the next launch without navigati
   const preferences = await AppPreferencesService.create(storage);
   const {router, history} = startupRouter(preferences, '/features');
 
-  await preferences.setDefaultFeature('transactions');
+  await preferences.setDefaultFeature('solana');
   assert.equal(router.features.$exact.$active, true);
   assert.equal(history.snapshot.entries[0].ref, '/features');
   assert.equal(
-    startupRouter(await AppPreferencesService.create(storage)).router
-      .transactions.$exact.$active,
+    startupRouter(await AppPreferencesService.create(storage)).router.solana
+      .$exact.$active,
     true,
   );
 

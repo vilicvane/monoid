@@ -16,7 +16,7 @@ function matchingRoots(router, activity) {
   return Object.keys(ROUTE_SCHEMA).filter(name => router[name][activity]);
 }
 
-for (const feature of ['sessions', 'transactions']) {
+for (const feature of ['sessions', 'ethereum', 'solana', 'bitcoin']) {
   test(`opening ${feature} from the hub preserves a return to the hub`, async () => {
     const router = await createRouter();
     assert.equal(router.$ableToBack, false);
@@ -88,8 +88,8 @@ test('only the outgoing feature is active until both page transitions finish', a
   leavingTransition({leaving: true});
   context.after(() => leavingTransition({leaving: false}));
 
-  const opening = router.transactions.$push();
-  const [entering] = router.transactions.$exact.$view().$entries;
+  const opening = router.ethereum.$push();
+  const [entering] = router.ethereum.$exact.$view().$entries;
   const enteringTransition = entering.$transition;
   enteringTransition({entering: true});
   context.after(() => enteringTransition({entering: false}));
@@ -97,20 +97,20 @@ test('only the outgoing feature is active until both page transitions finish', a
   assert.equal(leaving.$leaving.$operation, 'push');
   assert.equal(entering.$entering.$operation, 'push');
   assert.equal(router.sessions.$active, true);
-  assert.equal(router.transactions.$active, false);
+  assert.equal(router.ethereum.$active, false);
   assert.equal(router.sessions.$matched, true);
-  assert.equal(router.transactions.$matched, true);
-  assert.deepEqual(matchingRoots(router, '$transition'), ['transactions']);
+  assert.equal(router.ethereum.$matched, true);
+  assert.deepEqual(matchingRoots(router, '$transition'), ['ethereum']);
 
   entering.$entering.$complete();
   await Promise.resolve();
   assert.equal(router.sessions.$active, true);
-  assert.equal(router.transactions.$active, false);
+  assert.equal(router.ethereum.$active, false);
 
   leaving.$leaving.$complete();
   await opening.$completed;
   assert.equal(router.sessions.$matched, false);
-  assert.equal(router.transactions.$exact.$active, true);
+  assert.equal(router.ethereum.$exact.$active, true);
   assert.deepEqual(matchingRoots(router, '$transition'), []);
   assert.deepEqual(sessionsView.$entries, []);
 });
@@ -118,11 +118,11 @@ test('only the outgoing feature is active until both page transitions finish', a
 test('a navigation reset exposes its new destination while an interrupted swipe still targets a feature', async () => {
   const router = await createRouter();
   await router.sessions.$push().$completed;
-  await router.transactions.$push().$completed;
+  await router.solana.$push().$completed;
 
   const swipe = router.$back.$switch({progress: 0.4});
   assert.deepEqual(matchingRoots(router, '$switching'), ['sessions']);
-  assert.deepEqual(matchingRoots(router, '$active'), ['transactions']);
+  assert.deepEqual(matchingRoots(router, '$active'), ['solana']);
 
   const resetting = router.safe.$reset();
   assert.deepEqual(matchingRoots(router, '$transition'), ['safe']);
@@ -135,54 +135,100 @@ test('a navigation reset exposes its new destination while an interrupted swipe 
   assert.deepEqual(matchingRoots(router, '$active'), ['safe']);
 });
 
-test('transaction history preserves wallet and detail state through back and forward without matching Sessions', async () => {
-  const router = await createRouter();
-  const address = '0x3535353535353535353535353535353535353535';
-  const detail = {chainId: 'eip155:1', hash: `0x${'1'.repeat(64)}`};
+for (const [feature, address, detail] of [
+  [
+    'ethereum',
+    '0x3535353535353535353535353535353535353535',
+    {chainId: 'eip155:1', hash: `0x${'1'.repeat(64)}`},
+  ],
+  [
+    'solana',
+    '11111111111111111111111111111111',
+    {chainId: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', id: 'signature'},
+  ],
+]) {
+  test(`${feature} history preserves wallet and detail state through cancelled swipes, back and forward`, async () => {
+    const router = await createRouter();
+    const route = router[feature];
 
-  await router.transactions.$push().$completed;
-  await router.transactions.wallet({address}).$push().$completed;
-  await router.transactions.wallet.transaction(detail).$push().$completed;
+    await route.$push().$completed;
+    await route.wallet({address}).$push().$completed;
+    await route.wallet.transaction(detail).$push().$completed;
 
-  assert.equal(router.sessions.$matched, false);
-  assert.equal(router.transactions.$active, true);
-  assert.equal(router.transactions.wallet.transaction.$exact.$active, true);
-  assert.deepEqual({...router.$state}, {address, ...detail});
+    assert.equal(route.wallet.transaction.$exact.$active, true);
+    assert.deepEqual(matchingRoots(router, '$matched'), [feature]);
+    assert.deepEqual({...router.$state}, {address, ...detail});
 
-  await router.$back().$completed;
-  assert.equal(router.transactions.wallet.$exact.$active, true);
-  assert.deepEqual({...router.$state}, {address});
-  assert.equal(router.sessions.$matched, false);
+    const cancelled = router.$back.$switch({progress: 0.4});
+    assert.equal(route.wallet.transaction.$exact.$active, true);
+    assert.equal(route.wallet.$exact.$switching, true);
+    cancelled.$abort();
+    assert.equal(route.wallet.transaction.$exact.$active, true);
+    assert.deepEqual({...router.$state}, {address, ...detail});
 
-  await router.$back().$completed;
-  assert.equal(router.transactions.$exact.$active, true);
-  await router.$back().$completed;
-  assert.equal(router.features.$exact.$active, true);
+    await router.$back().$completed;
+    assert.equal(route.wallet.$exact.$active, true);
+    assert.deepEqual({...router.$state}, {address});
+    assert.deepEqual(matchingRoots(router, '$matched'), [feature]);
 
-  await router.$forward().$completed;
-  await router.$forward().$completed;
-  await router.$forward().$completed;
-  assert.equal(router.transactions.wallet.transaction.$exact.$active, true);
-  assert.deepEqual({...router.$state}, {address, ...detail});
-  assert.equal(router.sessions.$matched, false);
-});
+    await router.$back().$completed;
+    assert.equal(route.$exact.$active, true);
+    await router.$back().$completed;
+    assert.equal(router.features.$exact.$active, true);
+
+    await router.$forward().$completed;
+    await router.$forward().$completed;
+    await router.$forward().$completed;
+    assert.equal(route.wallet.transaction.$exact.$active, true);
+    assert.deepEqual({...router.$state}, {address, ...detail});
+    assert.deepEqual(matchingRoots(router, '$matched'), [feature]);
+  });
+}
+
+for (const kind of ['speed-up', 'cancel']) {
+  test(`Ethereum ${kind} replacement returns to its detail without matching Solana`, async () => {
+    const router = await createRouter();
+    const address = '0x3535353535353535353535353535353535353535';
+    const detail = {chainId: 'eip155:1', hash: `0x${'1'.repeat(64)}`};
+
+    await router.ethereum.$push().$completed;
+    await router.ethereum.wallet({address}).$push().$completed;
+    await router.ethereum.wallet.transaction(detail).$push().$completed;
+    await router.ethereum.wallet.transaction.replace({kind}).$push().$completed;
+    assert.deepEqual({...router.$state}, {address, ...detail, kind});
+    assert.deepEqual(matchingRoots(router, '$matched'), ['ethereum']);
+
+    const cancelled = router.$back.$switch({progress: 0.4});
+    cancelled.$abort();
+    assert.equal(
+      router.ethereum.wallet.transaction.replace.$exact.$active,
+      true,
+    );
+    assert.deepEqual({...router.$state}, {address, ...detail, kind});
+
+    await router.$back().$completed;
+    assert.equal(router.ethereum.wallet.transaction.$exact.$active, true);
+    assert.deepEqual({...router.$state}, {address, ...detail});
+  });
+}
 
 for (const destination of ['features', 'scan', 'safe']) {
   test(`resetting to ${destination} clears the temporary feature and its history`, async () => {
     const router = await createRouter();
-    await router.transactions.$push().$completed;
-    await router.transactions
+    await router.ethereum.$push().$completed;
+    await router.ethereum
       .wallet({address: '0x3535353535353535353535353535353535353535'})
       .$push().$completed;
 
     const resetting = router[destination].$reset();
     assert.deepEqual(matchingRoots(router, '$transition'), [destination]);
-    assert.equal(router.transactions.$active, true);
+    assert.equal(router.ethereum.$active, true);
     await resetting.$completed;
 
     assert.equal(router[destination].$exact.$active, true);
     assert.equal(router.sessions.$matched, false);
-    assert.equal(router.transactions.$matched, false);
+    assert.equal(router.ethereum.$matched, false);
+    assert.equal(router.solana.$matched, false);
     assert.equal(router.$ableToBack, false);
     assert.equal(router.$ableToForward, false);
     assert.equal(router.$snapshot.operation, 'reset');

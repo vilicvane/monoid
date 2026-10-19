@@ -1,21 +1,24 @@
-import type {LucideIcon} from 'lucide-react';
-import {
-  Bitcoin as bitcoin,
-  Globe as globe,
-  History as history,
-} from 'lucide-react';
+import bitcoin from '@web3icons/core/svgs/networks/mono/bitcoin.svg.js';
+import ethereum from '@web3icons/core/svgs/networks/mono/ethereum.svg.js';
+import solana from '@web3icons/core/svgs/networks/mono/solana.svg.js';
+import walletConnect from '@web3icons/core/svgs/wallets/mono/wallet-connect.svg.js';
 
 import {
   FEATURES as FEATURE_DEFINITIONS,
   type FeatureRoute,
 } from '../@features.js';
 
-const FEATURE_VISUALS: Record<FeatureRoute, {icon: LucideIcon; color: string}> =
-  {
-    sessions: {icon: globe, color: 'var(--ion-color-primary)'},
-    transactions: {icon: history, color: 'var(--ion-color-safe)'},
-    bitcoin: {icon: bitcoin, color: '#f7931a'},
-  };
+import type {AppIconSource} from './@ui/app-icon.js';
+
+const FEATURE_VISUALS: Record<
+  FeatureRoute,
+  {icon: AppIconSource; color: string}
+> = {
+  sessions: {icon: walletConnect, color: 'var(--ion-color-primary)'},
+  bitcoin: {icon: bitcoin, color: '#f7931a'},
+  ethereum: {icon: ethereum, color: '#627eea'},
+  solana: {icon: solana, color: '#9945ff'},
+};
 
 export const FEATURES = FEATURE_DEFINITIONS.map(feature => ({
   ...feature,

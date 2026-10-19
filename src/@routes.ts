@@ -44,11 +44,10 @@ export const ROUTE_SCHEMA = {
       switchAccounts: true,
     },
   },
-  transactions: {
+  ethereum: {
     wallet: {
       $state: undefined! as {
         address: string;
-        addressType: 'evm' | 'solana';
       },
       transaction: {
         $state: undefined! as {chainId: string; hash: string},
@@ -56,7 +55,12 @@ export const ROUTE_SCHEMA = {
           $state: undefined! as {kind: EvmTransactionReplacementKind},
         },
       },
-      solanaTransaction: {
+    },
+  },
+  solana: {
+    wallet: {
+      $state: undefined! as {address: string},
+      transaction: {
         $state: undefined! as {chainId: string; id: string},
       },
     },

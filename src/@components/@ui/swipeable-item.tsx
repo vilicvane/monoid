@@ -102,20 +102,27 @@ export const SwipeAction = styled.button<{$color?: string}>`
   justify-content: center;
   gap: 4px;
 
-  .lucide {
-    overflow: visible;
-    flex-shrink: 0;
-    width: 18px;
-    height: 18px;
-    padding: 9px;
-    border-radius: 50%;
-    background: var(--swipe-action-color);
-    color: var(--ion-color-primary-contrast);
-  }
-
   &:focus-visible {
     outline: 2px solid var(--swipe-action-color);
     outline-offset: -4px;
+  }
+`;
+
+export const SwipeActionIcon = styled.span`
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--swipe-action-color);
+  color: var(--ion-color-primary-contrast);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  .lucide {
+    width: 18px;
+    height: 18px;
   }
 `;
 
