@@ -160,13 +160,13 @@ beforeEach(() => {
     tap(sessionId) {
       this.emit('sessionOpened', {scanId: this.scanId, sessionId, tag: {}});
     },
-    standby(callback, applet, waitForRemoval) {
+    standby(callback, applet, getCloseOptions) {
       const args = [
         callback,
         error => this.errors.push(error),
         () => this.cleanupCount++,
         connected => this.connections.push(connected),
-        waitForRemoval,
+        getCloseOptions,
       ];
       const dispose = applet ? applet.standby(...args) : standbyIsoDep(...args);
       this.disposers.push(dispose);
@@ -204,6 +204,79 @@ test('successive card taps close only their sessions and leave scanning active',
   assert.deepEqual(device.errors, []);
   assert.deepEqual(device.connections, [true, false, true, false]);
 });
+
+for (const kind of ['raw', 'applet']) {
+  test(`${kind} sends completion text with connection cleanup after the operation finishes`, async () => {
+    platform = 'ios';
+    const pending = deferred();
+    let completed = false;
+    let optionsRead = 0;
+    device.standby(
+      async () => {
+        await pending.promise;
+        completed = true;
+      },
+      kind === 'applet' ? new TestApplet(new Uint8Array([1])) : undefined,
+      () => {
+        optionsRead++;
+        assert.equal(completed, true);
+        return {message: 'Completed.'};
+      },
+    );
+    await until(() => device.starts.length === 1);
+    device.tap('completed-session');
+    await setImmediate();
+    assert.equal(optionsRead, 0);
+    assert.deepEqual(device.closeOptions, []);
+
+    pending.resolve();
+    await until(() => device.cleanupCount === 1);
+    assert.equal(optionsRead, 1);
+    assert.deepEqual(device.closeOptions, [
+      {
+        sessionId: 'completed-session',
+        waitForRemoval: false,
+        message: 'Completed.',
+      },
+    ]);
+    assert.deepEqual(device.errors, []);
+  });
+}
+
+for (const ending of ['dispose', 'scan-ended']) {
+  test(`${ending} discards completion options from an operation that resolves late`, async () => {
+    platform = 'ios';
+    const pending = deferred();
+    let callbacks = 0;
+    let optionsRead = 0;
+    const dispose = device.standby(
+      async () => {
+        callbacks++;
+        await pending.promise;
+      },
+      undefined,
+      () => {
+        optionsRead++;
+        return {message: 'Completed.', waitForRemoval: true};
+      },
+    );
+    await until(() => device.starts.length === 1);
+    device.tap('cancelled-session');
+    await until(() => callbacks === 1);
+    let stopped;
+    if (ending === 'dispose') stopped = dispose();
+    else device.emit('scanEnded', {scanId: device.scanId, reason: 'cancelled'});
+    await until(() => device.stops.length === 1);
+
+    pending.resolve();
+    await stopped;
+    await until(() => device.closes.length === 1);
+    assert.equal(optionsRead, 0);
+    assert.deepEqual(device.closeOptions, [
+      {sessionId: 'cancelled-session', waitForRemoval: false},
+    ]);
+  });
+}
 
 for (const kind of ['raw', 'applet']) {
   test(`${kind} connection feedback exposes only the current native session ID`, async () => {
@@ -269,7 +342,7 @@ test('an operation error is reported before waiting for removal and cleanup resu
     () => {
       if (failed) assert.deepEqual(device.errors, [failure]);
 
-      return failed;
+      return {waitForRemoval: failed};
     },
   );
   await until(() => device.starts.length === 1);
@@ -479,7 +552,7 @@ test('SELECT 6a82 reports an absent applet before waiting for removal', async ()
   device.standby(
     async () => callbacks++,
     new TestApplet(new Uint8Array([1])),
-    () => true,
+    () => ({waitForRemoval: true}),
   );
   await until(() => device.starts.length === 1);
   device.tap('missing-applet');
@@ -741,7 +814,7 @@ test('cancel during removal waiting releases the scan and permits a fresh scan',
       throw failure;
     },
     undefined,
-    () => true,
+    () => ({waitForRemoval: true}),
   );
   await until(() => device.starts.length === 1);
   device.tap('waiting');
@@ -922,7 +995,7 @@ for (const [reason, state, event] of [
         void dispose();
       },
       undefined,
-      () => true,
+      () => ({waitForRemoval: true}),
     );
     device.disposers.push(dispose);
     await until(() => device.starts.length === 1);

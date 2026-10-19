@@ -42,14 +42,14 @@ mock.module('../.bld/app/@lib/isodep.js', {
       onError,
       onCleanup,
       onConnectionChange,
-      waitForRemoval,
+      getCloseOptions,
     ) {
       const scan = {
         callback,
         onError,
         onCleanup,
         onConnectionChange,
-        waitForRemoval,
+        getCloseOptions,
         stopped: deferred(),
         stopCalls: 0,
       };
@@ -131,7 +131,8 @@ async function connect(scan) {
   } catch (error) {
     scan.onError(error);
   }
-  scan.waitingForRemoval = scan.waitForRemoval();
+  scan.closeOptions = scan.getCloseOptions();
+  scan.waitingForRemoval = scan.closeOptions.waitForRemoval ?? false;
   scan.onConnectionChange(false);
   scan.onCleanup();
   await setImmediate();
@@ -155,6 +156,8 @@ test('iOS closes the native sheet before returning an operation error', async ()
   });
   await connect(run.scan);
   assert.equal(run.scan.waitingForRemoval, false);
+  assert.deepEqual(run.scan.closeOptions, {});
+  assert.notEqual(presenter.current.content, 'Completed.');
   assert.equal(run.scan.stopCalls, 1);
   assert.equal(run.settled, false);
   hide(presenter);
@@ -173,7 +176,8 @@ test('raw scan presentation binds progress to its native session and clears it a
   run.scan.onConnectionChange(true, 'install-session');
   assert.equal(presenter.current.sessionId, 'install-session');
   await run.scan.callback('install-session');
-  assert.equal(presenter.current.content, 'Installing applet\n42%');
+  assert.equal(presenter.current.content, 'Completed.');
+  assert.deepEqual(run.scan.getCloseOptions(), {message: 'Completed.'});
   assert.equal(presenter.current.sessionId, 'install-session');
   run.scan.onConnectionChange(false);
   assert.equal(presenter.current.sessionId, undefined);
@@ -198,7 +202,7 @@ test('failure is displayed while waiting for removal and can be cancelled', asyn
     error => error === failure,
   );
   run.scan.onError(failure);
-  assert.equal(run.scan.waitForRemoval(), true);
+  assert.deepEqual(run.scan.getCloseOptions(), {waitForRemoval: true});
   run.scan.onConnectionChange(false);
 
   assert.equal(presenter.current.error, true);
@@ -226,6 +230,8 @@ test('success waits for native stop and shared presentation exit', async () => {
   assert.equal(presenter.current.content, 'Installing 40%');
   pending.resolve();
   await connected;
+  assert.equal(presenter.current.content, 'Completed.');
+  assert.deepEqual(run.scan.closeOptions, {});
   assert.equal(presenter.current.closing, true);
   assert.equal(run.scan.stopCalls, 1);
   run.scan.stopped.resolve();
@@ -247,6 +253,7 @@ test('presentation exit cannot resolve success before native cleanup', async () 
 });
 
 test('dismissal waits for outstanding callback and ignores its late progress', async () => {
+  platform = 'ios';
   const {presenter, start} = setup();
   const callback = deferred();
   let lateContent;
@@ -270,11 +277,13 @@ test('dismissal waits for outstanding callback and ignores its late progress', a
   assert.equal(run.settled, false);
   callback.resolve();
   await connected;
+  assert.deepEqual(run.scan.closeOptions, {});
   assert.equal((await run.promise).error.code, 'CANCELLED');
   assert.equal(run.scan.stopCalls, 1);
 });
 
 test('unmount aborts pending callback work before native stop completes', async () => {
+  platform = 'ios';
   const {presenter, owner, start} = setup();
   const pendingRead = deferred();
   let signal;
@@ -292,6 +301,7 @@ test('unmount aborts pending callback work before native stop completes', async 
   assert.equal(signal.reason.code, 'CANCELLED');
   pendingRead.resolve();
   await connected;
+  assert.deepEqual(run.scan.closeOptions, {});
   assert.equal(continued, false);
   assert.equal(run.settled, false);
   run.scan.stopped.resolve();
@@ -300,6 +310,7 @@ test('unmount aborts pending callback work before native stop completes', async 
 });
 
 test('native tag loss aborts pending callback work without waiting for its response', async () => {
+  platform = 'ios';
   const {presenter, start} = setup();
   const pendingRead = deferred();
   let signal;
@@ -315,6 +326,8 @@ test('native tag loss aborts pending callback work without waiting for its respo
   assert.equal(signal.reason.code, 'CANCELLED');
   pendingRead.resolve();
   await connected;
+  assert.deepEqual(run.scan.closeOptions, {});
+  assert.notEqual(presenter.current.content, 'Completed.');
   run.scan.stopped.resolve();
   hide(presenter);
   assert.equal((await run.promise).error, signal.reason);

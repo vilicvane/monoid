@@ -5,7 +5,7 @@ description: Monoid NFC card sessions, Access/Safe PIN ownership, biometric vaul
 
 # Monoid card sessions
 
-Source: `../records.md`, especially records 29–32, 34 and 38–39, and `../29.md`. Treat records
+Source: `../records.md`, especially records 29–32, 34 and 38–40, and `../29.md`. Treat records
 as authoritative and keep them up to date. Records 19–24 describe an older WIP;
 do not reintroduce their plain-storage design or assume those TODOs still exist.
 
@@ -31,8 +31,10 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   `setSessionMessage`; clear the presentation's session ID on disconnect. Stale
   messages cannot overwrite removal or disconnect feedback, and message failures
   must not change APDU outcomes. Public Core NFC does not expose spinner control.
-  Ordinary connection cleanup retains the last message until scan dismissal;
-  only an explicit removal gate restores the initial hold-card prompt.
+  Successful card operations show `Completed.` using the optional `closeSession`
+  message, written atomically before ending the connection. PIN input, redirects,
+  cancellation and failure do not mark completion. Only an explicit removal gate
+  restores the initial hold-card prompt.
 - Card sounds respect the iPhone Silent Mode switch, matching the user's final
   preference after checking the system NFC completion sound.
 - During an iOS APDU exchange, Core NFC response/retry errors count as `TAG_LOST`

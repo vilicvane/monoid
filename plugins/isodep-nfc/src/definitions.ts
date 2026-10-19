@@ -55,6 +55,11 @@ export type CloseSessionOptions = {
   sessionId: string;
   /** Keep discovery blocked until native removal detection. See platform notes. */
   waitForRemoval?: boolean;
+  /**
+   * Nonblank final system-sheet text for a healthy, idle connection on iOS.
+   * Ignored while waiting for removal, after session failure, or on Android.
+   */
+  message?: string;
 };
 
 export type SessionEndedReason =

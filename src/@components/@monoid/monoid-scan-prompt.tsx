@@ -299,7 +299,10 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
       // Both the native scan and the actual card/backdrop exit animations must finish.
       const [, hidden] = await Promise.all([
         stopped,
-        monoidScanPromptPresenter.hide(owner),
+        monoidScanPromptPresenter.hide(
+          owner,
+          completed.type === 'success' ? 'Completed.' : undefined,
+        ),
       ]);
 
       if (disposed) {
@@ -623,6 +626,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
           }
 
           result = {type: 'success'};
+          setStateContent('Completed.');
         },
         error => {
           if (disposed) {
@@ -679,7 +683,11 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
         },
         () => {
           // Core NFC covers the WebView. Close its sheet before presenting errors.
-          if (Capacitor.getPlatform() === 'ios') return false;
+          if (Capacitor.getPlatform() === 'ios') {
+            return !disposed && !finishing && result?.type === 'success'
+              ? {message: 'Completed.'}
+              : {};
+          }
 
           if (
             disposed ||
@@ -691,7 +699,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
               (result.error instanceof IsoDepScanError ||
                 isCredentialRequestCancelled(result.error)))
           ) {
-            return false;
+            return {};
           }
 
           setState('error');
@@ -717,7 +725,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
             result.error = errorService.markPresented(result.error);
           }
 
-          return true;
+          return {waitForRemoval: true};
         },
         allowInstallRedirect
           ? async sessionId => {

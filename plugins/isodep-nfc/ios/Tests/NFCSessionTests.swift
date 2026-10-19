@@ -94,9 +94,9 @@ private final class Fixture {
         return result
     }
 
-    @discardableResult func close(_ id: String, wait: Bool = false) -> Recorded<Void> {
+    @discardableResult func close(_ id: String, wait: Bool = false, message: String? = nil) -> Recorded<Void> {
         let result = Recorded<Void>()
-        controller.close(id: id, waitForRemoval: wait, completion: result.complete)
+        controller.close(id: id, waitForRemoval: wait, message: message, completion: result.complete)
         return result
     }
 
@@ -211,6 +211,154 @@ final class NFCSessionTests: XCTestCase {
         XCTAssertEqual(exchange.code, "TIMEOUT")
         XCTAssertEqual(exchange.outcome, "unknown")
         XCTAssertEqual(fixture.card.sent.count, 1)
+    }
+
+    func testCloseMessageReplacesProgressAndSurvivesScanDismissal() throws {
+        let fixture = Fixture()
+        let id = fixture.open()
+        let exchange = fixture.exchange(id)
+        fixture.card.completions[0](.success([0x90, 0]))
+        XCTAssertTrue(exchange.succeeded)
+        try fixture.controller.setSessionMessage(id: id, message: "Reading card…")
+        let scheduled = fixture.nextTaskId
+
+        XCTAssertTrue(fixture.close(id, message: "Completed.").succeeded)
+        XCTAssertEqual(fixture.reader.alertMessage, "Completed.")
+        XCTAssertThrowsError(try fixture.controller.setSessionMessage(id: id, message: "Late progress")) { error in
+            XCTAssertEqual((error as? NFCFailure)?.code, "SESSION_CLOSED")
+        }
+        let stopped = fixture.stop()
+        XCTAssertEqual(fixture.reader.alertMessage, "Completed.")
+        XCTAssertEqual(fixture.reader.invalidationMessages, [nil])
+        XCTAssertTrue(stopped.values.isEmpty)
+        fixture.reader.invalidateCallback()
+        XCTAssertTrue(stopped.succeeded)
+        XCTAssertEqual(fixture.reader.alertMessage, "Completed.")
+        XCTAssertEqual(fixture.nextTaskId, scheduled)
+        XCTAssertEqual(fixture.card.sent.count, 1)
+    }
+
+    func testCloseMessageIsIdempotentAndCannotChangeAnotherConnection() throws {
+        let fixture = Fixture()
+        let oldId = fixture.open()
+        XCTAssertTrue(fixture.close(oldId, message: "Completed.").succeeded)
+        XCTAssertTrue(fixture.close(oldId, message: "Repeated close").succeeded)
+        XCTAssertTrue(fixture.close("unknown", message: "Unknown close").succeeded)
+        XCTAssertEqual(fixture.reader.alertMessage, "Completed.")
+
+        let nextCard = FakeCard()
+        fixture.reader.discover(nextCard)
+        fixture.reader.connections[1](nil)
+        let newId = fixture.events.last { $0.0 == "sessionOpened" }!.1["sessionId"] as! String
+        try fixture.controller.setSessionMessage(id: newId, message: "Current connection")
+        for id in [oldId, "unknown"] {
+            XCTAssertTrue(fixture.close(id, message: "Stale completion").succeeded)
+            XCTAssertEqual(fixture.reader.alertMessage, "Current connection")
+        }
+        XCTAssertTrue(fixture.exchange(newId).values.isEmpty)
+        XCTAssertEqual(nextCard.sent.count, 1)
+        XCTAssertEqual(fixture.reader.restarts, 1)
+    }
+
+    func testCloseMessageCannotCompleteAnInflightExchange() throws {
+        let fixture = Fixture()
+        let id = fixture.open()
+        try fixture.controller.setSessionMessage(id: id, message: "Reading card…")
+        let exchange = fixture.exchange(id)
+        let closed = fixture.close(id, message: "Completed.")
+
+        XCTAssertEqual(fixture.reader.alertMessage, "Reading card…")
+        XCTAssertEqual(exchange.code, "CANCELLED")
+        XCTAssertEqual(exchange.outcome, "unknown")
+        XCTAssertTrue(closed.values.isEmpty)
+        XCTAssertEqual(fixture.reader.invalidations, 1)
+        XCTAssertEqual(fixture.reader.restarts, 0)
+        fixture.reader.invalidateCallback()
+        XCTAssertTrue(closed.succeeded)
+        fixture.card.completions[0](.success([0x90, 0]))
+        XCTAssertEqual(fixture.reader.alertMessage, "Reading card…")
+        XCTAssertEqual(fixture.card.sent.count, 1)
+    }
+
+    func testCloseMessageCannotCompleteFailedOrTimedOutExchanges() throws {
+        for code in ["TAG_LOST", "IO_ERROR", "TIMEOUT"] {
+            let fixture = Fixture()
+            let id = fixture.open()
+            try fixture.controller.setSessionMessage(id: id, message: "Reading card…")
+            let exchange = fixture.exchange(id, timeout: 500)
+            if code == "TIMEOUT" {
+                fixture.advance(500)
+            } else {
+                fixture.card.completions[0](.failure(NFCFailure(code: code, message: "Failed")))
+            }
+            let closed = fixture.close(id, message: "Completed.")
+
+            XCTAssertEqual(exchange.code, code)
+            XCTAssertEqual(exchange.outcome, "unknown")
+            XCTAssertEqual(fixture.reader.alertMessage, "Reading card…")
+            fixture.stop()
+            XCTAssertEqual(fixture.reader.invalidationMessages, [code == "TAG_LOST" ? "Card connection lost." : nil])
+            fixture.reader.invalidateCallback()
+            XCTAssertTrue(closed.succeeded)
+            XCTAssertEqual(fixture.card.sent.count, 1)
+        }
+    }
+
+    func testCloseMessageCannotCompleteFailedOrTimedOutConnections() {
+        for timesOut in [false, true] {
+            let fixture = Fixture()
+            fixture.start()
+            fixture.reader.activate()
+            fixture.reader.alertMessage = "Hold your card near the top of your iPhone."
+            fixture.reader.discover(fixture.card)
+            if timesOut {
+                fixture.advance(30_000)
+            } else {
+                fixture.reader.connections[0](NFCFailure(code: "IO_ERROR", message: "Failed"))
+            }
+            let id = fixture.events.first { $0.0 == "sessionEnded" }!.1["sessionId"] as! String
+            let closed = fixture.close(id, message: "Completed.")
+
+            XCTAssertEqual(fixture.reader.alertMessage, "Hold your card near the top of your iPhone.")
+            XCTAssertEqual(fixture.count("sessionOpened"), 0)
+            fixture.stop()
+            fixture.reader.invalidateCallback()
+            XCTAssertTrue(closed.succeeded)
+            XCTAssertTrue(fixture.card.sent.isEmpty)
+        }
+    }
+
+    func testCloseMessageCannotReplaceRemovalInstructions() {
+        let fixture = Fixture()
+        let id = fixture.open()
+        let removing = fixture.close(id, wait: true, message: "Completed.")
+        XCTAssertEqual(fixture.reader.alertMessage, "Remove the card before scanning it again.")
+        XCTAssertTrue(fixture.close(id, message: "Late completion").succeeded)
+        XCTAssertEqual(fixture.reader.alertMessage, "Remove the card before scanning it again.")
+        XCTAssertTrue(removing.values.isEmpty)
+        XCTAssertEqual(fixture.reader.restarts, 0)
+        fixture.card.isAvailable = false
+        fixture.advance(250)
+        XCTAssertTrue(removing.succeeded)
+        XCTAssertEqual(fixture.reader.alertMessage, "Hold your card near the top of your iPhone.")
+        XCTAssertTrue(fixture.close(id, wait: true, message: "Repeated completion").succeeded)
+        XCTAssertEqual(fixture.reader.alertMessage, "Hold your card near the top of your iPhone.")
+        XCTAssertTrue(fixture.card.sent.isEmpty)
+    }
+
+    func testCloseMessageCannotChangeAStoppingScan() throws {
+        let fixture = Fixture()
+        let id = fixture.open()
+        try fixture.controller.setSessionMessage(id: id, message: "Reading card…")
+        let stopped = fixture.stop()
+        let closed = fixture.close(id, message: "Completed.")
+        XCTAssertEqual(fixture.reader.alertMessage, "Reading card…")
+        XCTAssertTrue(closed.values.isEmpty)
+        fixture.reader.invalidateCallback()
+        XCTAssertTrue(closed.succeeded)
+        XCTAssertTrue(stopped.succeeded)
+        XCTAssertTrue(fixture.close(id, message: "Late completion").succeeded)
+        XCTAssertEqual(fixture.reader.alertMessage, "Reading card…")
     }
 
     func testSessionMessageCannotOverwriteRemovalInstructions() {
@@ -485,9 +633,10 @@ final class NFCSessionTests: XCTestCase {
         }
     }
 
-    func testRediscoveryCannotEraseTagLossMessageBeforeStop() {
+    func testRediscoveryCannotEraseTagLossMessageBeforeStop() throws {
         let fixture = Fixture()
         let id = fixture.open()
+        try fixture.controller.setSessionMessage(id: id, message: "Reading card…")
         fixture.exchange(id)
         fixture.card.completions[0](.failure(NFCFailure(code: "TAG_LOST", message: "Lost")))
         fixture.close(id)
@@ -495,6 +644,9 @@ final class NFCSessionTests: XCTestCase {
         let nextCard = FakeCard()
         fixture.reader.discover(nextCard)
         fixture.reader.connections[1](nil)
+        let newId = fixture.events.last { $0.0 == "sessionOpened" }!.1["sessionId"] as! String
+        XCTAssertTrue(fixture.close(newId, message: "Completed.").succeeded)
+        XCTAssertEqual(fixture.reader.alertMessage, "Reading card…")
         fixture.stop()
         XCTAssertEqual(fixture.reader.invalidationMessages, ["Card connection lost."])
         XCTAssertTrue(nextCard.sent.isEmpty)

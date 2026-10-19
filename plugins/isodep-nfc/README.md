@@ -17,15 +17,15 @@ arbitrary ISO-DEP bytes.
 Import `IsoDepNfc` and the exported types from `capacitor-isodep-nfc` after adding
 this local package to an application.
 
-| Method                                       | Result                                                       |
-| -------------------------------------------- | ------------------------------------------------------------ |
-| `getStatus()`                                | `{supported, enabled}`                                       |
-| `openSettings()`                             | Opens Android NFC settings; iOS rejects `UNSUPPORTED`        |
-| `startScan({scanId, transceiveTimeoutMs?})`  | Enables continuous scanning without waiting for a tag        |
-| `stopScan({scanId})`                         | Stops the scan, cancels its pending work and awaits cleanup  |
-| `transceive({sessionId, data, timeoutMs?})`  | `{data}` with the unmodified response bytes                  |
-| `setSessionMessage({sessionId, message})`    | Updates the iOS system sheet; Android rejects `UNSUPPORTED`  |
-| `closeSession({sessionId, waitForRemoval?})` | Closes one connection; optionally waits for detected removal |
+| Method                                                 | Result                                                       |
+| ------------------------------------------------------ | ------------------------------------------------------------ |
+| `getStatus()`                                          | `{supported, enabled}`                                       |
+| `openSettings()`                                       | Opens Android NFC settings; iOS rejects `UNSUPPORTED`        |
+| `startScan({scanId, transceiveTimeoutMs?})`            | Enables continuous scanning without waiting for a tag        |
+| `stopScan({scanId})`                                   | Stops the scan, cancels its pending work and awaits cleanup  |
+| `transceive({sessionId, data, timeoutMs?})`            | `{data}` with the unmodified response bytes                  |
+| `setSessionMessage({sessionId, message})`              | Updates the iOS system sheet; Android rejects `UNSUPPORTED`  |
+| `closeSession({sessionId, waitForRemoval?, message?})` | Closes one connection; optionally waits for detected removal |
 
 ## iOS integration and differences
 
@@ -63,6 +63,16 @@ without replacing the current message. Text changes do not send commands,
 restart polling or extend deadlines. Core NFC exposes no public spinner or
 progress-bar control; callers can show actual operation stages or measured
 progress in this text. Android rejects this iOS-only method with `UNSUPPORTED`.
+
+On iOS, `closeSession` accepts an optional nonblank `message` to replace progress
+with final text such as `Completed.` while closing a healthy, idle connection.
+The update and close happen together, so late progress cannot overwrite the
+final text. Only supply completion text after the application operation succeeds.
+It is ignored for ended or unknown sessions, an ended scan, connection or APDU
+work still in flight, a scan that has lost a connection, or any removal wait;
+failure and removal feedback remain intact. Invalid text rejects
+`INVALID_ARGUMENT`. Android ignores this option. The message does not change
+cleanup, send an APDU, or stop the scan; await `stopScan` as usual.
 
 The platform imposes its own reader-session time limit, normally 60 seconds.
 Longer `transceiveTimeoutMs` values cannot extend it. A system timeout emits

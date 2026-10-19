@@ -61,6 +61,29 @@ test('content updates keep the same presentation and its exit callback remains v
   assert.equal(presenter.current, undefined);
 });
 
+for (const finalContent of ['Completed.', null, undefined]) {
+  test(`hide commits final content ${String(finalContent)} before exit and preserves it for repeated callers`, async () => {
+    const presenter = new MonoidScanPromptPresenter();
+    const owner = Symbol();
+    const shown = show(presenter, owner, 'Reading the card');
+    const completion = presenter.hide(owner, finalContent);
+
+    assert.equal(presenter.current.token, shown.token);
+    assert.equal(presenter.current.closing, true);
+    assert.equal(
+      presenter.current.content,
+      finalContent === undefined ? 'Reading the card' : finalContent,
+    );
+    const closing = presenter.current;
+    assert.equal(presenter.hide(owner), completion);
+    assert.equal(presenter.hide(owner, 'Late progress'), completion);
+    assert.equal(presenter.current, closing);
+    await assertPending(completion);
+    presenter.remove(shown, true);
+    assert.equal(await completion, true);
+  });
+}
+
 test('reopening cancels the prior exit and ignores its late success or failure', async () => {
   const presenter = new MonoidScanPromptPresenter();
   const owner = Symbol();
@@ -91,7 +114,7 @@ test('replacement cancels the old owner without allowing it to close the new pre
   const replacement = show(presenter, secondOwner);
 
   assert.equal(await firstExit, false);
-  assert.equal(await presenter.hide(firstOwner), false);
+  assert.equal(await presenter.hide(firstOwner, 'Stale completion'), false);
   presenter.remove(initial, true);
   assert.equal(presenter.current, replacement);
   assert.equal(replacement.closing, false);

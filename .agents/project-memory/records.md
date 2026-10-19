@@ -62,3 +62,7 @@
 ## d099e17
 
 39. [user] after confirming the iOS NFC system sheet updates its text, keep it from reverting to the initial hold-card prompt when finishing; timing out without a card tap should close quietly without an app error. NFC dismissal feedback, idle timeout.
+
+## 09ed49b
+
+40. [user] the final in-progress text is misleading at scan completion; clear it or show an explicit completion message instead. NFC completion presentation.

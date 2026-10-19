@@ -1,6 +1,10 @@
 import {App} from '@capacitor/app';
 import {Capacitor, type PluginListenerHandle} from '@capacitor/core';
-import type {IsoDepNfcError, ScanEndedEvent} from 'capacitor-isodep-nfc';
+import type {
+  CloseSessionOptions,
+  IsoDepNfcError,
+  ScanEndedEvent,
+} from 'capacitor-isodep-nfc';
 import {IsoDepNfc} from 'capacitor-isodep-nfc';
 
 let previousScan: Promise<void> = Promise.resolve();
@@ -31,7 +35,7 @@ export function standbyIsoDep(
   onError: (error: unknown) => void,
   onCleanup?: () => void,
   onConnectionChange?: (connected: boolean, sessionId?: string) => void,
-  waitForRemoval?: () => boolean,
+  getCloseOptions?: () => Omit<CloseSessionOptions, 'sessionId'>,
 ): () => Promise<void> {
   let disposed = false;
   let connectedSessionId: string | undefined;
@@ -85,12 +89,14 @@ export function standbyIsoDep(
         }
       }
 
-      const waitingForRemoval =
-        !disposed && !scanEnded && (waitForRemoval?.() ?? false);
+      const closeOptions =
+        !disposed && !scanEnded ? getCloseOptions?.() : undefined;
+      const waitingForRemoval = closeOptions?.waitForRemoval ?? false;
 
       try {
         await IsoDepNfc.closeSession({
           sessionId,
+          ...closeOptions,
           waitForRemoval: waitingForRemoval,
         });
       } catch (error) {

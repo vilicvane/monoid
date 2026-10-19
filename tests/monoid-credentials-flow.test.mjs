@@ -366,7 +366,7 @@ function mount(overrides = {}) {
         onError,
         onCleanup,
         onConnectionChange,
-        waitForRemoval,
+        getCloseOptions,
         onNotFound,
       ) {
         assert.ok(
@@ -378,7 +378,7 @@ function mount(overrides = {}) {
           onError,
           onCleanup,
           onConnectionChange,
-          waitForRemoval,
+          getCloseOptions,
           onNotFound,
           stopRequested: false,
           stopFinished: false,
@@ -484,7 +484,8 @@ function mount(overrides = {}) {
       scan.onError(error);
     }
     scan.callbackReturned = true;
-    scan.waitingForRemoval = scan.waitForRemoval();
+    scan.closeOptions = scan.getCloseOptions();
+    scan.waitingForRemoval = scan.closeOptions.waitForRemoval ?? false;
     scan.onConnectionChange?.(false);
     if (cleanup && !scan.stopRequested) scan.onCleanup?.();
     await state.flush();
@@ -502,7 +503,8 @@ function mount(overrides = {}) {
       scan.onError(error);
     }
     scan.callbackReturned = true;
-    scan.waitingForRemoval = scan.waitForRemoval();
+    scan.closeOptions = scan.getCloseOptions();
+    scan.waitingForRemoval = scan.closeOptions.waitForRemoval ?? false;
     scan.onConnectionChange(false);
     if (cleanup && !scan.stopRequested) scan.onCleanup();
     await state.flush();
@@ -717,15 +719,90 @@ test('prompt: missing PIN exits without waiting for removal and prompts after cl
   assert.equal(state.inputs.length, 1);
 });
 
-test('prompt: successful operations exit without waiting for removal', async () => {
-  const state = mount({auth: false});
-  const scan = await state.tap();
+for (const targetPlatform of ['ios', 'android']) {
+  test(`prompt: successful operations show completion while exiting on ${targetPlatform}`, async () => {
+    platform = targetPlatform;
+    const state = mount({
+      auth: false,
+      onBusiness: (_applet, setContent) => setContent('Reading addresses 3/3'),
+    });
+    const scan = await state.tap();
 
-  assert.equal(scan.waitingForRemoval, false);
-  assert.equal(state.presenter.current.closing, true);
-  await state.finishExit();
-  assert.equal(state.outcome, 'resolved');
-});
+    assert.equal(scan.waitingForRemoval, false);
+    assert.deepEqual(
+      scan.closeOptions,
+      targetPlatform === 'ios' ? {message: 'Completed.'} : {},
+    );
+    assert.equal(state.presenter.current.content, 'Completed.');
+    assert.equal(state.presenter.current.closing, true);
+    await state.finishExit();
+    assert.equal(state.outcome, 'resolved');
+  });
+}
+
+for (const [outcome, options, missingApplet] of [
+  ['Access PIN input', {}, false],
+  ['Safe PIN input', {safe: true, helloPIN: false, safePIN: false}, false],
+  ['install redirect', {auth: false, allowInstallRedirect: true}, true],
+  ['uninitialized card', {auth: false, helloPIN: false}, false],
+  [
+    'operation failure',
+    {
+      auth: false,
+      onBusiness: () => {
+        throw readFailed();
+      },
+    },
+    false,
+  ],
+  [
+    'tag loss',
+    {
+      auth: false,
+      onBusiness: () => {
+        throw tagLost();
+      },
+    },
+    false,
+  ],
+]) {
+  test(`prompt: ${outcome} does not claim iOS scan completion`, async () => {
+    platform = 'ios';
+    const state = mount(options);
+    const scan = missingApplet
+      ? await state.missingApplet()
+      : await state.tap();
+
+    assert.deepEqual(scan.closeOptions, {});
+    assert.notEqual(state.presenter.current.content, 'Completed.');
+    assert.equal(state.presenter.current.closing, true);
+    await state.finishExit();
+    assert.notEqual(state.outcome, 'resolved');
+  });
+}
+
+for (const cancellation of ['dismiss', 'unmount']) {
+  test(`prompt: ${cancellation} before a late callback resolves does not claim iOS completion`, async () => {
+    platform = 'ios';
+    const reading = deferred();
+    const state = mount({auth: false, onBusiness: () => reading.promise});
+    const tapping = state.tap();
+    await state.flush();
+    assert.equal(state.businessCalls, 1);
+
+    if (cancellation === 'dismiss') state.presenter.current.onDismiss();
+    else state.owner.unmount();
+    await state.flush();
+    reading.resolve();
+    const scan = await tapping;
+
+    assert.deepEqual(scan.closeOptions, {});
+    assert.notEqual(state.presenter.current.content, 'Completed.');
+    await state.finishExit();
+    assert.equal(state.outcome, 'rejected');
+    assert.equal(state.errors[0].code, 'CANCELLED');
+  });
+}
 
 test('prompt: a page PIN session unlocks once for multiple destination scans', async () => {
   const state = mount({

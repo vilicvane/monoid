@@ -1,4 +1,4 @@
-import {IsoDepNfc} from 'capacitor-isodep-nfc';
+import {type CloseSessionOptions, IsoDepNfc} from 'capacitor-isodep-nfc';
 
 import {standbyIsoDep} from './isodep.js';
 
@@ -27,7 +27,7 @@ export abstract class Applet<TCommandDefinitions> {
     /** Reports native connection changes, including the SELECT exchange. */
     onConnectionChange?: (connected: boolean, sessionId?: string) => void,
     /** Evaluated after the operation or onError, before connection cleanup. */
-    waitForRemoval?: () => boolean,
+    getCloseOptions?: () => Omit<CloseSessionOptions, 'sessionId'>,
     /** Handles a missing SELECT target while its raw connection is still open. */
     onNotFound?: (sessionId: string) => Promise<void>,
   ): () => Promise<void> {
@@ -51,7 +51,7 @@ export abstract class Applet<TCommandDefinitions> {
       onError,
       onCleanup,
       onConnectionChange,
-      waitForRemoval,
+      getCloseOptions,
     );
   }
 

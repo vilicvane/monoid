@@ -193,7 +193,7 @@ final class NFCSessionController: NFCScanEvents {
         scan.reader.alertMessage = message
     }
 
-    func close(id: String, waitForRemoval: Bool, completion: @escaping Completion) {
+    func close(id: String, waitForRemoval: Bool, message: String? = nil, completion: @escaping Completion) {
         guard let scan, let session = scan.session, session.id == id else {
             if waitForRemoval && (scan == nil || scan?.removedSessionId != id) {
                 completion(.failure(NFCFailure(code: "SESSION_CLOSED", message: "This NFC session is no longer available.")))
@@ -201,6 +201,14 @@ final class NFCSessionController: NFCScanEvents {
                 completion(.success(()))
             }
             return
+        }
+
+        // Set the final text together with closing the connection, so late
+        // progress cannot replace it or turn failed/in-flight work into success.
+        if let message, scan.endCode == nil, !scan.connectionLost,
+           session.connected, !session.ended, !session.working,
+           !session.waitingForRemoval, !waitForRemoval {
+            scan.reader.alertMessage = message
         }
 
         if waitForRemoval {

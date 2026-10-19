@@ -50,13 +50,18 @@ export class MonoidScanPromptPresenter {
     this.current = {...options, owner, token: token!, closing: false};
   }
 
-  hide(owner: symbol): Promise<boolean> {
+  hide(owner: symbol, finalContent?: ReactNode): Promise<boolean> {
     if (this.current && this.current.owner !== owner) {
       return Promise.resolve(false);
     }
 
     if (this.current && !this.current.closing) {
-      this.current = {...this.current, closing: true};
+      this.current = {
+        ...this.current,
+        content:
+          finalContent !== undefined ? finalContent : this.current.content,
+        closing: true,
+      };
     }
 
     return this.completion?.owner === owner
