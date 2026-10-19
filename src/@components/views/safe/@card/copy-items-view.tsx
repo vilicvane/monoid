@@ -20,6 +20,7 @@ import {
 } from '../../../../@lib/monoid/index.js';
 import type {Router} from '../../../../@routes.js';
 import {isCredentialRequestCancelled} from '../../../../@services/index.js';
+import {popOutAnimationCSS} from '../../../@animations.js';
 import {AppletInstallProgressContent} from '../../../@monoid/applet-install-progress.js';
 import {MonoidCard, MonoidCardFrame} from '../../../@monoid/monoid-card.js';
 import {
@@ -121,6 +122,14 @@ const CardGrid = styled.div`
   max-width: 300px;
 `;
 
+const CopySteps = styled(Steps)<{$exiting: boolean}>`
+  ${props => props.$exiting && popOutAnimationCSS}
+
+  @media (prefers-reduced-motion: reduce) {
+    animation-duration: 1ms;
+  }
+`;
+
 const CardPreviewButton = styled.button`
   min-width: 0;
   padding: 0;
@@ -151,7 +160,6 @@ const CardPreview = styled(MonoidCard)<{
       ? 'var(--ion-color-light)'
       : 'var(--ion-color-dark-contrast)'};
   --monoid-card-logo-width: calc(72 / 430 * 100%);
-  --monoid-card-logo-right: 0.5px;
   --monoid-card-logo-background: ${props =>
     props.$interrupted
       ? 'var(--ion-color-warning)'
@@ -161,7 +169,8 @@ const CardPreview = styled(MonoidCard)<{
       ? 'var(--color-text-warning)'
       : 'var(--ion-color-primary)'};
 
-  box-shadow: inset 0 0 0 0.5px var(--ion-color-medium-tint);
+  box-sizing: border-box;
+  border: 0.5px solid var(--ion-color-medium-tint);
 `;
 
 const CardPlaceholder = styled(MonoidCardFrame)`
@@ -212,7 +221,7 @@ const CopyProgress = ({
   value: string;
 }): ReactNode => (
   <>
-    {children}, hold tight...
+    {children}...
     <br />
     <MonoidScanStatePromptContentHighlight>
       {value}
@@ -284,7 +293,9 @@ export const CopyItemsView = observer(
       monoidCredentialsStore.createPINSession(),
     );
     const backup = session.backup;
-    const [working, setWorking] = useState(false);
+    const [workingStep, setWorkingStep] = useState<number>();
+    const [stepsExited, setStepsExited] = useState(false);
+    const working = workingStep !== undefined;
     const [notice, setNotice] = useState<string>();
     const [failed, setFailed] = useState(false);
     const [confirmRestart, setConfirmRestart] = useState(false);
@@ -337,14 +348,14 @@ export const CopyItemsView = observer(
 
     const selected = backup?.items.filter(item => item.selected) ?? [];
     const selectedGroups = getCardResourceGroups(selected);
-    const itemCountLabel = `Items · ${formatCardResourceCount(selectedGroups)}`;
+    const itemCountLabel = `items ${formatCardResourceCount(selectedGroups)}`;
     const targets = backup?.targets ?? [];
     const transfers = targets.flatMap(target => target.items);
     const exported = transfers.filter(item => item.exported).length;
     const conflicts = transfers.filter(item => item.conflict).length;
     const completedCards = targets.filter(target => target.complete).length;
     const sourceId = backup?.source.id;
-    const step = backup?.complete
+    const nextStep = backup?.complete
       ? 5
       : !backup
         ? 1
@@ -353,7 +364,10 @@ export const CopyItemsView = observer(
           : exported < transfers.length
             ? 3
             : 4;
+    const step = workingStep ?? nextStep;
+    const activeStep = Math.min(step, 4);
     const busy = working || session.busy;
+    const complete = backup?.complete && !busy && !failed;
     const destinationsEditable = !!backup && !backup.importStarted;
     const operationNotice = notice && (failed || step < 3) && (
       <Notice role={failed ? 'alert' : 'status'}>{notice}</Notice>
@@ -385,7 +399,7 @@ export const CopyItemsView = observer(
       if (running.current || session.busy) return;
 
       running.current = true;
-      setWorking(true);
+      setWorkingStep(step);
       setNotice(undefined);
       setFailed(false);
 
@@ -405,7 +419,7 @@ export const CopyItemsView = observer(
         }
       } finally {
         running.current = false;
-        if (mounted.current) setWorking(false);
+        if (mounted.current) setWorkingStep(undefined);
       }
     };
 
@@ -512,7 +526,11 @@ export const CopyItemsView = observer(
             );
 
             try {
-              setState(isNew ? 'Setting Safe PIN...' : 'Unlocking safe...');
+              setState(
+                isNew
+                  ? 'Setting Safe PIN, hold tight...'
+                  : 'Unlocking safe, hold tight...',
+              );
               const initialized = await initializeBackupTarget(
                 applet,
                 hello,
@@ -548,7 +566,7 @@ export const CopyItemsView = observer(
         await scanWithAccess(
           'Scan the source card',
           async (applet, setState, hello, signal) => {
-            setState('Reading items...');
+            setState('Reading items, hold tight...');
             await session.readSource(
               applet,
               hello,
@@ -601,7 +619,7 @@ export const CopyItemsView = observer(
               </MonoidScanStatePromptContentHighlight>
             </>,
             async (applet, setState, hello, signal) => {
-              setState('Authenticating with Safe PIN...');
+              setState('Authenticating with Safe PIN, hold tight...');
               await session.exportItems(applet, hello, pin!, signal, () => {
                 setState(
                   <CopyProgress
@@ -642,7 +660,7 @@ export const CopyItemsView = observer(
                 signal,
                 (_current, _total, stage) => {
                   if (stage === 'verifying') {
-                    setState('Checking card...');
+                    setState('Checking card, hold tight...');
                     return;
                   }
                   setState(
@@ -715,7 +733,7 @@ export const CopyItemsView = observer(
               id={sourceId}
               description={
                 step === 3
-                  ? `Items · ${getCopyProgress(targets, 'exported')}`
+                  ? `items ${getCopyProgress(targets, 'exported')}`
                   : itemCountLabel
               }
               $interrupted={interruptedCards.has(backup!.source.publicKey)}
@@ -743,12 +761,14 @@ export const CopyItemsView = observer(
             <CardPreview
               id={target.id}
               description={
-                step === 4 && startedImports.has(target.publicKey)
-                  ? `Items · ${getCopyProgress([target], 'imported')}`
+                activeStep === 4 && startedImports.has(target.publicKey)
+                  ? `items ${getCopyProgress([target], 'imported')}`
                   : undefined
               }
               $interrupted={interruptedCards.has(target.publicKey)}
-              $pending={step === 4 && !startedImports.has(target.publicKey)}
+              $pending={
+                activeStep === 4 && !startedImports.has(target.publicKey)
+              }
             />
           </CardPreviewButton>
         ))}
@@ -806,14 +826,21 @@ export const CopyItemsView = observer(
               )
             }
           >
-            {backup?.complete ? (
-              !busy && <OperationComplete />
+            {stepsExited ? (
+              <OperationComplete />
             ) : (
-              <Steps>
+              <CopySteps
+                $exiting={!!complete}
+                onAnimationEnd={event => {
+                  if (complete && event.target === event.currentTarget) {
+                    setStepsExited(true);
+                  }
+                }}
+              >
                 <Step
                   title="Choose items"
                   numero={1}
-                  activeNumero={step}
+                  activeNumero={activeStep}
                   processing={working && step === 1}
                   summary={step === 2 ? sourceCard : undefined}
                 >
@@ -828,7 +855,7 @@ export const CopyItemsView = observer(
                 <Step
                   title="Add destination cards"
                   numero={2}
-                  activeNumero={step}
+                  activeNumero={activeStep}
                   processing={working && step === 2}
                 >
                   {destinationCards}
@@ -836,7 +863,7 @@ export const CopyItemsView = observer(
                 <Step
                   title="Export from source card"
                   numero={3}
-                  activeNumero={step}
+                  activeNumero={activeStep}
                   processing={working && step === 3}
                 >
                   {sourceCard}
@@ -845,7 +872,7 @@ export const CopyItemsView = observer(
                 <Step
                   title="Import to destination cards"
                   numero={4}
-                  activeNumero={step}
+                  activeNumero={activeStep}
                   processing={working && step === 4}
                 >
                   {destinationCards}
@@ -858,7 +885,7 @@ export const CopyItemsView = observer(
                   )}
                   {operationNotice}
                 </Step>
-              </Steps>
+              </CopySteps>
             )}
           </ViewContent>
         </View>

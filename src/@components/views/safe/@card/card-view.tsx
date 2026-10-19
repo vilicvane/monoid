@@ -436,7 +436,7 @@ const CardContent = observer(
             if (signal.aborted) cancel();
 
             try {
-              setStateContent('Creating key...');
+              setStateContent('Creating key, hold tight...');
               // Retain the command even if the callback is entered again.
               writing ??= createCardKey(
                 applet,
@@ -446,7 +446,7 @@ const CardContent = observer(
                   card.upsert(item);
                   createdIndex = item.index;
                   if (!operation.signal.aborted)
-                    setStateContent('Reading key...');
+                    setStateContent('Reading key, hold tight...');
                 },
                 getCardKeyAddressTypes(type).find(
                   addressType =>

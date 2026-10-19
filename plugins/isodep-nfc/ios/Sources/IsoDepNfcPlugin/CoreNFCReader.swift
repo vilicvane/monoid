@@ -97,7 +97,7 @@ final class CoreNFCReader: NSObject, NFCScanDriver, NFCTagReaderSessionDelegate 
             session.restartPolling()
             return
         }
-        session.alertMessage = "Keep your card near the top of your iPhone."
+        session.alertMessage = "Keep your card near the top of your iPhone, hold tight..."
         events?.detected(self, card: CoreNFCCard(tag, reader: session))
     }
 

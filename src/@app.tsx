@@ -1,9 +1,8 @@
-import {Keyboard} from '@capacitor/keyboard';
 import {IonApp, setupIonicReact, useIonAlert, useIonToast} from '@ionic/react';
 import classNames from 'classNames';
 import {observer} from 'mobx-react-lite';
 import type {CSSProperties, ReactNode} from 'react';
-import {useEffect, useLayoutEffect, useRef, useState} from 'react';
+import {useEffect, useLayoutEffect, useRef} from 'react';
 
 /* Core CSS required for Ionic components to work properly */
 import '@ionic/react/css/core.css';
@@ -35,8 +34,9 @@ import '@ionic/react/css/palettes/dark.class.css';
 import './@styles/variables.css';
 import './@styles/overrides.css';
 
-import {NavBar, Views} from './@components/index.js';
+// eslint-disable-next-line @mufan/scoped-modules -- The app owns the single global card presentation host.
 import {MonoidScanPromptHost} from './@components/@monoid/monoid-scan-prompt-host.js';
+import {NavBar, Views} from './@components/index.js';
 import {useEntrances} from './@entrances.js';
 
 setupIonicReact();

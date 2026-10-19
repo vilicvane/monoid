@@ -81,7 +81,11 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {MonoidCardError, MonoidWrongCardError},
 });
 mock.module('../.bld/app/@components/@animations.js', {
-  namedExports: {fadeInAnimationCSS: '', popInAnimationCSS: ''},
+  namedExports: {
+    fadeInAnimationCSS: '',
+    popInAnimationCSS: '',
+    popOutAnimationCSS: '',
+  },
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
@@ -187,6 +191,7 @@ for (const [path, names] of [
     ],
   ],
   ['@ui/step', ['Step', 'Steps']],
+  ['@ui/operation-complete', ['OperationComplete']],
   [
     '@view/index',
     [
@@ -507,21 +512,40 @@ test('multi-card export advances for every transferred item and keeps the source
           node.type === 'MonoidCard' &&
           node.props.id === session.backup.source.id,
       );
-      if (content.props.value !== '4/4')
-        descriptions.push(card.props.description);
+      descriptions.push(card.props.description);
     },
     hello(1),
     new AbortController().signal,
   );
+  const exportStep = find(
+    state.render(),
+    node => node.type === 'Step' && node.props.numero === 3,
+  );
+  const importStep = find(
+    state.tree,
+    node => node.type === 'Step' && node.props.numero === 4,
+  );
+  assert.equal(exportStep.props.activeNumero, 3);
+  assert.equal(exportStep.props.processing, true);
+  assert.equal(importStep.props.activeNumero, 3);
+  assert.equal(importStep.props.processing, false);
+
   scan.finished.resolve();
   await state.flush();
 
+  const readyImportStep = find(
+    state.tree,
+    node => node.type === 'Step' && node.props.numero === 4,
+  );
+  assert.equal(readyImportStep.props.activeNumero, 4);
+  assert.equal(readyImportStep.props.processing, false);
   assert.deepEqual(progress, ['0/4', '1/4', '2/4', '3/4', '4/4']);
   assert.deepEqual(descriptions, [
-    'Items · 0/4',
-    'Items · 1/4',
-    'Items · 2/4',
-    'Items · 3/4',
+    'items 0/4',
+    'items 1/4',
+    'items 2/4',
+    'items 3/4',
+    'items 4/4',
   ]);
   assert.deepEqual(state.errors, []);
 });
@@ -549,7 +573,7 @@ test('single-item import shows the count and changes to Checking card during fin
     {
       importItem: async () => {},
       list: async () => {
-        assert.equal(progress.at(-1), 'Checking card...');
+        assert.equal(progress.at(-1), 'Checking card, hold tight...');
         assert.equal(session.backup.complete, false);
         return {
           items: [
@@ -569,10 +593,43 @@ test('single-item import shows the count and changes to Checking card during fin
     hello(2),
     new AbortController().signal,
   );
+  assert.equal(session.backup.complete, true);
+  const pendingSteps = find(state.render(), node => node.type === 'Steps');
+  assert.ok(pendingSteps);
+  assert.equal(pendingSteps.props.$exiting, false);
+  assert.equal(
+    find(state.tree, node => node.type === 'Step' && node.props.numero === 4)
+      .props.processing,
+    true,
+  );
+  assert.equal(
+    find(state.tree, node => node.type === 'OperationComplete'),
+    undefined,
+  );
+
   scan.finished.resolve();
   await state.flush();
 
-  assert.deepEqual(progress, ['0/1', '1/1', 'Checking card...']);
+  const exitingSteps = find(state.tree, node => node.type === 'Steps');
+  assert.ok(exitingSteps);
+  assert.equal(exitingSteps.props.$exiting, true);
+  assert.equal(
+    find(state.tree, node => node.type === 'OperationComplete'),
+    undefined,
+  );
+  // A child spinner finishing must not end the steps' own exit animation.
+  exitingSteps.props.onAnimationEnd({target: {}, currentTarget: {}});
+  assert.ok(find(state.render(), node => node.type === 'Steps'));
+  const element = {};
+  exitingSteps.props.onAnimationEnd({target: element, currentTarget: element});
+  state.render();
+  assert.equal(
+    find(state.tree, node => node.type === 'Steps'),
+    undefined,
+  );
+  assert.ok(find(state.tree, node => node.type === 'OperationComplete'));
+
+  assert.deepEqual(progress, ['0/1', '1/1', 'Checking card, hold tight...']);
   assert.equal(session.backup.complete, true);
   assert.deepEqual(state.errors, []);
 });
@@ -623,11 +680,11 @@ for (const hasRecord of [true, false]) {
       progress,
       hasRecord
         ? [
-            'Reading items...',
+            'Reading items, hold tight...',
             ['Reading address records', '0/1'],
             ['Reading address records', '1/1'],
           ]
-        : ['Reading items...'],
+        : ['Reading items, hold tight...'],
     );
     assert.ok(state.sessions[0].backup);
     assert.deepEqual(state.errors, []);

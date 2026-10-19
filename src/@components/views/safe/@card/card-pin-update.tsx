@@ -133,7 +133,7 @@ export const CardPINUpdate = observer(
                   scanSignal.addEventListener('abort', cancel, {once: true});
                   if (scanSignal.aborted) cancel();
                   try {
-                    setState(`Updating ${kind} PIN...`);
+                    setState(`Updating ${kind} PIN, hold tight...`);
                     writing = (async () => {
                       updatedCardId = await updateCardPIN(
                         applet,

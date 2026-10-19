@@ -89,7 +89,7 @@ export const SafeView = observer(
         scanPrompt(
           'Scan a monoid card',
           async (applet, setStateContent, hello, signal) => {
-            setStateContent('Listing safe items...');
+            setStateContent('Listing safe items, hold tight...');
 
             const items = await scanCardItems(
               applet,

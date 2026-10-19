@@ -1,10 +1,6 @@
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
-import {TypewriterText} from '../../@ui/typewriter-text.js';
-
-const KEYWORDS = ['WalletConnect', 'Passkey'] as const;
-
 const Keyword = styled.strong`
   color: var(--ion-color-primary);
   font-weight: 500;
@@ -19,13 +15,7 @@ export function QrScanInstructions({
 }): ReactNode {
   return (
     <Keyword className={className} aria-hidden={!active}>
-      <TypewriterText
-        texts={KEYWORDS}
-        active={active}
-        fallback="WalletConnect / Passkey"
-      >
-        {keyword => keyword}
-      </TypewriterText>
+      WalletConnect
     </Keyword>
   );
 }

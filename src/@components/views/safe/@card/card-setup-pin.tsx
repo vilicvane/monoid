@@ -155,8 +155,8 @@ export function CardSetupPIN({
 
                     setState(
                       current.safe.pin === false
-                        ? 'Setting Safe PIN...'
-                        : 'Unlocking safe...',
+                        ? 'Setting Safe PIN, hold tight...'
+                        : 'Unlocking safe, hold tight...',
                     );
                     const result = await initializeMonoidCard(
                       applet,
@@ -170,7 +170,7 @@ export function CardSetupPIN({
 
                     if (current.pin === false) {
                       accessPINId = uint8ArrayToHex(result.id);
-                      setState('Authenticating...');
+                      setState('Authenticating, hold tight...');
                       await applet.authenticate({pin: pin!});
                       signal.throwIfAborted();
                       accessPINAuthenticated = true;

@@ -52,7 +52,7 @@ final class CameraPermissionUITests: XCTestCase {
         // Do not reactivate the app or switch tabs: either would conceal the
         // first-authorization lifecycle bug. This accessible header is exposed
         // only once startScan has delivered the first native frame and revealed it.
-        let ready = webView.staticTexts["WalletConnect / Passkey"]
+        let ready = webView.staticTexts["WalletConnect"]
         let clipboard = webView.buttons["Clipboard"]
         let cameraReady = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
@@ -93,7 +93,7 @@ final class CameraPermissionUITests: XCTestCase {
         XCTAssertTrue(scan.waitForExistence(timeout: 20))
         scan.tap()
 
-        let ready = webView.staticTexts["WalletConnect / Passkey"]
+        let ready = webView.staticTexts["WalletConnect"]
         XCTAssertTrue(ready.waitForExistence(timeout: 20),
                       "Grant camera access first, or run the first-authorization test with this test.")
 

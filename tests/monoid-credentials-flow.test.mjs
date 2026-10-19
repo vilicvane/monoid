@@ -968,7 +968,10 @@ test('prompt: missing applet reads card information on the open connection befor
   assert.equal(scan.stopRequested, false);
   assert.equal(scan.callbackReturned, undefined);
   assert.equal(state.presenter.current.closing, false);
-  assert.equal(state.presenter.current.content, 'Reading card information...');
+  assert.equal(
+    state.presenter.current.content,
+    'Reading card information, hold tight...',
+  );
   assert.deepEqual(state.navigations, []);
 
   reading.resolve(state.cardInformation);

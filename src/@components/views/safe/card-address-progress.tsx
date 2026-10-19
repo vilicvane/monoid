@@ -9,7 +9,7 @@ export function CardAddressProgress({
 }: {
   progress: CardDerivationsProgress;
 }): ReactNode {
-  if (progress.stage === 'checking') return 'Checking card...';
+  if (progress.stage === 'checking') return 'Checking card, hold tight...';
 
   return (
     <MonoidScanStatePromptProgress

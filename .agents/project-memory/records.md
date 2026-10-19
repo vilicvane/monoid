@@ -70,3 +70,10 @@
 ## 7c1bbb9
 
 41. [user] use an empty string for the scan's final message instead of `Completed.`; confirmed on the physical iPhone that the system sheet finishes with no prompt text. NFC completion presentation.
+
+## 8aac0c2
+
+42. [user] implement Passkeys with a Home entry for account management using the current interaction and visual design; both QR and system-provider use are wanted, but start with one and prioritize iOS. The user proposed opening the main app before tapping the card. Passkey scope and sequence.
+43. [agent] the full app-level Passkey experiment is removed: Home entry, local account-management pages/storage, Passkey-specific card wrappers, iOS provider, native/shared request bridge and notification handoff. Preserve the preexisting generic card protocol, P-256, Safe and NFC functions. Physical failure, request-delivery lessons, historical derivation design and the iOS BLE Service Data limitation for standard remote FIDO hybrid are recorded in [43.md](43.md); no Passkey UI or transport remains in the app.
+44. [user] physical testing showed that swiping out of the Passkey extension closed its sheet; the later notification opened Monoid but also dismissed the sheet, which did not return on switching back. Notification navigation did not preserve the system request. See [43.md](43.md).
+45. [user] pause and clean up the local iOS provider direction, record the lessons and prioritize remote Passkey use. Direct NFC authentication was originally intended to be implemented by installing the corresponding applet on the card. Passkey scope correction.

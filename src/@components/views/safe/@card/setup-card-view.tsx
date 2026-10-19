@@ -98,7 +98,7 @@ export const SetupCardView = observer(
         await scanPrompt(
           installing ? 'Scan the card to install applets' : 'Scan a card',
           async (sessionId, setStateContent, signal) => {
-            setStateContent('Reading card information...');
+            setStateContent('Reading card information, hold tight...');
             scannedInformation = await readCardInformation(sessionId, signal);
 
             signal.throwIfAborted();

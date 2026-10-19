@@ -14,7 +14,7 @@ export function describeAppletInstallProgress(update: AppletInstallProgress): {
     return {
       status:
         update.stage === 'checking'
-          ? 'Checking card...'
+          ? 'Checking card, hold tight...'
           : 'Verifying installation, hold tight...',
     };
   }
@@ -23,13 +23,13 @@ export function describeAppletInstallProgress(update: AppletInstallProgress): {
 
   switch (update.phase) {
     case 'checking':
-      return {status: `Checking ${name}...`};
+      return {status: `Checking ${name}, hold tight...`};
     case 'uploading':
       return {
         status: `Uploading ${name}...`,
         percentage: Math.floor(update.progress * 100),
       };
     case 'configuring':
-      return {status: `Configuring ${name}...`};
+      return {status: `Configuring ${name}, hold tight...`};
   }
 }

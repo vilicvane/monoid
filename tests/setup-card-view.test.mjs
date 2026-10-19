@@ -550,7 +550,10 @@ test('installation waits for a fresh identity read before sending installation c
   assert.deepEqual(state.reads, ['native-session']);
   assert.deepEqual(state.installs, []);
   assert.deepEqual(state.routes, []);
-  assert.equal(state.promptContents.at(-1), 'Reading card information...');
+  assert.equal(
+    state.promptContents.at(-1),
+    'Reading card information, hold tight...',
+  );
 
   reading.resolve(state.cardInformation);
   await connecting;
@@ -694,7 +697,10 @@ for (const [stage, name] of [
     }
 
     state.onProgress({stage, phase: 'configuring'});
-    assert.equal(textOf(state.promptContents.at(-1)), `Configuring ${name}...`);
+    assert.equal(
+      textOf(state.promptContents.at(-1)),
+      `Configuring ${name}, hold tight...`,
+    );
     state.render();
     assert.equal(textOf(state.tree).includes('%'), false);
     assert.equal(textOf(state.tree).includes('Configuring'), false);
@@ -708,7 +714,10 @@ test('existing applets can complete after checking without showing an upload per
   const state = mount();
   state.click();
   await state.connect();
-  assert.equal(textOf(state.promptContents.at(-1)), 'Checking card...');
+  assert.equal(
+    textOf(state.promptContents.at(-1)),
+    'Checking card, hold tight...',
+  );
 
   for (const [stage, name] of [
     ['identity', 'Monoid Safe Identity Applet'],
@@ -716,7 +725,10 @@ test('existing applets can complete after checking without showing an upload per
     ['monoid', 'Monoid Applet'],
   ]) {
     state.onProgress({stage, phase: 'checking'});
-    assert.equal(textOf(state.promptContents.at(-1)), `Checking ${name}...`);
+    assert.equal(
+      textOf(state.promptContents.at(-1)),
+      `Checking ${name}, hold tight...`,
+    );
     state.render();
     assert.equal(
       find(state.tree, node => node.type === 'step' || node.type === 'steps'),

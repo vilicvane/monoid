@@ -55,7 +55,7 @@ export const KeyHeader = observer(
       await scanPrompt(
         'Scan card to save alias',
         async (applet, setStateContent) => {
-          setStateContent('Saving alias...');
+          setStateContent('Saving alias, hold tight...');
 
           await applet
             .set({index: hexToUint8Array(data.index), alias})

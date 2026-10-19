@@ -48,7 +48,8 @@ export function MonoidScanStatePromptProgress({
 }): ReactNode {
   return (
     <>
-      {children}, hold tight...
+      {children}
+      {showCount ? '...' : ', hold tight...'}
       {showCount && (
         <>
           <br />
@@ -389,7 +390,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
             return;
           }
 
-          setStateContent('Greeting to monoid...');
+          setStateContent('Greeting to monoid, hold tight...');
 
           let hello = (
             includeSafe
@@ -475,7 +476,9 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
             }
 
             setStateContent(
-              safe.pin === false ? 'Setting Safe PIN...' : 'Unlocking safe...',
+              safe.pin === false
+                ? 'Setting Safe PIN, hold tight...'
+                : 'Unlocking safe, hold tight...',
             );
 
             const needsAccessPIN = hello.pin === false;
@@ -548,7 +551,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
               return;
             }
 
-            setStateContent('Authenticating...');
+            setStateContent('Authenticating, hold tight...');
 
             try {
               await applet.authenticate({pin});
@@ -731,7 +734,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
           ? async sessionId => {
               if (disposed || finishing || result) return;
 
-              setStateContent('Reading card information...');
+              setStateContent('Reading card information, hold tight...');
               const cardInformation = await readCardInformation(
                 sessionId,
                 credentialsRequest.signal,
