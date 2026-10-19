@@ -64,13 +64,14 @@ restart polling or extend deadlines. Core NFC exposes no public spinner or
 progress-bar control; callers can show actual operation stages or measured
 progress in this text. Android rejects this iOS-only method with `UNSUPPORTED`.
 
-On iOS, `closeSession` accepts an optional nonblank `message` to replace progress
-with final text such as `Completed.` while closing a healthy, idle connection.
+On iOS, `closeSession` accepts an optional `message` to replace progress while
+closing a healthy, idle connection. Pass `''` to clear the app's message or a
+nonblank string for final text; omit the option to preserve the current message.
 The update and close happen together, so late progress cannot overwrite the
-final text. Only supply completion text after the application operation succeeds.
+final text. Only supply this option after the application operation succeeds.
 It is ignored for ended or unknown sessions, an ended scan, connection or APDU
 work still in flight, a scan that has lost a connection, or any removal wait;
-failure and removal feedback remain intact. Invalid text rejects
+failure and removal feedback remain intact. Non-string or whitespace-only text rejects
 `INVALID_ARGUMENT`. Android ignores this option. The message does not change
 cleanup, send an APDU, or stop the scan; await `stopScan` as usual.
 

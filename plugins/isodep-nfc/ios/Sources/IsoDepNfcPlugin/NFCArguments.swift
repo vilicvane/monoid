@@ -18,10 +18,11 @@ enum NFCArguments {
         return value
     }
 
-    static func message(_ options: [String: Any]) throws -> String {
+    static func message(_ options: [String: Any], allowEmpty: Bool = false) throws -> String {
         guard let value = options["message"] as? String,
-              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw NFCFailure(code: "INVALID_ARGUMENT", message: "message must be a nonblank string.")
+              (allowEmpty && value.isEmpty) || !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            let requirement = allowEmpty ? "empty or a nonblank string" : "a nonblank string"
+            throw NFCFailure(code: "INVALID_ARGUMENT", message: "message must be \(requirement).")
         }
         return value
     }

@@ -157,7 +157,7 @@ test('iOS closes the native sheet before returning an operation error', async ()
   await connect(run.scan);
   assert.equal(run.scan.waitingForRemoval, false);
   assert.deepEqual(run.scan.closeOptions, {});
-  assert.notEqual(presenter.current.content, 'Completed.');
+  assert.notEqual(presenter.current.content, '');
   assert.equal(run.scan.stopCalls, 1);
   assert.equal(run.settled, false);
   hide(presenter);
@@ -176,8 +176,8 @@ test('raw scan presentation binds progress to its native session and clears it a
   run.scan.onConnectionChange(true, 'install-session');
   assert.equal(presenter.current.sessionId, 'install-session');
   await run.scan.callback('install-session');
-  assert.equal(presenter.current.content, 'Completed.');
-  assert.deepEqual(run.scan.getCloseOptions(), {message: 'Completed.'});
+  assert.equal(presenter.current.content, '');
+  assert.deepEqual(run.scan.getCloseOptions(), {message: ''});
   assert.equal(presenter.current.sessionId, 'install-session');
   run.scan.onConnectionChange(false);
   assert.equal(presenter.current.sessionId, undefined);
@@ -230,7 +230,7 @@ test('success waits for native stop and shared presentation exit', async () => {
   assert.equal(presenter.current.content, 'Installing 40%');
   pending.resolve();
   await connected;
-  assert.equal(presenter.current.content, 'Completed.');
+  assert.equal(presenter.current.content, '');
   assert.deepEqual(run.scan.closeOptions, {});
   assert.equal(presenter.current.closing, true);
   assert.equal(run.scan.stopCalls, 1);
@@ -327,7 +327,7 @@ test('native tag loss aborts pending callback work without waiting for its respo
   pendingRead.resolve();
   await connected;
   assert.deepEqual(run.scan.closeOptions, {});
-  assert.notEqual(presenter.current.content, 'Completed.');
+  assert.notEqual(presenter.current.content, '');
   run.scan.stopped.resolve();
   hide(presenter);
   assert.equal((await run.promise).error, signal.reason);

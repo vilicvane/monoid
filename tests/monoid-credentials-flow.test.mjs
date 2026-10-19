@@ -731,9 +731,9 @@ for (const targetPlatform of ['ios', 'android']) {
     assert.equal(scan.waitingForRemoval, false);
     assert.deepEqual(
       scan.closeOptions,
-      targetPlatform === 'ios' ? {message: 'Completed.'} : {},
+      targetPlatform === 'ios' ? {message: ''} : {},
     );
-    assert.equal(state.presenter.current.content, 'Completed.');
+    assert.equal(state.presenter.current.content, '');
     assert.equal(state.presenter.current.closing, true);
     await state.finishExit();
     assert.equal(state.outcome, 'resolved');
@@ -774,7 +774,7 @@ for (const [outcome, options, missingApplet] of [
       : await state.tap();
 
     assert.deepEqual(scan.closeOptions, {});
-    assert.notEqual(state.presenter.current.content, 'Completed.');
+    assert.notEqual(state.presenter.current.content, '');
     assert.equal(state.presenter.current.closing, true);
     await state.finishExit();
     assert.notEqual(state.outcome, 'resolved');
@@ -797,7 +797,7 @@ for (const cancellation of ['dismiss', 'unmount']) {
     const scan = await tapping;
 
     assert.deepEqual(scan.closeOptions, {});
-    assert.notEqual(state.presenter.current.content, 'Completed.');
+    assert.notEqual(state.presenter.current.content, '');
     await state.finishExit();
     assert.equal(state.outcome, 'rejected');
     assert.equal(state.errors[0].code, 'CANCELLED');

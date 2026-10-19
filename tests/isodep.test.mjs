@@ -220,7 +220,7 @@ for (const kind of ['raw', 'applet']) {
       () => {
         optionsRead++;
         assert.equal(completed, true);
-        return {message: 'Completed.'};
+        return {message: ''};
       },
     );
     await until(() => device.starts.length === 1);
@@ -236,7 +236,7 @@ for (const kind of ['raw', 'applet']) {
       {
         sessionId: 'completed-session',
         waitForRemoval: false,
-        message: 'Completed.',
+        message: '',
       },
     ]);
     assert.deepEqual(device.errors, []);
@@ -257,7 +257,7 @@ for (const ending of ['dispose', 'scan-ended']) {
       undefined,
       () => {
         optionsRead++;
-        return {message: 'Completed.', waitForRemoval: true};
+        return {message: '', waitForRemoval: true};
       },
     );
     await until(() => device.starts.length === 1);

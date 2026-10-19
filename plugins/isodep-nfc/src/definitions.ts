@@ -56,7 +56,9 @@ export type CloseSessionOptions = {
   /** Keep discovery blocked until native removal detection. See platform notes. */
   waitForRemoval?: boolean;
   /**
-   * Nonblank final system-sheet text for a healthy, idle connection on iOS.
+   * Final system-sheet text for a healthy, idle connection on iOS.
+   * An empty string clears the message; omit to preserve the current text.
+   * Nonempty messages must contain non-whitespace text.
    * Ignored while waiting for removal, after session failure, or on Android.
    */
   message?: string;

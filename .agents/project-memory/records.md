@@ -66,3 +66,7 @@
 ## 09ed49b
 
 40. [user] the final in-progress text is misleading at scan completion; clear it or show an explicit completion message instead. NFC completion presentation.
+
+## 7c1bbb9
+
+41. [user] use an empty string for the scan's final message instead of `Completed.`; confirmed on the physical iPhone that the system sheet finishes with no prompt text. NFC completion presentation.

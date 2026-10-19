@@ -301,7 +301,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
         stopped,
         monoidScanPromptPresenter.hide(
           owner,
-          completed.type === 'success' ? 'Completed.' : undefined,
+          completed.type === 'success' ? '' : undefined,
         ),
       ]);
 
@@ -626,7 +626,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
           }
 
           result = {type: 'success'};
-          setStateContent('Completed.');
+          setStateContent('');
         },
         error => {
           if (disposed) {
@@ -685,7 +685,7 @@ export function useMonoidScanPrompt<TSafe extends boolean = false>({
           // Core NFC covers the WebView. Close its sheet before presenting errors.
           if (Capacitor.getPlatform() === 'ios') {
             return !disposed && !finishing && result?.type === 'success'
-              ? {message: 'Completed.'}
+              ? {message: ''}
               : {};
           }
 

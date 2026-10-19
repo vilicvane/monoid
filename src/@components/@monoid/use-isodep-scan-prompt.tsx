@@ -69,10 +69,7 @@ export function useIsoDepScanPrompt(): (
             // Cleanup failures take priority, but every exit still waits for both.
             const [stopped, hidden] = await Promise.allSettled([
               Promise.resolve().then(() => stop()),
-              presenter.hide(
-                owner,
-                'success' in completed ? 'Completed.' : undefined,
-              ),
+              presenter.hide(owner, 'success' in completed ? '' : undefined),
               callbackFinished,
             ]);
 
@@ -153,7 +150,7 @@ export function useIsoDepScanPrompt(): (
             await pending;
             controller.signal.throwIfAborted();
             result = {success: true};
-            content = 'Completed.';
+            content = '';
             show();
           },
           error => {
@@ -186,7 +183,7 @@ export function useIsoDepScanPrompt(): (
             // Core NFC covers the WebView. Return the error after closing its sheet.
             if (Capacitor.getPlatform() === 'ios') {
               return !finishing && result && 'success' in result
-                ? {message: 'Completed.'}
+                ? {message: ''}
                 : {};
             }
 

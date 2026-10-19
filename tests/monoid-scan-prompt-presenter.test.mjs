@@ -61,7 +61,7 @@ test('content updates keep the same presentation and its exit callback remains v
   assert.equal(presenter.current, undefined);
 });
 
-for (const finalContent of ['Completed.', null, undefined]) {
+for (const finalContent of ['', 'Completed.', null, undefined]) {
   test(`hide commits final content ${String(finalContent)} before exit and preserves it for repeated callers`, async () => {
     const presenter = new MonoidScanPromptPresenter();
     const owner = Symbol();
