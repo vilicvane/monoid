@@ -18,11 +18,11 @@ import {
 
 import {TransactionDetails} from './@sessions/transaction-details.js';
 
-export const TransactionHistoryView = observer(
+export const EthereumTransactionHistoryView = observer(
   ({
     view,
   }: RouteComponentProps<
-    Router['transactions']['wallet']['transaction']
+    Router['ethereum']['wallet']['transaction']
   >): ReactNode => {
     const {transactionHistoryService} = useEntrances();
     const active = !view.$leaving && view.$match.$exact.$active;

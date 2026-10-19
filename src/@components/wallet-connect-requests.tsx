@@ -22,7 +22,8 @@ export function WalletConnectRequests(): null {
           router.features,
           router.bitcoin,
           router.sessions,
-          router.transactions,
+          router.ethereum,
+          router.solana,
           router.scan,
           router.safe,
         ].some(route => route.$transition || route.$switching)
@@ -34,7 +35,7 @@ export function WalletConnectRequests(): null {
       if (
         router.sessions.request.$matched ||
         router.bitcoin.wallet.send.$matched ||
-        router.transactions.wallet.transaction.replace.$matched
+        router.ethereum.wallet.transaction.replace.$matched
       ) {
         requests.forEach(({id}) => presented.add(id));
         return;

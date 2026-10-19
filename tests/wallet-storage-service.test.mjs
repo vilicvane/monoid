@@ -293,6 +293,61 @@ test('derivation suggestions advance each address type independently', async () 
   assert.deepEqual(storage.writes, []);
 });
 
+test('deleting a key removes all its addresses and persists only that index, even when another key has the same public key', async context => {
+  context.mock.method(console, 'info', () => {});
+
+  const first = {...createKey([SOLANA_SOURCE]), index: '00000002'};
+  const deleted = {
+    ...createKey([EVM_SOURCE, SOLANA_SOURCE]),
+    defaultWallet: getWalletReference(SOLANA_SOURCE),
+  };
+  const samePublicKey = {
+    ...createKey([EVM_SOURCE, SEGWIT_SOURCE]),
+    index: '00000003',
+    alias: 'Other key',
+    defaultWallet: getWalletReference(SEGWIT_SOURCE),
+  };
+  const storage = createStorage([first, deleted, samePublicKey]);
+  const service = await WalletStorageService.create(storage);
+  const retained = [service.keys[0], service.keys[2]];
+
+  service.deleteKey(KEY_INDEX);
+
+  assert.equal(service.indexToKeyMap.has(KEY_INDEX), false);
+  assert.equal(service.keys[0], retained[0]);
+  assert.equal(service.keys[1], retained[1]);
+  assert.deepEqual(toJS(service.keys), [first, samePublicKey]);
+  assert.deepEqual(storage.writes, [['walletKeys', [first, samePublicKey]]]);
+
+  const reloaded = await WalletStorageService.create(storage);
+
+  assert.deepEqual(toJS(reloaded.keys), [first, samePublicKey]);
+  assert.equal(reloaded.indexToKeyMap.has(KEY_INDEX), false);
+  assert.equal(
+    getDefaultWallet(reloaded.keys[1]).addressType,
+    'bitcoin-segwit',
+  );
+});
+
+test('deleting the final empty key persists an empty store and repeated deletion does not write again', async context => {
+  context.mock.method(console, 'info', () => {});
+
+  const storage = createStorage([createKey([])]);
+  const service = await WalletStorageService.create(storage);
+
+  service.deleteKey(KEY_INDEX);
+  service.deleteKey(KEY_INDEX);
+
+  assert.deepEqual(toJS(service.keys), []);
+  assert.equal(service.indexToKeyMap.size, 0);
+  assert.deepEqual(storage.writes, [['walletKeys', []]]);
+
+  const reloaded = await WalletStorageService.create(storage);
+
+  assert.deepEqual(toJS(reloaded.keys), []);
+  assert.deepEqual(storage.writes, [['walletKeys', []]]);
+});
+
 test('deleting a non-default source preserves the default and remaining order', async context => {
   context.mock.method(console, 'info', () => {});
 
@@ -516,6 +571,7 @@ test('unknown keys or wallet references leave stored data unchanged', async () =
   const service = await WalletStorageService.create(storage);
 
   service.addWallet('ffffffff', SOLANA_SOURCE);
+  service.deleteKey('ffffffff');
   service.deleteWallet('ffffffff', getWalletReference(EVM_SOURCE));
   service.deleteWallet(KEY_INDEX, getWalletReference(SOLANA_SOURCE));
   service.deleteWallet(KEY_INDEX, {

@@ -30,7 +30,11 @@ import {
   getWalletReference,
 } from '../../@services/index.js';
 import {AppIcon} from '../@ui/app-icon.js';
-import {SwipeAction, SwipeableItem} from '../@ui/swipeable-item.js';
+import {
+  SwipeAction,
+  SwipeActionIcon,
+  SwipeableItem,
+} from '../@ui/swipeable-item.js';
 
 import {
   ExpandableKeyGroup,
@@ -174,7 +178,9 @@ export const KeyWalletList = observer(
                               );
                             })}
                           >
-                            <AppIcon icon={copy} aria-hidden="true" />
+                            <SwipeActionIcon>
+                              <AppIcon icon={copy} aria-hidden="true" />
+                            </SwipeActionIcon>
                             Copy
                           </SwipeAction>
                           {!isDefault && (
@@ -194,7 +200,9 @@ export const KeyWalletList = observer(
                                 setOpenWallet(undefined);
                               }}
                             >
-                              <AppIcon icon={star} aria-hidden="true" />
+                              <SwipeActionIcon>
+                                <AppIcon icon={star} aria-hidden="true" />
+                              </SwipeActionIcon>
                               Default
                             </SwipeAction>
                           )}
@@ -247,7 +255,9 @@ export const KeyWalletList = observer(
                               },
                             )}
                           >
-                            <AppIcon icon={trash} aria-hidden="true" />
+                            <SwipeActionIcon>
+                              <AppIcon icon={trash} aria-hidden="true" />
+                            </SwipeActionIcon>
                             Delete
                           </SwipeAction>
                         </>

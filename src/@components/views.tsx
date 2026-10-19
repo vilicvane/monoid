@@ -8,6 +8,10 @@ import {BitcoinTransactionView} from './views/bitcoin-transaction-view.js';
 import {BitcoinTransactionsView} from './views/bitcoin-transactions-view.js';
 import {BitcoinWalletView} from './views/bitcoin-wallet-view.js';
 import {BitcoinWalletsView} from './views/bitcoin-wallets-view.js';
+import {EthereumTransactionHistoryView} from './views/ethereum-transaction-history-view.js';
+import {EthereumTransactionReplacementView} from './views/ethereum-transaction-replacement-view.js';
+import {EthereumTransactionsView} from './views/ethereum-transactions-view.js';
+import {EthereumWalletsView} from './views/ethereum-wallets-view.js';
 import {FeaturesView} from './views/features-view.js';
 import {SafeMatch} from './views/safe/index.js';
 import {ScanView} from './views/scan-view.js';
@@ -17,11 +21,9 @@ import {SessionsRequestFab} from './views/sessions-request-fab.js';
 import {SessionsView} from './views/sessions-view.js';
 import {SolanaTransactionHistoryView} from './views/solana-transaction-history-view.js';
 import {SolanaTransactionView} from './views/solana-transaction-view.js';
-import {TransactionHistoryView} from './views/transaction-history-view.js';
-import {TransactionReplacementView} from './views/transaction-replacement-view.js';
+import {SolanaTransactionsView} from './views/solana-transactions-view.js';
+import {SolanaWalletsView} from './views/solana-wallets-view.js';
 import {TransactionView} from './views/transaction-view.js';
-import {TransactionWalletsView} from './views/transaction-wallets-view.js';
-import {TransactionsView} from './views/transactions-view.js';
 import {WalletConnectAuthenticationView} from './views/wallet-connect-authentication-view.js';
 import {WalletConnectRequestView} from './views/wallet-connect-request-view.js';
 import {WalletConnectView} from './views/wallet-connect-view.js';
@@ -57,27 +59,35 @@ export const Views = (): ReactNode => {
       />
       <Route view={router.sessions.$exact.$view()} component={SessionsView} />
       <Route
-        view={router.transactions.$exact.$view()}
-        component={TransactionWalletsView}
+        view={router.ethereum.$exact.$view()}
+        component={EthereumWalletsView}
       />
       <Route
-        view={router.transactions.wallet.$exact.$view()}
-        component={TransactionsView}
+        view={router.ethereum.wallet.$exact.$view()}
+        component={EthereumTransactionsView}
       />
       <Route
-        view={router.transactions.wallet.transaction.$exact.$view({
+        view={router.ethereum.wallet.transaction.$exact.$view({
           parallel: true,
         })}
-        component={TransactionHistoryView}
+        component={EthereumTransactionHistoryView}
       />
       <Route
-        view={router.transactions.wallet.transaction.replace.$view({
+        view={router.ethereum.wallet.transaction.replace.$view({
           parallel: true,
         })}
-        component={TransactionReplacementView}
+        component={EthereumTransactionReplacementView}
       />
       <Route
-        view={router.transactions.wallet.solanaTransaction.$view({
+        view={router.solana.$exact.$view()}
+        component={SolanaWalletsView}
+      />
+      <Route
+        view={router.solana.wallet.$exact.$view()}
+        component={SolanaTransactionsView}
+      />
+      <Route
+        view={router.solana.wallet.transaction.$view({
           parallel: true,
         })}
         component={SolanaTransactionHistoryView}

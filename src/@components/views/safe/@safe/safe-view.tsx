@@ -1,11 +1,13 @@
-import {IonFabButton} from '@ionic/react';
-import {CreditCard as creditCard} from 'lucide-react';
+import {IonFabButton, useIonAlert} from '@ionic/react';
+import {CreditCard as creditCard, Trash2 as trash} from 'lucide-react';
 import {observer} from 'mobx-react-lite';
-import type {ReactNode} from 'react';
+import {type MouseEvent, type ReactNode, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
+import type {SafeIndexHex} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import type {Router} from '../../../../@routes.js';
+import type {WalletKeyData} from '../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {KeyList} from '../../../@key/key-list.js';
 import {
@@ -13,6 +15,11 @@ import {
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
 import {AppIcon} from '../../../@ui/app-icon.js';
+import {
+  SwipeAction,
+  SwipeActionIcon,
+  SwipeableItem,
+} from '../../../@ui/swipeable-item.js';
 import {
   View,
   ViewContent,
@@ -31,6 +38,42 @@ export const SafeView = observer(
     const {router, cardStore, walletStorageService, errorService} =
       useEntrances();
     const isViewActive = useViewActive(view);
+    const [presentAlert] = useIonAlert();
+    const [openKey, setOpenKey] = useState<SafeIndexHex>();
+    const listRef = useRef<HTMLDivElement>(null);
+
+    const deleteKey = errorService.catch(
+      async (event: MouseEvent<HTMLButtonElement>, key: WalletKeyData) => {
+        const row = event.currentTarget.closest<HTMLElement>('[role="group"]');
+
+        await presentAlert({
+          header: 'Delete key?',
+          subHeader: key.alias || key.index,
+          message:
+            'Remove this key and all its addresses from this device? Your card is not affected.',
+          buttons: [
+            {text: 'Cancel', role: 'cancel'},
+            {
+              text: 'Delete',
+              role: 'destructive',
+              handler: () => {
+                walletStorageService.deleteKey(key.index);
+                setOpenKey(undefined);
+              },
+            },
+          ],
+          onDidDismiss: () => {
+            const nextTarget = row?.isConnected
+              ? row
+              : (listRef.current?.querySelector<HTMLElement>(
+                  '[role="group"]',
+                ) ?? listRef.current);
+
+            nextTarget?.focus({preventScroll: true});
+          },
+        });
+      },
+    );
 
     const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
       safe: true,
@@ -89,9 +132,46 @@ export const SafeView = observer(
             <ViewHeaderTitle>Safe</ViewHeaderTitle>
           </ViewHeader>
           <ViewContent>
-            <KeyList>
+            <KeyList ref={listRef} tabIndex={-1}>
               {walletStorageService.keys.map(key => (
-                <KeyItem key={key.index} data={key} />
+                <SwipeableItem
+                  key={key.index}
+                  open={openKey === key.index}
+                  onOpenChange={open =>
+                    setOpenKey(current =>
+                      open
+                        ? key.index
+                        : current === key.index
+                          ? undefined
+                          : current,
+                    )
+                  }
+                  actions={
+                    <SwipeAction
+                      type="button"
+                      $color="var(--ion-color-danger)"
+                      onClick={event => deleteKey(event, key)}
+                    >
+                      <SwipeActionIcon>
+                        <AppIcon icon={trash} aria-hidden="true" />
+                      </SwipeActionIcon>
+                      Delete
+                    </SwipeAction>
+                  }
+                >
+                  <KeyItem
+                    data={key}
+                    onClick={() => {
+                      if (openKey) {
+                        setOpenKey(undefined);
+                      } else if (key.type === 'seed' || key.type === 'master') {
+                        router.safe.derivableKey({index: key.index}).$push();
+                      } else {
+                        router.safe.rawKey({index: key.index}).$push();
+                      }
+                    }}
+                  />
+                </SwipeableItem>
               ))}
             </KeyList>
           </ViewContent>

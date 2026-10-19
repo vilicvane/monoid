@@ -22,7 +22,7 @@ export const SolanaTransactionHistoryView = observer(
   ({
     view,
   }: RouteComponentProps<
-    Router['transactions']['wallet']['solanaTransaction']
+    Router['solana']['wallet']['transaction']
   >): ReactNode => {
     const {solanaTransactionHistoryService} = useEntrances();
     const active = !view.$leaving && view.$match.$exact.$active;

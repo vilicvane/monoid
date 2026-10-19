@@ -21,6 +21,11 @@ export const SessionsView = observer(
     const actions = getPendingActions(walletKitService);
     const pendingTopics = new Set(actions.map(action => action.request.topic));
     const active = !view.$leaving && view.$match.$exact.$active;
+    const sessions = Array.from(walletKitService.sessions.values()).sort(
+      (a, b) =>
+        walletKitService.sessionRecords.get(b.topic)!.lastActivityAt -
+        walletKitService.sessionRecords.get(a.topic)!.lastActivityAt,
+    );
 
     return (
       <View inert={!active}>
@@ -30,13 +35,15 @@ export const SessionsView = observer(
         <ViewContent>
           {walletKitService.sessions.size ? (
             <SessionList>
-              {Array.from(walletKitService.sessions, ([topic, session]) => (
+              {sessions.map(session => (
                 <SessionListItem
-                  key={topic}
+                  key={session.topic}
                   session={session}
-                  record={walletKitService.sessionRecords.get(topic)!}
-                  hasPendingRequest={pendingTopics.has(topic)}
-                  onClick={() => router.sessions.session({topic}).$push()}
+                  record={walletKitService.sessionRecords.get(session.topic)!}
+                  hasPendingRequest={pendingTopics.has(session.topic)}
+                  onClick={() =>
+                    router.sessions.session({topic: session.topic}).$push()
+                  }
                 />
               ))}
             </SessionList>

@@ -47,6 +47,16 @@ export class WalletStorageService {
     return this.computedIndexToKeyMap.get();
   }
 
+  deleteKey(index: SafeIndexHex): void {
+    const keyIndex = this.keys.findIndex(key => key.index === index);
+
+    if (keyIndex === -1) return;
+
+    runInAction(() => {
+      this.keys.splice(keyIndex, 1);
+    });
+  }
+
   addWallet(index: SafeIndexHex, source: WalletKeyPublicKeyData): void {
     const key = this.indexToKeyMap.get(index);
 

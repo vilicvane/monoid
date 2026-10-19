@@ -55,10 +55,10 @@ import {
 } from '../@view/index.js';
 
 type ReplacementView = RouteComponentProps<
-  Router['transactions']['wallet']['transaction']['replace']
+  Router['ethereum']['wallet']['transaction']['replace']
 >['view'];
 
-export const TransactionReplacementView = observer(
+export const EthereumTransactionReplacementView = observer(
   ({view}: {view: ReplacementView}): ReactNode => {
     const {transactionHistoryService} = useEntrances();
     const detail = transactionHistoryService.get(
@@ -277,8 +277,8 @@ const TransactionReplacementContent = observer(
     }, [evmCalldataService, view.chainId, original, data]);
 
     const openTransaction = (hash: string): void => {
-      router.transactions
-        .wallet({address: original.from!, addressType: 'evm'})
+      router.ethereum
+        .wallet({address: original.from!})
         .transaction({chainId: view.chainId, hash})
         .$replace();
     };

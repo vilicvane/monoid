@@ -28,7 +28,11 @@ import {
   ListItemName,
 } from '../@ui/list.js';
 import {RippleEffect} from '../@ui/ripple-effect.js';
-import {SwipeAction, SwipeableItem} from '../@ui/swipeable-item.js';
+import {
+  SwipeAction,
+  SwipeActionIcon,
+  SwipeableItem,
+} from '../@ui/swipeable-item.js';
 import {
   View,
   ViewContent,
@@ -131,10 +135,12 @@ export const FeaturesView = observer(
                         aria-busy={saving && openFeature === route}
                         onClick={() => setDefaultFeature(route)}
                       >
-                        <AppIcon
-                          icon={isDefault ? starOff : star}
-                          aria-hidden="true"
-                        />
+                        <SwipeActionIcon>
+                          <AppIcon
+                            icon={isDefault ? starOff : star}
+                            aria-hidden="true"
+                          />
+                        </SwipeActionIcon>
                         {isDefault ? 'Clear' : 'Default'}
                       </SwipeAction>
                     }

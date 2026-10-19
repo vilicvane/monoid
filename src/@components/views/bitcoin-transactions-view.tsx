@@ -6,25 +6,16 @@ import {useEntrances} from '../../@entrances.js';
 import {getBitcoinWalletSigningAccount} from '../../@lib/bitcoin-wallet.js';
 import type {Router} from '../../@routes.js';
 import {useBitcoinWalletRefresh} from '../@hooks/use-bitcoin-wallet-refresh.js';
-import {WalletAccountList} from '../@key/wallet-account-list.js';
 import {Button} from '../@ui/button.js';
 import {PopupDateTime} from '../@ui/date-time.js';
-import {InfoSection, InfoSectionItemLabel} from '../@ui/info-section.js';
 import {ErrorMessage, WarningMessage} from '../@ui/message-content.js';
-import {
-  View,
-  ViewContent,
-  ViewHeader,
-  ViewHeaderTitle,
-  ViewLoading,
-  ViewPlaceholder,
-} from '../@view/index.js';
+import {useViewActive} from '../@view/index.js';
 
 import {
   BitcoinSubmissionListItem,
   BitcoinTransactionListItem,
 } from './@sessions/bitcoin-transaction-list.js';
-import {TransactionList} from './@sessions/transaction-list.js';
+import {TransactionsPage} from './@transactions/transactions-page.js';
 
 export const BitcoinTransactionsView = observer(
   ({
@@ -33,7 +24,8 @@ export const BitcoinTransactionsView = observer(
     Router['bitcoin']['wallet']['transactions']
   >): ReactNode => {
     const {router, walletStorageService, bitcoinWalletService} = useEntrances();
-    const active = !view.$leaving && view.$match.$exact.$active;
+    const isViewActive = useViewActive(view);
+    const active = isViewActive();
     const account = getBitcoinWalletSigningAccount(
       walletStorageService.keys,
       view.address,
@@ -57,90 +49,81 @@ export const BitcoinTransactionsView = observer(
     useBitcoinWalletRefresh(view.address, active && !!account);
 
     return (
-      <View inert={!active}>
-        <ViewHeader>
-          <ViewHeaderTitle>Transactions</ViewHeaderTitle>
-        </ViewHeader>
-        <ViewContent>
-          {!account ? (
-            <ViewPlaceholder>
-              This Bitcoin wallet is no longer in Safe.
-            </ViewPlaceholder>
-          ) : (
-            <>
-              <InfoSection>
-                <WalletAccountList
-                  keys={walletStorageService.keys}
-                  addressType={account.wallet.addressType}
-                  addresses={[view.address]}
-                  compact
-                  contained
-                />
-              </InfoSection>
-              {hasTransactions && (
-                <InfoSectionItemLabel>Choose transaction</InfoSectionItemLabel>
-              )}
-              {state.error && (
-                <ErrorMessage>
-                  {state.error}
-                  {snapshot && (
-                    <span>
-                      Showing cached transactions from{' '}
-                      <PopupDateTime value={snapshot.updatedAt} />.
-                    </span>
-                  )}
-                </ErrorMessage>
-              )}
-              {snapshot?.pendingHistoryTruncated && (
-                <WarningMessage>
-                  There are more pending transactions than can be shown.
-                </WarningMessage>
-              )}
-              {hasTransactions ? (
-                <TransactionList>
-                  {submissions.map(submission => (
-                    <BitcoinSubmissionListItem
-                      key={submission.txid}
-                      submission={submission}
-                      onClick={() =>
-                        route.transaction({txid: submission.txid}).$push()
-                      }
-                    />
-                  ))}
-                  {transactions.map(transaction => (
-                    <BitcoinTransactionListItem
-                      key={transaction.txid}
-                      transaction={transaction}
-                      onClick={() =>
-                        route.transaction({txid: transaction.txid}).$push()
-                      }
-                    />
-                  ))}
-                </TransactionList>
-              ) : snapshot ? (
-                <ViewPlaceholder>No transactions</ViewPlaceholder>
-              ) : state.status !== 'error' ? (
-                <ViewLoading />
-              ) : null}
-              {state.historyError && (
-                <ErrorMessage>{state.historyError}</ErrorMessage>
-              )}
-              {snapshot?.hasMore && (
-                <Button
-                  color="neutral"
-                  loading={state.loadingMore}
-                  disabled={state.status === 'loading'}
-                  onClick={() =>
-                    void bitcoinWalletService.loadMore(view.address)
-                  }
-                >
-                  Load more
-                </Button>
-              )}
-            </>
-          )}
-        </ViewContent>
-      </View>
+      <TransactionsPage
+        active={active}
+        keys={walletStorageService.keys}
+        account={
+          account && {
+            address: view.address,
+            addressType: account.wallet.addressType,
+          }
+        }
+        unavailableMessage="This Bitcoin wallet is no longer in Safe."
+        hasTransactions={hasTransactions}
+        loading={!snapshot && state.status !== 'error'}
+        emptyMessage={snapshot ? 'No transactions' : null}
+        beforeList={
+          <>
+            {state.error && (
+              <ErrorMessage>
+                {state.error}
+                {snapshot && (
+                  <span>
+                    Showing cached transactions from{' '}
+                    <PopupDateTime value={snapshot.updatedAt} />.
+                  </span>
+                )}
+              </ErrorMessage>
+            )}
+            {snapshot?.pendingHistoryTruncated && (
+              <WarningMessage>
+                There are more pending transactions than can be shown.
+              </WarningMessage>
+            )}
+          </>
+        }
+        afterList={
+          <>
+            {state.historyError && (
+              <ErrorMessage>{state.historyError}</ErrorMessage>
+            )}
+            {snapshot?.hasMore && (
+              <Button
+                color="neutral"
+                loading={state.loadingMore}
+                disabled={state.status === 'loading'}
+                onClick={() => {
+                  if (!isViewActive()) return;
+                  void bitcoinWalletService.loadMore(view.address);
+                }}
+              >
+                Load more
+              </Button>
+            )}
+          </>
+        }
+      >
+        {submissions.map(submission => (
+          <BitcoinSubmissionListItem
+            key={submission.txid}
+            submission={submission}
+            onClick={() => {
+              if (!isViewActive()) return;
+              route.transaction({txid: submission.txid}).$push();
+            }}
+          />
+        ))}
+        {transactions.map(transaction => (
+          <BitcoinTransactionListItem
+            key={transaction.txid}
+            transaction={transaction}
+            onClick={() => {
+              if (!isViewActive()) return;
+              route.transaction({txid: transaction.txid}).$push();
+            }}
+          />
+        ))}
+      </TransactionsPage>
     );
   },
 );

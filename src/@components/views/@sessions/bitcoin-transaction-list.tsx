@@ -1,20 +1,16 @@
 import type {ReactNode} from 'react';
-import {styled} from 'styled-components';
 
 import type {
   BitcoinSubmission,
   BitcoinWalletTransaction,
 } from '../../../@services/index.js';
 import {AddressChainIcon} from '../../@key/address-chain-icon.js';
-import {PopupDateTime} from '../../@ui/date-time.js';
 import {IconTag, IconTagName} from '../../@ui/icon-tag.js';
-import {TransactionStatus} from '../../@ui/transaction-status.js';
 
-import {TransactionListRow} from './transaction-list.js';
-
-const Status = styled(TransactionStatus)`
-  font-size: 16px;
-`;
+import {
+  TransactionListMetadata,
+  TransactionListRow,
+} from './transaction-list.js';
 
 const chain = (
   <IconTag>
@@ -35,16 +31,14 @@ export function BitcoinTransactionListItem({
       chain={chain}
       hash={transaction.txid}
       metadata={
-        <>
-          {transaction.status.confirmed ? (
-            <PopupDateTime value={transaction.status.blockTime * 1000} />
-          ) : (
-            <span>Pending</span>
-          )}
-          <Status
-            status={transaction.status.confirmed ? 'confirmed' : 'pending'}
-          />
-        </>
+        <TransactionListMetadata
+          time={
+            transaction.status.confirmed
+              ? transaction.status.blockTime * 1000
+              : 'Pending'
+          }
+          status={transaction.status.confirmed ? 'confirmed' : 'pending'}
+        />
       }
       onClick={onClick}
     />
@@ -66,18 +60,16 @@ export function BitcoinSubmissionListItem({
         submission.status === 'unknown' ? (
           <span role="status">Broadcast unconfirmed</span>
         ) : (
-          <>
-            <PopupDateTime value={submission.createdAt} />
-            <Status
-              status={
-                submission.status === 'submitted'
-                  ? 'pending'
-                  : submission.status === 'rejected'
-                    ? 'failed'
-                    : submission.status
-              }
-            />
-          </>
+          <TransactionListMetadata
+            time={submission.createdAt}
+            status={
+              submission.status === 'submitted'
+                ? 'pending'
+                : submission.status === 'rejected'
+                  ? 'failed'
+                  : submission.status
+            }
+          />
         )
       }
       onClick={onClick}
