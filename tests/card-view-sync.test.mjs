@@ -1072,6 +1072,99 @@ test('a single derived address remains at zero until its read finishes', async (
   assert.equal(state.progressUpdates.at(-1).props.current, 1);
 });
 
+test('switching an unselected key network exposes Derive even before its recorded addresses are imported', async () => {
+  const state = mount({items: cardItems(INDEX, [wallet(0)])});
+  state.changeAddressType(INDEX, 'bitcoin-segwit');
+
+  assert.equal(state.item(INDEX).props.selected, false);
+  assert.equal(state.item(INDEX).props.address, undefined);
+  assert.equal(state.visible('Derive'), true);
+  assert.equal(state.visible('Import'), false);
+  state.click('Derive');
+  await state.tap();
+  await state.finish();
+
+  assert.equal(state.item(INDEX).props.path, "m/84'/0'/0'/0/0");
+  assert.ok(state.item(INDEX).props.address);
+  assert.equal(state.item(INDEX).props.selected, false);
+  assert.equal(state.visible('Derive'), false);
+  assert.deepEqual(toJS(state.card.items[0].derivations), [wallet(0)]);
+  assert.deepEqual(toJS(state.card.items[1].derivationRecord.wallets), [
+    getWalletReference(wallet(0)),
+  ]);
+  assert.deepEqual(state.storage.keys, []);
+  assert.deepEqual(state.writes, []);
+  assert.deepEqual(state.aliasWrites, []);
+});
+
+test('Derive previews every missing row without selection and Import persists only the selected key', async () => {
+  const state = mount({
+    items: [...cardItems(INDEX, []), ...cardItems(SECOND_INDEX, [])],
+  });
+  state.changeAddressType(INDEX, 'bitcoin-segwit');
+  state.changeAddressType(SECOND_INDEX, 'bitcoin-segwit');
+  state.click('Derive');
+  await state.tap();
+  await state.finish();
+
+  assert.deepEqual(
+    state.keyViews.map(({index}) => Buffer.from(index).toString('hex')),
+    [INDEX, SECOND_INDEX],
+  );
+  for (const index of [INDEX, SECOND_INDEX]) {
+    assert.ok(state.item(index).props.address);
+    assert.equal(state.item(index).props.selected, false);
+  }
+  assert.equal(state.visible('Derive'), false);
+  assert.equal(state.visible('Import'), false);
+  assert.deepEqual(state.storage.keys, []);
+  assert.deepEqual(state.writes, []);
+  assert.equal(state.card.items.length, 2);
+
+  state.select(SECOND_INDEX);
+  state.click('Import');
+  await state.tap();
+  await state.finish();
+
+  assert.deepEqual(
+    state.writes.map(({key}) => key.index),
+    [SECOND_INDEX],
+  );
+  assert.deepEqual(
+    state.storage.keys.map(({index}) => index),
+    [SECOND_INDEX],
+  );
+  assert.equal(state.storage.keys[0].wallets[0].addressType, 'bitcoin-segwit');
+  assert.equal(
+    state.card.items.find(item => item.derivationRecord)?.derivationRecord
+      .index,
+    SECOND_INDEX,
+  );
+});
+
+test('an unselected missing preview does not block importing or copying selected ready keys', async () => {
+  const state = mount({
+    items: [
+      ...cardItems(INDEX, [wallet(0)]),
+      {index: SECOND_INDEX, type: 'seed', secret: true},
+    ],
+  });
+  state.select(INDEX);
+  assert.equal(state.visible('Derive'), true);
+  assert.equal(state.visible('Copy'), true);
+  await state.click('Import');
+
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.writes, []);
+  assert.deepEqual(
+    state.storage.keys.map(({index}) => index),
+    [INDEX],
+  );
+  assert.equal(state.item(SECOND_INDEX).props.selected, false);
+  assert.equal(state.item(SECOND_INDEX).props.address, undefined);
+  assert.equal(state.visible('Derive'), true);
+});
+
 test('uploading an empty phone list preserves an empty companion, the key and copy availability', async () => {
   const state = mount({
     items: cardItems(INDEX, [wallet(0)]),

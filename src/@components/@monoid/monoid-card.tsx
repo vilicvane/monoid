@@ -56,11 +56,16 @@ const CardDescription = styled.span`
   letter-spacing: normal;
 `;
 
+const CardSubtitle = styled.span`
+  color: var(--ion-color-primary);
+`;
+
 export function MonoidCard({
   className,
   children,
   error = false,
   id,
+  subtitle,
   description,
   ref,
 }: {
@@ -68,6 +73,7 @@ export function MonoidCard({
   children?: ReactNode;
   error?: boolean;
   id?: string;
+  subtitle?: string;
   description?: string;
   ref?: Ref<HTMLDivElement>;
 }): ReactNode {
@@ -77,6 +83,7 @@ export function MonoidCard({
       {id ? (
         <CardLabel>
           {id}
+          {subtitle && <CardSubtitle>{subtitle}</CardSubtitle>}
           {description && <CardDescription>{description}</CardDescription>}
         </CardLabel>
       ) : (

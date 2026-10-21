@@ -29,6 +29,7 @@ import {XUint8Array, xCBOR} from '../../../@x-value/index.js';
 
 import {
   getCardKeyAddressTypes,
+  getLocalCardWalletDerivation,
   readCardWalletDerivations,
 } from './card-address.js';
 import type {ScannedCardItemData} from './common.js';
@@ -298,22 +299,84 @@ function sameWallets(
   );
 }
 
+type CardDerivationWriteOptions = {
+  mode: 'replace';
+  expected: readonly WalletKeyWalletParameters[] | undefined;
+};
+
+type CardDerivationResource = ScannedCardItemData & {
+  derivationRecord: CardDerivationRecord;
+};
+
+export function writeCardDerivationRecord(
+  applet: MonoidApplet,
+  root: {index: SafeIndexHex; type: SafeKnownType},
+  wallets: readonly WalletKeyWalletParameters[],
+  signal: AbortSignal,
+  options?: CardDerivationWriteOptions,
+  onProgress?: (progress: CardDerivationsProgress) => void,
+): Promise<CardDerivationResource> {
+  return updateCardDerivationRecord(
+    applet,
+    root,
+    wallets,
+    signal,
+    options,
+    onProgress,
+  );
+}
+
 export async function writeCardDerivations(
   applet: MonoidApplet,
   root: {index: SafeIndexHex; type: SafeKnownType},
   wallets: readonly WalletKeyWalletParameters[],
   signal: AbortSignal,
-  options?: {
-    mode: 'replace';
-    expected: readonly WalletKeyWalletParameters[] | undefined;
-  },
+  options?: CardDerivationWriteOptions,
   onProgress?: (progress: CardDerivationsProgress) => void,
-): Promise<
-  ScannedCardItemData & {
-    derivationRecord: CardDerivationRecord;
-    derivations: WalletKeyPublicKeyData[];
-  }
-> {
+  knownWallets: readonly WalletKeyPublicKeyData[] = [],
+): Promise<CardDerivationResource & {derivations: WalletKeyPublicKeyData[]}> {
+  let derivations: WalletKeyPublicKeyData[] = [];
+  const resource = await updateCardDerivationRecord(
+    applet,
+    root,
+    wallets,
+    signal,
+    options,
+    onProgress,
+    async record => {
+      const needsRead = record.wallets.some(
+        wallet => !getLocalCardWalletDerivation(knownWallets, wallet),
+      );
+      if (needsRead)
+        onProgress?.({
+          stage: 'reading',
+          current: 0,
+          total: record.wallets.length,
+        });
+      derivations = await readCardWalletDerivations(
+        applet,
+        root,
+        record.wallets,
+        signal,
+        needsRead
+          ? (current, total) => onProgress?.({stage: 'reading', current, total})
+          : undefined,
+        knownWallets,
+      );
+    },
+  );
+  return {...resource, derivations};
+}
+
+async function updateCardDerivationRecord(
+  applet: MonoidApplet,
+  root: {index: SafeIndexHex; type: SafeKnownType},
+  wallets: readonly WalletKeyWalletParameters[],
+  signal: AbortSignal,
+  options?: CardDerivationWriteOptions,
+  onProgress?: (progress: CardDerivationsProgress) => void,
+  readDerivations?: (record: CardDerivationRecord) => Promise<void>,
+): Promise<CardDerivationResource> {
   if (getCardDerivationSourceType(root.index) !== root.type) {
     throw new Error('Derivation source does not match');
   }
@@ -390,24 +453,11 @@ export async function writeCardDerivations(
     secret: false,
     derivationRecord,
   };
-  const readDerivations = async (): Promise<WalletKeyPublicKeyData[]> => {
-    const total = derivationRecord.wallets.length;
-    if (total) onProgress?.({stage: 'reading', current: 0, total});
-
-    return readCardWalletDerivations(
-      applet,
-      root,
-      derivationRecord.wallets,
-      signal,
-      (current, total) => onProgress?.({stage: 'reading', current, total}),
-    );
-  };
-
   if (previous && sameWallets(previous.wallets, derivationRecord.wallets)) {
-    const derivations = await readDerivations();
+    await readDerivations?.(derivationRecord);
     throwIfCancelled(signal);
 
-    return {...item, derivations};
+    return item;
   }
 
   const request = {index: hexToUint8Array(index), data};
@@ -431,9 +481,9 @@ export async function writeCardDerivations(
     throw new Error('Too many derivation records');
   }
 
-  // Resolve every public key before mutation, so the caller can publish an
-  // acknowledged write without another NFC command that could fail or cancel.
-  const derivations = await readDerivations();
+  // Callers needing address previews resolve them before mutation, so an ACK
+  // can be published without a later NFC command that could fail or cancel.
+  await readDerivations?.(derivationRecord);
   throwIfCancelled(signal);
 
   onProgress?.({stage: 'writing', current: 0, total: 1});
@@ -446,5 +496,5 @@ export async function writeCardDerivations(
 
   // Return acknowledged writes even if cancellation arrived during the command.
   onProgress?.({stage: 'writing', current: 1, total: 1});
-  return {...item, derivations};
+  return item;
 }

@@ -72,7 +72,7 @@ mock.module('react/jsx-runtime', {
 mock.module('styled-components', {
   namedExports: {styled: {span: () => 'span'}},
 });
-mock.module('lucide-react', {namedExports: {X: 'x'}});
+mock.module('lucide-react', {namedExports: {X: 'x', Bug: 'bug'}});
 mock.module('../.bld/app/@lib/render-icon.js', {
   namedExports: {renderIcon: icon => icon},
 });
@@ -181,6 +181,7 @@ mock.module('../.bld/app/@services/index.js', {
 const {MonoidScanPromptPresenter} = await import(
   '../.bld/app/@services/monoid-scan-prompt-presenter.js'
 );
+const {ErrorService} = await import('../.bld/app/@services/error-service.js');
 const {useMonoidScanPrompt, MonoidScanRedirectError} = await import(
   '../.bld/app/@components/@monoid/monoid-scan-prompt.js'
 );
@@ -250,6 +251,7 @@ const tagLost = () => Object.assign(new Error('Tag lost'), {code: 'TAG_LOST'});
 function mount(overrides = {}) {
   const state = {
     auth: 'access',
+    retryOnError: true,
     cardId: CARD_ID,
     savedPINs: {},
     scans: [],
@@ -287,8 +289,9 @@ function mount(overrides = {}) {
   state.business = async (applet, _setContent, hello) => {
     state.businessCalls++;
     state.businessHello = hello;
-    await state.onBusiness?.(applet, _setContent, hello);
+    const result = await state.onBusiness?.(applet, _setContent, hello);
     state.businessCompleted++;
+    return result;
   };
   const assertMutationReady = () => {
     const scan = state.scans.at(-1);
@@ -313,10 +316,14 @@ function mount(overrides = {}) {
       }),
     },
     monoidScanPromptPresenter: state.presenter,
-    errorService: {
+    errorService: state.errorService ?? {
       markPresented: error => {
-        state.presentedErrors.push(error);
-        return error;
+        const presented =
+          typeof error === 'object' && error !== null
+            ? error
+            : new Error(String(error));
+        state.presentedErrors.push(presented);
+        return presented;
       },
       catch: promise => promise.catch(error => state.retryErrors.push(error)),
     },
@@ -437,7 +444,7 @@ function mount(overrides = {}) {
       ensureSetup: state.ensureSetup,
       allowInstallRedirect: state.allowInstallRedirect,
       auth: state.auth,
-      retryOnError: true,
+      retryOnError: state.retryOnError,
       pinSession: state.pinSession,
     });
   });
@@ -663,7 +670,7 @@ test('prompt: wrong card highlights the expected card ID', async () => {
   assert.deepEqual(state.retryErrors, []);
 });
 
-test('prompt: unexpected errors retain the Details path after inline display', async () => {
+test('prompt: ordinary errors retain their identity after inline display and retry', async () => {
   const failure = new Error('Unexpected APDU response');
   const state = mount({
     auth: false,
@@ -673,12 +680,69 @@ test('prompt: unexpected errors retain the Details path after inline display', a
   });
   const scan = await state.tap({cleanup: false});
   assert.equal(state.presenter.current.content, failure.message);
-  assert.deepEqual(state.presentedErrors, []);
+  assert.deepEqual(state.presentedErrors, [failure]);
   scan.onCleanup();
   await state.flush();
   await state.finishExit();
   assert.deepEqual(state.retryErrors, [failure]);
 });
+
+for (const {targetPlatform, failure} of [
+  {targetPlatform: 'android', failure: new Error('Wrong card')},
+  {targetPlatform: 'android', failure: 'Unexpected card response'},
+  {targetPlatform: 'ios', failure: new Error('Wrong card')},
+]) {
+  test(`prompt: ${targetPlatform} ${typeof failure === 'string' ? 'primitive' : 'Error'} failures are shown exactly once across the scan and error service`, async t => {
+    platform = targetPlatform;
+    const errorService = new ErrorService();
+    const toasts = [];
+    errorService.presentToast = async options => toasts.push(options);
+    const mark = t.mock.method(errorService, 'markPresented');
+    const log = t.mock.method(console, 'error', () => {});
+    const state = mount({
+      auth: false,
+      retryOnError: false,
+      errorService,
+      onBusiness: () => {
+        throw failure;
+      },
+    });
+    errorService.catch(state.operation);
+    const scan = await state.tap({cleanup: false});
+
+    assert.equal(scan.waitingForRemoval, targetPlatform === 'android');
+    assert.equal(mark.mock.callCount(), targetPlatform === 'android' ? 1 : 0);
+    assert.deepEqual(toasts, []);
+    if (targetPlatform === 'android') {
+      assert.equal(
+        state.presenter.current.content,
+        failure instanceof Error ? failure.message : failure,
+      );
+    }
+
+    scan.onCleanup();
+    await state.flush();
+    await state.finishExit();
+
+    assert.equal(state.outcome, 'rejected');
+    assert.equal(state.scans.length, 1);
+    const reported = state.errors[0];
+    if (failure instanceof Error) {
+      assert.equal(reported, failure);
+    } else {
+      assert.ok(reported instanceof Error);
+      assert.equal(reported.message, failure);
+    }
+    assert.equal(log.mock.calls[0].arguments[0], reported);
+    if (targetPlatform === 'android') {
+      assert.equal(mark.mock.calls[0].result, reported);
+      assert.deepEqual(toasts, []);
+    } else {
+      assert.equal(toasts.length, 1);
+      assert.equal(toasts[0].message, failure.message);
+    }
+  });
+}
 
 test('prompt: iOS returns errors after closing the sheet without silently reopening it', async () => {
   platform = 'ios';
@@ -744,6 +808,62 @@ for (const targetPlatform of ['ios', 'android']) {
     );
     assert.equal(state.presenter.current.content, '');
     assert.equal(state.presenter.current.closing, true);
+    await state.finishExit();
+    assert.equal(state.outcome, 'resolved');
+  });
+
+  test(`prompt: an explicit success message stays visible without error styling on ${targetPlatform}`, async () => {
+    platform = targetPlatform;
+    const state = mount({
+      auth: false,
+      onBusiness: (_applet, setContent) => {
+        setContent('Checking card, hold tight...');
+        return {message: 'Already synced'};
+      },
+    });
+    const scan = await state.tap({cleanup: false});
+
+    assert.deepEqual(
+      scan.closeOptions,
+      targetPlatform === 'ios'
+        ? {message: 'Already synced'}
+        : {waitForRemoval: true},
+    );
+    assert.equal(state.presenter.current.content, 'Already synced');
+    assert.equal(state.presenter.current.error, false);
+    assert.equal(state.presenter.current.closing, false);
+    if (targetPlatform === 'android') {
+      assert.equal(state.presenter.current.scanning, false);
+      assert.equal(scan.waitingForRemoval, true);
+    }
+    assert.equal(state.outcome, undefined);
+    assert.deepEqual(state.presentedErrors, []);
+    assert.deepEqual(state.retryErrors, []);
+
+    scan.onCleanup();
+    await state.flush();
+    assert.equal(state.presenter.current.content, 'Already synced');
+    assert.equal(state.presenter.current.closing, true);
+    await state.finishExit();
+    assert.equal(state.outcome, 'resolved');
+    assert.equal(state.scans.length, 1);
+  });
+
+  test(`prompt: an empty success message keeps the normal clear-and-close behavior on ${targetPlatform}`, async () => {
+    platform = targetPlatform;
+    const state = mount({
+      auth: false,
+      onBusiness: () => ({message: ''}),
+    });
+    const scan = await state.tap();
+
+    assert.equal(scan.waitingForRemoval, false);
+    assert.deepEqual(
+      scan.closeOptions,
+      targetPlatform === 'ios' ? {message: ''} : {},
+    );
+    assert.equal(state.presenter.current.content, '');
+    assert.equal(state.presenter.current.error, false);
     await state.finishExit();
     assert.equal(state.outcome, 'resolved');
   });

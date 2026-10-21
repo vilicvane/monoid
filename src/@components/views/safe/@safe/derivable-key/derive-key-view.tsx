@@ -17,7 +17,6 @@ import type {WalletKeyPublicKeyData} from '../../../../../@services/index.js';
 import {
   getWalletData,
   getWalletReference,
-  matchesWalletReference,
 } from '../../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../../@utils/index.js';
 import {AddressTypeSelector} from '../../../../@key/address-type-selector.js';
@@ -40,7 +39,7 @@ import {
   readCardKeyAddress,
 } from '../../card-address.js';
 import {assertCardForUpdate} from '../../card-alias-update.js';
-import {writeCardDerivations} from '../../card-derivations.js';
+import {writeCardDerivationRecord} from '../../card-derivations.js';
 import type {ScannedCardData} from '../../common.js';
 
 export const DeriveKeyView = observer(
@@ -251,7 +250,7 @@ export const DeriveKeyView = observer(
               }
 
               setStateContent('Saving derivation, hold tight...');
-              const resource = await writeCardDerivations(
+              const resource = await writeCardDerivationRecord(
                 applet,
                 key,
                 wallets,
@@ -264,21 +263,43 @@ export const DeriveKeyView = observer(
               );
               // Acknowledged card writes are committed locally before cancellation
               // or route checks; only navigation waits for the scan to finish.
-              const source = resource.derivations.find(source =>
-                matchesWalletReference(source, wallet),
-              )!;
               const cachedCard = cardStore.get(card);
               if (cachedCard) {
-                runInAction(() => {
-                  const {derivations, ...record} = resource;
-                  cachedCard.upsert(record);
-                  const cachedKey = cachedCard.items.find(
-                    item => item.index === key.index,
-                  );
-                  cachedKey?.setRecordedWallets(derivations);
-                });
+                const cachedKey = cachedCard.items.find(
+                  item => item.index === key.index,
+                );
+                const known = [
+                  wallet,
+                  ...(cachedKey?.derivations ?? []),
+                  ...Object.values(cachedKey?.refs ?? {}).map(
+                    ({addressType, seed, curve, path, publicKey}) => ({
+                      addressType,
+                      seed,
+                      curve,
+                      path,
+                      publicKey,
+                    }),
+                  ),
+                  ...key.wallets,
+                ];
+                const derivations = resource.derivationRecord.wallets.map(
+                  parameters => getLocalCardWalletDerivation(known, parameters),
+                );
+                if (
+                  cachedKey &&
+                  derivations.every(value => value !== undefined)
+                ) {
+                  runInAction(() => {
+                    cachedCard.upsert(resource);
+                    cachedKey.setRecordedWallets(derivations);
+                  });
+                } else {
+                  // The record can include card-only addresses whose public keys
+                  // have never been read. Keep partial previews out of CardStore.
+                  cardStore.forget(card);
+                }
               }
-              walletStorageService.addWallet(key.index, source);
+              walletStorageService.addWallet(key.index, wallet);
             } finally {
               signal.removeEventListener('abort', cancel);
             }

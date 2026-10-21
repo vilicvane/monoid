@@ -79,7 +79,7 @@ mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
 });
 mock.module('../.bld/app/@components/views/safe/card-derivations.js', {
   namedExports: {
-    writeCardDerivations: (...args) => fixture.write(...args),
+    writeCardDerivationRecord: (...args) => fixture.write(...args),
   },
 });
 const {useViewActive} = await import(
@@ -157,6 +157,7 @@ function mount() {
     errors: [],
     routes: [],
     authCount: 0,
+    keyReads: 0,
     clears: 0,
     storage,
     cardStore: new CardStore(),
@@ -172,7 +173,8 @@ function mount() {
     }),
     applet: {
       async viewKey() {
-        return {publicKey: bytes(PUBLIC_KEY)};
+        state.keyReads++;
+        return {publicKey: bytes(FRESH_PUBLIC_KEY)};
       },
     },
     slot(create) {
@@ -237,11 +239,6 @@ function mount() {
       key: INDEX,
       secret: false,
       derivationRecord: {index: INDEX, wallets},
-      derivations: wallets.map(wallet => ({
-        ...wallet,
-        publicKey:
-          wallet.path === previous.path ? PUBLIC_KEY : FRESH_PUBLIC_KEY,
-      })),
     };
   };
   state.pinSession = {clear: () => state.clears++};
@@ -277,7 +274,7 @@ async function derive(state) {
 
 afterEach(() => owners.splice(0).forEach(owner => owner.unmount()));
 
-test('Import scans again, appends only the requested address, and commits its fresh public key before leaving', async () => {
+test('Import scans to save metadata and reuses the previewed public key without another derivation', async () => {
   const state = mount();
   await derive(state);
   const originalDefault = toJS(state.storage.keys[0].defaultWallet);
@@ -303,6 +300,7 @@ test('Import scans again, appends only the requested address, and commits its fr
     [PATH],
   );
   assert.equal(state.storage.keys[0].wallets[1].publicKey, FRESH_PUBLIC_KEY);
+  assert.equal(state.keyReads, 1);
   assert.deepEqual(toJS(state.storage.keys[0].defaultWallet), originalDefault);
   assert.deepEqual(state.routes, []);
 
@@ -491,6 +489,7 @@ test('local preview refuses a different derived key before any metadata write an
 
 test('a verified local preview binds the complete card identity across a write retry', async () => {
   const state = mount();
+  state.applet.viewKey = async () => ({publicKey: bytes(PUBLIC_KEY)});
   selectDerivation(
     state,
     'bitcoin-segwit',
@@ -545,7 +544,16 @@ test('single-address Import preserves card-only records without restoring them t
   const write = state.write;
   state.write = async (...args) => {
     const result = await write(...args);
-    return {...result, derivations: [...result.derivations, ...cardOnly]};
+    return {
+      ...result,
+      derivationRecord: {
+        index: INDEX,
+        wallets: [
+          ...result.derivationRecord.wallets,
+          ...cardOnly.map(getWalletReference),
+        ],
+      },
+    };
   };
   state.click('Import');
   await state.tap();
@@ -585,7 +593,6 @@ test('deleting an address then importing another updates the card snapshot witho
           ...result.derivationRecord.wallets,
         ],
       },
-      derivations: [deleted, ...result.derivations],
     };
   };
   state.click('Import');
@@ -629,4 +636,41 @@ test('importing after an empty card record refreshes the card address preview', 
     state.storage.keys[0].wallets.map(wallet => wallet.path),
     [PATH],
   );
+});
+
+test('card-only paths with unknown previews invalidate the cache without deriving or importing them', async () => {
+  const state = mount();
+  const previous = toJS(state.storage.keys[0].wallets[0]);
+  const cached = state.cardStore.set({
+    id: Buffer.from(state.hello.id).toString('hex'),
+    publicKey: Buffer.from(state.hello.publicKey).toString('hex'),
+    bundle: false,
+    items: [
+      {index: INDEX, type: 'seed', secret: true, derivations: [previous]},
+    ],
+  });
+  const cardOnly = {...getWalletReference(previous), path: "m/44'/60'/0'/0/9"};
+  await derive(state);
+  const write = state.write;
+  state.write = async (...args) => {
+    const result = await write(...args);
+    return {
+      ...result,
+      derivationRecord: {
+        index: INDEX,
+        wallets: [cardOnly, ...result.derivationRecord.wallets],
+      },
+    };
+  };
+  state.click('Import');
+  await state.tap();
+  await state.finish();
+
+  assert.equal(state.keyReads, 1);
+  assert.equal(state.cardStore.get(cached), undefined);
+  assert.deepEqual(
+    state.storage.keys[0].wallets.map(wallet => wallet.path),
+    [previous.path, PATH],
+  );
+  assert.deepEqual(state.routes, ['back']);
 });

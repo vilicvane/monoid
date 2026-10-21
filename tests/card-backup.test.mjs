@@ -51,8 +51,8 @@ function destination(identity) {
       this.calls.push(['importItem', structuredClone(request)]);
       assert.equal(
         request.data[0],
-        identity,
-        'Ciphertext belongs to this card',
+        request.senderPublicKey ? identity : 0x7f,
+        'Ciphertext belongs to this recipient or its bundle',
       );
       await this.beforeImport?.(request);
       const key = hex(request.index);
@@ -121,7 +121,10 @@ function fixture() {
     async exportItem(request) {
       this.calls.push(['exportItem', structuredClone(request)]);
       await this.onExport?.(request);
-      return artifact(request.index, request.recipientPublicKey);
+      return artifact(
+        request.index,
+        request.recipientPublicKey ?? Uint8Array.of(4, 0x7f),
+      );
     },
   };
   return {
@@ -133,8 +136,12 @@ function fixture() {
   };
 }
 
-async function ready({multiple = false} = {}) {
+async function ready({multiple = false, bundle = false} = {}) {
   const {source, target, ...rest} = fixture();
+  if (bundle) {
+    for (const card of [source, target, rest.secondTarget])
+      card.hello.bundle = new Uint8Array(32).fill(1);
+  }
   const session = new CardBackupSession();
   await session.readSource(source, source.hello, signal());
   await session.addTarget(target.hello);
@@ -1310,7 +1317,7 @@ test('cancellation after acknowledged Import retains that item and starts no nex
     session.backup.targets[0].items.map(item => item.imported),
     [true, false, false],
   );
-  assert.deepEqual(reported, [[0, 3, 'importing']]);
+  assert.deepEqual(reported, [[0, 3]]);
 });
 
 test('cancellation after acknowledged Export retains its artifact without publishing late progress', async () => {
@@ -1358,43 +1365,35 @@ test('a cancelled source authentication does not publish export progress or begi
   );
 });
 
-test('Import reports a separate verification stage and counts only acknowledged imports', async () => {
+test('Import counts only acknowledged items without rereading the destination', async () => {
   const {session, source, target} = await ready();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
   target.records.set(hex(index(2)), {index: index(2), data: bytes('deadbeef')});
   const reported = [];
-  const originalList = target.list;
-  target.list = function (request) {
-    assert.deepEqual(reported.at(-1), [2, 3, 'verifying']);
-    assert.equal(session.backup.targets[0].complete, false);
-    return originalList.call(this, request);
-  };
+  target.list = () => assert.fail('Acknowledged imports need no final List');
 
   await session.importItems(target, target.hello, PIN, signal(), (...value) =>
     reported.push(value),
   );
 
   assert.deepEqual(reported, [
-    [0, 3, 'importing'],
-    [1, 3, 'importing'],
-    [1, 3, 'importing'],
-    [2, 3, 'importing'],
-    [2, 3, 'verifying'],
+    [0, 3],
+    [1, 3],
+    [1, 3],
+    [2, 3],
   ]);
   assert.equal(session.backup.targets[0].complete, false);
 });
 
-test('cancellation during verification preserves imported items and retries only verification', async () => {
+test('cancellation with the final Import ACK preserves completion without a later command', async () => {
   const {session, source, target} = await ready();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
   const controller = new AbortController();
   const reported = [];
-  const originalList = target.list;
-  target.list = async function (request) {
-    const result = await originalList.call(this, request);
-    controller.abort();
-    return result;
+  target.afterImport = request => {
+    if (hex(request.index) === hex(index(3))) controller.abort();
   };
+  target.list = () => assert.fail('Acknowledged imports need no final List');
 
   await assert.rejects(
     session.importItems(
@@ -1407,25 +1406,20 @@ test('cancellation during verification preserves imported items and retries only
     {code: 'CANCELLED'},
   );
   assert.deepEqual(reported, [
-    [0, 3, 'importing'],
-    [1, 3, 'importing'],
-    [2, 3, 'importing'],
-    [3, 3, 'importing'],
-    [3, 3, 'verifying'],
+    [0, 3],
+    [1, 3],
+    [2, 3],
   ]);
   assert.equal(
     session.backup.targets[0].items.every(item => item.imported),
     true,
   );
-  assert.equal(session.backup.targets[0].complete, false);
-
-  target.list = originalList;
-  await session.importItems(target, target.hello, PIN, signal(), progress);
+  assert.equal(session.backup.targets[0].complete, true);
   assert.equal(
     target.calls.filter(([method]) => method === 'importItem').length,
     3,
   );
-  assert.equal(target.calls.filter(([method]) => method === 'list').length, 2);
+  assert.equal(target.calls.filter(([method]) => method === 'list').length, 0);
   assert.equal(session.backup.complete, true);
 });
 
@@ -1603,6 +1597,79 @@ test('multiple destinations receive their own ciphertext and can finish in eithe
       });
     }
   }
+});
+
+test('same-bundle destinations reuse one export per item and import in either order', async () => {
+  const {session, source, target, secondTarget} = await ready({
+    multiple: true,
+    bundle: true,
+  });
+  const reported = [];
+  await session.exportItems(source, source.hello, PIN, signal(), (...value) =>
+    reported.push(value),
+  );
+  const exports = source.calls.filter(([method]) => method === 'exportItem');
+  assert.deepEqual(
+    exports.map(([, request]) => hex(request.index)),
+    [1, 2, 3].map(value => hex(index(value))),
+  );
+  assert.ok(exports.every(([, request]) => !('recipientPublicKey' in request)));
+  assert.deepEqual(
+    session.backup.targets[0].items.map(item => item.exported),
+    session.backup.targets[1].items.map(item => item.exported),
+  );
+  assert.deepEqual(
+    reported,
+    Array.from({length: 7}, (_, count) => [count, 6]),
+  );
+
+  await session.importItems(
+    secondTarget,
+    secondTarget.hello,
+    PIN,
+    signal(),
+    progress,
+  );
+  assert.deepEqual(
+    session.backup.targets.map(card => card.complete),
+    [false, true],
+  );
+  await session.importItems(target, target.hello, PIN, signal(), progress);
+  assert.equal(session.backup.complete, true);
+  for (const card of [target, secondTarget]) {
+    assert.ok(card.calls.every(([method]) => method === 'importItem'));
+    assert.ok(
+      card.calls.every(([, request]) => !('senderPublicKey' in request)),
+    );
+  }
+});
+
+test('a retained bundle export is reused across destinations after cancellation', async () => {
+  const {session, source} = await ready({multiple: true, bundle: true});
+  const controller = new AbortController();
+  source.onExport = () => controller.abort();
+  await assert.rejects(
+    session.exportItems(source, source.hello, PIN, controller.signal, progress),
+    {code: 'CANCELLED'},
+  );
+  const retained = session.backup.targets[0].items[0].exported;
+  assert.ok(retained);
+  assert.equal(session.backup.targets[1].items[0].exported, undefined);
+
+  source.onExport = undefined;
+  await session.exportItems(source, source.hello, PIN, signal(), progress);
+  assert.deepEqual(
+    source.calls
+      .filter(([method]) => method === 'exportItem')
+      .map(([, request]) => hex(request.index)),
+    [1, 2, 3].map(value => hex(index(value))),
+  );
+  assert.ok(
+    session.backup.targets.every(card =>
+      card.items.every(item => item.exported),
+    ),
+  );
+  assert.deepEqual(session.backup.targets[1].items[0].exported, retained);
 });
 
 test('destination duplicates use the complete public key, while equal display IDs remain distinct', async () => {
@@ -1945,17 +2012,14 @@ for (const failure of ['before-acknowledgement', 'after-card-commit']) {
   });
 }
 
-test('final List must contain all acknowledged items before reporting completion', async () => {
+test('successful imports finish directly from acknowledged items', async () => {
   const {session, source, target} = await ready();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
-  target.list = async () => ({items: [{index: index(1)}, {index: index(3)}]});
-  await assert.rejects(
-    session.importItems(target, target.hello, PIN, signal(), progress),
-    /not found/,
-  );
-  assert.equal(session.backup.complete, false);
+  target.list = () => assert.fail('Acknowledged imports need no final List');
+  await session.importItems(target, target.hello, PIN, signal(), progress);
+  assert.equal(session.backup.complete, true);
   assert.deepEqual(
     session.backup.targets[0].items.map(item => item.imported),
-    [true, false, true],
+    [true, true, true],
   );
 });

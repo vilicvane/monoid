@@ -33,6 +33,7 @@ import {
   SolanaTokenService,
   SolanaTransactionHistoryService,
   StorageService,
+  SyncCardsStore,
   TransactionHistoryService,
   WalletKitService,
   WalletStorageService,
@@ -139,6 +140,11 @@ export class Entrances {
   @entrance
   get copyItemsStore() {
     return new CopyItemsStore();
+  }
+
+  @entrance
+  get syncCardsStore() {
+    return new SyncCardsStore();
   }
 
   @entrance

@@ -635,3 +635,42 @@ test('reading no addresses reports no completed address', async () => {
   );
   assert.deepEqual(derived, []);
 });
+
+test('known previews only replace equivalent reads and never add unrequested addresses', async () => {
+  const known = {
+    addressType: 'evm',
+    seed: 'Bitcoin seed',
+    curve: 'secp256k1',
+    path: "m/44'/60'/0'/0/7",
+    publicKey: PUBLIC_KEY,
+  };
+  const {publicKey: _publicKey, ...parameters} = known;
+  const requested = [
+    {...parameters, addressType: 'bitcoin-segwit'},
+    {...parameters, addressType: 'bitcoin-taproot'},
+  ];
+  const calls = [];
+  const derived = await readCardWalletDerivations(
+    {
+      async viewKey(request) {
+        calls.push(request);
+        return {publicKey: bytes(TAPROOT_KEY)};
+      },
+    },
+    {type: 'seed', index: INDEX},
+    requested,
+    undefined,
+    undefined,
+    [
+      known,
+      {...known, publicKey: TAPROOT_KEY},
+      {...known, path: "m/44'/60'/0'/0/8"},
+    ],
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].taproot, true);
+  assert.deepEqual(derived, [
+    {...requested[0], publicKey: PUBLIC_KEY},
+    {...requested[1], publicKey: TAPROOT_KEY},
+  ]);
+});

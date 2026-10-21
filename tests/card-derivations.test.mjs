@@ -12,6 +12,7 @@ import {
   isCardDerivationItem,
   mergeCardDerivationWallets,
   readCardDerivationRecord,
+  writeCardDerivationRecord,
   writeCardDerivations,
 } from '../.bld/app/@components/views/safe/card-derivations.js';
 import {ADDRESS_TYPES} from '../.bld/app/@lib/wallet-address.js';
@@ -470,6 +471,113 @@ test('write re-reads and merges on-card records, preserving unrelated metadata',
   assert.deepEqual(
     applet.calls.map(([command]) => command),
     ['view', 'list', 'get', 'viewKey', 'viewKey'],
+  );
+});
+
+test('record-only writes merge every stored path without deriving address previews', async () => {
+  const original = {
+    ...recordItem(SEED, [wallet(), wallet('solana')]),
+    alias: 'Addresses',
+  };
+  const applet = createApplet([original]);
+  const result = await writeCardDerivationRecord(
+    applet,
+    SEED,
+    [wallet('evm', 7)],
+    signal(),
+  );
+  assert.deepEqual(
+    applet.calls.map(([command]) => command),
+    ['view', 'list', 'get', 'set'],
+  );
+  assert.deepEqual(result.derivationRecord.wallets, [
+    wallet(),
+    wallet('solana'),
+    wallet('evm', 7),
+  ]);
+  assert.equal(result.alias, 'Addresses');
+  assert.equal(result.derivations, undefined);
+  assert.deepEqual(
+    decodeCardDerivationRecord(applet.items.get(result.index).data).wallets,
+    [wallet(), wallet('evm', 7), wallet('solana')],
+  );
+
+  applet.calls.length = 0;
+  await writeCardDerivationRecord(applet, SEED, [wallet('evm', 7)], signal());
+  assert.deepEqual(
+    applet.calls.map(([command]) => command),
+    ['view', 'list', 'get'],
+  );
+});
+
+test('known address previews avoid all derivation reads while preserving the exact merged record', async () => {
+  const previous = wallet();
+  const added = wallet('evm', 7);
+  const applet = createApplet([recordItem(SEED, [previous])]);
+  const events = [];
+  const result = await writeCardDerivations(
+    applet,
+    SEED,
+    [added],
+    signal(),
+    undefined,
+    event => events.push(event),
+    [previous, added, wallet('solana')].map(wallet => ({
+      ...wallet,
+      publicKey: SECP_PUBLIC_KEY,
+    })),
+  );
+  assert.deepEqual(
+    applet.calls.map(([command]) => command),
+    ['view', 'list', 'get', 'set'],
+  );
+  assert.deepEqual(result.derivationRecord.wallets, [previous, added]);
+  assert.deepEqual(
+    result.derivations,
+    [previous, added].map(wallet => ({
+      ...wallet,
+      publicKey: SECP_PUBLIC_KEY,
+    })),
+  );
+  assert.equal(
+    events.some(event => event.stage === 'reading'),
+    false,
+  );
+});
+
+test('only missing address previews are derived before an acknowledged metadata write', async () => {
+  const previous = wallet();
+  const unknown = wallet('solana');
+  const added = wallet('evm', 7);
+  const applet = createApplet([recordItem(SEED, [previous, unknown])]);
+  const events = [];
+  const result = await writeCardDerivations(
+    applet,
+    SEED,
+    [added],
+    signal(),
+    undefined,
+    event => events.push(event),
+    [previous, added].map(wallet => ({...wallet, publicKey: SECP_PUBLIC_KEY})),
+  );
+  assert.deepEqual(
+    applet.calls.map(([command]) => command),
+    ['view', 'list', 'get', 'viewKey', 'set'],
+  );
+  assert.equal(
+    applet.calls.find(([command]) => command === 'viewKey')[1].derivation.type,
+    'slip10',
+  );
+  assert.deepEqual(result.derivationRecord.wallets, [previous, unknown, added]);
+  assert.equal(result.derivations.length, 3);
+  assert.deepEqual(
+    events.filter(event => event.stage === 'reading'),
+    [
+      {stage: 'reading', current: 0, total: 3},
+      {stage: 'reading', current: 1, total: 3},
+      {stage: 'reading', current: 2, total: 3},
+      {stage: 'reading', current: 3, total: 3},
+    ],
   );
 });
 

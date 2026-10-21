@@ -122,12 +122,11 @@ test('retained Copy state keeps acknowledged exports and UI progress without rep
     error => error === failure,
   );
   flow.markInterrupted(source.publicKey, true);
-  flow.setNotice('Copy interrupted', true);
+  flow.setFailed(true);
 
   const returned = getFlow(store, 'partial');
   assert.equal(returned.session.busy, false);
   assert.equal(returned.failed, true);
-  assert.equal(returned.notice, 'Copy interrupted');
   assert.equal(returned.interruptedCards.has(source.publicKey), true);
   assert.equal(
     returned.session.backup.targets[0].items[0].exported.data,
@@ -162,7 +161,7 @@ test('Start over resets only its own flow and preserves the original selection',
   flow.markInterrupted(source.publicKey, true);
   flow.startImport(source.publicKey);
   flow.exitSteps();
-  flow.setNotice('Interrupted', true);
+  flow.setFailed(true);
   await flow.restart();
 
   assert.equal(flow.session.backup.targets.length, 0);
@@ -172,7 +171,6 @@ test('Start over resets only its own flow and preserves the original selection',
       .map(item => item.index),
     [secondIndex],
   );
-  assert.equal(flow.notice, undefined);
   assert.equal(flow.failed, false);
   assert.equal(flow.stepsExited, false);
   assert.equal(flow.interruptedCards.size, 0);

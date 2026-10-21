@@ -69,6 +69,7 @@ mock.module('../.bld/app/@lib/global-platform/install.js', {
 mock.module('../.bld/app/@lib/global-platform/card-information.js', {
   namedExports: {
     readCardInformation: async () => {
+      fixture.informationReads = (fixture.informationReads ?? 0) + 1;
       if (fixture.informationError) throw fixture.informationError;
       return fixture.information;
     },
@@ -82,7 +83,10 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
     MonoidCardError,
     MonoidWrongCardError,
     hasAppletBundle: true,
-    readMonoidAppletInstallation: async () => fixture.installation,
+    readMonoidAppletInstallation: async () => {
+      fixture.installationReads = (fixture.installationReads ?? 0) + 1;
+      return fixture.installation;
+    },
     createMonoidApplet: aid => ({
       async openSession() {
         fixture.events.push({type: 'select', aid});
@@ -403,6 +407,8 @@ test('installation asks for Secret PIN before scanning, completes PIN setup, the
     ['input', 'vault', 'scan'],
   );
   await state.tap({finish: false});
+  assert.equal(state.informationReads, 1);
+  assert.equal(state.installationReads, 2, 'refresh installed applets only');
   assert.equal(
     state.targets.length,
     0,
@@ -472,6 +478,32 @@ test('the refreshed applet list is shown only after leaving Complete', async () 
   assert.ok(content);
   assert.equal(content.props.id, '01020304');
   assert.ok(content.props.applets.every(applet => applet.installed));
+});
+
+test('setting PINs reuses the current applet inventory and updated Hello', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.uninitialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.informationReads = 0;
+  state.installationReads = 0;
+
+  state.click('Set Secret PIN');
+  await state.answer();
+  await state.tap();
+
+  assert.deepEqual(state.errors, []);
+  assert.equal(state.informationReads, 1);
+  assert.equal(state.installationReads, 1);
+  assert.ok(state.node('OperationComplete'));
+  state.click('Back to Card Applets');
+  assert.equal(state.node('CardAppletsContent').props.id, '01020304');
+  assert.ok(
+    find(
+      state.render(),
+      node => node.type === 'Button' && text(node) === 'Scan another card',
+    ),
+  );
 });
 
 test('failed installation reports the error and stays on Card information without offering automatic reinstall', async () => {

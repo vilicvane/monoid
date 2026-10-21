@@ -20,6 +20,19 @@ backup/restore progress, and operation errors use the shared NFC presentation.
   without another discovery scan.
 - A committed result is delivered to its originating flow even if another route
   takes focus while the NFC presentation closes.
+- Setup returns to its actual source: Copy-origin setup returns to Copy, while
+  Card-origin bundle setup returns to Card on completion or an uncertain creation
+  result. Safe is the fallback when the source is no longer in history. An older,
+  unrelated Copy entry must not determine the destination.
+- Copy completion offers Back to Card when Card exists in route history,
+  otherwise Back to Safe. If neither destination exists, no return button is shown.
+
+Copy retains each acknowledged import and completes a destination as soon as all
+its items are acknowledged, without a final inventory reread. An interrupted,
+unacknowledged import retries the same envelope through the card's idempotent
+import command. A bundled source exports each selected item once and shares that
+envelope with its other enrolled destination cards; an unbundled source still
+exports separately for each recipient public key.
 
 ## Update, reinstall, and fresh install
 
@@ -66,6 +79,10 @@ Secret PIN authorization for both Export and Import. Secret PINs are never saved
 PIN authorization is re-established after SELECT. Ordinary replacement refuses a
 changed caller AID or an unreadable/incompatible Identity; it never silently
 converts to Fresh install.
+
+Within one scan, the completion snapshot reuses the card's already-read GP
+information. Installation and replacement still refresh the applet inventory;
+PIN-only setup keeps that inventory and uses the updated Hello response.
 
 ## Bundle collection
 

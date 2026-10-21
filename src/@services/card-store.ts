@@ -167,7 +167,7 @@ export class CardStore {
     return this.cards.get(`${identity.id}:${identity.publicKey}`);
   }
 
-  /** An interrupted applet replacement makes the scanned resource list stale. */
+  /** Card mutations can invalidate the scanned resource list and address previews. */
   forget(identity: CardIdentity): void {
     this.cards.delete(`${identity.id}:${identity.publicKey}`);
   }

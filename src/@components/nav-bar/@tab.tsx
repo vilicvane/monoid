@@ -94,7 +94,11 @@ const Badge = styled(NumberBadge)<{$visible: boolean}>`
 `;
 
 const RippleEffect = styled(RippleEffect_)`
-  margin: calc(var(--view-inset-bottom) / 2) -20px 0;
+  left: 50%;
+  right: auto;
+  width: var(--nav-tab-ripple-width, calc(100% + 40px));
+  margin-top: calc(var(--view-inset-bottom) / 2);
+  transform: translateX(-50%);
 `;
 
 export const Tab = observer(

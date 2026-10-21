@@ -8,7 +8,6 @@ export class CopyItemsState {
   readonly session: CardBackupSession;
   readonly interruptedCards = new Set<string>();
   readonly startedImports = new Set<string>();
-  notice: string | undefined;
   failed = false;
   stepsExited = false;
 
@@ -24,8 +23,7 @@ export class CopyItemsState {
     });
   }
 
-  setNotice(notice: string | undefined, failed = false): void {
-    this.notice = notice;
+  setFailed(failed: boolean): void {
     this.failed = failed;
   }
 
@@ -52,7 +50,7 @@ export class CopyItemsState {
     await this.session.reset(this.sourceCard, this.sourceIndexes);
     runInAction(() => {
       this.clearProgress();
-      this.setNotice(undefined);
+      this.setFailed(false);
     });
   }
 }

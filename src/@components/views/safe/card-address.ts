@@ -77,9 +77,15 @@ export async function readCardWalletDerivations(
   wallets: readonly WalletKeyWalletParameters[],
   signal?: AbortSignal,
   onProgress?: (current: number, total: number) => void,
+  knownWallets: readonly WalletKeyPublicKeyData[] = [],
 ): Promise<WalletKeyPublicKeyData[]> {
   const derived: WalletKeyPublicKeyData[] = [];
   const publicKeys = new Map<string, PublicKeyHex>();
+  for (const wallet of knownWallets) {
+    const requestKey = getCardWalletDerivationKey(wallet);
+    if (!publicKeys.has(requestKey))
+      publicKeys.set(requestKey, wallet.publicKey);
+  }
 
   for (const wallet of wallets) {
     if (signal?.aborted) {

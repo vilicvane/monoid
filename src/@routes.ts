@@ -110,6 +110,12 @@ export const ROUTE_SCHEMA = {
         sourceIndexes?: SafeIndexHex[];
       },
     },
+    syncCards: {
+      $state: (state: {
+        card?: Pick<ScannedCardData, 'id' | 'publicKey'>;
+        syncId?: string;
+      }) => ({...state, syncId: state.syncId ?? createFlowId()}),
+    },
     setupCard: {
       $state: (state: {
         cardInformation?: CardInformation;

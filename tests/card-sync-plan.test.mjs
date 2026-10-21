@@ -1,0 +1,205 @@
+import assert from 'node:assert/strict';
+import {test} from 'node:test';
+
+import {createCardSyncPlans} from '../.bld/app/@components/views/safe/@card/card-sync-plan.js';
+import {
+  encodeCardDerivationRecord,
+  getCardDerivationItemIndex,
+} from '../.bld/app/@components/views/safe/card-derivations.js';
+
+const keyIndex = '03010000000000000001';
+const publicIndex = '10000000000000000001';
+const hex = bytes => Buffer.from(bytes).toString('hex');
+
+function card(id, bundle, items) {
+  return {
+    id: `0000000${id}`,
+    publicKey: `04${String(id).repeat(128)}`,
+    bundle,
+    items,
+  };
+}
+
+function secret(overrides = {}) {
+  return {
+    index: keyIndex,
+    type: 'secp256k1',
+    secret: true,
+    fingerprint: 'key:1',
+    exported: {data: 'aa'},
+    ...overrides,
+  };
+}
+
+function records(wallets) {
+  const derivationRecord = {
+    index: keyIndex,
+    wallets: wallets.map(addressType => ({addressType})),
+  };
+  return {
+    index: getCardDerivationItemIndex(keyIndex),
+    type: 0x0f01,
+    secret: false,
+    key: keyIndex,
+    data: hex(encodeCardDerivationRecord(derivationRecord)),
+    derivationRecord,
+  };
+}
+
+test('public data crosses groups while Secret and address unions stay inside each bundle', () => {
+  const cards = [
+    card(1, 'A', [
+      secret({alias: ''}),
+      records(['evm']),
+      {index: publicIndex, secret: false, data: 'aa'},
+    ]),
+    card(2, 'A', [secret({alias: 'Ethereum'}), records(['bitcoin-taproot'])]),
+    card(3, 'B', [
+      secret({fingerprint: 'key:2', key: '01', alias: 'Separate'}),
+      records(['bitcoin-segwit']),
+    ]),
+    card(4, false, [
+      secret({fingerprint: 'key:3', key: '02'}),
+      records(['evm']),
+    ]),
+    card(5, false, []),
+  ];
+  const plans = createCardSyncPlans(cards);
+  assert.deepEqual(
+    plans[0].items
+      .find(item => item.derivationRecord)
+      .derivationRecord.wallets.map(item => item.addressType),
+    ['evm', 'bitcoin-taproot'],
+  );
+  assert.equal(
+    plans[0].items.find(item => item.index === keyIndex).alias,
+    'Ethereum',
+  );
+  assert.equal(
+    plans[2].items.find(item => item.index === keyIndex).alias,
+    'Separate',
+  );
+  assert.equal(
+    plans[2].items.find(item => item.derivationRecord).derivationRecord.wallets
+      .length,
+    1,
+  );
+  assert.equal(
+    plans[3].items.find(item => item.derivationRecord).derivationRecord.wallets
+      .length,
+    1,
+  );
+  assert.deepEqual(
+    plans[4].items.map(item => item.index),
+    [publicIndex],
+  );
+});
+
+test('first opaque data wins, first nonempty alias wins, and absent items do not delete', () => {
+  const first = {index: publicIndex, secret: false, data: 'aa', alias: '  '};
+  const second = {...first, data: 'bb', alias: 'Named'};
+  const third = {...first, data: 'cc', alias: 'Later'};
+  const plans = createCardSyncPlans([
+    card(1, false, [first]),
+    card(2, false, [second]),
+    card(3, false, [third]),
+  ]);
+  assert.equal(plans[0].items[0].data, 'aa');
+  assert.equal(plans[0].items[0].alias, 'Named');
+  assert.deepEqual(
+    plans[0].operations.map(item => item.kind),
+    ['alias'],
+  );
+  assert.deepEqual(
+    plans[2].operations.map(item => item.kind),
+    ['data', 'alias'],
+  );
+  assert.equal(first.alias, '  ', 'planning must not mutate observations');
+});
+
+test('Secret import retains authenticated metadata and applies merged alias afterwards', () => {
+  const plans = createCardSyncPlans([
+    card(1, 'A', [
+      secret({alias: '', exported: {alias: '', data: 'aa'}}),
+      records(['evm']),
+    ]),
+    card(2, 'A', [secret({alias: 'Named'}), records(['bitcoin-taproot'])]),
+    card(3, 'A', []),
+  ]);
+  const ops = plans[2].operations;
+  assert.deepEqual(
+    ops.map(item => item.kind),
+    ['import', 'alias', 'create'],
+  );
+  assert.equal(ops[0].after.alias, '');
+  assert.equal(ops[0].exported.alias, '');
+  assert.equal(ops[1].after.alias, 'Named');
+  assert.equal(ops[2].after.derivationRecord.wallets.length, 2);
+});
+
+test('opaque Secret verification uses another member, while differing aliases or fingerprints stop planning', () => {
+  const pair = (a, b) => [card(1, 'A', [a]), card(2, 'A', [b])];
+  const plans = createCardSyncPlans(
+    pair(
+      secret({fingerprint: undefined, exported: {data: 'aa'}}),
+      secret({fingerprint: undefined, exported: {data: 'bb'}}),
+    ),
+  );
+  assert.deepEqual(
+    plans.map(plan => plan.operations[0].kind),
+    ['verify', 'verify'],
+  );
+  assert.deepEqual(
+    plans.map(plan => plan.operations[0].exported.data),
+    ['bb', 'aa'],
+  );
+  assert.throws(
+    () =>
+      createCardSyncPlans(
+        pair(
+          secret({fingerprint: undefined, alias: 'A'}),
+          secret({fingerprint: undefined, alias: 'B'}),
+        ),
+      ),
+    /cannot compare Secret/,
+  );
+  assert.throws(
+    () => createCardSyncPlans(pair(secret(), secret({fingerprint: 'other'}))),
+    /conflicting Secret/,
+  );
+  assert.throws(
+    () => createCardSyncPlans(pair(secret(), secret({key: ''}))),
+    /conflicting item metadata/,
+  );
+});
+
+test('orphan records and a public/private index collision are not silently globalized', () => {
+  assert.throws(
+    () =>
+      createCardSyncPlans([card(1, 'A', [records(['evm'])]), card(2, 'A', [])]),
+    /associated key is missing/,
+  );
+  assert.throws(
+    () =>
+      createCardSyncPlans([
+        card(1, 'A', [secret()]),
+        card(2, false, [{index: keyIndex, secret: false, data: 'aa'}]),
+      ]),
+    /conflicting sync scopes/,
+  );
+});
+
+test('non-bundle Secrets with the same index remain separate and are never exported to peers', () => {
+  const plans = createCardSyncPlans([
+    card(1, false, [
+      secret({fingerprint: undefined, exported: undefined, key: '01'}),
+    ]),
+    card(2, false, [
+      secret({fingerprint: undefined, exported: undefined, key: '02'}),
+    ]),
+  ]);
+  assert.deepEqual(
+    plans.map(plan => plan.operations.length),
+    [0, 0],
+  );
+});

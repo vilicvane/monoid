@@ -80,7 +80,7 @@ type MonoidScanPromptCallback = (
   setStateContent: MonoidScanPromptSetStateContentCallback,
   hello: MonoidAppletHello,
   signal: AbortSignal,
-) => Promise<void>;
+) => Promise<void | {message: string}>;
 
 type MonoidScanPromptValidateCard = (hello: MonoidAppletHello) => void;
 
@@ -192,7 +192,7 @@ export function useMonoidScanPrompt({
       | {type: 'set' | 'remove'; id: MonoidIdHex; pin: MonoidPIN}
       | undefined;
     let result:
-      | {type: 'success'}
+      | {type: 'success'; message?: string}
       | {type: 'input'; request: PINRequest; message?: string}
       | {type: 'redirect'; navigate: () => void}
       | {type: 'uninitialized'; presented?: boolean}
@@ -293,7 +293,7 @@ export function useMonoidScanPrompt({
         stopped,
         monoidScanPromptPresenter.hide(
           owner,
-          completed.type === 'success' ? '' : undefined,
+          completed.type === 'success' ? (completed.message ?? '') : undefined,
         ),
       ]);
 
@@ -589,7 +589,7 @@ export function useMonoidScanPrompt({
             return;
           }
 
-          await appletCallback(
+          const completion = await appletCallback(
             applet,
             content => {
               if (
@@ -608,8 +608,8 @@ export function useMonoidScanPrompt({
             return;
           }
 
-          result = {type: 'success'};
-          setStateContent('');
+          result = {type: 'success', message: completion?.message};
+          setStateContent(completion?.message ?? '');
         },
         error => {
           if (disposed) {
@@ -668,8 +668,14 @@ export function useMonoidScanPrompt({
           // Core NFC covers the WebView. Close its sheet before presenting errors.
           if (Capacitor.getPlatform() === 'ios') {
             return !disposed && !finishing && result?.type === 'success'
-              ? {message: ''}
+              ? {message: result.message ?? ''}
               : {};
+          }
+
+          if (!disposed && !finishing && result?.type === 'success') {
+            if (!result.message) return {};
+            setState('ready');
+            return {waitForRemoval: true};
           }
 
           if (
@@ -705,9 +711,7 @@ export function useMonoidScanPrompt({
                 String(result.error)
               ),
             );
-            if (result.error instanceof MonoidCardError) {
-              errorService.markPresented(result.error);
-            }
+            result.error = errorService.markPresented(result.error);
           }
 
           return {waitForRemoval: true};

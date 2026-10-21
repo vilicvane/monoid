@@ -52,6 +52,7 @@ import {
   ListItemDescription,
   ListItemName,
 } from '../../../@ui/list.js';
+import {WarningMessage} from '../../../@ui/message-content.js';
 import {OperationComplete} from '../../../@ui/operation-complete.js';
 import {Step, Steps} from '../../../@ui/step.js';
 import {useToast} from '../../../@ui/toast.js';
@@ -89,20 +90,6 @@ const Description = styled.p`
   font-size: 14px;
   line-height: 21px;
   color: var(--color-text-secondary);
-`;
-
-const Notice = styled.div`
-  margin: 8px 0;
-  padding: 12px;
-  border-radius: 10px;
-  background: var(--ion-color-light);
-  color: var(--color-text-secondary);
-  font-size: 14px;
-  line-height: 21px;
-
-  &[role='alert'] {
-    color: var(--ion-color-danger-shade);
-  }
 `;
 
 const Items = styled(List)`
@@ -234,14 +221,8 @@ export const CopyItemsView = observer(
         () => new CopyItemsState(view.sourceCard, view.sourceIndexes),
       ),
     );
-    const {
-      session,
-      notice,
-      failed,
-      stepsExited,
-      interruptedCards,
-      startedImports,
-    } = copyState;
+    const {session, failed, stepsExited, interruptedCards, startedImports} =
+      copyState;
     const [pinSession] = useState(() =>
       monoidCredentialsStore.createPINSession(),
     );
@@ -311,9 +292,6 @@ export const CopyItemsView = observer(
     const busy = working || session.busy;
     const complete = backup?.complete && !busy && !failed;
     const destinationsEditable = !!backup && !backup.importStarted;
-    const operationNotice = notice && (failed || step < 3) && (
-      <Notice role={failed ? 'alert' : 'status'}>{notice}</Notice>
-    );
 
     useEffect(() => {
       if (!backup?.targetsConfirmed) {
@@ -332,7 +310,7 @@ export const CopyItemsView = observer(
 
       running.current = true;
       setWorkingStep(step);
-      copyState.setNotice(undefined);
+      copyState.setFailed(false);
 
       try {
         await operation();
@@ -341,12 +319,8 @@ export const CopyItemsView = observer(
           const cancelled =
             isCredentialRequestCancelled(error) ||
             (error instanceof Error && error.name === 'AbortError');
-          copyState.setNotice(
-            cancelled
-              ? 'Interrupted. You can continue on this page.'
-              : `${error instanceof Error ? error.message : 'Copy interrupted.'} Try again to continue.`,
-            !cancelled,
-          );
+          copyState.setFailed(!cancelled);
+          if (!cancelled) errorService.catch(Promise.reject(error));
         }
       } finally {
         running.current = false;
@@ -498,7 +472,9 @@ export const CopyItemsView = observer(
       }
     };
 
-    const backToSafe = router.$backTo(router.safe.$exact);
+    const backToCard = router.$backTo(router.safe.card.$exact);
+    const back = backToCard ?? router.$backTo(router.safe.$exact);
+    const backLabel = backToCard ? 'Back to Card' : 'Back to Safe';
 
     const proceed = async (): Promise<void> => {
       if (!backup) {
@@ -608,30 +584,20 @@ export const CopyItemsView = observer(
               copyState.markInterrupted(target!.publicKey, false);
               copyState.startImport(target!.publicKey);
               setState('Authenticating, hold tight...');
-              await session.importItems(
-                applet,
-                hello,
-                pin!,
-                signal,
-                (_current, _total, stage) => {
-                  if (stage === 'verifying') {
-                    setState('Checking card, hold tight...');
-                    return;
-                  }
-                  setState(
-                    <CopyProgress
-                      value={getCopyProgress(
-                        session.backup!.targets.filter(
-                          card => card.publicKey === target!.publicKey,
-                        ),
-                        'imported',
-                      )}
-                    >
-                      Importing items
-                    </CopyProgress>,
-                  );
-                },
-              );
+              await session.importItems(applet, hello, pin!, signal, () => {
+                setState(
+                  <CopyProgress
+                    value={getCopyProgress(
+                      session.backup!.targets.filter(
+                        card => card.publicKey === target!.publicKey,
+                      ),
+                      'imported',
+                    )}
+                  >
+                    Importing items
+                  </CopyProgress>,
+                );
+              });
             },
             hello => {
               if (target) {
@@ -665,7 +631,7 @@ export const CopyItemsView = observer(
           pin = undefined;
         }
       } else {
-        backToSafe?.();
+        back?.();
       }
     };
 
@@ -675,7 +641,7 @@ export const CopyItemsView = observer(
       targets.length ? 'Continue to export' : 'Scan destination card',
       'Scan source card',
       completedCards ? 'Scan next destination card' : 'Scan a destination card',
-      'Back to Safe',
+      backLabel,
     ][step];
 
     const sourceCard = (
@@ -760,7 +726,7 @@ export const CopyItemsView = observer(
           </ViewHeader>
           <ViewContent
             footer={
-              (step < 5 || backToSafe) && (
+              (step < 5 || back) && (
                 <>
                   <Button
                     color={step === 5 ? 'neutral' : 'primary'}
@@ -802,12 +768,6 @@ export const CopyItemsView = observer(
                   summary={step === 2 ? sourceCard : undefined}
                 >
                   {sourceCard}
-                  <span>
-                    Scan the source card{sourceId && ` ${sourceId}`} to choose
-                    items to copy.
-                  </span>
-                  <span>The source card stays unchanged.</span>
-                  {operationNotice}
                 </Step>
                 <Step
                   title="Add destination cards"
@@ -824,7 +784,6 @@ export const CopyItemsView = observer(
                   processing={working && step === 3}
                 >
                   {sourceCard}
-                  {operationNotice}
                 </Step>
                 <Step
                   title="Import to destination cards"
@@ -834,13 +793,12 @@ export const CopyItemsView = observer(
                 >
                   {destinationCards}
                   {conflicts > 0 && (
-                    <Notice role="status">
+                    <WarningMessage>
                       Some items conflict with existing contents. Existing
                       contents were not overwritten. View card details, then
                       retry or start over to choose other cards.
-                    </Notice>
+                    </WarningMessage>
                   )}
-                  {operationNotice}
                 </Step>
               </CopySteps>
             )}

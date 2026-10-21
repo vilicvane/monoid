@@ -6,6 +6,7 @@ export * from './card-store.js';
 export * from './card-maintenance-service.js';
 export * from './chain-service.js';
 export * from './copy-items-store.js';
+export * from './sync-cards-store.js';
 export * from './error-service.js';
 export * from './evm-call-history-service.js';
 export * from './evm-calldata-service.js';

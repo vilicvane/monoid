@@ -174,6 +174,7 @@ const {useViewActive} = await import(
 for (const [path, names] of [
   ['@monoid/monoid-card', ['MonoidCard', 'MonoidCardFrame']],
   ['@ui/app-icon', ['AppIcon']],
+  ['@ui/message-content', ['WarningMessage']],
   ['@ui/button', ['Button', 'Buttons']],
   ['@ui/centered-popup', ['CenteredPopup']],
   [
@@ -260,6 +261,8 @@ function mount({
   needsSetup = false,
   sourceBundle = false,
   destinationBundle = false,
+  canBackToCard = false,
+  canBackToSafe = false,
 } = {}) {
   const state = {
     slots: [],
@@ -336,9 +339,18 @@ function mount({
   state.view.$match.$view = () => ({$entries: [state.view]});
   state.entrances = {
     router: {
-      $backTo: () => undefined,
+      $backTo(target) {
+        if (target === this.safe.card.$exact && canBackToCard) {
+          return () => state.routes.push({type: 'back-to-card'});
+        }
+
+        if (target === this.safe.$exact && canBackToSafe) {
+          return () => state.routes.push({type: 'back-to-safe'});
+        }
+      },
       safe: {
         $exact: {},
+        card: {$exact: {}},
       },
       cardApplets: data => ({
         $push() {
@@ -811,101 +823,140 @@ test('multi-card export advances for every transferred item and keeps the source
   assert.deepEqual(state.errors, []);
 });
 
-test('single-item import shows the count and changes to Checking card during final verification', async () => {
-  const state = mount();
-  const session = state.sessions[0];
-  await session.addTarget(hello(2));
-  await session.confirmTargets();
-  await session.exportItems(
-    {
-      authenticate: async () => {},
-      exportItem: async () => ({data: Uint8Array.of(1)}),
-    },
-    hello(1),
-    PIN,
-    new AbortController().signal,
-    () => {},
-  );
-  state.click('Scan a destination card');
-  assert.equal(state.monoidScans.length, 0);
-  state.inputs.at(-1).finished.resolve(PIN);
-  await state.flush();
-  const scan = state.monoidScans[0];
-  assert.equal(scan.options.auth, undefined);
-  const progress = [];
-  const authentication = [];
-  scan.validate(hello(2));
-  await scan.callback(
-    {
-      authenticate: async request => authentication.push(request),
-      importItem: async () => {},
-      list: async () => {
-        assert.equal(progress.at(-1), 'Checking card, hold tight...');
-        assert.equal(session.backup.complete, false);
-        return {
-          items: [
-            {
-              index: Uint8Array.from(
-                Buffer.from('02400000000000000001', 'hex'),
-              ),
-            },
-          ],
-        };
+for (const {canBackToCard, canBackToSafe, backLabel, backRoute} of [
+  {
+    canBackToCard: true,
+    canBackToSafe: true,
+    backLabel: 'Back to Card',
+    backRoute: 'back-to-card',
+  },
+  {
+    canBackToCard: false,
+    canBackToSafe: true,
+    backLabel: 'Back to Safe',
+    backRoute: 'back-to-safe',
+  },
+  {
+    canBackToCard: false,
+    canBackToSafe: false,
+    backLabel: undefined,
+    backRoute: undefined,
+  },
+]) {
+  test(`single-item import reports progress and completes with ${backLabel ?? 'no return button'}`, async () => {
+    const state = mount({canBackToCard, canBackToSafe});
+    const session = state.sessions[0];
+    await session.addTarget(hello(2));
+    await session.confirmTargets();
+    await session.exportItems(
+      {
+        authenticate: async () => {},
+        exportItem: async () => ({data: Uint8Array.of(1)}),
       },
-    },
-    content =>
-      progress.push(
-        typeof content === 'string' ? content : content.props.value,
-      ),
-    hello(2),
-    new AbortController().signal,
-  );
-  assert.equal(session.backup.complete, true);
-  const pendingSteps = find(state.render(), node => node.type === 'Steps');
-  assert.ok(pendingSteps);
-  assert.equal(pendingSteps.props.$exiting, false);
-  assert.equal(
-    find(state.tree, node => node.type === 'Step' && node.props.numero === 4)
-      .props.processing,
-    true,
-  );
-  assert.equal(
-    find(state.tree, node => node.type === 'OperationComplete'),
-    undefined,
-  );
+      hello(1),
+      PIN,
+      new AbortController().signal,
+      () => {},
+    );
+    state.click('Scan a destination card');
+    assert.equal(state.monoidScans.length, 0);
+    state.inputs.at(-1).finished.resolve(PIN);
+    await state.flush();
+    const scan = state.monoidScans[0];
+    assert.equal(scan.options.auth, undefined);
+    const progress = [];
+    const authentication = [];
+    scan.validate(hello(2));
+    await scan.callback(
+      {
+        authenticate: async request => authentication.push(request),
+        importItem: async () => {},
+        list: async () => {
+          assert.equal(progress.at(-1), 'Checking card, hold tight...');
+          assert.equal(session.backup.complete, false);
+          return {
+            items: [
+              {
+                index: Uint8Array.from(
+                  Buffer.from('02400000000000000001', 'hex'),
+                ),
+              },
+            ],
+          };
+        },
+      },
+      content =>
+        progress.push(
+          typeof content === 'string' ? content : content.props.value,
+        ),
+      hello(2),
+      new AbortController().signal,
+    );
+    assert.equal(session.backup.complete, true);
+    const pendingSteps = find(state.render(), node => node.type === 'Steps');
+    assert.ok(pendingSteps);
+    assert.equal(pendingSteps.props.$exiting, false);
+    assert.equal(
+      find(state.tree, node => node.type === 'Step' && node.props.numero === 4)
+        .props.processing,
+      true,
+    );
+    assert.equal(
+      find(state.tree, node => node.type === 'OperationComplete'),
+      undefined,
+    );
 
-  scan.finished.resolve();
-  await state.flush();
+    scan.finished.resolve();
+    await state.flush();
 
-  const exitingSteps = find(state.tree, node => node.type === 'Steps');
-  assert.ok(exitingSteps);
-  assert.equal(exitingSteps.props.$exiting, true);
-  assert.equal(
-    find(state.tree, node => node.type === 'OperationComplete'),
-    undefined,
-  );
-  // A child spinner finishing must not end the steps' own exit animation.
-  exitingSteps.props.onAnimationEnd({target: {}, currentTarget: {}});
-  assert.ok(find(state.render(), node => node.type === 'Steps'));
-  const element = {};
-  exitingSteps.props.onAnimationEnd({target: element, currentTarget: element});
-  state.render();
-  assert.equal(
-    find(state.tree, node => node.type === 'Steps'),
-    undefined,
-  );
-  assert.ok(find(state.tree, node => node.type === 'OperationComplete'));
+    const exitingSteps = find(state.tree, node => node.type === 'Steps');
+    assert.ok(exitingSteps);
+    assert.equal(exitingSteps.props.$exiting, true);
+    assert.equal(
+      find(state.tree, node => node.type === 'OperationComplete'),
+      undefined,
+    );
+    // A child spinner finishing must not end the steps' own exit animation.
+    exitingSteps.props.onAnimationEnd({target: {}, currentTarget: {}});
+    assert.ok(find(state.render(), node => node.type === 'Steps'));
+    const element = {};
+    exitingSteps.props.onAnimationEnd({
+      target: element,
+      currentTarget: element,
+    });
+    state.render();
+    assert.equal(
+      find(state.tree, node => node.type === 'Steps'),
+      undefined,
+    );
+    assert.ok(find(state.tree, node => node.type === 'OperationComplete'));
 
-  assert.deepEqual(authentication, [{secret: true, pin: PIN}]);
-  assert.deepEqual(progress, [
-    'Authenticating, hold tight...',
-    '0/1',
-    '1/1',
-    'Checking card, hold tight...',
-  ]);
-  assert.equal(session.backup.complete, true);
-  assert.deepEqual(state.errors, []);
-});
+    assert.deepEqual(authentication, [{secret: true, pin: PIN}]);
+    assert.deepEqual(progress, ['Authenticating, hold tight...', '0/1', '1/1']);
+    assert.equal(session.backup.complete, true);
+    assert.deepEqual(state.errors, []);
+    assert.deepEqual(state.routes, []);
+
+    const backButton = find(
+      state.tree,
+      node =>
+        node.type === 'Button' &&
+        ['Back to Card', 'Back to Safe'].includes(node.props.children),
+    );
+    if (backLabel) {
+      assert.ok(backButton);
+      assert.equal(backButton.props.children, backLabel);
+      assert.equal(backButton.props.color, 'neutral');
+      state.click(backLabel);
+      await state.flush();
+      assert.deepEqual(state.routes, [{type: backRoute}]);
+      assert.equal(state.monoidScans.length, 1);
+      assert.deepEqual(state.errors, []);
+    } else {
+      assert.equal(backButton, undefined);
+    }
+  });
+}
 
 for (const hasRecord of [true, false]) {
   test(`reading a Copy source ${hasRecord ? 'shows a single record count' : 'keeps the listing message without a count'}`, async () => {

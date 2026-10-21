@@ -6,7 +6,10 @@ import {
   encodeCardDerivationRecord,
   getCardDerivationItemIndex,
 } from '../.bld/app/@components/views/safe/card-derivations.js';
-import {scanCardItems} from '../.bld/app/@components/views/safe/scan-card.js';
+import {
+  readCardAddressPreviews,
+  scanCardItems,
+} from '../.bld/app/@components/views/safe/scan-card.js';
 import {parseDerivationPath} from '../.bld/app/@lib/bip39.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {ADDRESS_TYPES} from '../.bld/app/@lib/wallet-address.js';
@@ -375,4 +378,150 @@ test('an already cancelled scan does not list the card', async () => {
     ),
     {code: 'CANCELLED'},
   );
+});
+
+function confirmedItems(index, wallets) {
+  return [
+    {index, type: 'seed', secret: true},
+    {
+      index: getCardDerivationItemIndex(index),
+      type: CARD_DERIVATIONS_TYPE,
+      key: index,
+      secret: false,
+      derivationRecord: {index, wallets},
+    },
+  ];
+}
+
+test('confirmed-record hydration reads only missing previews, scoped to each source key', async () => {
+  const known = wallet('evm', "m/44'/60'/0'/0/7");
+  const added = wallet('evm', "m/44'/60'/0'/0/8");
+  const extra = wallet('evm', "m/44'/60'/0'/0/9");
+  const items = [
+    ...confirmedItems(ROOT, [known, added]),
+    ...confirmedItems(OTHER_SEED, [known]),
+  ];
+  const before = structuredClone(items);
+  const {applet, calls} = createApplet([]);
+  applet.list = () => assert.fail('Hydration must not list resources');
+  applet.get = () => assert.fail('Confirmed records must not be reread');
+
+  const hydrated = await readCardAddressPreviews(
+    applet,
+    items,
+    () => {},
+    undefined,
+    [
+      {
+        index: ROOT,
+        type: 'seed',
+        secret: true,
+        derivations: [known, extra].map(wallet => ({
+          ...wallet,
+          publicKey: PUBLIC_KEY,
+        })),
+      },
+    ],
+  );
+
+  assert.deepEqual(items, before, 'Preview loading must not mutate ACK data');
+  assert.deepEqual(
+    calls.viewKey.map(request => [
+      hex(request.index),
+      hex(request.derivation.path),
+    ]),
+    [
+      [ROOT, hex(parseDerivationPath(added.path))],
+      [OTHER_SEED, hex(parseDerivationPath(known.path))],
+    ],
+  );
+  assert.deepEqual(
+    hydrated[0].derivations.map(({publicKey: _publicKey, ...wallet}) => wallet),
+    [known, added],
+    'Known previews must not add an address absent from the confirmed record',
+  );
+  assert.equal(hydrated[2].derivations.length, 1);
+  assert.deepEqual(calls.get, []);
+});
+
+test('hydration keeps explicit empty records empty and reuses known default and native previews', async () => {
+  const empty = confirmedItems(ROOT, []);
+  const defaultWallet = {
+    ...wallet('evm', ADDRESS_TYPES.evm.path(0)),
+    publicKey: PUBLIC_KEY,
+  };
+  empty[0].ref = {...defaultWallet, address: 'old preview'};
+  const native = '03010000000000000001';
+  const p256 = '03020000000000000001';
+  const items = [
+    ...empty,
+    {index: OTHER_SEED, type: 'seed', secret: true},
+    {index: native, type: 'secp256k1', secret: true},
+    {index: p256, type: 'secp256r1', secret: true},
+  ];
+  const knownItems = [
+    {...empty[0], derivations: [defaultWallet]},
+    {...items[2], ref: {...defaultWallet, address: 'cached'}},
+    {
+      ...items[3],
+      derivations: [{addressType: 'bitcoin-segwit', publicKey: PUBLIC_KEY}],
+    },
+    {...items[4], publicKey: PUBLIC_KEY},
+  ];
+  const {applet, calls} = createApplet([]);
+  applet.list = () => assert.fail('Hydration must not list resources');
+  applet.get = () => assert.fail('Hydration must not read metadata');
+
+  const hydrated = await readCardAddressPreviews(
+    applet,
+    items,
+    () => {},
+    undefined,
+    knownItems,
+  );
+
+  assert.deepEqual(calls.viewKey, []);
+  assert.deepEqual(hydrated[0].derivations, []);
+  assert.equal(hydrated[0].ref, undefined);
+  assert.equal(empty[0].ref.address, 'old preview');
+  assert.equal(hydrated[2].ref.path, defaultWallet.path);
+  assert.deepEqual(hydrated[2].derivations, []);
+  assert.equal(hydrated[3].ref.addressType, 'evm');
+  assert.equal(hydrated[4].publicKey, PUBLIC_KEY);
+});
+
+test('interrupted hydration does not publish partially resolved previews into the confirmed snapshot', async () => {
+  const controller = new AbortController();
+  const known = wallet('evm', "m/44'/60'/0'/0/7");
+  const items = confirmedItems(ROOT, [
+    known,
+    wallet('evm', "m/44'/60'/0'/0/8"),
+  ]);
+  const before = structuredClone(items);
+  const progress = [];
+  const {applet, calls} = createApplet([]);
+  const viewKey = applet.viewKey;
+  applet.viewKey = async request => {
+    const result = await viewKey(request);
+    controller.abort();
+    return result;
+  };
+
+  await assert.rejects(
+    readCardAddressPreviews(
+      applet,
+      items,
+      (...value) => progress.push(value),
+      controller.signal,
+      [{...items[0], derivations: [{...known, publicKey: PUBLIC_KEY}]}],
+    ),
+    {code: 'CANCELLED'},
+  );
+
+  assert.deepEqual(items, before);
+  assert.deepEqual(progress, [
+    [0, 2],
+    [1, 2],
+  ]);
+  assert.equal(calls.viewKey.length, 1);
 });

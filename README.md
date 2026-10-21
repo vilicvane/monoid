@@ -157,6 +157,7 @@ and keyboard insets in its layout.
 ## Design
 
 - [地址管理与卡片同步](docs/address-management.md)
+- [多卡同步](docs/card-sync.md)
 
 ## License
 

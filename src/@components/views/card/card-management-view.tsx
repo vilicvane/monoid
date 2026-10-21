@@ -169,14 +169,14 @@ export const CardManagementView = observer(
     async function readSnapshot(
       sessionId: string,
       signal: AbortSignal,
+      information?: CardInformation,
     ): Promise<CardSnapshot> {
       const installation = await readMonoidAppletInstallation(
         sessionId,
         signal,
       );
-      let information: CardInformation;
       try {
-        information = await readCardInformation(sessionId, signal);
+        information ??= await readCardInformation(sessionId, signal);
       } catch (error) {
         if (error instanceof CardManagerNotFoundError) {
           return {
@@ -438,7 +438,10 @@ export const CardManagementView = observer(
           }
           if (saved?.mode === 'fresh') await maintenance.complete(saved.id);
 
-          const latest = await readSnapshot(sessionId, signal);
+          const latest =
+            action === 'setup' && !saved
+              ? {information, installation: {...current, hello: next}}
+              : await readSnapshot(sessionId, signal, information);
           signal.throwIfAborted();
           // Publish the snapshot with completion after the scan and handoff,
           // so the applet list never flashes beneath the closing scan overlay.

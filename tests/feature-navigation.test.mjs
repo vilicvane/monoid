@@ -44,6 +44,33 @@ test('Bundle setup opens distinct flows from Card in HTTP WebViews and retains a
   assert.equal(router.$state.bundleId, ids[0]);
 });
 
+test('Card sync creates distinct HTTP-safe flows and preserves the card and supplied flow ID', async t => {
+  const webCrypto = globalThis.crypto;
+  t.mock.getter(globalThis, 'crypto', () => ({
+    getRandomValues: webCrypto.getRandomValues.bind(webCrypto),
+  }));
+  const router = await createRouter();
+  const card = {id: '01020304', publicKey: `04${'01'.repeat(64)}`};
+  await router.safe.card({card}).$push().$completed;
+
+  const ids = [];
+  for (let i = 0; i < 2; i++) {
+    await router.safe.syncCards({card}).$push().$completed;
+    assert.equal(router.safe.syncCards.$exact.$active, true);
+    assert.deepEqual({...router.$state.card}, card);
+    assert.equal(typeof router.$state.syncId, 'string');
+    assert.ok(router.$state.syncId.length > 0);
+    ids.push(router.$state.syncId);
+    await router.$back().$completed;
+    assert.equal(router.safe.card.$exact.$active, true);
+  }
+  assert.notEqual(ids[0], ids[1]);
+
+  await router.safe.syncCards({card, syncId: ids[0]}).$push().$completed;
+  assert.equal(router.$state.syncId, ids[0]);
+  assert.deepEqual({...router.$state.card}, card);
+});
+
 for (const feature of [
   'sessions',
   'ethereum',

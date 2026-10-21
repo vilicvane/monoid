@@ -41,20 +41,44 @@ const Tab = styled(Tab_)`
   flex: 1 1 var(--nav-bar-icon-size);
   min-width: 0;
   /* Clip ripple overflow vertically without clipping the separate FAB slot. */
-  clip-path: inset(0 -20px calc(-1 * var(--view-inset-bottom)));
+  clip-path: inset(
+    0 var(--nav-tab-ripple-clip, -20px) calc(-1 * var(--view-inset-bottom))
+  );
+`;
+
+const HomeGroup = styled.div<{$expanded: boolean}>`
+  container-type: inline-size;
+  /* Keep each ripple as wide as an outer tab, independent of grouping. */
+  --nav-tab-ripple-width: calc(100cqw + 40px);
+  --nav-tab-ripple-clip: -100cqw;
+
+  display: flex;
+  justify-content: center;
+  flex: 1 1 var(--nav-bar-icon-size);
+  box-sizing: content-box;
+  padding-inline: ${props => (props.$expanded ? 20 : 0)}px;
+  min-width: 0;
+
+  transition: padding-inline ${navigationTransition.duration}ms
+    ${navigationTransition.easing}
+    ${props => (props.$expanded ? 0 : navigationTransition.duration)}ms;
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+`;
+
+const HomeTab = styled(Tab)`
+  flex: 0 0 40px;
 `;
 
 const FeatureTab = styled(Tab)<{$visible: boolean}>`
-  flex-grow: ${props => (props.$visible ? 1 : 0)};
-  flex-basis: ${props => (props.$visible ? 'var(--nav-bar-icon-size)' : '0px')};
-  overflow: hidden;
+  flex: 0 0 ${props => (props.$visible ? '40px' : '0px')};
   opacity: ${props => (props.$visible ? 1 : 0)};
   transform: scale(${props => (props.$visible ? 1 : 0)});
 
   transition:
     color 0.2s linear,
-    flex-grow ${navigationTransition.duration}ms ${navigationTransition.easing}
-      ${props => (props.$visible ? 0 : navigationTransition.duration)}ms,
     flex-basis ${navigationTransition.duration}ms ${navigationTransition.easing}
       ${props => (props.$visible ? 0 : navigationTransition.duration)}ms,
     opacity ${navigationTransition.duration}ms ${navigationTransition.easing},
@@ -142,21 +166,23 @@ export const Tabs = observer(({className}: {className?: string}): ReactNode => {
       className={classNames(className)}
       style={{'--nav-dot-delay': `${navigation.dotDelay}ms`} as CSSProperties}
     >
-      <Tab
-        label="Home"
-        icon={layoutGrid}
-        badge={pendingCount}
-        route={router.features}
-        activity={activity}
-      />
-      <FeatureTab
-        $visible={!!feature}
-        inert={!feature}
-        label={displayedFeature.name}
-        icon={displayedFeature.icon}
-        route={router[displayedFeature.route]}
-        activity={activity}
-      />
+      <HomeGroup $expanded={!!feature}>
+        <HomeTab
+          label="Home"
+          icon={layoutGrid}
+          badge={pendingCount}
+          route={router.features}
+          activity={activity}
+        />
+        <FeatureTab
+          $visible={!!feature}
+          inert={!feature}
+          label={displayedFeature.name}
+          icon={displayedFeature.icon}
+          route={router[displayedFeature.route]}
+          activity={activity}
+        />
+      </HomeGroup>
       <Tab label="Scan" icon={scan} route={router.scan} activity={activity} />
       <Tab
         label="Safe"

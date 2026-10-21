@@ -34,6 +34,7 @@ import {
   InfoSectionHeader,
   InfoSectionItemLabel,
 } from '../../../@ui/info-section.js';
+import {WarningMessage} from '../../../@ui/message-content.js';
 import {OperationComplete} from '../../../@ui/operation-complete.js';
 import {Step, Steps} from '../../../@ui/step.js';
 import {useToast} from '../../../@ui/toast.js';
@@ -79,6 +80,7 @@ export const SetupCardView = observer(
       monoidCredentialsStore,
     } = useEntrances();
     const [fromCopy] = useState(() => view.copyId !== undefined);
+    const [fromCard] = useState(() => !fromCopy && view.card !== undefined);
     const [bundleOnly] = useState(
       () => !fromCopy && view.createBundle === true,
     );
@@ -611,15 +613,23 @@ export const SetupCardView = observer(
       card => card.status !== 'complete',
     );
     const collectionBusy = busy || !!pendingPIN || !!pendingBundleCard;
-    const backToCopy = complete
-      ? router.$backTo(router.safe.copyItems.$exact)
+    const canReturn = complete || generationFailed;
+    const backToCopy =
+      canReturn && fromCopy
+        ? router.$backTo(router.safe.copyItems.$exact)
+        : undefined;
+    const backToCard =
+      canReturn && fromCard
+        ? router.$backTo(router.safe.card.$exact)
+        : undefined;
+    const back = canReturn
+      ? (backToCopy ?? backToCard ?? router.$backTo(router.safe.$exact))
       : undefined;
-    const back = complete
-      ? (backToCopy ?? router.$backTo(router.safe.$exact))
-      : undefined;
-    const leaveInterrupted = generationFailed
-      ? router.$backTo(router.safe.$exact)
-      : undefined;
+    const backLabel = backToCopy
+      ? 'Back to Copy'
+      : backToCard
+        ? 'Back to Card'
+        : 'Back to Safe';
 
     const bundleCards = bundleEnabled && (
       <>
@@ -673,9 +683,10 @@ export const SetupCardView = observer(
             )}
         </CardGrid>
         {generationFailed && (
-          <InfoSectionItemLabel role="alert">
-            Bundle creation could not be confirmed. This setup cannot continue.
-          </InfoSectionItemLabel>
+          <WarningMessage role="alert">
+            The bundle may have been created, but its setup data is incomplete.
+            Start a new setup.
+          </WarningMessage>
         )}
       </>
     );
@@ -696,14 +707,14 @@ export const SetupCardView = observer(
             complete ? (
               back && (
                 <Button color="neutral" onClick={() => back()}>
-                  {backToCopy ? 'Back to Copy' : 'Back to Safe'}
+                  {backLabel}
                 </Button>
               )
             ) : configuring ? (
               generationFailed ? (
-                leaveInterrupted && (
-                  <Button color="neutral" onClick={() => leaveInterrupted()}>
-                    Back to Safe
+                back && (
+                  <Button color="neutral" onClick={() => back()}>
+                    {backLabel}
                   </Button>
                 )
               ) : (

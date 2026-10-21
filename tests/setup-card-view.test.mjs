@@ -188,6 +188,9 @@ mock.module('../.bld/app/@components/@ui/toast.js', {
 mock.module('../.bld/app/@components/@ui/step.js', {
   namedExports: {Steps: 'steps', Step: renderStep},
 });
+mock.module('../.bld/app/@components/@ui/message-content.js', {
+  namedExports: {WarningMessage: 'warning-message'},
+});
 mock.module('../.bld/app/@components/@ui/use-input-modal.js', {
   namedExports: {
     useInputModal: () => [
@@ -486,6 +489,7 @@ function mount(
     copyAdditions: [],
     backAvailable: true,
     backToCopyAvailable: false,
+    backToCardAvailable: false,
     backToLookups: [],
     promptContents: [],
     cardInformation: structuredClone(CARD_INFORMATION),
@@ -752,6 +756,11 @@ function mount(
             ? () => state.routes.push({type: 'back-to-copy'})
             : undefined;
         }
+        if (target === state.entrances.router.safe.card.$exact) {
+          return state.backToCardAvailable
+            ? () => state.routes.push({type: 'back-to-card'})
+            : undefined;
+        }
         assert.equal(target, state.entrances.router.safe.$exact);
         return state.backAvailable
           ? () => state.routes.push({type: 'back-to-safe'})
@@ -760,6 +769,7 @@ function mount(
       safe: {
         $exact: {},
         copyItems: {$exact: {}},
+        card: {$exact: {}},
         scanCard: {$replace: () => state.routes.push({type: 'scan'})},
       },
     },
@@ -1304,6 +1314,8 @@ test('Copy entry ignores bundle mode and source Card identity and retains its si
     },
     [source],
   );
+  state.backToCopyAvailable = true;
+  state.backToCardAvailable = true;
   assert.deepEqual(state.cardLookups, []);
   assert.equal(
     textOf(find(state.tree, node => node.type === 'h1')),
@@ -1323,6 +1335,14 @@ test('Copy entry ignores bundle mode and source Card identity and retains its si
     {id: hex(destination.id), publicKey: hex(destination.publicKey)},
   ]);
   assert.deepEqual(state.bundleCalls, []);
+  assert.equal(state.button('Back to Card'), undefined);
+  assert.equal(state.button('Back to Safe'), undefined);
+  assert.equal(state.button('Back to Copy').props.color, 'neutral');
+  await state.click('Back to Copy');
+  assert.deepEqual(state.routes, [{type: 'back-to-copy'}]);
+  assert.ok(
+    !state.backToLookups.includes(state.entrances.router.safe.card.$exact),
+  );
 });
 
 test('an existing initialized applet completes directly without GP information or installation', async () => {
@@ -1539,6 +1559,81 @@ test('two-round setup authenticates each member and completes only after the fin
   assert.deepEqual(state.openedSessions, ['bundle-session', 'bundle-session']);
   assert.deepEqual(state.helloRequests, [{}, {}]);
 });
+
+for (const outcome of ['complete', 'uncertain']) {
+  test(`Card-origin bundle ${outcome} returns to Card without selecting an unrelated Copy history entry`, async () => {
+    const members = [bundleCard(1), bundleCard(2)];
+    const source = preparedCard(members[0]);
+    const state = mount(
+      SetupCardView,
+      {
+        card: {id: source.id, publicKey: source.publicKey},
+        createBundle: true,
+      },
+      [source],
+    );
+    state.backToCardAvailable = true;
+    state.backToCopyAvailable = true;
+    await state.finished;
+    await state.collect(members[1]);
+    await state.click('Continue');
+
+    state.click('Scan a card');
+    await state.answerBundlePIN();
+    if (outcome === 'uncertain') {
+      state.createFailure = new Error('Response lost');
+      await assert.rejects(
+        state.tapBundle(members[0]),
+        /Bundle creation not confirmed/,
+      );
+      await state.finished;
+    } else {
+      await state.tapBundle(members[0]);
+      await state.finishBundle();
+      state.click('Scan next card');
+      await state.answerBundlePIN();
+      await state.tapBundle(members[1]);
+      await state.finishBundle();
+    }
+
+    assert.equal(state.button('Back to Card').props.color, 'neutral');
+    assert.equal(state.button('Back to Copy'), undefined);
+    assert.equal(state.button('Back to Safe'), undefined);
+    assert.ok(
+      !state.backToLookups.includes(
+        state.entrances.router.safe.copyItems.$exact,
+      ),
+    );
+    await state.click('Back to Card');
+    assert.deepEqual(state.routes, [{type: 'back-to-card'}]);
+  });
+}
+
+for (const canBackToSafe of [true, false]) {
+  test(`Card-origin setup without Card history ${canBackToSafe ? 'falls back to Safe' : 'hides the return button when no return exists'}`, async () => {
+    const card = bundleCard(1);
+    const source = preparedCard(card);
+    const state = mount(
+      SetupCardView,
+      {card: {id: source.id, publicKey: source.publicKey}},
+      [source],
+    );
+    state.backAvailable = canBackToSafe;
+    state.backToCopyAvailable = true;
+    await state.collect(card);
+
+    assert.ok(find(state.tree, node => node.type === 'operation-complete'));
+    assert.equal(state.button('Back to Card'), undefined);
+    assert.equal(state.button('Back to Copy'), undefined);
+    if (canBackToSafe) {
+      await state.click('Back to Safe');
+      assert.deepEqual(state.routes, [{type: 'back-to-safe'}]);
+    } else {
+      assert.equal(state.button('Back to Safe'), undefined);
+      assert.deepEqual(state.routes, []);
+    }
+  });
+}
 
 test('cancelling the round-two PIN prompt restores the button without starting a scan', async () => {
   const state = await roundTwo();

@@ -2,6 +2,7 @@ export type {
   CardBundleSession,
   CardResetSession,
   CopyItemsState,
+  SyncCardsState,
 } from './@card/index.js';
 export {CardInformationPopup, CardSetupInformation} from './@card/index.js';
 export * from './card-address-progress.js';

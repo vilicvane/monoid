@@ -370,6 +370,7 @@ const CardContent = observer(
       resourceFilter === 'keys'
         ? selectedResources.filter(item => !isCardKeyItem(item)).length
         : 0;
+    const missingPreviews = keyItems.filter(({ref, empty}) => !ref && !empty);
     const missing = selectedKeys.filter(
       ({ref, empty, needsRecordDownload, direction}) =>
         !ref && !empty && !needsRecordDownload && direction !== 'upload',
@@ -467,8 +468,8 @@ const CardContent = observer(
       }
     };
 
-    const deriveSelected = async (): Promise<void> => {
-      if (busy || operationActive.current || missing.length === 0) {
+    const deriveMissingPreviews = async (): Promise<void> => {
+      if (busy || operationActive.current || missingPreviews.length === 0) {
         return;
       }
 
@@ -485,14 +486,14 @@ const CardContent = observer(
               setStateContent(
                 <MonoidScanStatePromptProgress
                   current={current}
-                  total={missing.length}
+                  total={missingPreviews.length}
                 >
                   Deriving addresses
                 </MonoidScanStatePromptProgress>,
               );
             };
             showProgress(0);
-            for (const [index, {item}] of missing.entries()) {
+            for (const [index, {item}] of missingPreviews.entries()) {
               if (signal.aborted || !mounted.current || !isViewActive()) return;
               derivedRefs.set(
                 item.key.index,
@@ -576,6 +577,7 @@ const CardContent = observer(
                   index,
                   {key, wallets, options},
                 ] of pendingDerivations) {
+                  const item = card.items.find(item => item.index === index)!;
                   const {derivations, ...resource} = await writeCardDerivations(
                     applet,
                     key,
@@ -590,11 +592,23 @@ const CardContent = observer(
                           <CardAddressProgress progress={progress} />,
                         );
                     },
+                    [
+                      ...(item.derivations ?? []),
+                      ...Object.values(item.refs).map(
+                        ({addressType, seed, curve, path, publicKey}) => ({
+                          addressType,
+                          seed,
+                          curve,
+                          path,
+                          publicKey,
+                        }),
+                      ),
+                      ...(indexToKeyMap.get(index)?.wallets ?? []),
+                    ],
                   );
                   pendingDerivations.delete(index);
                   runInAction(() => {
                     card.upsert(resource);
-                    const item = card.items.find(item => item.index === index)!;
                     item.setRecordedWallets(derivations);
                   });
                   onWritten?.(index, derivations);
@@ -895,7 +909,7 @@ const CardContent = observer(
           footer={
             <>
               <ViewActionButton
-                visible={deriving || missing.length > 0}
+                visible={deriving || missingPreviews.length > 0}
                 loading={deriving}
                 disabled={
                   updatingCard ||
@@ -904,7 +918,7 @@ const CardContent = observer(
                   creating ||
                   !!updatingPIN
                 }
-                onClick={errorService.catch(deriveSelected)}
+                onClick={errorService.catch(deriveMissingPreviews)}
               >
                 Derive
               </ViewActionButton>
@@ -1198,6 +1212,21 @@ const CardContent = observer(
                   >
                     Create key
                   </Button>
+                  {!canDelete && (
+                    <Button
+                      color="neutral"
+                      onClick={() => {
+                        setMenu(undefined);
+                        router.safe
+                          .syncCards({
+                            card: {id: card.id, publicKey: card.publicKey},
+                          })
+                          .$push();
+                      }}
+                    >
+                      Sync cards
+                    </Button>
+                  )}
                   {!canDelete && (
                     <Button
                       color="neutral"

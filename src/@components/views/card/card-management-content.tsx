@@ -8,10 +8,10 @@ import {
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
-import monoidLogo from '../../../@assets/monoid.svg';
 import type {CardInformation} from '../../../@lib/global-platform/card-information.js';
 import {CardPlaceholder, CardPreview} from '../../@monoid/card-preview.js';
 import {AppIcon} from '../../@ui/app-icon.js';
+import {AppletIcon} from '../../@ui/feature-icons.js';
 import {InfoSection} from '../../@ui/info-section.js';
 import {InfoMessage} from '../../@ui/message-content.js';
 import {CardSetupInformation} from '../safe/index.js';
@@ -112,20 +112,13 @@ const Symbol = styled.span`
   width: 30px;
   height: 30px;
   border-radius: 8px;
-  background: rgba(var(--ion-color-primary-rgb), 0.08);
-  color: var(--ion-color-primary);
+  background: var(--ion-color-primary);
+  color: var(--ion-color-primary-contrast);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   font-size: 19px;
-
-  img {
-    width: 17px;
-    height: 17px;
-    padding: 2px;
-    background: var(--ion-color-primary);
-  }
 `;
 
 const RowText = styled.div`
@@ -196,11 +189,7 @@ export function CardAppletsContent({
           return (
             <AppletRow key={applet.name}>
               <Symbol>
-                {applet.name === 'identity' ? (
-                  <AppIcon icon={creditCard} />
-                ) : (
-                  <img src={monoidLogo} alt="" />
-                )}
+                <AppIcon icon={AppletIcon} aria-hidden="true" />
               </Symbol>
               <RowText>
                 <span>
