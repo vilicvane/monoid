@@ -41,10 +41,9 @@ const Tab = styled(Tab_)`
 `;
 
 const HomeGroup = styled.div<{$expanded: boolean}>`
-  container-type: inline-size;
   /* Keep each ripple as wide as an outer tab, independent of grouping. */
-  --nav-tab-ripple-width: calc(100cqw + 40px);
-  --nav-tab-ripple-clip: -100cqw;
+  --nav-tab-ripple-width: calc(var(--nav-tab-width) + 40px);
+  --nav-tab-ripple-clip: calc(-1 * var(--nav-tab-width));
 
   display: flex;
   justify-content: center;
@@ -111,7 +110,22 @@ const FabSlot = styled.div<{$active: boolean}>`
 
 export const Tabs = observer(({className}: {className?: string}): ReactNode => {
   const {router, walletKitService, portals} = useEntrances();
+  const homeGroupRef = useRef<HTMLDivElement>(null);
   const fabSlotRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const group = homeGroupRef.current!;
+    // Resizing a query container interrupts descendant transitions in WebKit.
+    const observer = new ResizeObserver(([entry]) => {
+      group.style.setProperty(
+        '--nav-tab-width',
+        `${entry.contentRect.width}px`,
+      );
+    });
+    observer.observe(group);
+
+    return () => observer.disconnect();
+  }, []);
 
   useLayoutEffect(() => {
     fabSlotRef.current!.append(portals.fab);
@@ -152,7 +166,7 @@ export const Tabs = observer(({className}: {className?: string}): ReactNode => {
 
   return (
     <Container aria-label="Main navigation" className={classNames(className)}>
-      <HomeGroup $expanded={!!feature}>
+      <HomeGroup ref={homeGroupRef} $expanded={!!feature}>
         <HomeTab
           label="Home"
           icon={layoutGrid}
