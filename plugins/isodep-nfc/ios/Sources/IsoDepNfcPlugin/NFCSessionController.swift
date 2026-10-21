@@ -39,18 +39,23 @@ final class NFCSessionController: NFCScanEvents {
         let id: String
         let timeoutMs: Int
         let reader: NFCScanDriver
+        let validateStart: () -> NFCFailure?
         var starting: Completion?
         var stopping: [Completion] = []
         var endCode: String?
         var connectionLost = false
+        var completedSuccessfully = false
+        var stopAcknowledged = false
         var completionErrorMessage: String?
         var removedSessionId: String?
         var session: Session?
 
-        init(id: String, timeoutMs: Int, reader: NFCScanDriver, starting: @escaping Completion) {
+        init(id: String, timeoutMs: Int, reader: NFCScanDriver,
+             validateStart: @escaping () -> NFCFailure?, starting: @escaping Completion) {
             self.id = id
             self.timeoutMs = timeoutMs
             self.reader = reader
+            self.validateStart = validateStart
             self.starting = starting
         }
     }
@@ -75,6 +80,7 @@ final class NFCSessionController: NFCScanEvents {
     }
 
     private var scan: Scan?
+    private var pendingScan: Scan?
     private var retiredIds: Set<String> = []
     private let schedule: Schedule
     private let emit: (String, [String: Any]) -> Void
@@ -84,19 +90,37 @@ final class NFCSessionController: NFCScanEvents {
         self.emit = emit
     }
 
-    func start(id: String, timeoutMs: Int, reader: NFCScanDriver, completion: @escaping Completion) {
+    func start(id: String, timeoutMs: Int, reader: NFCScanDriver,
+               validateStart: @escaping () -> NFCFailure? = { nil }, completion: @escaping Completion) {
         if retiredIds.contains(id) {
             completion(.failure(NFCFailure(code: "SCAN_CLOSED", message: "This scan ID has already ended.")))
             return
         }
-        guard scan == nil else {
+        guard pendingScan == nil, scan == nil || scan?.stopAcknowledged == true else {
             completion(.failure(NFCFailure(code: "BUSY", message: "Scanning is already active or stopping.")))
             return
         }
 
-        scan = Scan(id: id, timeoutMs: timeoutMs, reader: reader, starting: completion)
-        reader.events = self
-        reader.begin()
+        let next = Scan(id: id, timeoutMs: timeoutMs, reader: reader,
+                        validateStart: validateStart, starting: completion)
+        if scan == nil {
+            begin(next)
+        } else {
+            pendingScan = next
+        }
+    }
+
+    private func begin(_ next: Scan) {
+        if let failure = next.validateStart() {
+            retiredIds.insert(next.id)
+            let completion = next.starting
+            next.starting = nil
+            completion?(.failure(failure))
+            return
+        }
+        scan = next
+        next.reader.events = self
+        next.reader.begin()
     }
 
     func activated(_ reader: NFCScanDriver) {
@@ -108,12 +132,13 @@ final class NFCSessionController: NFCScanEvents {
 
     func canDiscover(_ reader: NFCScanDriver) -> Bool {
         guard let scan else { return false }
-        return scan.reader === reader && scan.endCode == nil && scan.completionErrorMessage == nil && scan.session == nil
+        return scan.reader === reader && scan.endCode == nil &&
+            !scan.completedSuccessfully && scan.completionErrorMessage == nil && scan.session == nil
     }
 
     func detected(_ reader: NFCScanDriver, card: NFCCard) {
         guard let scan, scan.reader === reader, scan.endCode == nil,
-              scan.completionErrorMessage == nil, scan.session == nil else { return }
+              !scan.completedSuccessfully, scan.completionErrorMessage == nil, scan.session == nil else { return }
         let session = Session(card: card)
         scan.session = session
         session.cancelDeadline = schedule(30_000) { [weak self, weak scan, weak session] in
@@ -206,9 +231,9 @@ final class NFCSessionController: NFCScanEvents {
             return
         }
 
-        // Commit application completion with the connection close. A business
-        // failure is not a transport failure; keep normal cleanup and defer
-        // the system error indicator until the caller stops this scan.
+        // Final application results reserve discovery for stopScan. Only an
+        // explicit success can finish before the system sheet disappears;
+        // application failures keep the native cleanup barrier.
         if scan.endCode == nil, !scan.connectionLost, scan.completionErrorMessage == nil,
            session.connected, !session.ended, !session.working,
            !session.waitingForRemoval, !waitForRemoval {
@@ -216,6 +241,7 @@ final class NFCSessionController: NFCScanEvents {
                 scan.completionErrorMessage = errorMessage
                 scan.reader.alertMessage = errorMessage
             } else if let message {
+                scan.completedSuccessfully = true
                 scan.reader.alertMessage = message
             }
         }
@@ -239,7 +265,20 @@ final class NFCSessionController: NFCScanEvents {
 
     func stop(id: String, completion: @escaping Completion) {
         retiredIds.insert(id)
+        if pendingScan?.id == id {
+            cancelPending(reason: "stopped", code: "CANCELLED")
+        }
         guard let scan, scan.id == id else {
+            completion(.success(()))
+            return
+        }
+        if scan.completedSuccessfully, scan.endCode == nil, scan.session == nil {
+            // The operation is finished when successful invalidation begins.
+            // Keep this reader reserved until didInvalidate releases its RF state.
+            endScan(scan, reason: "stopped", code: "CANCELLED")
+            scan.stopAcknowledged = true
+        }
+        if scan.stopAcknowledged {
             completion(.success(()))
             return
         }
@@ -248,8 +287,18 @@ final class NFCSessionController: NFCScanEvents {
     }
 
     func terminate(reason: String, code: String) {
+        cancelPending(reason: reason, code: code)
         guard let scan else { return }
         endScan(scan, reason: reason, code: code)
+    }
+
+    private func cancelPending(reason: String, code: String) {
+        guard let pending = pendingScan else { return }
+        pendingScan = nil
+        retiredIds.insert(pending.id)
+        let completion = pending.starting
+        pending.starting = nil
+        completion?(.failure(NFCFailure(code: code, message: "The NFC scan ended: \(reason).")))
     }
 
     private func endSession(_ scan: Scan, _ session: Session, reason: String, code: String) {
@@ -320,6 +369,10 @@ final class NFCSessionController: NFCScanEvents {
             }
         }
         for completion in scan.stopping { completion(.success(())) }
+        if let pending = pendingScan {
+            pendingScan = nil
+            begin(pending)
+        }
     }
 
     private func finishClosing(_ scan: Scan, _ session: Session) {
@@ -376,7 +429,9 @@ final class NFCSessionController: NFCScanEvents {
         if session.waitingForRemoval {
             scan.reader.alertMessage = "Hold your card near the top of your iPhone."
         }
-        if scan.completionErrorMessage == nil { scan.reader.restartPolling() }
+        if !scan.completedSuccessfully, scan.completionErrorMessage == nil {
+            scan.reader.restartPolling()
+        }
         for completion in session.removing { completion(.success(())) }
         session.removing.removeAll()
     }

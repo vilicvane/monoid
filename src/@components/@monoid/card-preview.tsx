@@ -1,4 +1,3 @@
-import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import {MonoidCard, MonoidCardFrame} from './monoid-card.js';
@@ -67,21 +66,3 @@ export const CardPlaceholder = styled(MonoidCardFrame)`
   font-size: 24px;
   text-align: center;
 `;
-
-/** A confirmed read, shown while the scan is still finishing its cleanup. */
-export function ScannedCardPreview({
-  id,
-  itemCount,
-}: {
-  id: string;
-  itemCount: number;
-}): ReactNode {
-  return (
-    <CardGrid role="status" aria-label="Scanned card">
-      <CardPreview
-        id={id}
-        description={`${itemCount} ${itemCount === 1 ? 'item' : 'items'}`}
-      />
-    </CardGrid>
-  );
-}

@@ -547,17 +547,18 @@ const CardContent = observer(
               );
               showProgress(index + 1);
             }
-
-            if (signal.aborted || !mounted.current || !isViewActive()) return;
-            runInAction(() => {
-              for (const item of card.items) {
-                const ref = derivedRefs.get(item.index);
-                if (ref) item.ref = ref;
-              }
-            });
           },
           hello => assertCardForUpdate(hello, card),
         );
+
+        if (mounted.current && isViewActive()) {
+          runInAction(() => {
+            for (const item of card.items) {
+              const ref = derivedRefs.get(item.index);
+              if (ref) item.ref = ref;
+            }
+          });
+        }
       } finally {
         operationActive.current = false;
         if (mounted.current) {

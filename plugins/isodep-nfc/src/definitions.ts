@@ -59,6 +59,9 @@ export type CloseSessionOptions = {
    * Final system-sheet text for a healthy, idle connection on iOS.
    * An empty string clears the message; omit to preserve the current text.
    * Nonempty messages must contain non-whitespace text.
+   * Marks final application success and reserves the scan for stopScan.
+   * After this close, stopScan resolves when successful invalidation begins;
+   * the next startScan waits for the old reader's invalidation callback.
    * Ignored while waiting for removal, after session failure, or on Android.
    * Cannot be combined with errorMessage.
    */
@@ -143,10 +146,19 @@ export type IsoDepNfcPlugin = {
   /** Open Android NFC settings; iOS rejects with UNSUPPORTED. */
   openSettings(): Promise<void>;
 
-  /** Begin discovery; iOS presents a system sheet with a platform time limit. */
+  /**
+   * Begin discovery; iOS presents a system sheet with a platform time limit.
+   * After a successful iOS stop, one next start may wait for reader invalidation.
+   * It still resolves only when the new reader becomes active.
+   */
   startScan(options: StartScanOptions): Promise<void>;
 
-  /** Retire the scan ID, cancel its pending work and await connection closure. */
+  /**
+   * Retire the scan ID, cancel its pending work and await connection closure.
+   * After a healthy iOS closeSession with message, resolves once successful
+   * invalidation is requested, while the system completion sheet may remain.
+   * Other stops still wait for native cleanup. Also cancels a queued start.
+   */
   stopScan(options: StopScanOptions): Promise<void>;
 
   /** Exchange raw bytes. Concurrent exchanges reject BUSY without queuing. */
@@ -159,7 +171,8 @@ export type IsoDepNfcPlugin = {
   setSessionMessage(options: SetSessionMessageOptions): Promise<void>;
 
   /**
-   * Close one connection and await cleanup. Scanning continues.
+   * Close one connection and await cleanup. Scanning continues unless an iOS
+   * message or errorMessage reserves the scan for final stopScan.
    * With waitForRemoval, also await detected removal before accepting another
    * session. Stopping the scan cancels this wait instead of resolving it.
    */

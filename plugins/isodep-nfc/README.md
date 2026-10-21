@@ -17,15 +17,15 @@ arbitrary ISO-DEP bytes.
 Import `IsoDepNfc` and the exported types from `capacitor-isodep-nfc` after adding
 this local package to an application.
 
-| Method                                                                | Result                                                       |
-| --------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `getStatus()`                                                         | `{supported, enabled}`                                       |
-| `openSettings()`                                                      | Opens Android NFC settings; iOS rejects `UNSUPPORTED`        |
-| `startScan({scanId, transceiveTimeoutMs?})`                           | Enables continuous scanning without waiting for a tag        |
-| `stopScan({scanId})`                                                  | Stops the scan, cancels its pending work and awaits cleanup  |
-| `transceive({sessionId, data, timeoutMs?})`                           | `{data}` with the unmodified response bytes                  |
-| `setSessionMessage({sessionId, message})`                             | Updates the iOS system sheet; Android rejects `UNSUPPORTED`  |
-| `closeSession({sessionId, waitForRemoval?, message?, errorMessage?})` | Closes one connection; optionally waits for detected removal |
+| Method                                                                | Result                                                        |
+| --------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `getStatus()`                                                         | `{supported, enabled}`                                        |
+| `openSettings()`                                                      | Opens Android NFC settings; iOS rejects `UNSUPPORTED`         |
+| `startScan({scanId, transceiveTimeoutMs?})`                           | Enables continuous scanning without waiting for a tag         |
+| `stopScan({scanId})`                                                  | Stops the scan; iOS final success returns as dismissal starts |
+| `transceive({sessionId, data, timeoutMs?})`                           | `{data}` with the unmodified response bytes                   |
+| `setSessionMessage({sessionId, message})`                             | Updates the iOS system sheet; Android rejects `UNSUPPORTED`   |
+| `closeSession({sessionId, waitForRemoval?, message?, errorMessage?})` | Closes one connection; optionally waits for detected removal  |
 
 ## iOS integration and differences
 
@@ -48,9 +48,10 @@ iPhone; a simulator cannot establish their acceptance. See Apple's
 and [reader session documentation](https://developer.apple.com/documentation/corenfc/nfctagreadersession).
 
 `startScan` resolves when the reader becomes active and presents Apple's system
-NFC sheet. This sheet covers the web UI. Stop the scan and await `stopScan` before
-asking for a PIN or presenting biometrics; initiate another scan after the user
-finishes. The plugin never silently restarts a cancelled or timed-out reader.
+NFC sheet. This sheet covers the web UI. For a PIN or biometric handoff, close
+without a success `message` and await `stopScan` before presenting input;
+initiate another scan after the user finishes. The plugin never silently
+restarts a cancelled or timed-out reader.
 `getStatus` reports `readingAvailable` for both `supported` and `enabled`; iOS has
 no user-facing NFC switch or dedicated NFC settings screen.
 
@@ -72,8 +73,11 @@ final text. Only supply this option after the application operation succeeds.
 It is ignored for ended or unknown sessions, an ended scan, connection or APDU
 work still in flight, a scan that has lost a connection, or any removal wait;
 failure and removal feedback remain intact. Non-string or whitespace-only text rejects
-`INVALID_ARGUMENT`. Android ignores this option. The message does not change
-cleanup, send an APDU, or stop the scan; await `stopScan` as usual.
+`INVALID_ARGUMENT`. Android ignores this option. A valid successful close reserves
+the reader for `stopScan` and prevents rediscovery. It sends no APDU and does not
+itself stop the scan. The subsequent `stopScan` resolves as soon as it requests
+successful invalidation, allowing the application to continue during the system
+checkmark rather than waiting for the sheet to disappear.
 
 For an application failure such as an incorrect PIN response, pass a nonblank
 `errorMessage` instead of `message`. On a healthy, idle connection this records
@@ -98,11 +102,23 @@ UI does not itself terminate the reader.
 Reloading the WebView revokes the old reader and drops its pending replies;
 new-document calls still wait for native cleanup before opening another reader.
 
-`stopScan` waits for Core NFC's invalidation callback, which is the transport
-cleanup barrier. Core NFC exposes no separate sheet-animation completion
-callback. Closing an idle connection normally calls `restartPolling`, invalidating
-the old tag and allowing discovery in the same system sheet; an application
-failure supplied through `errorMessage` instead reserves the reader for `stopScan`.
+Except after a final successful `closeSession({message})`, `stopScan` waits for
+Core NFC's invalidation callback. PIN handoffs, application errors, cancellation
+and failed or in-flight operations retain that wait. Core NFC exposes no separate
+sheet-animation completion callback.
+
+After successful stop acknowledgment, the old reader remains reserved until its
+invalidation callback. One subsequent `startScan` may wait for that callback,
+then begin and resolve when the new reader becomes active. A second queued start
+or a start during any other active/stopping scan rejects `BUSY`. Stopping the
+queued scan cancels it with `CANCELLED`; backgrounding, document reload or plugin
+destruction also revoke it, so it cannot open a reader later. The queued scan's
+document and foreground state are checked again before it begins. Old callbacks
+remain bound to the old reader and cannot change the next scan.
+
+Closing an idle connection without `message` or `errorMessage` calls
+`restartPolling`, invalidating the old tag and allowing discovery in the same
+system sheet. Either final completion option reserves the reader for `stopScan`.
 If a command or connect is still in flight, closing it or reaching the plugin deadline must
 invalidate the entire reader; Core NFC cannot cancel one operation independently.
 New commands remain blocked until invalidation completes. No command is retried.
@@ -313,7 +329,9 @@ Scan end reasons are `stopped`, `nfc-disabled`, `app-paused`, `destroyed` and
 `scan-stopped` and `stopped` events omit it. A failed connection also emits
 `sessionEnded`, even though it never emitted `sessionOpened`. An end event marks
 its ID invalid while cleanup may still be running; await `closeSession` or
-`stopScan` for the corresponding cleanup to finish. A failure to close the native
+`stopScan` for the corresponding completion contract. After a successful iOS
+close, `stopScan` acknowledges dismissal while native reader cleanup continues
+internally. A failure to close the native
 transport stops the scan with `io-error` / `IO_ERROR`.
 
 Native rejections have a `code` from `IsoDepNfcErrorCode` and optional `data`:

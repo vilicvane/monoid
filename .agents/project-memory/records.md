@@ -93,4 +93,9 @@
 ## a8322d9
 
 49. [user] show confirmed NFC card results in the app as the iOS system sheet starts its completion checkmark, instead of waiting for the sheet to disappear. This request concerns card scans, not QR scanning. NFC result presentation.
-50. [agent] publish display-only card previews, derived addresses and verified operation completion from the successful card callback; keep scan promises awaiting native cleanup, presentation exit and deferred credential saving. Navigation, PIN dialogs, Copy/Bundle membership handoffs and next-scan actions still wait for that barrier. Only fully confirmed reads/writes may show completion; cancellation and failures must not produce an optimistic success or replay an operation. NFC lifecycle separation.
+50. [agent] ~~publish display-only card previews, derived addresses and verified operation completion while keeping scan promises behind system-sheet dismissal.~~ Superseded by 51–52; the per-page presentation changes were removed because they did not match the requested scan-completion semantics.
+
+## 7d831ba
+
+51. [user] for the app, an NFC scan is complete when the iOS system sheet starts its success checkmark; the remaining sheet animation is only a delay and must not hold up the normal flow. Preserve the original app behavior, rather than adding early previews or special per-page completion states. NFC completion clarification.
+52. [agent] implement successful completion at the native lifecycle boundary: a healthy final `closeSession.message` (including the empty string) reserves the reader as successfully completed; `stopScan` acknowledges after requesting native invalidation, while the old reader remains owned until `didInvalidate`. Queue at most one next scan behind that retiring reader, and cancel it on stop, background or document reset. Keep existing page logic, animations, credential-save ownership and Android behavior; missing-PIN handoffs, errors, cancellation and uncertain operations retain their full cleanup barrier. See [29.md](29.md).

@@ -243,6 +243,100 @@ for (const kind of ['raw', 'applet']) {
   });
 }
 
+test('iOS logical stop completes before sheet dismissal while a later native start waits and ignores retired scan events', async () => {
+  platform = 'ios';
+  const dismissal = deferred();
+  const nextOperation = deferred();
+  const nativeStarts = [];
+  const seen = [];
+  let dismissed = false;
+  let completion;
+
+  // Model the bridge contract only: stop acknowledges immediately, while native
+  // activation of the next reader waits for the old system presentation to end.
+  device.onStart = async () => {
+    const scanId = device.scanId;
+    if (nativeStarts.length) await dismissal.promise;
+    nativeStarts.push(scanId);
+  };
+  const stopFirst = standbyIsoDep(
+    async sessionId => seen.push(sessionId),
+    error => device.errors.push(error),
+    () => {
+      device.cleanupCount++;
+      completion = stopFirst();
+    },
+    connected => device.connections.push(connected),
+    () => ({message: ''}),
+  );
+  device.disposers.push(stopFirst);
+  await until(() => nativeStarts.length === 1);
+  const firstScanId = nativeStarts[0];
+  device.tap('completed-session');
+  await until(() => completion !== undefined);
+  await completion;
+
+  assert.equal(dismissed, false);
+  assert.deepEqual(device.stops, [firstScanId]);
+  assert.deepEqual(device.closeOptions, [
+    {sessionId: 'completed-session', waitForRemoval: false, message: ''},
+  ]);
+  assert.equal(device.listenerRemovals.length, 5);
+  assert.deepEqual(seen, ['completed-session']);
+
+  const stopNext = device.standby(async sessionId => {
+    seen.push(sessionId);
+    await nextOperation.promise;
+  });
+  await until(() => device.starts.length === 2);
+  const nextScanId = device.starts[1];
+  assert.notEqual(nextScanId, firstScanId);
+  assert.deepEqual(nativeStarts, [firstScanId]);
+
+  const emitRetiredEvents = () => {
+    device.emit('sessionOpened', {
+      scanId: firstScanId,
+      sessionId: 'late-session',
+      tag: {},
+    });
+    device.emit('sessionEnded', {
+      scanId: firstScanId,
+      sessionId: 'completed-session',
+      reason: 'tag-lost',
+      code: 'TAG_LOST',
+    });
+    device.emit('scanEnded', {
+      scanId: firstScanId,
+      reason: 'cancelled',
+      code: 'CANCELLED',
+    });
+  };
+  emitRetiredEvents();
+  await setImmediate();
+  assert.deepEqual(seen, ['completed-session']);
+  assert.deepEqual(device.connections, [true, false]);
+  assert.deepEqual(device.errors, []);
+
+  dismissed = true;
+  dismissal.resolve();
+  await until(() => nativeStarts.length === 2);
+  assert.deepEqual(nativeStarts, [firstScanId, nextScanId]);
+  device.tap('next-session');
+  await until(() => seen.length === 2);
+  emitRetiredEvents();
+  await setImmediate();
+  assert.deepEqual(seen, ['completed-session', 'next-session']);
+  assert.deepEqual(device.connections, [true, false, true]);
+  assert.deepEqual(device.errors, []);
+
+  nextOperation.resolve();
+  await until(() => device.cleanupCount === 2);
+  await stopNext();
+  assert.deepEqual(device.stops, [firstScanId, nextScanId]);
+  assert.deepEqual(device.connections, [true, false, true, false]);
+  assert.deepEqual(device.errors, []);
+});
+
 for (const ending of ['dispose', 'scan-ended']) {
   test(`${ending} discards completion options from an operation that resolves late`, async () => {
     platform = 'ios';

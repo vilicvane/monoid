@@ -86,7 +86,15 @@ public final class IsoDepNfcPlugin: CAPPlugin, CAPBridgedPlugin {
                 throw NFCFailure(code: "UNSUPPORTED", message: "The iOS NFC reader is unavailable.")
             }
             self.scanDocument = document
-            self.sessions.start(id: id, timeoutMs: timeout, reader: reader) { [weak self] result in
+            self.sessions.start(id: id, timeoutMs: timeout, reader: reader, validateStart: { [weak self] in
+                guard let self, self.document == document else {
+                    return NFCFailure(code: "APP_INACTIVE", message: "The document that requested this NFC scan has ended.")
+                }
+                guard UIApplication.shared.applicationState == .active else {
+                    return NFCFailure(code: "APP_INACTIVE", message: "NFC scanning requires the app in the foreground.")
+                }
+                return nil
+            }) { [weak self] result in
                 self?.settle(call, result: result, idKey: "scanId", id: id, operation: "startScan", document: document)
             }
         }

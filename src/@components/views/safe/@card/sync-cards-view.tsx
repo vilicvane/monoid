@@ -145,7 +145,7 @@ export const SyncCardsView = observer(
     const mounted = useRef(true);
     const operation = useRef<AbortController | undefined>(undefined);
     const busy = working || session.busy;
-    const complete = session.phase === 'complete' && !session.busy;
+    const complete = session.phase === 'complete' && !busy;
     const source = !flow.sourceConsumed ? flow.sourceCard : undefined;
     const bundles = [
       ...new Set(
@@ -499,13 +499,7 @@ export const SyncCardsView = observer(
             footer={
               complete ? (
                 back && (
-                  <Button
-                    color="neutral"
-                    disabled={busy}
-                    onClick={() => {
-                      if (!busy) back();
-                    }}
-                  >
+                  <Button color="neutral" onClick={() => back()}>
                     {backLabel}
                   </Button>
                 )
@@ -577,7 +571,7 @@ export const SyncCardsView = observer(
                   title="Sync cards"
                   numero={2}
                   activeNumero={complete ? 3 : collecting ? 1 : 2}
-                  processing={busy && !collecting && !complete}
+                  processing={busy && !collecting}
                 >
                   {cards}
                 </Step>

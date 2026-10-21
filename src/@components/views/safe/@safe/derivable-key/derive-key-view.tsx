@@ -165,6 +165,8 @@ export const DeriveKeyView = observer(
           return;
         }
 
+        let result: typeof derived;
+
         await scanPrompt(
           'Scan card to derive',
           async (applet, setStateContent, hello, signal) => {
@@ -187,13 +189,8 @@ export const DeriveKeyView = observer(
                 throw error;
               });
 
-            if (
-              mounted.current &&
-              isViewActive() &&
-              !controller.signal.aborted &&
-              !signal.aborted
-            ) {
-              setDerived({
+            if (!controller.signal.aborted && !signal.aborted) {
+              result = {
                 wallet: {
                   addressType,
                   seed: options.seed,
@@ -205,13 +202,14 @@ export const DeriveKeyView = observer(
                   id: uint8ArrayToHex(hello.id),
                   publicKey: uint8ArrayToHex(hello.publicKey),
                 },
-              });
+              };
             }
           },
-        ).catch(error => {
-          if (mounted.current) setDerived(undefined);
-          throw error;
-        });
+        );
+
+        if (mounted.current && !controller.signal.aborted && isViewActive()) {
+          setDerived(result);
+        }
       });
     };
 

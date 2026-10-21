@@ -138,7 +138,6 @@ export const CardManagementView = observer(
         if (!active) {
           controller.current?.abort();
           pinSession.clear();
-          setComplete(false);
           setPopup(undefined);
           setConfirm(undefined);
         }
@@ -450,11 +449,9 @@ export const CardManagementView = observer(
               ? {information, installation: {...current, hello: next}}
               : await readSnapshot(sessionId, signal, information);
           signal.throwIfAborted();
-          // Show the verified result while the system sheet closes. Publish the
-          // snapshot and hand off to other flows only after cleanup, so the
-          // applet list never flashes beneath the closing scan overlay.
+          // Publish the snapshot with completion after the scan and handoff,
+          // so the applet list never flashes beneath the closing scan overlay.
           result = {hello: next, snapshot: latest};
-          if (isActive()) setComplete(true);
         });
 
         if (accessPINId) {
@@ -480,7 +477,6 @@ export const CardManagementView = observer(
           try {
             await finishSetup(result.hello, result.snapshot);
           } catch (error) {
-            setComplete(false);
             errorService.catch(Promise.reject(error));
           }
         }
@@ -554,7 +550,6 @@ export const CardManagementView = observer(
               complete ? (
                 <Button
                   color="neutral"
-                  disabled={busy}
                   onClick={() => {
                     if (back) back();
                     else setComplete(false);
