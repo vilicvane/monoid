@@ -986,7 +986,12 @@ for (const [outcome, options, missingApplet, closeOptions = {}] of [
     false,
   ],
   ['install redirect', {auth: false, allowInstallRedirect: true}, true],
-  ['uninitialized card', {auth: false, accessPIN: false}, false],
+  [
+    'uninitialized card',
+    {auth: false, accessPIN: false},
+    false,
+    {errorMessage: 'Initialize card from Safe'},
+  ],
   [
     'operation failure',
     {
@@ -1812,6 +1817,37 @@ for (const [missing, overrides] of [
   ['Access PIN', {accessPIN: false}],
   ['Secret PIN', {secretPIN: false}],
 ]) {
+  test(`prompt: iOS reports an uninitialized card as failure (missing ${missing})`, async () => {
+    platform = 'ios';
+    const state = mount({savedPINs: {[CARD_ID]: PIN}, ...overrides});
+    const scan =
+      missing === 'applet' ? await state.missingApplet() : await state.tap();
+
+    assert.deepEqual(scan.closeOptions, {
+      errorMessage: 'Initialize card from Safe',
+    });
+    assert.equal(scan.waitingForRemoval, false);
+    assert.equal(scan.stopRequested, true);
+    assert.equal(state.outcome, undefined);
+    assert.equal(state.businessCalls, 0);
+    assert.equal(state.inputs.length, 0);
+    assert.deepEqual(state.authenticated, []);
+    assert.deepEqual(state.notifications, []);
+    await state.finishAnimation();
+    assert.equal(state.outcome, undefined);
+    await state.finishStop();
+
+    assert.equal(state.outcome, 'rejected');
+    assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
+    assert.equal(
+      state.notifications.at(-1).message,
+      'Initialize card from Safe',
+    );
+    assert.equal(state.scans.length, 1);
+    assert.deepEqual(state.writes, []);
+    assert.deepEqual(state.navigations, []);
+  });
+
   test(`prompt: ordinary operations stop on an uninitialized card (missing ${missing})`, async () => {
     const missingApplet = missing === 'applet';
     const state = mount({savedPINs: {[CARD_ID]: PIN}, ...overrides});

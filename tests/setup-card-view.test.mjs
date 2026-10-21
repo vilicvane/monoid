@@ -616,15 +616,19 @@ function mount(
       await state.prepareMember(hello);
       if (!state.confirmation()) await state.answerBundlePIN(pin);
     },
-    async collect(hello) {
+    async collect(hello, rejection) {
       state.existingHello = hello;
       state.scanFinished = deferred();
       const add =
         state.button('Add a card') ?? state.button('Add another card');
       assert.ok(add, 'Expected a card collection button');
       add.props.onClick();
-      await state.connect();
-      state.scanFinished.resolve();
+      if (rejection) {
+        await assert.rejects(state.connect(), rejection);
+      } else {
+        await state.connect();
+        state.scanFinished.resolve();
+      }
       await state.finished;
       state.render();
     },
@@ -1876,11 +1880,11 @@ for (const destination of ['leaving', 'inactive', 'unmounted']) {
   });
 }
 
-test('a duplicate card returns to collection without changing the collected members', async () => {
+test('a duplicate card rejects the live scan before returning to collection', async () => {
   const state = mount(SetupCardView, {cardInformation: undefined});
   await enableBundle(state);
   await state.collect(bundleCard(1));
-  await state.collect(bundleCard(1));
+  await state.collect(bundleCard(1), /already added/);
   assert.match(state.errors[0].message, /already added/);
   assert.equal(state.card('00000001').props.description, 'ready');
   assert.equal(state.button('Continue'), undefined);
@@ -1891,12 +1895,28 @@ test('a duplicate card returns to collection without changing the collected memb
   assert.equal(state.card('00000002').props.description, 'ready');
 });
 
+test('a full bundle rejects a new card while the scan is still open', async () => {
+  const state = mount(SetupCardView, {cardInformation: undefined});
+  await enableBundle(state);
+  const session = state.entrances.cardBundleStore.get(
+    state.view.bundleId,
+  ).session;
+  for (let identity = 1; identity <= 122; identity++) {
+    await session.addCard(bundleCard(identity));
+  }
+  await state.collect(bundleCard(123), /Too many cards/);
+  assert.equal(session.cards.length, 122);
+  assert.equal(state.card('0000007b'), undefined);
+  assert.equal(state.confirmation(), undefined);
+});
+
 for (const kind of ['access', 'secret']) {
-  test(`a card with a blocked ${kind} PIN is not counted and leaves collection ready`, async () => {
+  test(`a blocked ${kind} PIN rejects the live scan and leaves collection ready`, async () => {
     const state = mount(SetupCardView, {cardInformation: undefined});
     await enableBundle(state);
     await state.collect(
       bundleCard(1, {pins: {access: 5, secret: 5, [kind]: 0}}),
+      /PIN blocked/,
     );
     assert.equal(state.card('00000001'), undefined);
     assert.match(state.errors[0].message, /PIN blocked/);
@@ -1909,6 +1929,23 @@ for (const kind of ['access', 'secret']) {
     await state.collect(bundleCard(2));
     assert.equal(state.card('00000002').props.description, 'ready');
     assert.equal(state.button('Continue'), undefined);
+  });
+
+  test(`an enrolled card with blocked ${kind} PIN still hands off to reset after scan cleanup`, async () => {
+    const state = mount(SetupCardView, {cardInformation: undefined});
+    await enableBundle(state);
+    state.existingHello = bundleCard(1, {
+      bundle: BUNDLE,
+      pins: {access: 5, secret: 5, [kind]: 0},
+    });
+    state.click('Add a card');
+    await state.connect();
+    assert.equal(state.confirmation(), undefined);
+    state.scanFinished.resolve();
+    await state.finished;
+    assert.ok(state.confirmation());
+    assert.deepEqual(state.errors, []);
+    assert.equal(state.card('00000001'), undefined);
   });
 }
 

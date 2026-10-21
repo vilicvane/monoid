@@ -326,15 +326,22 @@ export const SetupCardView = observer(
         .$push();
     };
 
-    const acceptScan = async (hello: MonoidAppletHello): Promise<void> => {
-      if (bundleEnabled && hello.bundle !== false) {
-        await requestBundleCard({type: 'scanned', hello});
-        return;
-      }
+    const validateScan = (hello: MonoidAppletHello): void => {
+      if (bundleEnabled) bundleSession.validateAddition(hello);
+      // An enrolled card may be reset even when its old PINs are blocked.
+      if (bundleEnabled && hello.bundle !== false) return;
       if (hello.pins.secret === 0)
         throw new MonoidCardError('Secret PIN blocked');
       if (hello.pins.access === 0)
         throw new MonoidCardError('Access PIN blocked');
+    };
+
+    const acceptScan = async (hello: MonoidAppletHello): Promise<void> => {
+      validateScan(hello);
+      if (bundleEnabled && hello.bundle !== false) {
+        await requestBundleCard({type: 'scanned', hello});
+        return;
+      }
       if (hello.pins.secret === false || hello.pins.access === false) {
         cacheSetup(hello);
         setPendingPIN(hello);
@@ -359,6 +366,7 @@ export const SetupCardView = observer(
             setState,
             AbortSignal.any([signal, operation.signal]),
           );
+          if (result.type === 'ready') validateScan(result.hello);
           if (
             result.type === 'ready' &&
             hasInitializedPINs(result.hello) &&

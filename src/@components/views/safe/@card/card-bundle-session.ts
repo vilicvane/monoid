@@ -127,11 +127,7 @@ export class CardBundleSession {
     }
   }
 
-  private addIdentity(card: CardBundleIdentity, bundle: string | false): void {
-    this.requireCollecting();
-    if (bundle !== false) {
-      throw new MonoidCardError('Card already belongs to a bundle');
-    }
+  private validateAdditionIdentity(card: CardBundleIdentity): void {
     if (this.cards.some(current => current.publicKey === card.publicKey)) {
       throw new MonoidCardError('Card already added');
     }
@@ -139,6 +135,20 @@ export class CardBundleSession {
     if (this.cards.length === 122) {
       throw new MonoidCardError('Too many cards');
     }
+  }
+
+  /** Validate collection before closing the scan or starting PIN/reset setup. */
+  validateAddition(hello: MonoidAppletHello): void {
+    this.requireCollecting();
+    this.validateAdditionIdentity(readCardIdentity(hello));
+  }
+
+  private addIdentity(card: CardBundleIdentity, bundle: string | false): void {
+    this.requireCollecting();
+    if (bundle !== false) {
+      throw new MonoidCardError('Card already belongs to a bundle');
+    }
+    this.validateAdditionIdentity(card);
     this.setState({
       ...this.current.get(),
       cards: [...this.cards, {...card, status: 'pending'}],

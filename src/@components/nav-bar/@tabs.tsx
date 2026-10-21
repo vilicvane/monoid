@@ -5,13 +5,7 @@ import {
   Scan as scan,
 } from 'lucide-react';
 import {observer} from 'mobx-react-lite';
-import {
-  type CSSProperties,
-  type ReactNode,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from 'react';
+import {type ReactNode, useLayoutEffect, useRef, useState} from 'react';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
@@ -59,9 +53,11 @@ const HomeGroup = styled.div<{$expanded: boolean}>`
   padding-inline: ${props => (props.$expanded ? 20 : 0)}px;
   min-width: 0;
 
-  transition: padding-inline ${navigationTransition.duration}ms
-    ${navigationTransition.easing}
-    ${props => (props.$expanded ? 0 : navigationTransition.duration)}ms;
+  transition:
+    padding-left ${navigationTransition.duration}ms
+      ${navigationTransition.easing},
+    padding-right ${navigationTransition.duration}ms
+      ${navigationTransition.easing};
 
   @media (prefers-reduced-motion: reduce) {
     transition: none;
@@ -79,8 +75,7 @@ const FeatureTab = styled(Tab)<{$visible: boolean}>`
 
   transition:
     color 0.2s linear,
-    flex-basis ${navigationTransition.duration}ms ${navigationTransition.easing}
-      ${props => (props.$visible ? 0 : navigationTransition.duration)}ms,
+    flex-basis ${navigationTransition.duration}ms ${navigationTransition.easing},
     opacity ${navigationTransition.duration}ms ${navigationTransition.easing},
     transform ${navigationTransition.duration}ms ${navigationTransition.easing};
 
@@ -140,10 +135,8 @@ export const Tabs = observer(({className}: {className?: string}): ReactNode => {
     activeRoute,
     feature,
     lastFeature: feature ?? FEATURES[0],
-    dotDelay: navigationTransition.duration,
   });
 
-  // Set the delay before the newly active dot starts its transition.
   if (
     navigation.activeRoute !== activeRoute ||
     navigation.feature !== feature
@@ -152,20 +145,13 @@ export const Tabs = observer(({className}: {className?: string}): ReactNode => {
       activeRoute,
       feature,
       lastFeature: feature ?? navigation.lastFeature,
-      dotDelay:
-        navigationTransition.duration *
-        (navigation.feature && !feature ? 2 : 1),
     });
   }
 
   const displayedFeature = feature ?? navigation.lastFeature;
 
   return (
-    <Container
-      aria-label="Main navigation"
-      className={classNames(className)}
-      style={{'--nav-dot-delay': `${navigation.dotDelay}ms`} as CSSProperties}
-    >
+    <Container aria-label="Main navigation" className={classNames(className)}>
       <HomeGroup $expanded={!!feature}>
         <HomeTab
           label="Home"

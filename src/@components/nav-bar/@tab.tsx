@@ -61,8 +61,7 @@ const ActiveDot = styled(IndicatorDot)`
     transform: translate(-50%, -50%) scale(1);
     opacity: 1;
     transition-delay:
-      0s, var(--nav-dot-delay, ${navigationTransition.duration}ms),
-      var(--nav-dot-delay, ${navigationTransition.duration}ms);
+      0s, ${navigationTransition.duration}ms, ${navigationTransition.duration}ms;
   }
 
   ${Container}.exact-active & {

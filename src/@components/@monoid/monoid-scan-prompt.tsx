@@ -678,6 +678,10 @@ export function useMonoidScanPrompt({
               return {errorMessage: result.message};
             }
 
+            if (result.type === 'uninitialized') {
+              return {errorMessage: 'Initialize card from Safe'};
+            }
+
             if (
               result.type === 'error' &&
               !(result.error instanceof IsoDepScanError) &&
