@@ -59,9 +59,10 @@ mock.module('../.bld/app/@components/@view/index.js', {
 });
 mock.module('../.bld/app/@components/views/safe/scan-card.js', {
   namedExports: {
-    scanCardItems: async (applet, onProgress, signal) => {
+    scanCardItems: async (applet, onProgress, signal, localKeys) => {
       fixture.scannedApplet = applet;
       fixture.scannedSignal = signal;
+      fixture.scannedLocalKeys = localKeys;
       for (const progress of fixture.progress ?? []) {
         onProgress(...progress);
       }
@@ -81,12 +82,14 @@ function mount({active = true, leaving = false} = {}) {
     cards: [],
     scannedItems: [],
     storedCards: [],
+    localKeys: [],
   };
   state.scan = new Promise((resolve, reject) => {
     state.resolveScan = resolve;
     state.rejectScan = reject;
   });
   state.entrances = {
+    walletStorageService: {keys: state.localKeys},
     cardStore: {
       set: card => state.storedCards.push(card),
     },
@@ -175,6 +178,11 @@ test('a late failure cannot replace a route that is already leaving', async () =
 
 test('a completed scan stores every resource and routes to Card with only its identity', async () => {
   const state = mount();
+  state.localKeys.push({
+    type: 'secp256k1',
+    index: '03010000000000000001',
+    wallets: [{addressType: 'evm', publicKey: `02${'11'.repeat(32)}`}],
+  });
   state.scannedItems = [
     {type: 'seed', index: '00010000000000000001', alias: 'Seed', secret: true},
     {index: 'ffff0000000000000002', alias: '', key: '', secret: false},
@@ -193,6 +201,7 @@ test('a completed scan stores every resource and routes to Card with only its id
   await state.finished;
 
   assert.equal(state.scannedApplet, applet);
+  assert.equal(state.scannedLocalKeys, state.localKeys);
   assert.deepEqual(state.storedCards, [
     {
       id: '01020304',

@@ -40,6 +40,12 @@ Update and Reinstall replace **Monoid only**. Identity, its Secret PIN, and bund
 membership remain. Fresh install is a separate, explicitly confirmed action that
 replaces Identity as well and therefore changes the card identity.
 
+Initial inspection uses the public GP registry. If the card requires authentication
+(`6982`) but Monoid still answers Hello, Update and Reinstall open the GP secure
+channel to confirm the exact instance AID before backup. Other registry failures
+remain errors, and a successful prefix SELECT never supplies an assumed AID.
+Monoid is selected and its Secret PIN authenticated again after this query.
+
 For an unbundled card, ordinary replacement first exports every resource from
 `list({})`, including data and address records hidden from the normal resource
 view. The archive contains card-encrypted envelopes and the original index, key,

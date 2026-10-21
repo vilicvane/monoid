@@ -416,7 +416,7 @@ for (const [type, index, addressType, publicKey] of [
   ['secp256k1', '03010000000000000001', 'bitcoin-segwit', PUBLIC_KEY],
   ['ed25519', '04010000000000000001', 'solana', '00'.repeat(32)],
 ]) {
-  test(`scanning ${type} uses only the addresses in its native record`, async () => {
+  test(`scanning ${type} keeps the native record separate from its default preview`, async () => {
     const wallets = [
       {addressType, seed: undefined, curve: undefined, path: undefined},
     ];
@@ -442,7 +442,10 @@ for (const [type, index, addressType, publicKey] of [
     assert.deepEqual(requests, [{type, index: bytes(index)}]);
     assert.deepEqual(items[0].derivationRecord, {index, wallets});
     assert.deepEqual(items[1].derivations, [{...wallets[0], publicKey}]);
-    assert.equal(items[1].ref.addressType, addressType);
+    assert.equal(
+      items[1].ref.addressType,
+      type === 'ed25519' ? 'solana' : 'evm',
+    );
     assert.equal(items[1].ref.publicKey, publicKey);
     assert.equal(items[1].ref.path, undefined);
   });

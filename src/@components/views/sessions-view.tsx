@@ -5,6 +5,7 @@ import type {RouteComponentProps} from 'routra-react';
 import {useEntrances} from '../../@entrances.js';
 import {getPendingActions} from '../../@lib/pending-action.js';
 import type {Router} from '../../@routes.js';
+import {IconList} from '../@ui/list.js';
 import {
   View,
   ViewContent,
@@ -13,7 +14,7 @@ import {
   ViewPlaceholder,
 } from '../@view/index.js';
 
-import {SessionList, SessionListItem} from './@sessions/session-list-item.js';
+import {SessionListItem} from './@sessions/session-list-item.js';
 
 export const SessionsView = observer(
   ({view}: RouteComponentProps<Router['sessions']>): ReactNode => {
@@ -34,7 +35,7 @@ export const SessionsView = observer(
         </ViewHeader>
         <ViewContent>
           {walletKitService.sessions.size ? (
-            <SessionList>
+            <IconList>
               {sessions.map(session => (
                 <SessionListItem
                   key={session.topic}
@@ -46,7 +47,7 @@ export const SessionsView = observer(
                   }
                 />
               ))}
-            </SessionList>
+            </IconList>
           ) : (
             <ViewPlaceholder>No connected sites</ViewPlaceholder>
           )}

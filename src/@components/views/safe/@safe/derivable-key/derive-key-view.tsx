@@ -266,7 +266,7 @@ export const DeriveKeyView = observer(
               const cachedCard = cardStore.get(card);
               if (cachedCard) {
                 const cachedKey = cachedCard.items.find(
-                  item => item.index === key.index,
+                  item => item.index === key.index && item.type === key.type,
                 );
                 const known = [
                   wallet,
@@ -282,20 +282,23 @@ export const DeriveKeyView = observer(
                   ),
                   ...key.wallets,
                 ];
-                const derivations = resource.derivationRecord.wallets.map(
-                  parameters => getLocalCardWalletDerivation(known, parameters),
+                const derivations = resource.derivationRecord.wallets.flatMap(
+                  parameters => {
+                    const knownWallet = getLocalCardWalletDerivation(
+                      known,
+                      parameters,
+                    );
+                    return knownWallet ? [knownWallet] : [];
+                  },
                 );
-                if (
-                  cachedKey &&
-                  derivations.every(value => value !== undefined)
-                ) {
+                if (cachedKey) {
                   runInAction(() => {
+                    // Keep the complete saved parameters even when some public
+                    // keys have not been read for this page's preview cache.
                     cachedCard.upsert(resource);
                     cachedKey.setRecordedWallets(derivations);
                   });
                 } else {
-                  // The record can include card-only addresses whose public keys
-                  // have never been read. Keep partial previews out of CardStore.
                   cardStore.forget(card);
                 }
               }

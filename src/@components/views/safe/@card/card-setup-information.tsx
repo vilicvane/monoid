@@ -126,7 +126,7 @@ export function CardSetupInformation({
           </InfoSectionRow>
         )}
       </CardInformationFieldset>
-      <InfoMessage>Requires Java Card 3.0.5 or later</InfoMessage>
+      <InfoMessage>Requires Java Card 3.0.5 or later.</InfoMessage>
       {checks.length > 0 && (
         <CardInformationFieldset>
           <InfoLegend>Checklist</InfoLegend>

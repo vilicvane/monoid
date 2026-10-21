@@ -305,7 +305,7 @@ export const SolanaTokenActivity = observer(function SolanaTokenActivity({
                   : 'Balance data is incomplete.'}
               </InfoMessage>
             ) : !accountChanges.length ? (
-              <InfoMessage>No change to this account</InfoMessage>
+              <InfoMessage>No change to this account.</InfoMessage>
             ) : null}
           </>
         )}
@@ -426,7 +426,7 @@ export const SolanaTokenActivity = observer(function SolanaTokenActivity({
                   </Fragment>
                 ))}
                 {!changes.length && !incomplete && (
-                  <InfoMessage>No balance changes</InfoMessage>
+                  <InfoMessage>No balance changes.</InfoMessage>
                 )}
               </DetailsPopupSection>
             </>

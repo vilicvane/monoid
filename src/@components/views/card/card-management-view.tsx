@@ -22,6 +22,7 @@ import {
   initializeMonoidCard,
   installMonoidApplets,
   readMonoidAppletInstallation,
+  resolveMonoidAppletMaintenanceAid,
 } from '../../../@lib/monoid/index.js';
 import type {Router} from '../../../@routes.js';
 import {
@@ -361,16 +362,19 @@ export const CardManagementView = observer(
           ) {
             if (!current.hello)
               throw new MonoidCardError('Could not read Monoid Applet');
-            if (!current.monoid.aid)
-              throw new MonoidCardError('Could not identify Monoid Applet');
+            const appletAid = await resolveMonoidAppletMaintenanceAid(
+              sessionId,
+              current,
+              signal,
+            );
             const applet = await createMonoidApplet(
-              hexToUint8Array(current.monoid.aid),
+              hexToUint8Array(appletAid),
             ).openSession(sessionId);
             await applet.authenticate({secret: true, pin: pin!});
             signal.throwIfAborted();
             saved = await maintenance.prepare(applet, {
               mode: action,
-              appletAid: current.monoid.aid,
+              appletAid,
               cardInformation: information,
               onProgress: progress,
               signal,
@@ -415,7 +419,6 @@ export const CardManagementView = observer(
           const applet = await createMonoidApplet(
             saved ? hexToUint8Array(saved.card.appletAid) : undefined,
           ).openSession(sessionId);
-          setState('Hold tight...');
           if (next.pins.secret === 0) {
             throw new MonoidCardError('Secret PIN blocked');
           }
@@ -423,6 +426,7 @@ export const CardManagementView = observer(
             throw new MonoidCardError('Access PIN blocked');
           }
           if (next.pins.access === false || next.pins.secret === false) {
+            setState('Setting up PINs...');
             const accessUnset = next.pins.access === false;
             next = await initializeMonoidCard(applet, next, pin!, signal);
             if (accessUnset) {
@@ -432,12 +436,14 @@ export const CardManagementView = observer(
             }
           }
           if (saved && maintenance.get(saved.id)?.phase === 'restore') {
+            setState('Authenticating, hold tight...');
             await applet.authenticate({secret: true, pin: pin!});
             signal.throwIfAborted();
             await maintenance.restore(applet, saved.id, progress, signal);
           }
           if (saved?.mode === 'fresh') await maintenance.complete(saved.id);
 
+          if (action !== 'setup' || saved) setState('Reading card...');
           const latest =
             action === 'setup' && !saved
               ? {information, installation: {...current, hello: next}}
@@ -603,7 +609,7 @@ export const CardManagementView = observer(
                 <OperationComplete />
                 {manualRestore && (
                   <InfoMessage>
-                    Restore your items from another bundle card
+                    Restore your items from another bundle card.
                   </InfoMessage>
                 )}
               </>

@@ -9,7 +9,8 @@ import {
 import {InfoSection, InfoSectionHeader} from '../../@ui/info-section.js';
 import {ListSectionCount} from '../../@ui/list-section.js';
 import {
-  List,
+  IconList,
+  LIST_ICON_SIZE,
   ListItemButton,
   ListItemContent,
   ListItemDescription,
@@ -28,11 +29,7 @@ const Section = styled(InfoSection)`
   margin-inline: 2px;
 `;
 
-const ActionList = styled(List)`
-  --list-item-gap: 12px;
-  --list-item-content-gap: 2px;
-  --list-item-name-line-height: 20px;
-
+const ActionList = styled(IconList)`
   > button > time {
     align-self: flex-start;
     margin-top: 1px;
@@ -91,7 +88,7 @@ export function PendingActions({
                 name={info.name}
                 url={metadata.url}
                 icons={metadata.icons}
-                size={36}
+                size={LIST_ICON_SIZE}
               />
               <ListItemContent as="span">
                 <ListItemName>{title}</ListItemName>

@@ -13,6 +13,14 @@ import {CardPlaceholder, CardPreview} from '../../@monoid/card-preview.js';
 import {AppIcon} from '../../@ui/app-icon.js';
 import {AppletIcon} from '../../@ui/feature-icons.js';
 import {InfoSection} from '../../@ui/info-section.js';
+import {
+  IconList,
+  LIST_ICON_SIZE,
+  ListItem,
+  ListItemContent,
+  ListItemDescription,
+  ListItemName,
+} from '../../@ui/list.js';
 import {InfoMessage} from '../../@ui/message-content.js';
 import {CardSetupInformation} from '../safe/index.js';
 
@@ -95,46 +103,26 @@ const Hero = styled.div`
   margin: 12px auto 30px;
 `;
 
-const Applets = styled.div`
-  display: flex;
-  flex-direction: column;
+const Applets = styled(IconList)`
+  flex: none;
   margin-top: 4px;
 `;
 
-const AppletRow = styled.div`
-  display: flex;
+const AppletRow = styled(ListItem)`
   align-items: center;
-  gap: 11px;
-  padding: 10px 0;
 `;
 
 const Symbol = styled.span`
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
+  width: ${LIST_ICON_SIZE}px;
+  height: ${LIST_ICON_SIZE}px;
+  border-radius: ${LIST_ICON_SIZE / 4}px;
   background: var(--ion-color-primary);
   color: var(--ion-color-primary-contrast);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  font-size: 19px;
-`;
-
-const RowText = styled.div`
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  flex-direction: column;
-  gap: 5px;
-  font-size: 15px;
-  line-height: 21px;
-
-  small {
-    font-size: 13px;
-    line-height: 18px;
-    color: var(--color-text-secondary);
-  }
+  font-size: 28px;
 `;
 
 const Status = styled(AppIcon)<{$status: 'unknown' | 'update' | 'installed'}>`
@@ -191,20 +179,20 @@ export function CardAppletsContent({
               <Symbol>
                 <AppIcon icon={AppletIcon} aria-hidden="true" />
               </Symbol>
-              <RowText>
-                <span>
+              <ListItemContent>
+                <ListItemName>
                   {applet.name === 'identity'
                     ? 'Monoid Identity Applet'
                     : 'Monoid Applet'}
-                </span>
-                <small>
+                </ListItemName>
+                <ListItemDescription>
                   {applet.unknown
                     ? 'Unknown'
                     : !applet.installed
                       ? 'Not installed'
                       : (applet.version ?? 'Installed')}
-                </small>
-              </RowText>
+                </ListItemDescription>
+              </ListItemContent>
               {(applet.unknown || applet.installed) && (
                 <Status
                   icon={
@@ -229,7 +217,7 @@ export function CardAppletsContent({
         })}
       </Applets>
       {manualRestore && (
-        <InfoMessage>Restore your items from another bundle card</InfoMessage>
+        <InfoMessage>Restore your items from another bundle card.</InfoMessage>
       )}
     </>
   );

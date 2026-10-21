@@ -3,11 +3,16 @@ import {CBORAppletError} from '../../../@lib/cbor-applet.js';
 import type {MonoidApplet} from '../../../@lib/monoid/index.js';
 import {ADDRESS_TYPES} from '../../../@lib/wallet-address.js';
 // eslint-disable-next-line @mufan/import -- Keep card scanning independent of UI services.
-import {getWalletData} from '../../../@services/wallet-storage-service.js';
+import {
+  type WalletKeyData,
+  getWalletData,
+  matchesWalletReference,
+} from '../../../@services/wallet-storage-service.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../@utils/index.js';
 
 import {
   getCardKeyAddressTypes,
+  getLocalCardWalletDerivation,
   readCardWalletDerivations,
 } from './card-address.js';
 import {
@@ -25,6 +30,7 @@ export async function scanCardItems(
     stage: 'records' | 'keys',
   ) => void,
   signal?: AbortSignal,
+  localKeys: readonly WalletKeyData[] = [],
 ): Promise<ScannedCardItemData[]> {
   const assertActive = (): void => {
     if (signal?.aborted) {
@@ -65,16 +71,19 @@ export async function scanCardItems(
     scannedItems,
     (current, total) => onProgress(current, total, 'keys'),
     signal,
+    [],
+    localKeys,
   );
 }
 
-/** Hydrate already-read records without listing resources or rereading metadata. */
+/** Load one display preview per key; recorded addresses stay lazy until import. */
 export async function readCardAddressPreviews(
   applet: MonoidApplet,
   items: readonly ScannedCardItemData[],
   onProgress: (current: number, total: number) => void,
   signal?: AbortSignal,
   knownItems: readonly ScannedCardItemData[] = [],
+  localKeys: readonly WalletKeyData[] = [],
 ): Promise<ScannedCardItemData[]> {
   const assertActive = (): void => {
     if (signal?.aborted) {
@@ -100,14 +109,23 @@ export async function readCardAddressPreviews(
     records.set(item.derivationRecord.index, item.derivationRecord);
   }
 
-  const total = keys.reduce(
-    (count, item) =>
-      count +
-      (item.type === 'secp256r1'
-        ? 1
-        : (records.get(item.index)?.wallets.length ?? 1)),
-    0,
-  );
+  const previews = keys.map(item => {
+    const localKey = localKeys.find(
+      key => key.index === item.index && key.type === item.type,
+    );
+    const localWallet =
+      localKey?.wallets.find(
+        wallet =>
+          localKey.defaultWallet &&
+          matchesWalletReference(wallet, localKey.defaultWallet),
+      ) ?? localKey?.wallets[0];
+    const record = records.get(item.index);
+    const readDefault =
+      item.type === 'secp256r1' ||
+      (!localWallet && record?.wallets.length !== 0);
+    return {item, localKey, localWallet, record, readDefault};
+  });
+  const total = previews.filter(preview => preview.readDefault).length;
   let completed = 0;
 
   if (total > 0) {
@@ -115,7 +133,7 @@ export async function readCardAddressPreviews(
     onProgress(0, total);
   }
 
-  for (const item of keys) {
+  for (const {item, localKey, localWallet, record, readDefault} of previews) {
     assertActive();
     const type = SafeKnownType.satisfies(item.type);
     const key = {type, index: item.index};
@@ -123,6 +141,7 @@ export async function readCardAddressPreviews(
       source => source.index === item.index && source.type === item.type,
     );
     const knownWallets = [
+      ...(localKey?.wallets ?? []),
       ...(known?.derivations ?? []),
       ...(known?.ref
         ? [
@@ -157,70 +176,60 @@ export async function readCardAddressPreviews(
       continue;
     }
 
-    const record = records.get(item.index);
-
-    if (record) {
-      item.derivations = await readCardWalletDerivations(
+    let preview = localWallet;
+    if (readDefault) {
+      const addressType = getCardKeyAddressTypes(type)[0];
+      const options = ADDRESS_TYPES[addressType];
+      const derivations = await readCardWalletDerivations(
         applet,
         key,
-        record.wallets,
+        [
+          {
+            addressType,
+            seed: type === 'seed' ? options.seed : undefined,
+            curve: type === 'seed' ? options.curve : undefined,
+            path: type === 'seed' ? options.path(0) : undefined,
+          },
+        ],
         signal,
-        current => {
-          assertActive();
-          onProgress(completed + current, total);
-        },
+        undefined,
         knownWallets,
-      );
+      ).catch(error => {
+        if (
+          error instanceof CBORAppletError &&
+          error.source.code.startsWith('UNSUPPORTED_')
+        ) {
+          return undefined;
+        }
+
+        throw error;
+      });
       assertActive();
-      completed += record.wallets.length;
-      const first = item.derivations[0];
-      if (first) item.ref = {...first, address: getWalletData(first).address};
-      continue;
+      preview = derivations?.[0];
     }
 
-    if (type === 'seed') {
-      item.derivations = [];
-    }
-
-    const addressType = getCardKeyAddressTypes(type)[0];
-    const options = ADDRESS_TYPES[addressType];
-    const derivations = await readCardWalletDerivations(
-      applet,
-      key,
-      [
-        {
-          addressType,
-          seed: type === 'seed' ? options.seed : undefined,
-          curve: type === 'seed' ? options.curve : undefined,
-          path: type === 'seed' ? options.path(0) : undefined,
-        },
-      ],
-      signal,
-      undefined,
-      knownWallets,
-    ).catch(error => {
-      if (
-        error instanceof CBORAppletError &&
-        error.source.code.startsWith('UNSUPPORTED_')
-      ) {
-        return undefined;
-      }
-
-      throw error;
-    });
-    assertActive();
-
-    const first = derivations?.[0];
-    if (first) {
+    if (preview) {
       item.ref = {
-        addressType: first.addressType,
-        ...(first.seed !== undefined && {seed: first.seed}),
-        ...(first.path !== undefined && {curve: first.curve, path: first.path}),
-        publicKey: first.publicKey,
-        address: getWalletData(first).address,
+        addressType: preview.addressType,
+        ...(preview.seed !== undefined && {seed: preview.seed}),
+        ...(preview.path !== undefined && {
+          curve: preview.curve,
+          path: preview.path,
+        }),
+        publicKey: preview.publicKey,
+        address: getWalletData(preview).address,
       };
     }
-    onProgress(++completed, total);
+    if (record) {
+      const available = preview ? [...knownWallets, preview] : knownWallets;
+      item.derivations = record.wallets.flatMap(parameters => {
+        const known = getLocalCardWalletDerivation(available, parameters);
+        return known ? [known] : [];
+      });
+    } else if (type === 'seed') {
+      item.derivations = [];
+    }
+    if (readDefault) onProgress(++completed, total);
   }
 
   assertActive();

@@ -2,7 +2,7 @@ import {IsoDepNfc} from 'capacitor-isodep-nfc';
 import {sha256, toUtf8Bytes} from 'ethers';
 
 import {hexToUint8Array, uint8ArrayToHex} from '../../@utils/index.js';
-import {AppletNotFoundError} from '../applet.js';
+import {AppletISOError, AppletNotFoundError} from '../applet.js';
 import {
   type CardInformation,
   readCardInformation,
@@ -19,6 +19,7 @@ import {
 } from '../global-platform/install.js';
 
 import {appletBundle} from './@applet-bundle.js';
+import {MonoidCardError} from './card-error.js';
 import {MonoidAppletHello, createMonoidApplet} from './monoid-applet.js';
 
 export type BundledApplet = {
@@ -173,6 +174,39 @@ export async function readMonoidAppletInstallation(
     }
   }
   return result;
+}
+
+/** Resolve the exact instance before maintenance; a prefix SELECT is insufficient. */
+export async function resolveMonoidAppletMaintenanceAid(
+  sessionId: string,
+  installation: MonoidAppletInstallation,
+  signal?: AbortSignal,
+): Promise<string> {
+  signal?.throwIfAborted();
+  if (installation.monoid.aid) return installation.monoid.aid;
+
+  const {registryError} = installation;
+  if (
+    !(registryError instanceof AppletISOError && registryError.sw === 0x6982)
+  ) {
+    throw (
+      registryError ?? new MonoidCardError('Could not identify Monoid Applet')
+    );
+  }
+
+  // Some cards expose SELECT/Hello but require GP authentication for GET STATUS.
+  // Only an explicitly requested maintenance operation opens this channel.
+  const registry = await GlobalPlatformInstaller.open(
+    cardTransceive(sessionId, signal),
+  );
+  signal?.throwIfAborted();
+  const instance = await registry.getEntry(
+    0x40,
+    hexToUint8Array(getBundledMonoidAppletAid()),
+  );
+  signal?.throwIfAborted();
+  if (!instance) throw new MonoidCardError('Could not identify Monoid Applet');
+  return uint8ArrayToHex(instance.aid);
 }
 
 function rethrowConnectionError(error: unknown): void {

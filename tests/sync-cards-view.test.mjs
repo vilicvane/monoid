@@ -126,11 +126,13 @@ mock.module('../.bld/app/@components/views/safe/scan-card.js', {
       _progress,
       signal,
       knownItems,
+      localKeys,
     ) => {
       fixture.previewSignals.push(signal);
       fixture.previewApplets.push(applet);
       fixture.previewRecords.push(items);
       fixture.previewKnownItems.push(knownItems);
+      fixture.previewLocalKeys.push(localKeys);
       if (fixture.previewFailure) throw fixture.previewFailure;
       signal.throwIfAborted();
       return fixture.previewItems;
@@ -294,7 +296,9 @@ function mount({
     previewApplets: [],
     previewRecords: [],
     previewKnownItems: [],
+    previewLocalKeys: [],
     previewItems: [],
+    localKeys: [],
     progress: [],
     mounted: true,
     slot: create => (state.slots[state.index++] ??= create()),
@@ -379,6 +383,7 @@ function mount({
   if (source) cardStore.set(source);
   const safeRoute = {$exact: {}, card: {$exact: {}}};
   state.entrances = {
+    walletStorageService: {keys: state.localKeys},
     router: {
       $backTo: target =>
         canBack &&
@@ -638,6 +643,11 @@ test('only writing the original Card reloads its addresses and restores the comp
     ],
   };
   const state = mount({source});
+  state.localKeys.push({
+    type: 'secp256k1',
+    index: '03010000000000000001',
+    wallets: [{addressType: 'evm', publicKey: `02${'11'.repeat(32)}`}],
+  });
   await state.session.add(first.applet, first.hello, signal(), PIN);
   await state.session.add(second.applet, second.hello, signal(), PIN);
   state.flow.consumeSource();
@@ -674,6 +684,8 @@ test('only writing the original Card reloads its addresses and restores the comp
   assert.deepEqual(state.previewKnownItems, [
     [{...source.items[0], derivations: []}],
   ]);
+  assert.equal(state.previewLocalKeys.length, 1);
+  assert.equal(state.previewLocalKeys[0], state.localKeys);
   assert.deepEqual(state.entrances.cardStore.get(source).snapshot(), {
     ...readBackupCardIdentity(first.hello),
     items: state.previewItems,

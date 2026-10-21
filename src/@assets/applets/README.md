@@ -1,14 +1,23 @@
 # Applet installation bundle
 
-The bundled Monoid Identity and Monoid CAPs are refreshed from
-`../monoid-javacard/build/javacard` at the start of `npm run build:web`. Ionic builds
-and `npm run ios:sync` use this same build entry. Their CAP hashes, load-image
-hashes and AIDs are recorded in `manifest.json`. Setup installs this bundled version.
+The Monoid Identity and Monoid CAPs are committed here with their load images and
+bundle descriptor, so the app can be built without a JavaCard checkout. At the
+start of `npm run build:web`, the app checks for newer CAPs in
+`../monoid-javacard/build/javacard`. Ionic builds and `npm run ios:sync` use this
+same build entry. CAP hashes, load-image hashes, AIDs, and source modification
+times are recorded in `manifest.json`. Setup installs this bundled version.
 
-Build the JavaCard project before building the app. The app build does not compile
-firmware, and missing or invalid CAPs stop the build instead of keeping an old
-bundle. Plain TypeScript compilation (`npm run build`) and the development server
-do not refresh applets. Use `npm run build:web` for app packaging.
+Build the JavaCard project first when you want to update the app's firmware. Both
+source CAPs must exist, and each changed CAP must be newer than its recorded source
+time, before the entire bundle is refreshed. Missing or older sources retain the
+committed bundle; equal timestamps with different content also retain it. Identical
+CAPs are not rewritten. The comparison uses the manifest, not the local copies'
+file timestamps, which Git checkout does not preserve. Invalid newer CAPs stop the
+build before any bundled files are written.
+
+The app build never compiles firmware. Plain TypeScript compilation (`npm run build`)
+and the development server do not refresh applets. Use `npm run build:web` for app
+packaging.
 
 To refresh only the bundled applets, run from the app repository:
 
@@ -23,7 +32,8 @@ node scripts/prepare-applets.mjs <approved-cap-directory>
 npx prettier --write src/@lib/monoid/@applet-bundle.ts src/@assets/applets/manifest.json
 ```
 
-The source directory must contain `monoididentity.cap` and `monoid.cap`.
+To refresh the bundle, the source directory must contain `monoididentity.cap` and
+`monoid.cap`.
 The preparation script validates the standard package/applet AIDs,
 copies both CAPs, extracts the components in Java Card load order, records SHA-256 hashes,
 and generates the bundle descriptor. It never builds or modifies the firmware

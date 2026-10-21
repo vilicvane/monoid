@@ -9,6 +9,7 @@ import {getWalletKitSessionAddresses} from '../../../@services/index.js';
 import {Address} from '../../@ui/address.js';
 import {DateTime} from '../../@ui/date-time.js';
 import {IndicatorDot} from '../../@ui/indicator-dot.js';
+import {LIST_ICON_SIZE, ListItemName} from '../../@ui/list.js';
 import {RippleEffect} from '../../@ui/ripple-effect.js';
 import {SiteLogo} from '../../@ui/site-logo.js';
 import {
@@ -16,18 +17,15 @@ import {
   getWalletConnectSiteInfo,
 } from '../@scan/wallet-connect-site.js';
 
-export const SessionList = styled.div`
-  margin: 0 calc(-1 * var(--view-padding));
-`;
-
 const Item = styled.button`
   position: relative;
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) auto;
+  grid-template-columns: ${LIST_ICON_SIZE}px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 2px 12px;
+  gap: var(--list-item-content-gap) var(--list-item-gap);
   width: 100%;
-  padding: 8px var(--view-padding);
+  padding: var(--list-item-padding-block, 8px)
+    var(--list-item-padding-inline, var(--view-padding));
   border: none;
   background: transparent;
   color: inherit;
@@ -44,13 +42,9 @@ const Item = styled.button`
   }
 `;
 
-const Name = styled.div`
-  display: flex;
-  align-items: center;
+const Name = styled(ListItemName).attrs({as: 'div'})`
   min-width: 0;
   gap: 4px;
-  font-size: 16px;
-  line-height: 20px;
 
   span {
     overflow: hidden;
@@ -121,7 +115,7 @@ export function SessionListItem({
         name={info.name}
         url={metadata.url}
         icons={metadata.icons}
-        size={36}
+        size={LIST_ICON_SIZE}
       />
       <Name>
         <span title={info.name}>{info.name}</span>

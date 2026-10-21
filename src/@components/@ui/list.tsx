@@ -5,6 +5,14 @@ export const List = styled.div`
   margin: 0 calc(-1 * var(--list-item-padding-inline, var(--view-padding)));
 `;
 
+export const LIST_ICON_SIZE = 36;
+
+export const IconList = styled(List)`
+  --list-item-gap: 12px;
+  --list-item-content-gap: 2px;
+  --list-item-name-line-height: 20px;
+`;
+
 const listItemCSS = css`
   position: relative;
   display: flex;

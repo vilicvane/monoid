@@ -107,6 +107,7 @@ export const SafeView = observer(
                 );
               },
               signal,
+              walletStorageService.keys,
             );
 
             scannedCard = {

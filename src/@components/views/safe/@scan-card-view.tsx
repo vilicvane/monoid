@@ -23,7 +23,8 @@ import {scanCardItems} from './scan-card.js';
 export const ScanCardView = ({
   view,
 }: RouteComponentProps<Router['safe']['scanCard']>): ReactNode => {
-  const {router, cardStore, errorService} = useEntrances();
+  const {router, cardStore, walletStorageService, errorService} =
+    useEntrances();
   const isViewActive = useViewActive(view);
   const isViewPresent = useViewActive(view, {allowEntering: true});
   const [scanPromptContent, scanPrompt] = useMonoidScanPrompt({
@@ -62,6 +63,7 @@ export const ScanCardView = ({
                   );
                 },
                 signal,
+                walletStorageService.keys,
               );
 
               scannedCard = {
@@ -101,6 +103,7 @@ export const ScanCardView = ({
     };
   }, [
     cardStore,
+    walletStorageService,
     errorService,
     router.safe,
     scanPrompt,

@@ -29,6 +29,10 @@
 
 读取或切换预览不会自动导入，也不会自动增加卡片记录。手机已删除的地址即使仍能从卡上计算出来，也不能仅因预览或缓存命中重新成为已导入地址。
 
+Safe 进入 Card 时读取资源与地址参数清单，不逐条派生卡片清单中的地址。同一完整 index 和类型的 Key 已在 Safe 中有地址时，直接使用本机已有地址；只有 Safe 中尚无任何地址的 Key 才读取一个默认地址预览，明确的卡片空清单仍不自动回退。切换网络时优先使用 Safe 中该地址类型已有的地址，不限制为默认派生路径；没有可复用预览时显示占位，等待用户点击 Derive。
+
+卡片附属记录保存完整地址清单；`derivations` 和 `refs` 仅是已经取得公钥的预览缓存，可以不完整。同步方向、空清单与待导入判断都以附属记录为准，不能把尚未读取的公钥误判为没有地址。同步完成后刷新原 Card 页面也采用同样的按需预览规则。
+
 Card 页面按当前各项目选择的网络检查预览；有缺失预览时直接显示 Derive，无需先勾选。Derive 只读取缺失预览，Import、Copy 和 Update 仍以勾选项目为准。明确的空地址清单不会自动恢复默认预览，用户切换网络后才提供对应的派生入口。
 
 ### Default 仅属于手机
@@ -112,9 +116,9 @@ Safe 列表支持左滑删除整个 Key，确认后按 index 移除手机中的 
 
 ### 执行和中断
 
-- 需要追加卡片记录的单地址 Import，在刷卡时读取最新清单并合并，避免覆盖其他设备新增的记录。导入已经读出的完整卡片清单，如果没有需要写卡的内容，可以直接保存手机，不额外要求二次刷卡。
+- 需要追加卡片记录的单地址 Import，在刷卡时读取最新清单并合并，避免覆盖其他设备新增的记录。明确点击 Import / Update 下载卡片清单时，才补读其中尚无公钥的地址；公钥已经齐全且没有需要写卡的内容时，直接保存手机。多选中同时需要补读和写入的项目共用一次刷卡。
 - Safe → Key → Derive 的 Import 复用本次已验证的地址预览，仅保存合并后的记录，不为保存一个地址重新派生整个清单。Card 的 Import / Update 需要完整预览时，按同一源 Key 复用已知派生结果，只刷卡读取缺失的公钥；公钥复用不扩大本次选择的地址范围。
-- 写入后更新 CardStore 时，只有完整清单中的地址都具有已知预览，才发布完整缓存。遇到尚未读取公钥的卡上独有地址，则使旧缓存失效，不能把部分预览作为完整地址清单；已确认的写入及本次单地址导入仍保留。
+- 写入后更新 CardStore 时保存完整地址参数记录，预览缓存只保留已知公钥，不为补齐缓存额外派生。卡上独有地址即使尚未读出公钥，也保留在完整记录中供后续显式下载；找不到同一 index 和类型的源 Key 时，才使旧快照失效。已确认的写入及本次单地址导入仍保留。
 - 覆盖上传先绑定完整卡片身份，并核对当前清单与用户选方向时看到的清单；若已经等于本次目标，视为目标已达成；若与快照和目标均不同，提示重新扫卡，取得新快照后再选择方向，不能用过期快照覆盖新的地址。
 - 每个 Key 的已确认写入独立提交到 CardStore；后续项目失败不能回滚或隐藏前面已经成功的写入。
 - 响应丢失时重新读取并核对结果，不自动重建 Key，也不把一次不确定写入当作未发生。
@@ -154,7 +158,7 @@ seed 的算法名继续为 `bip32` 或 `slip10-ed25519`，path 每一级使用 4
 | [card-view.tsx](../src/@components/views/safe/@card/card-view.tsx)                                                                                                       | 每个 Key 独立选择同步方向；下载合并、上传替换；批量按钮按各自方向处理，已确认写入逐项提交                    |
 | [@key-item.tsx](../src/@components/views/safe/@card/@key-item.tsx)                                                                                                       | 更新标记支持点击和键盘切换方向，不触发行勾选                                                                 |
 | [card-derivations.ts](../src/@components/views/safe/card-derivations.ts)                                                                                                 | 派生与原生地址使用统一附属记录；支持 merge、replace 和写入前快照检查，保留明确空清单                         |
-| [scan-card.ts](../src/@components/views/safe/scan-card.ts)                                                                                                               | 有记录时按记录读取，明确空记录不回退；无记录时提供默认预览                                                   |
+| [scan-card.ts](../src/@components/views/safe/scan-card.ts)                                                                                                               | 读取完整参数清单，优先复用 Safe 地址；仅为没有本机地址的 Key 读取默认预览，明确空记录不回退                  |
 | [card-store.ts](../src/@services/card-store.ts)                                                                                                                          | 按完整卡片身份保存共享快照，区分记录清单与预览缓存；提供 Copy 使用的普通数据快照                             |
 | [key-wallet-list.tsx](../src/@components/@key/key-wallet-list.tsx) 与 [raw-key-view.tsx](../src/@components/views/safe/@safe/raw-key-view.tsx)                           | 所有钱包地址可删除；删除最后一个保留 Key，原生空 Key 提供 Scan card 入口                                     |
 | [get-wallet-signing-account.ts](../src/@components/@monoid/get-wallet-signing-account.ts) 与 [bitcoin-wallet.ts](../src/@lib/bitcoin-wallet.ts)                          | 仅从当前明确地址记录解析签名账户；具体记录失效后不能继续使用旧账户                                           |

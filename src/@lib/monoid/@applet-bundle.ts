@@ -17,6 +17,6 @@ export const appletBundle: readonly BundledApplet[] | undefined = [
     packageAid: 'f06d6f6e6f696402',
     appletAid: 'f06d6f6e6f69640201',
     codeURL: new URL('../../@assets/applets/monoid.bin', import.meta.url),
-    sha256: '73274c49afc5a14df4be35f607ce63fcba40779fa725ef3d48c236072bbc9b28',
+    sha256: '8de5c4ad096469fd4268723387cfef4aff419c0b526799114dd1478dcaa0b8aa',
   },
 ];

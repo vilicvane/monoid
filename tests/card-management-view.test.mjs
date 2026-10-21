@@ -87,6 +87,20 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
       fixture.installationReads = (fixture.installationReads ?? 0) + 1;
       return fixture.installation;
     },
+    resolveMonoidAppletMaintenanceAid: async (
+      sessionId,
+      installation,
+      signal,
+    ) => {
+      fixture.events.push({
+        type: 'resolve-aid',
+        sessionId,
+        installation,
+        signal,
+      });
+      if (fixture.resolveAidError) throw fixture.resolveAidError;
+      return fixture.resolvedAid ?? installation.monoid.aid ?? AID;
+    },
     createMonoidApplet: aid => ({
       async openSession() {
         fixture.events.push({type: 'select', aid});
@@ -322,7 +336,11 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     isUpdateAvailable: () => false,
     recordInstallation: async () => {},
     prepare: async (_applet, options) => {
-      state.events.push({type: 'prepare', mode: options.mode});
+      state.events.push({
+        type: 'prepare',
+        mode: options.mode,
+        appletAid: options.appletAid,
+      });
       state.pending = {
         id: 'maintenance',
         mode: options.mode,
@@ -637,6 +655,134 @@ test('bundle replacement requires explicit confirmation and leaves a manual reco
   assert.match(text(state.node('InfoMessage')), /another bundle card/);
   assert.equal(
     state.events.some(event => event.type === 'restore'),
+    false,
+  );
+});
+
+for (const mode of ['update', 'reinstall']) {
+  test(`${mode} resolves a protected registry AID before backup`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    delete state.installation.monoid.aid;
+    state.installation.registryError = Object.assign(
+      new Error('Reading the card registry failed'),
+      {sw: 0x6982},
+    );
+    const scannedInstallation = state.installation;
+    state.maintenance.isUpdateAvailable = () => mode === 'update';
+    state.click('Scan a card');
+    await state.tap();
+    assert.equal(
+      state.events.some(event => event.type === 'resolve-aid'),
+      false,
+      'ordinary card inspection must not authenticate the GP channel',
+    );
+    if (mode === 'reinstall') state.click('Card menu');
+    state.click(
+      mode === 'update' ? 'Update Monoid Applet' : 'Reinstall Monoid Applet',
+    );
+    await state.answer();
+    await state.tap();
+
+    assert.deepEqual(state.errors, []);
+    const operations = state.events.filter(event =>
+      ['resolve-aid', 'select', 'auth', 'prepare', 'replace'].includes(
+        event.type,
+      ),
+    );
+    assert.deepEqual(
+      operations.slice(0, 5).map(event => event.type),
+      ['resolve-aid', 'select', 'auth', 'prepare', 'replace'],
+    );
+    const lookups = operations.filter(event => event.type === 'resolve-aid');
+    assert.equal(lookups.length, 1);
+    assert.equal(lookups[0].sessionId, 'session');
+    assert.equal(lookups[0].installation, scannedInstallation);
+    assert.equal(lookups[0].signal.aborted, false);
+    assert.equal(
+      Buffer.from(
+        operations.find(event => event.type === 'select').aid,
+      ).toString('hex'),
+      AID,
+    );
+    assert.deepEqual(
+      operations.find(event => event.type === 'auth'),
+      {
+        type: 'auth',
+        secret: true,
+        pin: PIN,
+      },
+    );
+    assert.deepEqual(
+      operations.find(event => event.type === 'prepare'),
+      {
+        type: 'prepare',
+        mode,
+        appletAid: AID,
+      },
+    );
+    assert.ok(state.node('OperationComplete'));
+  });
+}
+
+test('a failed maintenance AID resolution stops before backup or replacement and preserves the error', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  delete state.installation.monoid.aid;
+  state.installation.registryError = Object.assign(
+    new Error('Registry requires authentication'),
+    {sw: 0x6982},
+  );
+  state.resolveAidError = new Error('Management authentication failed');
+  state.click('Scan a card');
+  await state.tap();
+  state.click('Card menu');
+  state.click('Reinstall Monoid Applet');
+  await state.answer();
+  await state.tap();
+
+  assert.deepEqual(state.errors, [state.resolveAidError]);
+  assert.equal(
+    state.events.filter(event => event.type === 'resolve-aid').length,
+    1,
+  );
+  assert.equal(
+    state.events.some(event =>
+      [
+        'select',
+        'auth',
+        'prepare',
+        'replace',
+        'install',
+        'initialize',
+      ].includes(event.type),
+    ),
+    false,
+  );
+  assert.equal(state.pending, undefined);
+  assert.equal(state.node('OperationComplete'), undefined);
+});
+
+test('maintenance rejects a changed card identity before authenticating its protected registry', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  delete state.installation.monoid.aid;
+  state.click('Scan a card');
+  await state.tap();
+  state.click('Card menu');
+  state.click('Reinstall Monoid Applet');
+  await state.answer();
+  state.installation = {
+    ...state.installation,
+    hello: {...state.initialized, publicKey: new Uint8Array(65).fill(3)},
+  };
+  await state.tap();
+
+  assert.ok(state.errors[0] instanceof MonoidWrongCardError);
+  assert.equal(
+    state.events.some(event =>
+      ['resolve-aid', 'auth', 'prepare', 'replace'].includes(event.type),
+    ),
     false,
   );
 });

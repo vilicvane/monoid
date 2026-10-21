@@ -241,6 +241,21 @@ function cardItems(index, wallets, preview = wallets[0] ?? wallet(0)) {
   ];
 }
 
+function sparseCardItems(index, wallets, known = [], preview) {
+  return [
+    {
+      index,
+      type: 'seed',
+      secret: true,
+      derivations: known,
+      ...(preview && {
+        ref: {...preview, address: getWalletData(preview).address},
+      }),
+    },
+    metadata(index, wallets),
+  ];
+}
+
 function mount({items, keys = []}) {
   const storage = new WalletStorageService({async set() {}}, keys);
   const state = {
@@ -931,6 +946,204 @@ test('divergent derivations merge into the phone before offering the merged card
   assert.equal(state.item(INDEX).props.canWrite, false);
   assert.equal(state.visible('Update card'), false);
   assert.deepEqual(state.routes, []);
+});
+
+test('a sparse card preview uses the matching Safe default address without reading the card', () => {
+  const first = wallet(7);
+  const preferred = wallet(9, OTHER_PUBLIC_KEY);
+  const state = mount({
+    items: sparseCardItems(INDEX, [first, preferred]),
+    keys: [key(INDEX, [first, preferred], preferred)],
+  });
+
+  assert.equal(state.item(INDEX).props.empty, false);
+  assert.equal(state.item(INDEX).props.path, preferred.path);
+  assert.equal(
+    state.item(INDEX).props.address,
+    getWalletData(preferred).address,
+  );
+  assert.equal(state.visible('Derive'), false);
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.keyViews, []);
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), [first, preferred]);
+});
+
+test('switching networks prefers a Safe custom-path address over a cached preview and leaves missing networks un-derived', () => {
+  const evm = wallet(7);
+  const localSegwit = {
+    ...wallet(5, OTHER_PUBLIC_KEY),
+    addressType: 'bitcoin-segwit',
+    path: "m/84'/0'/3'/0/5",
+  };
+  const cachedSegwit = {
+    ...wallet(0),
+    addressType: 'bitcoin-segwit',
+    path: "m/84'/0'/0'/0/0",
+  };
+  const state = mount({
+    items: sparseCardItems(INDEX, [evm, localSegwit], [cachedSegwit], evm),
+    keys: [key(INDEX, [evm, localSegwit])],
+  });
+
+  state.changeAddressType(INDEX, 'bitcoin-segwit');
+  assert.equal(state.item(INDEX).props.path, localSegwit.path);
+  assert.equal(
+    state.item(INDEX).props.address,
+    getWalletData(localSegwit).address,
+  );
+  assert.equal(state.visible('Derive'), false);
+
+  state.changeAddressType(INDEX, 'solana');
+  assert.equal(state.item(INDEX).props.address, undefined);
+  assert.equal(state.visible('Derive'), true);
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.keyViews, []);
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), [evm, localSegwit]);
+});
+
+test('a sparse recorded list stays downloadable and reads only its missing address after explicit Update', async () => {
+  const common = wallet(0);
+  const cardOnly = wallet(7);
+  const state = mount({
+    items: sparseCardItems(INDEX, [common, cardOnly], [common], common),
+    keys: [key(INDEX, [common])],
+  });
+  const beforeRecord = toJS(state.card.items[1].derivationRecord);
+  state.select(INDEX);
+  assert.equal(state.item(INDEX).props.empty, false);
+  assert.equal(state.item(INDEX).props.state, 'outdated');
+  assert.equal(state.item(INDEX).props.syncDirection, 'download');
+  assert.equal(state.visible('Update'), true);
+  assert.deepEqual(state.scans, []);
+
+  state.click('Update');
+  assert.equal(state.scans.length, 1);
+  assert.equal(state.scans[0].label, 'Scan card to import');
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), [common]);
+  await state.tap();
+  await state.finish();
+
+  assert.deepEqual(state.keyViews, [
+    getAppletKey({type: 'seed', index: INDEX}, 'evm', cardOnly.path),
+  ]);
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), [common, cardOnly]);
+  assert.deepEqual(toJS(state.card.items[1].derivationRecord), beforeRecord);
+  assert.deepEqual(state.writes, []);
+  assert.deepEqual(state.aliasWrites, []);
+  assert.deepEqual(state.errors, []);
+});
+
+test('Import resolves the complete recorded list without silently importing its unrecorded default preview', async () => {
+  const first = wallet(7);
+  const second = wallet(9);
+  const preview = wallet(0);
+  const state = mount({
+    items: sparseCardItems(INDEX, [first, second], [], preview),
+  });
+  state.select(INDEX);
+  assert.equal(state.item(INDEX).props.empty, false);
+  assert.equal(state.visible('Import'), true);
+  state.click('Import');
+  await state.tap();
+  await state.finish();
+
+  assert.deepEqual(state.keyViews, [
+    getAppletKey({type: 'seed', index: INDEX}, 'evm', first.path),
+    getAppletKey({type: 'seed', index: INDEX}, 'evm', second.path),
+  ]);
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), [first, second]);
+  assert.equal(state.item(INDEX).props.path, preview.path);
+  assert.equal(
+    state.visible('Update'),
+    true,
+    'preview import remains a separate action',
+  );
+  assert.equal(state.visible('Back to Safe'), false);
+  assert.deepEqual(state.writes, []);
+  assert.deepEqual(state.errors, []);
+});
+
+test('a sparse card cache can download an alias using all recorded addresses already known in Safe without scanning', async () => {
+  const common = wallet(0);
+  const known = wallet(7);
+  const items = sparseCardItems(INDEX, [common, known], [common], common);
+  items[0].alias = 'Card alias';
+  const local = {...key(INDEX, [common, known]), alias: 'Phone alias'};
+  const state = mount({items, keys: [local]});
+  state.select(INDEX);
+
+  await state.click('Update');
+
+  assert.equal(state.storage.keys[0].alias, 'Card alias');
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), [common, known]);
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.keyViews, []);
+  assert.deepEqual(state.writes, []);
+  assert.deepEqual(state.errors, []);
+});
+
+test('a failed deferred address read does not import a partial recorded list or mutate its metadata', async () => {
+  const common = wallet(0);
+  const first = wallet(7);
+  const second = wallet(9);
+  const state = mount({
+    items: sparseCardItems(INDEX, [common, first, second], [common], common),
+    keys: [key(INDEX, [common])],
+  });
+  const beforeRecord = toJS(state.card.items[1].derivationRecord);
+  const viewKey = state.applet.viewKey;
+  state.applet.viewKey = async request => {
+    const result = await viewKey(request);
+    if (state.keyViews.length === 2) throw new Error('Address read failed');
+    return result;
+  };
+  state.select(INDEX);
+  state.click('Update');
+  await assert.rejects(state.tap(), /Address read failed/);
+  await state.dismiss();
+
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), [common]);
+  assert.deepEqual(toJS(state.card.items[1].derivationRecord), beforeRecord);
+  assert.deepEqual(state.writes, []);
+  assert.equal(state.item(INDEX).props.state, 'outdated');
+  assert.equal(state.visible('Update'), true);
+});
+
+test('a batch imports missing recorded addresses and persists another selected preview in one scan', async () => {
+  const common = wallet(0);
+  const cardOnly = wallet(7);
+  const preview = wallet(3);
+  const state = mount({
+    items: [
+      ...sparseCardItems(INDEX, [common, cardOnly], [common], common),
+      ...cardItems(SECOND_INDEX, [], preview),
+    ],
+    keys: [key(INDEX, [common])],
+  });
+  state.select(INDEX);
+  state.select(SECOND_INDEX);
+  state.click('Import');
+  assert.equal(state.scans.length, 1);
+  await state.tap();
+  await state.finish();
+
+  assert.equal(state.scans.length, 1);
+  assert.deepEqual(state.keyViews, [
+    getAppletKey({type: 'seed', index: INDEX}, 'evm', cardOnly.path),
+  ]);
+  assert.deepEqual(
+    state.writes.map(write => write.key.index),
+    [SECOND_INDEX],
+  );
+  assert.deepEqual(toJS(state.storage.indexToKeyMap.get(INDEX).wallets), [
+    common,
+    cardOnly,
+  ]);
+  assert.deepEqual(
+    toJS(state.storage.indexToKeyMap.get(SECOND_INDEX).wallets),
+    [preview],
+  );
+  assert.deepEqual(state.errors, []);
 });
 
 test('a pending download does not block an independent upload in the selected batch', async () => {

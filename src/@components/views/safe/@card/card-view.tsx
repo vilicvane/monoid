@@ -7,6 +7,7 @@ import {styled} from 'styled-components';
 
 import {type SafeIndexHex, SafeKnownType} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
+import type {MonoidApplet} from '../../../../@lib/monoid/index.js';
 import {
   ADDRESS_TYPES,
   type AddressChain,
@@ -57,6 +58,7 @@ import {
   getLocalCardKeyAddress,
   getLocalCardWalletDerivation,
   readCardKeyAddress,
+  readCardWalletDerivations,
 } from '../card-address.js';
 import {assertCardForUpdate, writeCardAliases} from '../card-alias-update.js';
 import {writeCardDerivations} from '../card-derivations.js';
@@ -267,23 +269,66 @@ const CardContent = observer(
 
     const {indexToKeyMap} = walletStorageService;
 
+    const getSafeAddress = (
+      key: CardKeySelection['key'],
+      addressType: AddressType,
+    ): ScannedCardKeyData['ref'] | undefined => {
+      const local = indexToKeyMap.get(key.index);
+      if (local?.type !== key.type) return;
+      const wallets = local.wallets.filter(
+        wallet => wallet.addressType === addressType,
+      );
+      const wallet =
+        wallets.find(
+          wallet =>
+            local.defaultWallet &&
+            matchesWalletReference(wallet, local.defaultWallet),
+        ) ?? wallets[0];
+      return wallet && {...wallet, address: getWalletData(wallet).address};
+    };
+
     const keyItems = items.map(item => {
-      const ref = item.refs[item.addressType];
+      const ref =
+        item.refs[item.addressType] ??
+        getSafeAddress(item.key, item.addressType);
       const existingKey = indexToKeyMap.get(item.key.index);
       const cardDerivations = card.items.find(
         resource => resource.derivationRecord?.index === item.key.index,
       )?.derivationRecord?.wallets;
       const recorded = cardDerivations !== undefined;
-      const recordedWallets = recorded ? item.derivations : [];
+      const knownWallets = [
+        ...item.derivations,
+        ...Object.values(item.refs).map(
+          ({addressType, seed, curve, path, publicKey}) => ({
+            addressType,
+            seed,
+            curve,
+            path,
+            publicKey,
+          }),
+        ),
+        ...(existingKey?.type === item.key.type ? existingKey.wallets : []),
+      ];
+      const recordedWallets = (cardDerivations ?? []).flatMap(parameters => {
+        const wallet = getLocalCardWalletDerivation(knownWallets, parameters);
+        return wallet ? [wallet] : [];
+      });
       const empty =
         recorded &&
-        !recordedWallets.length &&
+        !cardDerivations.length &&
         !previewIndexes.has(item.key.index);
       const source = {...item.key, alias: item.key.alias ?? ''};
       const recordData = getCardKeyData(source, recordedWallets);
       const needsRecordDownload =
         recorded &&
-        (!existingKey || !isWalletKeyUpToDate(recordData, existingKey));
+        (!existingKey ||
+          !isWalletKeyUpToDate(recordData, existingKey) ||
+          cardDerivations.some(
+            parameters =>
+              !existingKey.wallets.some(wallet =>
+                matchesWalletReference(wallet, parameters),
+              ),
+          ));
       // A row represents its recorded list first. Only a later, separate
       // import can add an unrecorded address currently being previewed.
       const previewData =
@@ -292,8 +337,9 @@ const CardContent = observer(
         ? recordData
         : (previewData ?? (recorded ? recordData : undefined));
       const canDownload =
-        !!incoming &&
-        (!existingKey || !isWalletKeyUpToDate(incoming, existingKey));
+        needsRecordDownload ||
+        (!!incoming &&
+          (!existingKey || !isWalletKeyUpToDate(incoming, existingKey)));
       const state: KeyItemState = !existingKey
         ? 'new'
         : canDownload
@@ -539,6 +585,11 @@ const CardContent = observer(
         wallets: WalletKeyPublicKeyData[],
       ) => void,
       prompt = 'Scan card to update',
+      beforeWriting?: (
+        applet: MonoidApplet,
+        setStateContent: (content: ReactNode) => void,
+        signal: AbortSignal,
+      ) => Promise<void>,
     ): Promise<void> => {
       const total = pending.size + pendingDerivations.size;
       const operation = new AbortController();
@@ -572,7 +623,14 @@ const CardContent = observer(
 
             try {
               writing = (async () => {
-                showProgress();
+                if (beforeWriting)
+                  await beforeWriting(
+                    applet,
+                    setStateContent,
+                    operation.signal,
+                  );
+                operation.signal.throwIfAborted();
+                if (total > 0) showProgress();
                 for (const [
                   index,
                   {key, wallets, options},
@@ -708,6 +766,18 @@ const CardContent = observer(
       const incoming = new Map(
         downloadableKeys.map(({item, incoming}) => [item.key.index, incoming!]),
       );
+      const unreadRecords = downloadableKeys.filter(
+        ({item, cardDerivations, needsRecordDownload}) =>
+          needsRecordDownload &&
+          cardDerivations!.some(
+            parameters =>
+              !incoming
+                .get(item.key.index)!
+                .wallets.some(wallet =>
+                  matchesWalletReference(wallet, parameters),
+                ),
+          ),
+      );
       const pendingDerivations = new Map(
         [...incoming].flatMap(([index, key]) => {
           const saved = card.items.find(
@@ -736,7 +806,7 @@ const CardContent = observer(
       setImporting(true);
 
       try {
-        if (pendingDerivations.size) {
+        if (pendingDerivations.size || unreadRecords.length) {
           await writeCardUpdates(
             new Map(),
             pendingDerivations,
@@ -758,6 +828,54 @@ const CardContent = observer(
               }
             },
             'Scan card to import',
+            unreadRecords.length
+              ? async (applet, setStateContent, signal) => {
+                  const total = unreadRecords.reduce(
+                    (count, entry) => count + entry.cardDerivations!.length,
+                    0,
+                  );
+                  let completed = 0;
+                  const showProgress = (current: number): void => {
+                    if (signal.aborted || !mounted.current || !isViewActive())
+                      return;
+                    setStateContent(
+                      <MonoidScanStatePromptProgress
+                        current={current}
+                        total={total}
+                      >
+                        Reading addresses
+                      </MonoidScanStatePromptProgress>,
+                    );
+                  };
+                  showProgress(0);
+                  for (const {item, cardDerivations} of unreadRecords) {
+                    signal.throwIfAborted();
+                    const selected = incoming.get(item.key.index)!;
+                    const wallets = await readCardWalletDerivations(
+                      applet,
+                      item.key,
+                      cardDerivations!,
+                      signal,
+                      current => showProgress(completed + current),
+                      selected.wallets,
+                    );
+                    signal.throwIfAborted();
+                    incoming.set(
+                      item.key.index,
+                      getCardKeyData(
+                        {...item.key, alias: item.key.alias ?? ''},
+                        wallets,
+                      ),
+                    );
+                    runInAction(() => {
+                      card.items.find(
+                        resource => resource.index === item.key.index,
+                      )!.derivations = wallets;
+                    });
+                    completed += cardDerivations!.length;
+                  }
+                }
+              : undefined,
           );
         }
 
@@ -1083,6 +1201,7 @@ const CardContent = observer(
                 const ordinaryRef =
                   item.refs.evm ?? item.refs['bitcoin-segwit'];
                 let localRef =
+                  getSafeAddress(editing.key, addressType) ??
                   item.refs[addressType] ??
                   (item.type === 'secp256k1' && ordinaryRef
                     ? getLocalCardKeyAddress(ordinaryRef, addressType)

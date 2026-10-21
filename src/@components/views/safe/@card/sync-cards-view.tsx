@@ -113,7 +113,13 @@ function progressContent(progress: CardSyncProgress): ReactNode {
 
 export const SyncCardsView = observer(
   ({view}: RouteComponentProps<Router['safe']['syncCards']>): ReactNode => {
-    const {router, cardStore, syncCardsStore, errorService} = useEntrances();
+    const {
+      router,
+      cardStore,
+      walletStorageService,
+      syncCardsStore,
+      errorService,
+    } = useEntrances();
     const isViewActive = useViewActive(view);
     const toast = useToast();
     const [flow] = useState(() =>
@@ -374,6 +380,7 @@ export const SyncCardsView = observer(
               },
               activeSignal,
               knownItems,
+              walletStorageService.keys,
             ).catch(error => {
               if (!activeSignal.aborted && mounted.current && isViewActive()) {
                 toast({

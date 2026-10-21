@@ -40,6 +40,7 @@ export type ScannedCardItemData = {
   secret: boolean;
   publicKey?: PublicKeyHex;
   ref?: ScannedCardKeyData['ref'];
+  /** Cached public keys only; the companion derivationRecord holds the full saved list. */
   derivations?: WalletKeyPublicKeyData[];
   derivationRecord?: CardDerivationRecord;
 };

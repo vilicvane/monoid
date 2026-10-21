@@ -638,7 +638,7 @@ test('importing after an empty card record refreshes the card address preview', 
   );
 });
 
-test('card-only paths with unknown previews invalidate the cache without deriving or importing them', async () => {
+test('card-only paths remain in the complete record while unknown previews stay lazy after import', async () => {
   const state = mount();
   const previous = toJS(state.storage.keys[0].wallets[0]);
   const cached = state.cardStore.set({
@@ -667,7 +667,18 @@ test('card-only paths with unknown previews invalidate the cache without derivin
   await state.finish();
 
   assert.equal(state.keyReads, 1);
-  assert.equal(state.cardStore.get(cached), undefined);
+  assert.equal(state.cardStore.get(cached), cached);
+  assert.deepEqual(
+    cached.items[0].derivations.map(wallet => wallet.path),
+    [PATH],
+  );
+  assert.deepEqual(
+    toJS(cached.items.find(item => item.derivationRecord)?.derivationRecord),
+    {
+      index: INDEX,
+      wallets: [cardOnly, getWalletReference({...previous, path: PATH})],
+    },
+  );
   assert.deepEqual(
     state.storage.keys[0].wallets.map(wallet => wallet.path),
     [previous.path, PATH],

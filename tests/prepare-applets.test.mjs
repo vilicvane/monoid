@@ -6,18 +6,45 @@ import {beforeEach, mock, test} from 'node:test';
 import {zipSync} from 'fflate';
 
 const sourceFiles = new Map();
+const bundledFiles = new Map();
+const sourceTimes = new Map();
 const writtenFiles = new Map();
+const savedTime = '2026-10-20T12:00:00.000Z';
+const newerTime = '2026-10-21T12:00:00.000Z';
+const olderTime = '2026-10-19T12:00:00.000Z';
+
+function isSource(file) {
+  return path.dirname(file) === 'approved-caps';
+}
+
+function missing(file) {
+  return Object.assign(new Error(`Missing ${path.basename(file)}`), {
+    code: 'ENOENT',
+  });
+}
 
 mock.module('node:fs/promises', {
   namedExports: {
     mkdir: async () => {},
     readFile: async file => {
-      const data = sourceFiles.get(path.basename(file));
-      assert(data, `Missing ${path.basename(file)}`);
-      return data;
+      const files = isSource(file) ? sourceFiles : bundledFiles;
+      const data = files.get(path.basename(file));
+      if (!data) throw missing(file);
+      return Buffer.from(data);
+    },
+    stat: async file => {
+      if (isSource(file)) {
+        if (!sourceFiles.has(path.basename(file))) throw missing(file);
+        return {
+          mtime: new Date(sourceTimes.get(path.basename(file)) ?? savedTime),
+        };
+      }
+      // Simulate a later checkout without changing the recorded source time.
+      return {mtime: new Date('2026-10-22T12:00:00.000Z')};
     },
     writeFile: async (file, data) => {
       writtenFiles.set(path.basename(file), data);
+      bundledFiles.set(path.basename(file), Buffer.from(data));
     },
   },
 });
@@ -26,15 +53,23 @@ const {prepareApplets, readAppletPackage} = await import(
   '../scripts/prepare-applets.mjs'
 );
 
-beforeEach(() => {
+beforeEach(t => {
   sourceFiles.clear();
+  bundledFiles.clear();
+  sourceTimes.clear();
   writtenFiles.clear();
+  t.mock.method(process.stdout, 'write', () => true);
 });
 
 const target = {
   packageAid: 'f06d6f6e6f696400',
   appletAid: 'f06d6f6e6f69640001',
 };
+const applets = ['monoididentity', 'monoid'].map((name, index) => ({
+  name,
+  packageAid: `f06d6f6e6f69640${index * 2}`,
+  appletAid: `f06d6f6e6f69640${index * 2}01`,
+}));
 const component = (tag, body) =>
   Buffer.from([tag, body.length >> 8, body.length & 255, ...body]);
 
@@ -77,6 +112,19 @@ function capFixture({packageAid: packageHex, appletAid: appletHex} = target) {
       ),
     );
   return {data, zip};
+}
+
+function setSource(applet, value = 1, modifiedAt = savedTime) {
+  const {data, zip} = capFixture(applet);
+  data.Method = component(7, [value]);
+  sourceFiles.set(`${applet.name}.cap`, Buffer.from(zip()));
+  sourceTimes.set(`${applet.name}.cap`, modifiedAt);
+}
+
+async function prepareSavedBundle() {
+  applets.forEach(applet => setSource(applet));
+  await prepareApplets('approved-caps');
+  writtenFiles.clear();
 }
 
 test('CAP components use VM load order and exclude debug metadata regardless of ZIP order', () => {
@@ -125,17 +173,11 @@ test('CAP without optional Export remains loadable', () => {
   assert(readAppletPackage(zip(), target).code.length > 0);
 });
 
-test('preparation bundles Identity and merged Monoid with their current AIDs in dependency order', async t => {
-  t.mock.method(process.stdout, 'write', () => true);
+test('preparation bundles Identity and merged Monoid with their current AIDs in dependency order', async () => {
   const names = ['monoididentity', 'monoid'];
-  const applets = names.map((name, index) => ({
-    name,
-    packageAid: `f06d6f6e6f69640${index * 2}`,
-    appletAid: `f06d6f6e6f69640${index * 2}01`,
-  }));
 
   for (const applet of applets) {
-    sourceFiles.set(`${applet.name}.cap`, capFixture(applet).zip());
+    setSource(applet);
   }
 
   await prepareApplets('approved-caps');
@@ -170,15 +212,126 @@ test('preparation bundles Identity and merged Monoid with their current AIDs in 
       createHash('sha256').update(code).digest('hex'),
     );
     assert.equal(entry.loadBytes, code.length);
+    assert.equal(entry.sourceModifiedAt, savedTime);
     assert(writtenFiles.get('@applet-bundle.ts').includes(entry.loadSha256));
     assert(writtenFiles.get('@applet-bundle.ts').includes(entry.appletAid));
   }
   assert(!writtenFiles.has('monoidsafe.cap'));
   assert(!writtenFiles.has('monoidsafe.bin'));
+});
 
-  writtenFiles.clear();
+test('missing source bundle preserves the checked-in bundle', async () => {
+  await prepareSavedBundle();
+  sourceFiles.clear();
+
+  await prepareApplets('approved-caps');
+
+  assert.equal(writtenFiles.size, 0);
+});
+
+test('one missing source preserves both checked-in CAPs instead of mixing versions', async () => {
+  await prepareSavedBundle();
+  setSource(applets[0], 2, newerTime);
   sourceFiles.delete('monoid.cap');
+
+  await prepareApplets('approved-caps');
+
+  assert.equal(writtenFiles.size, 0);
+});
+
+for (const modifiedAt of [olderTime, savedTime]) {
+  test(`different source content dated ${modifiedAt} cannot replace the bundle`, async () => {
+    await prepareSavedBundle();
+    setSource(applets[1], 2, modifiedAt);
+
+    await prepareApplets('approved-caps');
+
+    assert.equal(writtenFiles.size, 0);
+  });
+}
+
+test('one newer and one older changed source preserve the complete checked-in bundle', async () => {
+  await prepareSavedBundle();
+  setSource(applets[0], 2, newerTime);
+  setSource(applets[1], 2, olderTime);
+
+  await prepareApplets('approved-caps');
+
+  assert.equal(writtenFiles.size, 0);
+});
+
+test('unchanged content does not rewrite files or source timestamps', async () => {
+  await prepareSavedBundle();
+  sourceTimes.set('monoididentity.cap', olderTime);
+  sourceTimes.set('monoid.cap', newerTime);
+
+  await prepareApplets('approved-caps');
+
+  assert.equal(writtenFiles.size, 0);
+});
+
+test('newer sources use manifest timestamps even after a later Git checkout', async () => {
+  await prepareSavedBundle();
+  // An unchanged older dependency is compatible with a newer Monoid build.
+  sourceTimes.set('monoididentity.cap', olderTime);
+  setSource(applets[1], 2, newerTime);
+
+  await prepareApplets('approved-caps');
+
+  assert(!writtenFiles.has('monoididentity.cap'));
+  assert(!writtenFiles.has('monoididentity.bin'));
+  assert.deepEqual(
+    writtenFiles.get('monoid.cap'),
+    sourceFiles.get('monoid.cap'),
+  );
+  assert(writtenFiles.has('monoid.bin'));
+  assert(writtenFiles.has('@applet-bundle.ts'));
+  const manifest = JSON.parse(writtenFiles.get('manifest.json'));
+  assert.equal(manifest[0].sourceModifiedAt, savedTime);
+  assert.equal(manifest[1].sourceModifiedAt, newerTime);
+});
+
+test('invalid newer source fails without replacing any bundled artifacts', async () => {
+  await prepareSavedBundle();
+  setSource(applets[0], 2, newerTime);
+  sourceFiles.set('monoid.cap', Buffer.from('invalid cap'));
+  sourceTimes.set('monoid.cap', newerTime);
+
+  await assert.rejects(prepareApplets('approved-caps'));
+
+  assert.equal(writtenFiles.size, 0);
+});
+
+test('fallback rejects a tampered checked-in CAP before writing any artifacts', async () => {
+  await prepareSavedBundle();
+  sourceFiles.clear();
+  bundledFiles.set('monoid.cap', Buffer.from('tampered cap'));
+
+  await assert.rejects(
+    prepareApplets('approved-caps'),
+    /Bundled CAP hash mismatch/,
+  );
+
+  assert.equal(writtenFiles.size, 0);
+});
+
+test('checked-in CAPs regenerate a missing load image without source files', async () => {
+  await prepareSavedBundle();
+  const expected = bundledFiles.get('monoid.bin');
+  sourceFiles.clear();
+  bundledFiles.delete('monoid.bin');
+
+  await prepareApplets('approved-caps');
+
+  assert.deepEqual([...writtenFiles.keys()], ['monoid.bin']);
+  assert.deepEqual(writtenFiles.get('monoid.bin'), expected);
+});
+
+test('missing sources and missing checked-in CAPs fail without a partial bundle', async () => {
+  setSource(applets[0], 2, newerTime);
+
   await assert.rejects(prepareApplets('approved-caps'), /Missing/);
+
   assert.equal(writtenFiles.size, 0);
 });
 

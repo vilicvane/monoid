@@ -56,8 +56,15 @@ mock.module('../.bld/app/@lib/global-platform/install.js', {
       },
       open: async () => {
         fixture.events.push('open GP');
+        if (fixture.channelError) throw fixture.channelError;
+        fixture.onGPOpen?.();
         return {
-          getEntry,
+          getEntry: async (scope, aid) => {
+            fixture.gpQueries.push({scope, aid: hex(aid)});
+            if (fixture.authenticatedRegistryError)
+              throw fixture.authenticatedRegistryError;
+            return getEntry(scope, aid);
+          },
           async removeInstance(aid) {
             fixture.events.push(`delete instance ${hex(aid)}`);
             if (fixture.failDelete) throw fixture.failDelete;
@@ -97,15 +104,18 @@ mock.module('capacitor-isodep-nfc', {
   },
 });
 
+const {AppletISOError} = await import('../.bld/app/@lib/applet.js');
 const {
   getCardMaintenanceFingerprint,
   readMonoidAppletInstallation,
   replaceMonoidApplets,
+  resolveMonoidAppletMaintenanceAid,
 } = await import('../.bld/app/@lib/monoid/install.js');
 
 beforeEach(() => {
   fixture = {
     events: [],
+    gpQueries: [],
     instances: new Set([identityAid, monoidAid]),
     packages: new Set([identityPackage, monoidPackage]),
     information,
@@ -299,6 +309,109 @@ test('registry failure preserves successful SELECT and Hello instead of claiming
   assert.equal(result.monoid.installed, true);
   assert.equal(result.monoid.aid, undefined);
   assert.deepEqual(result.hello, fixture.hello);
+});
+
+test('maintenance resolves an exact AID through GP authentication after public registry access is denied', async () => {
+  fixture.registryError = new AppletISOError(
+    'Reading the card registry',
+    0x6982,
+  );
+  const installation = await readMonoidAppletInstallation('session');
+  assert.deepEqual(installation.hello, fixture.hello);
+  assert.equal(installation.monoid.aid, undefined);
+  assert.ok(!fixture.events.includes('open GP'), 'inspection stays public');
+
+  assert.equal(
+    await resolveMonoidAppletMaintenanceAid('session', installation),
+    monoidAid,
+  );
+  assert.deepEqual(fixture.gpQueries, [{scope: 0x40, aid: monoidAid}]);
+  assert.ok(fixture.events.every(value => !/delete|install /.test(value)));
+});
+
+test('maintenance reuses an observed exact AID without another GP authentication', async () => {
+  const installation = await readMonoidAppletInstallation('session');
+  assert.equal(
+    await resolveMonoidAppletMaintenanceAid('session', installation),
+    monoidAid,
+  );
+  assert.ok(!fixture.events.includes('open GP'));
+  assert.deepEqual(fixture.gpQueries, []);
+});
+
+test('maintenance does not turn other registry failures into authentication retries', async () => {
+  for (const error of [
+    new AppletISOError('Reading the card registry', 0x6a80),
+    new Error('Missing or invalid card registry fields.'),
+  ]) {
+    fixture.registryError = error;
+    const installation = await readMonoidAppletInstallation('session');
+    await assert.rejects(
+      resolveMonoidAppletMaintenanceAid('session', installation),
+      value => value === error,
+    );
+  }
+  assert.ok(!fixture.events.includes('open GP'));
+});
+
+test('maintenance refuses to infer an exact AID when the authenticated registry has no matching instance', async () => {
+  fixture.registryError = new AppletISOError(
+    'Reading the card registry',
+    0x6982,
+  );
+  const installation = await readMonoidAppletInstallation('session');
+  fixture.instances.delete(monoidAid);
+  fixture.instances.add(`${monoidAid}00`);
+  await assert.rejects(
+    resolveMonoidAppletMaintenanceAid('session', installation),
+    /Could not identify Monoid Applet/,
+  );
+  assert.deepEqual(fixture.gpQueries, [{scope: 0x40, aid: monoidAid}]);
+  assert.ok(fixture.events.every(value => !/delete|install /.test(value)));
+});
+
+test('maintenance preserves authentication and authenticated registry errors without retrying', async () => {
+  for (const failure of ['channelError', 'authenticatedRegistryError']) {
+    fixture.registryError = new AppletISOError(
+      'Reading the card registry',
+      0x6982,
+    );
+    const installation = await readMonoidAppletInstallation('session');
+    const error = Object.assign(new Error('Session closed'), {
+      code: 'SESSION_CLOSED',
+    });
+    fixture[failure] = error;
+    const before = fixture.events.filter(value => value === 'open GP').length;
+    await assert.rejects(
+      resolveMonoidAppletMaintenanceAid('session', installation),
+      value => value === error,
+    );
+    assert.equal(
+      fixture.events.filter(value => value === 'open GP').length,
+      before + 1,
+    );
+    delete fixture[failure];
+  }
+  assert.ok(fixture.events.every(value => !/delete|install /.test(value)));
+});
+
+test('cancellation after GP authentication stops maintenance identification before further card commands', async () => {
+  fixture.registryError = new AppletISOError(
+    'Reading the card registry',
+    0x6982,
+  );
+  const installation = await readMonoidAppletInstallation('session');
+  const controller = new AbortController();
+  fixture.onGPOpen = () => controller.abort();
+  await assert.rejects(
+    resolveMonoidAppletMaintenanceAid(
+      'session',
+      installation,
+      controller.signal,
+    ),
+    error => error.name === 'AbortError',
+  );
+  assert.deepEqual(fixture.gpQueries, []);
 });
 
 test('disconnection during registry inspection stops before fallback reads', async () => {

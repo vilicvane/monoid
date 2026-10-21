@@ -39,6 +39,10 @@ function resource(index, type) {
   return {index: bytes(index), type, secret: true};
 }
 
+function localKey(index, wallets, defaultWallet) {
+  return {index, type: 'seed', alias: undefined, wallets, defaultWallet};
+}
+
 function metadata(index, wallets) {
   return {
     item: {
@@ -82,7 +86,7 @@ function createApplet(resources, records = []) {
   return {applet, calls};
 }
 
-test('scan restores multiple paths of one address type without adding a default wallet', async () => {
+test('scan keeps recorded paths as metadata and reads only the default preview for a key absent from Safe', async () => {
   const wallets = [
     wallet('evm', "m/44'/60'/0'/0/7"),
     wallet('evm', "m/44'/60'/0'/0/9"),
@@ -100,28 +104,21 @@ test('scan restores multiple paths of one address type without adding a default 
   assert.equal(calls.get.length, 1);
   assert.deepEqual(
     calls.viewKey.map(request => hex(request.derivation.path)),
-    wallets.map(source => hex(parseDerivationPath(source.path))),
+    [hex(parseDerivationPath(ADDRESS_TYPES.evm.path(0)))],
   );
-  assert.deepEqual(
-    root.derivations,
-    wallets.map(source => ({
-      ...source,
-      publicKey: PUBLIC_KEY,
-    })),
-  );
-  assert.equal(root.ref.path, wallets[0].path);
+  assert.deepEqual(root.derivations, []);
+  assert.equal(root.ref.path, ADDRESS_TYPES.evm.path(0));
   assert.equal(root.ref.address, '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf');
   assert.deepEqual(items[1].derivationRecord, {index: ROOT, wallets});
   assert.deepEqual(progress, [
     [0, 1, 'records'],
     [1, 1, 'records'],
-    [0, 2, 'keys'],
-    [1, 2, 'keys'],
-    [2, 2, 'keys'],
+    [0, 1, 'keys'],
+    [1, 1, 'keys'],
   ]);
 });
 
-test('scan requests the Taproot output key for a stored Taproot wallet', async () => {
+test('a stored Taproot address does not change the default display derivation', async () => {
   const record = metadata(ROOT, [wallet('bitcoin-taproot', "m/86'/0'/0'/0/4")]);
   const {applet, calls} = createApplet(
     [record.item, resource(ROOT, 'seed')],
@@ -131,10 +128,9 @@ test('scan requests the Taproot output key for a stored Taproot wallet', async (
   const items = await scanCardItems(applet, () => {});
 
   assert.equal(calls.viewKey.length, 1);
-  assert.equal(calls.viewKey[0].taproot, true);
-  assert.equal(items[1].derivations[0].publicKey, TAPROOT_KEY);
-  assert.equal(items[1].ref.addressType, 'bitcoin-taproot');
-  assert.match(items[1].ref.address, /^bc1p/);
+  assert.equal(calls.viewKey[0].taproot, undefined);
+  assert.deepEqual(items[1].derivations, []);
+  assert.equal(items[1].ref.addressType, 'evm');
 });
 
 test('scan associates records by the full source index, including the type prefix', async () => {
@@ -152,15 +148,104 @@ test('scan associates records by the full source index, including the type prefi
     [seedRecord, secondRecord],
   );
 
-  const items = await scanCardItems(applet, () => {});
+  const items = await scanCardItems(applet, () => {}, undefined, [
+    localKey(ROOT, [
+      {...wallet('evm', "m/44'/60'/0'/0/2"), publicKey: PUBLIC_KEY},
+    ]),
+    localKey(OTHER_SEED, [
+      {...wallet('solana', "m/44'/501'/3'/0'"), publicKey: SOLANA_KEY},
+    ]),
+  ]);
 
   assert.equal(items[0].derivations[0].addressType, 'evm');
   assert.equal(items[1].derivations[0].addressType, 'solana');
   assert.equal(items[1].derivations[0].seed, 'ed25519 seed');
-  assert.equal(calls.viewKey[1].type, 'seed');
-  assert.equal(calls.viewKey[1].derivation.type, 'slip10');
-  assert.equal(calls.viewKey[1].derivation.curve, 'ed25519');
-  assert.equal(hex(calls.viewKey[1].index), OTHER_SEED);
+  assert.deepEqual(calls.viewKey, []);
+});
+
+test('Safe supplies its selected address at a custom path without reading card public keys', async () => {
+  const first = {...wallet('evm', "m/44'/60'/0'/0/7"), publicKey: PUBLIC_KEY};
+  const selected = {
+    ...wallet('solana', "m/44'/501'/5'/0'"),
+    publicKey: SOLANA_KEY,
+  };
+  const recorded = [
+    wallet('evm', "m/44'/60'/0'/0/1"),
+    wallet('evm', "m/44'/60'/0'/0/2"),
+  ];
+  const record = metadata(ROOT, recorded);
+  const {applet, calls} = createApplet(
+    [resource(ROOT, 'seed'), record.item],
+    [record],
+  );
+  const keys = [localKey(ROOT, [first, selected], selected)];
+  const before = structuredClone(keys);
+  const progress = [];
+
+  const items = await scanCardItems(
+    applet,
+    (...value) => progress.push(value),
+    undefined,
+    keys,
+  );
+
+  assert.deepEqual(calls.viewKey, []);
+  assert.equal(items[0].ref.addressType, 'solana');
+  assert.equal(items[0].ref.path, selected.path);
+  assert.equal(items[0].ref.publicKey, selected.publicKey);
+  assert.deepEqual(items[0].derivations, []);
+  assert.deepEqual(items[1].derivationRecord.wallets, recorded);
+  assert.deepEqual(
+    keys,
+    before,
+    'Scanning must not import or edit Safe addresses',
+  );
+  assert.deepEqual(progress, [
+    [0, 1, 'records'],
+    [1, 1, 'records'],
+  ]);
+});
+
+test('an invalid local default falls back to the first existing Safe address', async () => {
+  const first = {...wallet('evm', "m/44'/60'/0'/0/7"), publicKey: PUBLIC_KEY};
+  const {applet, calls} = createApplet([resource(ROOT, 'seed')]);
+  const items = await scanCardItems(applet, () => {}, undefined, [
+    localKey(ROOT, [first], wallet('evm', "m/44'/60'/0'/0/8")),
+  ]);
+
+  assert.deepEqual(calls.viewKey, []);
+  assert.equal(items[0].ref.path, first.path);
+});
+
+test('a Safe key without addresses still receives only the ordinary default preview', async () => {
+  const record = metadata(ROOT, [wallet('evm', "m/44'/60'/0'/0/7")]);
+  const {applet, calls} = createApplet(
+    [resource(ROOT, 'seed'), record.item],
+    [record],
+  );
+  const items = await scanCardItems(applet, () => {}, undefined, [
+    localKey(ROOT, []),
+  ]);
+
+  assert.equal(calls.viewKey.length, 1);
+  assert.equal(items[0].ref.path, ADDRESS_TYPES.evm.path(0));
+  assert.deepEqual(items[0].derivations, []);
+});
+
+test('Safe address reuse requires both the source index and key type to match', async () => {
+  const {applet, calls} = createApplet([resource(ROOT, 'seed')]);
+  const items = await scanCardItems(applet, () => {}, undefined, [
+    {
+      ...localKey(ROOT, [{addressType: 'evm', publicKey: PUBLIC_KEY}]),
+      type: 'secp256k1',
+    },
+    localKey(OTHER_SEED, [
+      {...wallet('solana', "m/44'/501'/5'/0'"), publicKey: SOLANA_KEY},
+    ]),
+  ]);
+
+  assert.equal(calls.viewKey.length, 1);
+  assert.equal(items[0].ref.path, ADDRESS_TYPES.evm.path(0));
 });
 
 test('scan preserves orphan metadata and unrelated resources without applying orphan paths', async () => {
@@ -239,8 +324,9 @@ test('invalid recognized metadata fails the scan before deriving keys', async ()
   assert.equal(calls.viewKey.length, 0);
 });
 
-test('a stored derivation unsupported by this card fails instead of silently dropping it', async () => {
-  const record = metadata(ROOT, [wallet('evm', "m/44'/60'/0'/0/2")]);
+test('an unavailable default preview keeps the recorded addresses intact for later import', async () => {
+  const wallets = [wallet('evm', "m/44'/60'/0'/0/2")];
+  const record = metadata(ROOT, wallets);
   const {applet} = createApplet(
     [resource(ROOT, 'seed'), record.item],
     [record],
@@ -250,10 +336,10 @@ test('a stored derivation unsupported by this card fails instead of silently dro
     throw unsupported;
   };
 
-  await assert.rejects(
-    scanCardItems(applet, () => {}),
-    error => error === unsupported,
-  );
+  const items = await scanCardItems(applet, () => {});
+  assert.equal(items[0].ref, undefined);
+  assert.deepEqual(items[0].derivations, []);
+  assert.deepEqual(items[1].derivationRecord, {index: ROOT, wallets});
 });
 
 test('an unsupported default display derivation still leaves the key available', async () => {
@@ -270,7 +356,7 @@ test('an unsupported default display derivation still leaves the key available',
   assert.deepEqual(items[0].derivations, []);
 });
 
-test('scan progress uses stable stages and counts every saved address, including reused public keys', async () => {
+test('scan progress counts display reads rather than every recorded address', async () => {
   const path = "m/44'/60'/0'/0/7";
   const record = metadata(ROOT, [
     wallet('evm', path),
@@ -303,20 +389,17 @@ test('scan progress uses stable stages and counts every saved address, including
     [0, 2, 'records'],
     [1, 2, 'records'],
     [2, 2, 'records'],
-    [0, 5, 'keys'],
-    [1, 5, 'keys'],
-    [2, 5, 'keys'],
-    [3, 5, 'keys'],
-    [4, 5, 'keys'],
-    [5, 5, 'keys'],
+    [0, 3, 'keys'],
+    [1, 3, 'keys'],
+    [2, 3, 'keys'],
+    [3, 3, 'keys'],
   ]);
   assert.deepEqual(beforeReads, [
-    [0, 5, 'keys'],
-    [1, 5, 'keys'],
-    [3, 5, 'keys'],
-    [4, 5, 'keys'],
+    [0, 3, 'keys'],
+    [1, 3, 'keys'],
+    [2, 3, 'keys'],
   ]);
-  assert.equal(calls.viewKey.length, 4);
+  assert.equal(calls.viewKey.length, 3);
 });
 
 for (const stage of ['list', 'records', 'saved-key', 'preview', 'p256']) {
@@ -393,7 +476,120 @@ function confirmedItems(index, wallets) {
   ];
 }
 
-test('confirmed-record hydration reads only missing previews, scoped to each source key', async () => {
+test('equivalent cached derivations cannot cross source keys during display hydration', async () => {
+  const defaultWallet = wallet('evm', ADDRESS_TYPES.evm.path(0));
+  const items = [
+    ...confirmedItems(ROOT, [defaultWallet]),
+    ...confirmedItems(OTHER_SEED, [defaultWallet]),
+  ];
+  const {applet, calls} = createApplet([]);
+  const rootKey = `03${PUBLIC_KEY.slice(2)}`;
+  const hydrated = await readCardAddressPreviews(
+    applet,
+    items,
+    () => {},
+    undefined,
+    [{...items[0], derivations: [{...defaultWallet, publicKey: rootKey}]}],
+  );
+
+  assert.deepEqual(
+    calls.viewKey.map(request => hex(request.index)),
+    [OTHER_SEED],
+  );
+  assert.equal(hydrated[0].ref.publicKey, rootKey);
+  assert.equal(hydrated[0].derivations[0].publicKey, rootKey);
+  assert.equal(hydrated[2].ref.publicKey, PUBLIC_KEY);
+  assert.equal(hydrated[2].derivations[0].publicKey, PUBLIC_KEY);
+});
+
+test('sparse hydration reuses equivalent public keys but never adds records absent from the card', async () => {
+  const known = wallet('evm', "m/44'/60'/0'/0/7");
+  const equivalent = {...known, addressType: 'bitcoin-segwit'};
+  const missing = wallet('evm', "m/44'/60'/0'/0/8");
+  const extra = wallet('evm', "m/44'/60'/0'/0/9");
+  const items = confirmedItems(ROOT, [known, equivalent, missing]);
+  const before = structuredClone(items);
+  const local = [
+    localKey(
+      ROOT,
+      [known, extra].map(value => ({...value, publicKey: PUBLIC_KEY})),
+      extra,
+    ),
+  ];
+  const {applet, calls} = createApplet([]);
+  const hydrated = await readCardAddressPreviews(
+    applet,
+    items,
+    () => {},
+    undefined,
+    [],
+    local,
+  );
+
+  assert.deepEqual(calls.viewKey, []);
+  assert.equal(hydrated[0].ref.path, extra.path);
+  assert.deepEqual(
+    hydrated[0].derivations,
+    [known, equivalent].map(value => ({...value, publicKey: PUBLIC_KEY})),
+  );
+  assert.deepEqual(hydrated[1].derivationRecord.wallets, [
+    known,
+    equivalent,
+    missing,
+  ]);
+  assert.deepEqual(items, before);
+});
+
+test('an explicit empty card record stays empty while Safe can supply a display reference', async () => {
+  const selected = {
+    ...wallet('evm', "m/44'/60'/0'/0/7"),
+    publicKey: PUBLIC_KEY,
+  };
+  const {applet, calls} = createApplet([]);
+  const hydrated = await readCardAddressPreviews(
+    applet,
+    confirmedItems(ROOT, []),
+    () => assert.fail('No card address needs to be read'),
+    undefined,
+    [],
+    [localKey(ROOT, [selected])],
+  );
+
+  assert.deepEqual(calls.viewKey, []);
+  assert.deepEqual(hydrated[0].derivations, []);
+  assert.equal(hydrated[0].ref.path, selected.path);
+  assert.deepEqual(hydrated[1].derivationRecord.wallets, []);
+});
+
+test('hydration requires parsed address metadata before starting any default reads', async () => {
+  const items = confirmedItems(ROOT, []);
+  delete items[1].derivationRecord;
+  const {applet, calls} = createApplet([]);
+  await assert.rejects(
+    readCardAddressPreviews(applet, items, () => {}),
+    /Address records were not read/,
+  );
+  assert.deepEqual(calls.viewKey, []);
+});
+
+test('local native previews keep optional derivation fields omitted', async () => {
+  const index = '03010000000000000001';
+  const {applet, calls} = createApplet([resource(index, 'secp256k1')]);
+  const items = await scanCardItems(applet, () => {}, undefined, [
+    {
+      ...localKey(index, [{addressType: 'evm', publicKey: PUBLIC_KEY}]),
+      type: 'secp256k1',
+    },
+  ]);
+  assert.deepEqual(calls.viewKey, []);
+  assert.deepEqual(items[0].ref, {
+    addressType: 'evm',
+    publicKey: PUBLIC_KEY,
+    address: '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf',
+  });
+});
+
+test('confirmed-record hydration preserves sparse known previews without reading every missing address', async () => {
   const known = wallet('evm', "m/44'/60'/0'/0/7");
   const added = wallet('evm', "m/44'/60'/0'/0/8");
   const extra = wallet('evm', "m/44'/60'/0'/0/9");
@@ -431,16 +627,16 @@ test('confirmed-record hydration reads only missing previews, scoped to each sou
       hex(request.derivation.path),
     ]),
     [
-      [ROOT, hex(parseDerivationPath(added.path))],
-      [OTHER_SEED, hex(parseDerivationPath(known.path))],
+      [ROOT, hex(parseDerivationPath(ADDRESS_TYPES.evm.path(0)))],
+      [OTHER_SEED, hex(parseDerivationPath(ADDRESS_TYPES.evm.path(0)))],
     ],
   );
   assert.deepEqual(
     hydrated[0].derivations.map(({publicKey: _publicKey, ...wallet}) => wallet),
-    [known, added],
+    [known],
     'Known previews must not add an address absent from the confirmed record',
   );
-  assert.equal(hydrated[2].derivations.length, 1);
+  assert.deepEqual(hydrated[2].derivations, []);
   assert.deepEqual(calls.get, []);
 });
 
@@ -519,9 +715,6 @@ test('interrupted hydration does not publish partially resolved previews into th
   );
 
   assert.deepEqual(items, before);
-  assert.deepEqual(progress, [
-    [0, 2],
-    [1, 2],
-  ]);
+  assert.deepEqual(progress, [[0, 1]]);
   assert.equal(calls.viewKey.length, 1);
 });
