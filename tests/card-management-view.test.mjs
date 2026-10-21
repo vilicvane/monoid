@@ -85,6 +85,7 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
     hasAppletBundle: true,
     readMonoidAppletInstallation: async () => {
       fixture.installationReads = (fixture.installationReads ?? 0) + 1;
+      if (fixture.installationReadError) throw fixture.installationReadError;
       return fixture.installation;
     },
     resolveMonoidAppletMaintenanceAid: async (
@@ -432,9 +433,15 @@ test('installation asks for Secret PIN before scanning, completes PIN setup, the
     0,
     'wait for NFC sheet cleanup before adding target',
   );
-  assert.equal(state.node('OperationComplete'), undefined);
+  assert.ok(state.node('OperationComplete'));
   assert.equal(state.node('CardAppletsContent'), undefined);
-  assert.ok(state.node('CardInformationContent'));
+  assert.equal(state.node('CardInformationContent'), undefined);
+  assert.equal(state.node('Button').props.disabled, true);
+  assert.equal(
+    state.events.some(event => event.type === 'save-access'),
+    false,
+    'completion feedback must not save credentials before NFC cleanup',
+  );
   state.scans[0].finished.resolve();
   await state.flush();
   assert.deepEqual(state.targets, [state.initialized]);
@@ -452,7 +459,7 @@ test('installation asks for Secret PIN before scanning, completes PIN setup, the
   assert.deepEqual(state.backs, ['copy']);
 });
 
-test('installation keeps the current page during deferred PIN saving and Copy handoff, then shows Complete directly', async () => {
+test('installation shows Complete while PIN saving and Copy handoff finish, keeping the return action disabled', async () => {
   const state = mount({returnTo: 'copy'});
   const savePIN = deferred();
   const handoff = deferred();
@@ -468,19 +475,22 @@ test('installation keeps the current page during deferred PIN saving and Copy ha
   state.click('Install applets');
   await state.answer();
   await state.tap();
-  assert.ok(state.node('CardInformationContent'));
+  assert.equal(state.node('CardInformationContent'), undefined);
   assert.equal(state.node('CardAppletsContent'), undefined);
-  assert.equal(state.node('OperationComplete'), undefined);
+  assert.ok(state.node('OperationComplete'));
+  assert.equal(state.node('Button').props.disabled, true);
+  assert.deepEqual(state.targets, []);
   savePIN.resolve();
   await state.flush();
-  assert.ok(state.node('CardInformationContent'));
+  assert.equal(state.node('CardInformationContent'), undefined);
   assert.equal(state.node('CardAppletsContent'), undefined);
-  assert.equal(state.node('OperationComplete'), undefined);
+  assert.ok(state.node('OperationComplete'));
   assert.ok(state.node('Button').props.disabled);
   handoff.resolve();
   await state.flush();
   assert.ok(state.node('OperationComplete'));
   assert.equal(state.node('CardAppletsContent'), undefined);
+  assert.equal(state.node('Button').props.disabled, false);
   assert.deepEqual(state.targets, [state.initialized]);
 });
 
@@ -496,6 +506,45 @@ test('the refreshed applet list is shown only after leaving Complete', async () 
   assert.ok(content);
   assert.equal(content.props.id, '01020304');
   assert.ok(content.props.applets.every(applet => applet.installed));
+});
+
+test('failed final card verification never shows Complete or hands off the card', async () => {
+  const state = mount({returnTo: 'copy'});
+  const failure = new Error('Card connection lost');
+  state.applet.authenticate = async () => {
+    state.installationReadError = failure;
+  };
+  state.click('Install applets');
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, [failure]);
+  assert.equal(state.node('OperationComplete'), undefined);
+  assert.deepEqual(state.targets, []);
+  assert.equal(
+    state.events.some(event => event.type === 'save-access'),
+    false,
+  );
+});
+
+test('failed Copy handoff clears the early completion feedback', async () => {
+  const state = mount({returnTo: 'copy'});
+  const failure = new Error('Copy session unavailable');
+  state.entrances.copyItemsStore.get = () => ({
+    session: {
+      async addTarget() {
+        throw failure;
+      },
+    },
+  });
+  state.click('Install applets');
+  await state.answer();
+  await state.tap({finish: false});
+  assert.ok(state.node('OperationComplete'));
+  state.scans[0].finished.resolve();
+  await state.flush();
+  assert.deepEqual(state.errors, [failure]);
+  assert.equal(state.node('OperationComplete'), undefined);
+  assert.deepEqual(state.targets, []);
 });
 
 test('setting PINs reuses the current applet inventory and updated Hello', async () => {

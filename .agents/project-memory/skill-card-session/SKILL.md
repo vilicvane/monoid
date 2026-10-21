@@ -5,13 +5,19 @@ description: Monoid NFC card sessions, Access/Safe PIN ownership, biometric vaul
 
 # Monoid card sessions
 
-Source: `../records.md`, especially records 29–32, 34, 38–41 and 47, and `../29.md`. Treat records
+Source: `../records.md`, especially records 29–32, 34, 38–41, 47 and 49–50, and `../29.md`. Treat records
 as authoritative and keep them up to date. Records 19–24 describe an older WIP;
 do not reintroduce their plain-storage design or assume those TODOs still exist.
 
 - `useMonoidScanPrompt` owns card presentation, retries, PIN input and deferred
   credential saving. `useIsoDepScanPrompt` handles raw card operations such as
   GlobalPlatform setup. Both await native cleanup and presentation exit.
+- Display confirmed card previews, derived addresses and verified completion from
+  the successful card callback so the underlying UI updates during the iOS
+  checkmark. Keep navigation, PIN dialogs, Copy/Bundle handoffs and next-scan
+  controls behind the existing cleanup/credential barrier. Do not resolve scan
+  promises early: leaving the owning view can abort deferred PIN saving. Failed
+  or cancelled callbacks must not publish success or replay uncertain mutations.
 - Access PINs preload through `MonoidPINSession` before NFC starts. Page-owned
   sessions may span related operations; temporary sessions dispose with the scan.
   They retain plaintext only for the owning flow. Persistent storage uses the

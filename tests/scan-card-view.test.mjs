@@ -2,12 +2,36 @@ import assert from 'node:assert/strict';
 import {mock, test} from 'node:test';
 
 let fixture;
+const sameDependencies = (left, right) =>
+  left?.length === right?.length &&
+  left.every((value, index) => Object.is(value, right[index]));
 
 mock.module('react', {
   namedExports: {
-    useMemo: create => create(),
-    useEffect: effect => {
-      fixture.cleanup = effect();
+    useState: initial => {
+      const slot = fixture.slot(() => ({value: initial}));
+      return [
+        slot.value,
+        value => {
+          slot.value = value;
+        },
+      ];
+    },
+    useMemo: (create, dependencies) => {
+      const slot = fixture.slot(() => ({}));
+      if (!sameDependencies(slot.dependencies, dependencies)) {
+        slot.dependencies = dependencies;
+        slot.value = create();
+      }
+      return slot.value;
+    },
+    useEffect: (effect, dependencies) => {
+      const slot = fixture.slot(() => ({}));
+      if (!sameDependencies(slot.dependencies, dependencies)) {
+        slot.cleanup?.();
+        slot.dependencies = dependencies;
+        slot.cleanup = effect();
+      }
     },
   },
 });
@@ -33,17 +57,14 @@ mock.module('../.bld/app/@utils/index.js', {
 class MonoidScanRedirectError extends Error {
   code = 'CANCELLED';
 }
+mock.module('../.bld/app/@components/@monoid/card-preview.js', {
+  namedExports: {ScannedCardPreview: 'scanned-card-preview'},
+});
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
     MonoidScanRedirectError,
     MonoidScanStatePromptProgress: 'span',
-    useMonoidScanPrompt: () => [
-      null,
-      (content, onScan) => {
-        fixture.onScan = onScan;
-        return fixture.scan;
-      },
-    ],
+    useMonoidScanPrompt: () => [null, fixture.scanPrompt],
   },
 });
 const {useViewActive} = await import(
@@ -52,6 +73,7 @@ const {useViewActive} = await import(
 mock.module('../.bld/app/@components/@view/index.js', {
   namedExports: {
     View: 'div',
+    ViewContent: 'section',
     ViewHeader: 'header',
     ViewHeaderTitle: 'h1',
     useViewActive,
@@ -77,17 +99,34 @@ const {ScanCardView} = await import(
 
 function mount({active = true, leaving = false} = {}) {
   const state = {
+    slots: [],
+    index: 0,
     replacements: 0,
     errors: [],
     cards: [],
     scannedItems: [],
     storedCards: [],
     localKeys: [],
+    slot(create) {
+      return (this.slots[this.index++] ??= create());
+    },
+    cleanup() {
+      this.slots.forEach(slot => slot.cleanup?.());
+    },
   };
   state.scan = new Promise((resolve, reject) => {
     state.resolveScan = resolve;
     state.rejectScan = reject;
   });
+  state.scanPrompt = (content, onScan) => {
+    state.onScan = (
+      applet,
+      setState,
+      hello,
+      signal = new AbortController().signal,
+    ) => onScan(applet, setState, hello, signal);
+    return state.scan;
+  };
   state.entrances = {
     walletStorageService: {keys: state.localKeys},
     cardStore: {
@@ -111,8 +150,23 @@ function mount({active = true, leaving = false} = {}) {
     $match: {$exact: {$active: active, $transition: !active && !leaving}},
   };
   view.$match.$view = () => ({$entries: [view]});
-  ScanCardView({view});
+  state.render = () => {
+    fixture = state;
+    state.index = 0;
+    return ScanCardView({view});
+  };
+  state.render();
   return state;
+}
+
+function findPreview(node) {
+  if (!node) return;
+  if (node.type === 'scanned-card-preview') return node.props;
+  const children = Array.isArray(node) ? node : [node.props?.children];
+  for (const child of children) {
+    const preview = findPreview(child);
+    if (preview) return preview;
+  }
 }
 
 test('background cancellation returns an active scan page to Safe without an error toast', async () => {
@@ -197,6 +251,12 @@ test('a completed scan stores every resource and routes to Card with only its id
     publicKey,
     bundle: new Uint8Array(32).fill(0x42),
   });
+  assert.deepEqual(findPreview(state.render()), {
+    id: '01020304',
+    itemCount: 2,
+  });
+  assert.deepEqual(state.storedCards, []);
+  assert.deepEqual(state.cards, []);
   state.resolveScan();
   await state.finished;
 
@@ -241,6 +301,47 @@ test('a successful scan finishing after unmount neither overwrites the store nor
   assert.deepEqual(state.cards, []);
   assert.equal(state.replacements, 0);
   assert.deepEqual(state.errors, []);
+});
+
+test('a cleanup failure clears the early card preview without committing or navigating', async () => {
+  const state = mount();
+  await state.onScan({}, () => {}, {
+    id: new Uint8Array([1]),
+    publicKey: new Uint8Array([4]),
+    bundle: false,
+  });
+  assert.deepEqual(findPreview(state.render()), {id: '01', itemCount: 0});
+  const failure = new Error('Native cleanup failed');
+  state.rejectScan(failure);
+  await state.finished;
+
+  assert.equal(findPreview(state.render()), undefined);
+  assert.deepEqual(state.storedCards, []);
+  assert.deepEqual(state.cards, []);
+  assert.deepEqual(state.errors, [failure]);
+  state.cleanup();
+});
+
+test('a cancelled read cannot publish a late preview', async () => {
+  const state = mount();
+  const controller = new AbortController();
+  controller.abort();
+  await state.onScan(
+    {},
+    () => {},
+    {
+      id: new Uint8Array([1]),
+      publicKey: new Uint8Array([4]),
+      bundle: false,
+    },
+    controller.signal,
+  );
+  assert.equal(findPreview(state.render()), undefined);
+  state.rejectScan(Object.assign(new Error('Cancelled'), {code: 'CANCELLED'}));
+  await state.finished;
+  assert.deepEqual(state.storedCards, []);
+  assert.deepEqual(state.cards, []);
+  state.cleanup();
 });
 
 test('scan progress forwards completed counts and cancellation', async () => {

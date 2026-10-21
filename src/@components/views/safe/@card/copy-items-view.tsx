@@ -232,6 +232,8 @@ export const CopyItemsView = observer(
     const [confirmRestart, setConfirmRestart] = useState(false);
     const [details, setDetails] = useState<'items' | CardBackupIdentity>();
     const [destination, setDestination] = useState<CardBackupIdentity>();
+    const [scannedDestination, setScannedDestination] =
+      useState<CardBackupIdentity>();
     const [secretPINInput, showSecretPINInput] = useInputModal();
     const [accessPINInput, scanWithAccess] = useMonoidScanPrompt({
       auth: 'access',
@@ -273,6 +275,11 @@ export const CopyItemsView = observer(
     const selectedGroups = getCardResourceGroups(selected);
     const itemCountLabel = `items ${formatCardResourceCount(selectedGroups)}`;
     const targets = backup?.targets ?? [];
+    const destinationPreview =
+      scannedDestination &&
+      !targets.some(target => target.publicKey === scannedDestination.publicKey)
+        ? scannedDestination
+        : undefined;
     const transfers = targets.flatMap(target => target.items);
     const exported = transfers.filter(item => item.exported).length;
     const conflicts = transfers.filter(item => item.conflict).length;
@@ -287,10 +294,10 @@ export const CopyItemsView = observer(
           : exported < transfers.length
             ? 3
             : 4;
-    const step = workingStep ?? nextStep;
+    const complete = backup?.complete && !session.busy && !failed;
+    const step = complete ? 5 : (workingStep ?? nextStep);
     const activeStep = Math.min(step, 4);
     const busy = working || session.busy;
-    const complete = backup?.complete && !busy && !failed;
     const destinationsEditable = !!backup && !backup.importStarted;
 
     useEffect(() => {
@@ -324,7 +331,10 @@ export const CopyItemsView = observer(
         }
       } finally {
         running.current = false;
-        if (mounted.current) setWorkingStep(undefined);
+        if (mounted.current) {
+          setScannedDestination(undefined);
+          setWorkingStep(undefined);
+        }
       }
     };
 
@@ -374,6 +384,14 @@ export const CopyItemsView = observer(
           if (hello.pins.access === 0)
             throw new MonoidCardError('Access PIN blocked');
           scanned = hello;
+          if (
+            hello.pins.access !== false &&
+            hello.pins.secret !== false &&
+            mounted.current &&
+            isViewActive()
+          ) {
+            setScannedDestination(identity);
+          }
         },
       );
       if (!mounted.current || !isViewActive()) return;
@@ -695,7 +713,16 @@ export const CopyItemsView = observer(
             />
           </CardPreviewButton>
         ))}
-        {targets.length === 0 && (
+        {destinationPreview && (
+          <CardPreviewButton
+            key={destinationPreview.publicKey}
+            aria-label={`Destination card ${destinationPreview.id}`}
+            disabled
+          >
+            <CardPreview id={destinationPreview.id} />
+          </CardPreviewButton>
+        )}
+        {targets.length === 0 && !destinationPreview && (
           <CardPreviewButton
             aria-label="Scan a destination card"
             disabled={busy}
@@ -730,8 +757,8 @@ export const CopyItemsView = observer(
                 <>
                   <Button
                     color={step === 5 ? 'neutral' : 'primary'}
-                    loading={busy}
-                    disabled={!!backup && selected.length === 0}
+                    loading={busy && !complete}
+                    disabled={busy || (!!backup && selected.length === 0)}
                     onClick={() => void run(proceed)}
                   >
                     {primaryLabel}
@@ -749,7 +776,7 @@ export const CopyItemsView = observer(
               )
             }
           >
-            {stepsExited ? (
+            {stepsExited && complete ? (
               <OperationComplete />
             ) : (
               <CopySteps

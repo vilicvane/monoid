@@ -274,6 +274,44 @@ async function derive(state) {
 
 afterEach(() => owners.splice(0).forEach(owner => owner.unmount()));
 
+test('a confirmed derivation previews before NFC cleanup while Import stays disabled', async () => {
+  const state = mount();
+  state.click('Scan card');
+  assert.equal(
+    find(state.render(), node => node.type === 'address'),
+    undefined,
+  );
+
+  await state.tap();
+  assert.ok(find(state.render(), node => node.type === 'address'));
+  assert.equal(state.button('Import').props.disabled, true);
+  assert.equal(state.storage.keys[0].wallets.length, 1);
+  assert.deepEqual(state.writes, []);
+  assert.deepEqual(state.routes, []);
+
+  await state.finish();
+  assert.equal(state.button('Import').props.disabled, false);
+});
+
+test('a failed scan cleanup clears the early derivation preview', async () => {
+  const state = mount();
+  const failure = new Error('NFC cleanup failed');
+  state.click('Scan card');
+  await state.tap();
+  assert.ok(find(state.render(), node => node.type === 'address'));
+
+  state.scans.at(-1).reject(failure);
+  await state.finished;
+  assert.equal(
+    find(state.render(), node => node.type === 'address'),
+    undefined,
+  );
+  assert.equal(state.button('Import'), undefined);
+  assert.deepEqual(state.errors, [failure]);
+  assert.equal(state.storage.keys[0].wallets.length, 1);
+  assert.deepEqual(state.routes, []);
+});
+
 test('Import scans to save metadata and reuses the previewed public key without another derivation', async () => {
   const state = mount();
   await derive(state);

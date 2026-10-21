@@ -10,6 +10,7 @@ import type {Router} from '../../../../@routes.js';
 import type {WalletKeyData} from '../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {KeyList} from '../../../@key/key-list.js';
+import {ScannedCardPreview} from '../../../@monoid/card-preview.js';
 import {
   MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
@@ -41,6 +42,8 @@ export const SafeView = observer(
     const isViewActive = useViewActive(view);
     const [presentAlert] = useIonAlert();
     const [openKey, setOpenKey] = useState<SafeIndexHex>();
+    const [preview, setPreview] = useState<ScannedCardData>();
+    const [reading, setReading] = useState(false);
     const listRef = useRef<HTMLDivElement>(null);
 
     const deleteKey = errorService.catch(
@@ -84,7 +87,10 @@ export const SafeView = observer(
     });
 
     const onScanCardButtonClick = (): void => {
-      let scannedCard: ScannedCardData;
+      if (reading || !isViewActive()) return;
+      setReading(true);
+      setPreview(undefined);
+      let scannedCard: ScannedCardData | undefined;
 
       errorService.catch(
         scanPrompt(
@@ -110,20 +116,28 @@ export const SafeView = observer(
               walletStorageService.keys,
             );
 
+            if (signal.aborted || !isViewActive()) return;
+
             scannedCard = {
               id: uint8ArrayToHex(hello.id),
               publicKey: uint8ArrayToHex(hello.publicKey),
               bundle: hello.bundle && uint8ArrayToHex(hello.bundle),
               items,
             };
+            setPreview(scannedCard);
           },
-        ).then(() => {
-          if (isViewActive()) {
-            cardStore.set(scannedCard);
-            const {id, publicKey} = scannedCard;
-            router.safe.card({card: {id, publicKey}}).$push();
-          }
-        }),
+        )
+          .then(() => {
+            if (scannedCard && isViewActive()) {
+              cardStore.set(scannedCard);
+              const {id, publicKey} = scannedCard;
+              router.safe.card({card: {id, publicKey}}).$push();
+            }
+          })
+          .finally(() => {
+            setPreview(undefined);
+            setReading(false);
+          }),
       );
     };
 
@@ -134,7 +148,12 @@ export const SafeView = observer(
             <ViewHeaderTitle>Safe</ViewHeaderTitle>
           </ViewHeader>
           <ViewContent>
-            {!walletStorageService.keys.length ? (
+            {preview ? (
+              <ScannedCardPreview
+                id={preview.id}
+                itemCount={preview.items.length}
+              />
+            ) : !walletStorageService.keys.length ? (
               <ViewPlaceholder>No keys</ViewPlaceholder>
             ) : (
               <KeyList ref={listRef} tabIndex={-1}>
@@ -184,6 +203,7 @@ export const SafeView = observer(
           <ViewFab view={view} transition={transition}>
             <IonFabButton
               aria-label="Scan card"
+              disabled={reading}
               onClick={onScanCardButtonClick}
             >
               <AppIcon icon={creditCard} />

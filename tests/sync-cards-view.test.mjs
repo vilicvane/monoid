@@ -727,7 +727,7 @@ test('an operation failing before a new snapshot does not overwrite a richer Car
   assert.equal(stored.items[0].publicKey, source.items[0].publicKey);
 });
 
-test('the second round accepts pending cards in either order and completes only after scan cleanup', async () => {
+test('confirmed sync completes visually before scan cleanup while navigation stays disabled', async () => {
   const state = mount();
   const first = publicCard(1);
   const second = publicCard(2);
@@ -749,24 +749,34 @@ test('the second round accepts pending cards in either order and completes only 
   await state.startWriteScan();
   await state.tap(first.hello, first.applet);
   assert.equal(state.session.phase, 'complete');
-  assert.equal(state.button('Back to Safe'), undefined);
+  const pendingBack = state.button('Back to Safe');
+  assert.ok(pendingBack);
+  assert.equal(pendingBack.props.disabled, true);
+  pendingBack.props.onClick();
+  assert.deepEqual(state.backs, []);
   assert.equal(
     find(state.tree, node => node.type === 'OperationComplete'),
     undefined,
   );
-  await state.finishScan();
-  const back = state.button('Back to Safe');
-  assert.ok(back);
-  assert.equal(back.props.color, 'neutral');
-  assert.deepEqual(state.backs, []);
-
   const steps = find(state.tree, node => node.type === 'Steps');
   assert.equal(steps.props.$exiting, true);
+  assert.equal(
+    find(state.tree, node => node.type === 'Step' && node.props.numero === 2)
+      .props.processing,
+    false,
+  );
   steps.props.onAnimationEnd({target: {}, currentTarget: {}});
   assert.equal(state.flow.stepsExited, false);
   const element = {};
   steps.props.onAnimationEnd({target: element, currentTarget: element});
   assert.ok(find(state.render(), node => node.type === 'OperationComplete'));
+  assert.equal(state.button('Back to Safe').props.disabled, true);
+
+  await state.finishScan();
+  const back = state.button('Back to Safe');
+  assert.ok(back);
+  assert.equal(back.props.color, 'neutral');
+  assert.equal(back.props.disabled, false);
   back.props.onClick();
   assert.equal(state.backs.length, 1);
   assert.equal(state.previewSignals.length, 0);
@@ -795,6 +805,39 @@ test('cancelling the write Secret PIN leaves NFC and card data untouched', async
   assert.equal(state.scans.length, 0);
   assert.deepEqual(first.authentications, [{secret: true, pin: PIN}]);
   assert.equal(state.session.cards[0].completed, 0);
+});
+
+test('an unacknowledged sync write keeps completion hidden and does not replay the operation', async () => {
+  const state = mount();
+  const first = publicCard(1);
+  const second = publicCard(2);
+  await state.session.add(first.applet, first.hello, signal(), PIN);
+  await state.session.add(second.applet, second.hello, signal(), PIN);
+  state.session.prepare();
+  await state.session.write(second.applet, second.hello, signal(), PIN);
+  await state.startWriteScan();
+  const failure = new Error('Write response lost');
+  const create = mock.fn(async () => {
+    throw failure;
+  });
+  const scan = await state.tap(first.hello, {...first.applet, create});
+
+  assert.equal(scan.error, failure);
+  assert.equal(create.mock.callCount(), 1);
+  assert.equal(state.session.phase, 'write');
+  assert.equal(state.session.cards[0].complete, false);
+  assert.equal(state.session.cards[1].complete, true);
+  assert.equal(state.button('Back to Safe'), undefined);
+  assert.equal(
+    find(state.tree, node => node.type === 'Steps').props.$exiting,
+    false,
+  );
+  assert.equal(
+    find(state.tree, node => node.type === 'OperationComplete'),
+    undefined,
+  );
+  assert.ok(state.button('Scan a pending card'));
+  assert.deepEqual(state.errors, [failure]);
 });
 
 for (const alreadyWritten of [false, true]) {

@@ -117,6 +117,7 @@ export const SetupCardView = observer(
     const completing = useRef(false);
     const [busy, setBusy] = useState(false);
     const [singleComplete, setComplete] = useState(false);
+    const [scanPreview, setScanPreview] = useState<MonoidAppletHello>();
     const [pendingPIN, setPendingPIN] = useState<MonoidAppletHello>();
     const [showPINSetup, setShowPINSetup] = useState(false);
     const bundleConfirmation = useRef(0);
@@ -238,6 +239,7 @@ export const SetupCardView = observer(
           () => !isViewActive(),
           inactive => {
             if (inactive) {
+              setScanPreview(undefined);
               setShowPINSetup(false);
               bundleConfirmation.current++;
               setPendingBundleCard(undefined);
@@ -355,6 +357,7 @@ export const SetupCardView = observer(
       if (cardOperation.current || pendingBundleCard || !isActive()) return;
       const operation = new AbortController();
       cardOperation.current = operation;
+      setScanPreview(undefined);
       setBusy(true);
       let completed: MonoidAppletHello | undefined;
       try {
@@ -373,6 +376,8 @@ export const SetupCardView = observer(
             (!bundleEnabled || result.hello.bundle === false)
           ) {
             completed = result.hello;
+            if (isActive() && !signal.aborted && !operation.signal.aborted)
+              setScanPreview(result.hello);
           }
         });
         if (!isActive() || operation.signal.aborted || !result) return;
@@ -383,6 +388,7 @@ export const SetupCardView = observer(
         if (result.type === 'setup') openMaintenance(result.cardInformation);
         else if (!completed) await acceptScan(result.hello);
       } catch (error) {
+        if (mounted.current) setScanPreview(undefined);
         if (!operation.signal.aborted && !isCredentialRequestCancelled(error))
           throw error;
       } finally {
@@ -398,7 +404,10 @@ export const SetupCardView = observer(
         } finally {
           if (cardOperation.current === operation)
             cardOperation.current = undefined;
-          if (mounted.current) setBusy(false);
+          if (mounted.current) {
+            setScanPreview(undefined);
+            setBusy(false);
+          }
         }
       }
     };
@@ -407,6 +416,7 @@ export const SetupCardView = observer(
       if (cardOperation.current || !isActive()) return;
       const operation = new AbortController();
       cardOperation.current = operation;
+      setScanPreview(undefined);
       runInAction(() => {
         flow.pendingReset = reset;
       });
@@ -481,6 +491,8 @@ export const SetupCardView = observer(
             }
             initialized = hello;
             if (hasInitializedPINs(hello)) completed = hello;
+            if (completed && isActive() && !signal.aborted)
+              setScanPreview(completed);
           },
         );
         if (accessPINId && pin && isActive() && !operation.signal.aborted) {
@@ -499,6 +511,7 @@ export const SetupCardView = observer(
           flow.pendingReset = undefined;
         });
       } catch (error) {
+        if (mounted.current) setScanPreview(undefined);
         if (!operation.signal.aborted && !isCredentialRequestCancelled(error))
           throw error;
       } finally {
@@ -514,7 +527,10 @@ export const SetupCardView = observer(
         } finally {
           if (cardOperation.current === operation)
             cardOperation.current = undefined;
-          if (mounted.current) setBusy(false);
+          if (mounted.current) {
+            setScanPreview(undefined);
+            setBusy(false);
+          }
         }
       }
     };
@@ -533,6 +549,7 @@ export const SetupCardView = observer(
       );
       const operation = new AbortController();
       cardOperation.current = operation;
+      setScanPreview(undefined);
       setBusy(true);
       let pin: MonoidPIN | undefined;
       let scannedPublicKey: string | undefined;
@@ -593,9 +610,11 @@ export const SetupCardView = observer(
                 }
               });
             }
+            if (isActive() && !signal.aborted) setScanPreview(hello);
           },
         );
       } catch (error) {
+        if (mounted.current) setScanPreview(undefined);
         if (
           mounted.current &&
           scannedPublicKey &&
@@ -609,13 +628,26 @@ export const SetupCardView = observer(
         pin = undefined;
         if (cardOperation.current === operation)
           cardOperation.current = undefined;
-        if (mounted.current) setBusy(false);
+        if (mounted.current) {
+          setScanPreview(undefined);
+          setBusy(false);
+        }
       }
     };
 
     const complete =
-      singleComplete || (bundleSession.phase === 'complete' && !busy);
+      singleComplete ||
+      (!bundleEnabled && !!scanPreview) ||
+      (bundleSession.phase === 'complete' && (!busy || !!scanPreview));
     const configuring = bundleEnabled && bundleSession.phase !== 'collecting';
+    const pendingPreview =
+      !configuring &&
+      scanPreview &&
+      !bundleSession.cards.some(
+        card => card.publicKey === uint8ArrayToHex(scanPreview.publicKey),
+      )
+        ? scanPreview
+        : undefined;
     const generationFailed = bundleSession.generationUncertain && !busy;
     const hasPendingCard = bundleSession.cards.some(
       card => card.status !== 'complete',
@@ -675,9 +707,26 @@ export const SetupCardView = observer(
               />
             </CardPreviewButton>
           ))}
+          {pendingPreview && (
+            <CardPreviewButton
+              key={uint8ArrayToHex(pendingPreview.publicKey)}
+              aria-label={`Card ${uint8ArrayToHex(pendingPreview.id)}`}
+              disabled
+            >
+              <CardPreview
+                id={uint8ArrayToHex(pendingPreview.id)}
+                description="ready"
+              />
+            </CardPreviewButton>
+          )}
           {!configuring &&
             Array.from(
-              {length: Math.max(1, 2 - bundleSession.cards.length)},
+              {
+                length: Math.max(
+                  1,
+                  2 - bundleSession.cards.length - Number(!!pendingPreview),
+                ),
+              },
               (_, index) => (
                 <CardPreviewButton
                   key={`add-${index}`}
@@ -714,7 +763,13 @@ export const SetupCardView = observer(
           footer={
             complete ? (
               back && (
-                <Button color="neutral" onClick={() => back()}>
+                <Button
+                  color="neutral"
+                  disabled={busy}
+                  onClick={() => {
+                    if (!busy) back();
+                  }}
+                >
                   {backLabel}
                 </Button>
               )

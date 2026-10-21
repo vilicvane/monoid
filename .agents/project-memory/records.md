@@ -89,3 +89,8 @@
 ## 815eee4
 
 48. [user] disable app rotation and redeploy during iPhone testing. [agent] keep the iPhone interface portrait-only through `UISupportedInterfaceOrientations`; Capacitor reads this native configuration. iPhone orientation.
+
+## a8322d9
+
+49. [user] show confirmed NFC card results in the app as the iOS system sheet starts its completion checkmark, instead of waiting for the sheet to disappear. This request concerns card scans, not QR scanning. NFC result presentation.
+50. [agent] publish display-only card previews, derived addresses and verified operation completion from the successful card callback; keep scan promises awaiting native cleanup, presentation exit and deferred credential saving. Navigation, PIN dialogs, Copy/Bundle membership handoffs and next-scan actions still wait for that barrier. Only fully confirmed reads/writes may show completion; cancellation and failures must not produce an optimistic success or replay an operation. NFC lifecycle separation.
