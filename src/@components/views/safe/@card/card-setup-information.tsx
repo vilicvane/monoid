@@ -52,7 +52,6 @@ const CheckItem = styled.li`
 const CheckIcon = styled(AppIcon)<{$supported: boolean}>`
   flex-shrink: 0;
   font-size: 20px;
-  --icon-stroke-width: 2.5;
   color: ${props =>
     props.$supported ? 'var(--ion-color-safe)' : 'var(--ion-color-danger)'};
 `;

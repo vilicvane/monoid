@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import {mock, test} from 'node:test';
 
-import {getBytes} from 'ethers';
 import {base58} from '@scure/base';
+import {getBytes} from 'ethers';
 
 import {parseDerivationPath} from '../.bld/app/@lib/bip39.js';
 import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';

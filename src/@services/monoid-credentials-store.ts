@@ -434,6 +434,16 @@ export class MonoidPINSession implements AsyncDisposable {
     }
   }
 
+  authenticate(signal?: AbortSignal): Promise<void> {
+    return this.request(signal, async owner => {
+      try {
+        await this.getAccess(owner);
+      } catch (error) {
+        throw credentialError(error);
+      }
+    });
+  }
+
   getPINs(signal?: AbortSignal): Promise<MonoidPINs> {
     return this.request(signal, async owner => {
       if (!this.pins) {
@@ -489,7 +499,7 @@ export class MonoidPINSession implements AsyncDisposable {
 
   removePIN(
     id: MonoidIdHex,
-    expectedPIN: MonoidPIN,
+    expectedPIN?: MonoidPIN,
     signal?: AbortSignal,
   ): Promise<void> {
     return this.request(
@@ -504,6 +514,15 @@ export class MonoidPINSession implements AsyncDisposable {
         );
         if (owner.aborted) return;
         this.unlocked = snapshot;
+        this.pins ??= {...snapshot};
+        if (
+          expectedPIN === undefined ||
+          this.pins[id] === undefined ||
+          this.pins[id] === expectedPIN
+        ) {
+          if (snapshot[id] === undefined) delete this.pins[id];
+          else this.pins[id] = snapshot[id];
+        }
       },
       true,
     );

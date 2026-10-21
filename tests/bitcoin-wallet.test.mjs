@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
 import {mock, test} from 'node:test';
 
-// eslint-disable-next-line @mufan/scoped-modules -- Verify card paths without platform initialization.
 import {parseDerivationPath} from '../.bld/app/@lib/bip39.js';
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Test stored wallet data without platform services.
 import {
   getKeyWallets,
   getWalletData,

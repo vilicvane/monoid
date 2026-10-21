@@ -1,15 +1,15 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
-import {parseDerivationPath} from '../.bld/app/@lib/bip39.js';
-import {ADDRESS_TYPES} from '../.bld/app/@lib/wallet-address.js';
 import {
   CARD_DERIVATIONS_TYPE,
   encodeCardDerivationRecord,
   getCardDerivationItemIndex,
 } from '../.bld/app/@components/views/safe/card-derivations.js';
 import {scanCardItems} from '../.bld/app/@components/views/safe/scan-card.js';
+import {parseDerivationPath} from '../.bld/app/@lib/bip39.js';
+import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {ADDRESS_TYPES} from '../.bld/app/@lib/wallet-address.js';
 
 const ROOT = '02000000000000000001';
 const OTHER_SEED = '02400000000000000001';

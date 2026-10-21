@@ -6,15 +6,10 @@ import {test} from 'node:test';
 import {base58} from '@scure/base';
 import {reaction} from 'mobx';
 
-// eslint-disable-next-line @mufan/scoped-modules -- Distinguish definitive preflight refusals from lost responses.
 import {SolanaRPCError} from '../.bld/app/@lib/solana-rpc.js';
-// eslint-disable-next-line @mufan/scoped-modules -- Verify the exact compiled transaction bytes.
 import {parseSolanaTransaction} from '../.bld/app/@lib/solana-transaction.js';
-// eslint-disable-next-line @mufan/scoped-modules -- Exercise production request authorization.
 import {parseWalletConnectRequest} from '../.bld/app/@lib/wallet-connect-request.js';
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Avoid starting platform services.
 import {SolanaTransactionHistoryService} from '../.bld/app/@services/solana-transaction-history-service.js';
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Avoid starting platform services.
 import {WalletKitService} from '../.bld/app/@services/wallet-kit-service.js';
 
 const CHAIN = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';

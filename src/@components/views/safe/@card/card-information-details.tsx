@@ -1,17 +1,22 @@
 import type {ReactNode} from 'react';
+import {styled} from 'styled-components';
 
 import type {CardInformation} from '../../../../@lib/global-platform/card-information.js';
 import {getCardExpectedCryptography} from '../../../../@lib/global-platform/installation-support.js';
 import {
   InfoSection,
   InfoSectionDivider,
-  InfoSectionItem,
+  InfoSectionFlowItem,
   InfoSectionItemContent,
   InfoSectionItemLabel,
   InfoSectionTitle,
 } from '../../../@ui/info-section.js';
 
 type InformationField = readonly [label: string, value: ReactNode];
+
+const SectionTitle = styled(InfoSectionTitle)`
+  text-align: center;
+`;
 
 function InformationSection({
   title,
@@ -26,13 +31,13 @@ function InformationSection({
 
   return (
     <InfoSection data-popup-animation-group>
-      <InfoSectionTitle>{title}</InfoSectionTitle>
+      <SectionTitle>{title}</SectionTitle>
       <InfoSectionDivider />
       {available.map(([label, value], index) => (
-        <InfoSectionItem key={index}>
+        <InfoSectionFlowItem key={index}>
           <InfoSectionItemLabel>{label}</InfoSectionItemLabel>
           <InfoSectionItemContent>{value}</InfoSectionItemContent>
-        </InfoSectionItem>
+        </InfoSectionFlowItem>
       ))}
     </InfoSection>
   );
@@ -56,9 +61,7 @@ export function CardInformationDetails({
   if (information.secureChannels.length) {
     secureChannels.push([
       'Card recognition',
-      information.secureChannels.map(channel => (
-        <div key={channel}>{channel}</div>
-      )),
+      information.secureChannels.join(', '),
     ]);
   }
 
@@ -80,16 +83,9 @@ export function CardInformationDetails({
     <>
       <InformationSection
         title="Expected support"
-        fields={cryptography.map(({label, evidence, limitations}) => [
+        fields={cryptography.map(({label, evidence}) => [
           label,
-          <InfoSection key={label}>
-            <div>
-              {evidence.map(source => (
-                <div key={source}>{source}</div>
-              ))}
-            </div>
-            <InfoSectionItemLabel>{limitations}</InfoSectionItemLabel>
-          </InfoSection>,
+          evidence.join(', '),
         ])}
       />
       <InformationSection
@@ -141,15 +137,18 @@ export function CardInformationDetails({
             keyInformation.length
               ? keyInformation.map(key => [
                   `Version ${key.version} · ID ${key.id}`,
-                  key.components.map((component, index) => (
-                    <div key={index}>
-                      {component.type}
-                      {component.length !== undefined &&
-                        ` · ${component.lengthIsMinimum ? '≥' : ''}${component.length} bytes`}
-                      {component.parameterReference !== undefined &&
-                        ` · parameter reference ${component.parameterReference}`}
-                    </div>
-                  )),
+                  key.components
+                    .map(
+                      component =>
+                        component.type +
+                        (component.length !== undefined
+                          ? ` · ${component.lengthIsMinimum ? '≥' : ''}${component.length} bytes`
+                          : '') +
+                        (component.parameterReference !== undefined
+                          ? ` · parameter reference ${component.parameterReference}`
+                          : ''),
+                    )
+                    .join(', '),
                 ])
               : [['Keys', 'None']]
           }

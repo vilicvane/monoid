@@ -290,7 +290,7 @@ test('recognition preserves signed data, the original digest and the recovered s
     const original = structuredClone(input);
     const {data, digest} = parseEvmTypedData(input);
     const normalized = structuredClone(data);
-    const {EIP712Domain, ...types} = input.types;
+    const {EIP712Domain: _EIP712Domain, ...types} = input.types;
     const signature = await wallet.signTypedData(
       input.domain,
       types,

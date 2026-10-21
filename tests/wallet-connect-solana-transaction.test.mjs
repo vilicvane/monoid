@@ -7,7 +7,6 @@ import {base58} from '@scure/base';
 
 import {parseSolanaTransaction} from '../.bld/app/@lib/solana-transaction.js';
 import {parseWalletConnectRequest} from '../.bld/app/@lib/wallet-connect-request.js';
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Avoid starting platform services.
 import {WalletKitService} from '../.bld/app/@services/wallet-kit-service.js';
 
 const CHAIN = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
@@ -546,7 +545,7 @@ test('rechecks current wire bytes, signer restriction and permissions when retry
 test('successful publication retries retain original bytes and do not require another signature', async context => {
   const fixture = transaction();
   const incoming = request({transaction: fixture.encoded});
-  const {service, approve, kit} = setup(context, incoming);
+  const {approve, kit} = setup(context, incoming);
   kit.respondSessionRequest.mock.mockImplementationOnce(async () => {
     throw new Error('Relay unavailable.');
   });
@@ -621,10 +620,7 @@ test('expiry and session removal prevent publication, while explicit Reject rema
   for (const change of ['request', 'session', 'removed']) {
     const fixture = transaction();
     const incoming = request({transaction: fixture.encoded});
-    const {service, approve, kit, approved, sessions} = setup(
-      context,
-      incoming,
-    );
+    const {approve, kit, approved, sessions} = setup(context, incoming);
     if (change === 'request') incoming.params.request.expiryTimestamp = 1;
     if (change === 'session') approved.expiry = 1;
     if (change === 'removed') delete sessions[TOPIC];
@@ -632,7 +628,7 @@ test('expiry and session removal prevent publication, while explicit Reject rema
     assert.equal(kit.respondSessionRequest.mock.callCount(), 0);
   }
 
-  const {service, approve, kit} = setup(
+  const {service, kit} = setup(
     context,
     request({transaction: transaction().encoded}),
   );

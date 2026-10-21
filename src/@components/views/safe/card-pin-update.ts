@@ -11,27 +11,28 @@ import {uint8ArrayToHex} from '../../../@utils/index.js';
 import {assertCardForUpdate} from './card-alias-update.js';
 import type {ScannedCardData} from './common.js';
 
-export type CardPINKind = 'Access' | 'Safe';
+export type CardPINKind = 'Access' | 'Secret';
 
 export async function updateCardPIN(
   applet: MonoidApplet,
   hello: MonoidAppletHello,
   card: Pick<ScannedCardData, 'id' | 'publicKey'>,
   kind: CardPINKind,
-  currentSafePIN: MonoidPIN,
+  currentSecretPIN: MonoidPIN,
   newPIN: MonoidPIN,
   signal: AbortSignal,
 ): Promise<MonoidIdHex> {
   assertCardForUpdate(hello, card);
   signal.throwIfAborted();
-  if (hello.pins.safe === 0) throw new MonoidCardError('Safe PIN blocked');
-  if (hello.pins.safe === false) throw new MonoidCardError('Safe PIN not set');
-  if (!MonoidPIN.is(currentSafePIN) || !MonoidPIN.is(newPIN)) {
+  if (hello.pins.secret === 0) throw new MonoidCardError('Secret PIN blocked');
+  if (hello.pins.secret === false)
+    throw new MonoidCardError('Secret PIN not set');
+  if (!MonoidPIN.is(currentSecretPIN) || !MonoidPIN.is(newPIN)) {
     throw new MonoidCardError('PIN must contain 6 to 16 characters');
   }
 
   try {
-    await applet.authenticate({safe: true, pin: currentSafePIN});
+    await applet.authenticate({secret: true, pin: currentSecretPIN});
   } catch (error) {
     if (
       error instanceof CBORAppletError &&
@@ -39,8 +40,8 @@ export async function updateCardPIN(
     ) {
       throw new MonoidCardError(
         error.source.tries === 0
-          ? 'Safe PIN blocked'
-          : `Incorrect Safe PIN, tries remaining: ${error.source.tries}`,
+          ? 'Secret PIN blocked'
+          : `Incorrect Secret PIN, tries remaining: ${error.source.tries}`,
       );
     }
     throw error;
@@ -48,7 +49,10 @@ export async function updateCardPIN(
 
   signal.throwIfAborted();
   try {
-    await applet.setPIN({pin: newPIN, ...(kind === 'Safe' && {safe: true})});
+    await applet.setPIN({
+      pin: newPIN,
+      ...(kind === 'Secret' && {secret: true}),
+    });
   } catch {
     // A lost response cannot tell us whether the PIN was changed. Never replay it.
     throw new MonoidCardError('PIN update not confirmed');

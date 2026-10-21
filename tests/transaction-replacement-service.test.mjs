@@ -3,7 +3,6 @@ import {test} from 'node:test';
 
 import {Transaction, Wallet} from 'ethers';
 
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Isolate durable replacement submission from platform services.
 import {TransactionHistoryService} from '../.bld/app/@services/transaction-history-service.js';
 
 // Public fixture keys only; these accounts must never hold funds.

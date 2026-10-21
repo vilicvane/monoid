@@ -9,9 +9,9 @@ import {
   isWalletKeyUpToDate,
 } from '../.bld/app/@components/views/safe/card-key-import.js';
 import {
+  WalletStorageService,
   getDefaultWallet,
   getKeyWallets,
-  WalletStorageService,
 } from '../.bld/app/@services/wallet-storage-service.js';
 
 const INDEX = '00000001';
@@ -218,7 +218,7 @@ test('a conflicting public key rejects the entire import before alias or address
     createStorage([getCardKeyData(scannedKey(EVM_REF))]),
   );
   const original = toJS(service.keys);
-  const conflict = {...SEGWIT_REF, publicKey: '03' + PUBLIC_KEY.slice(2)};
+  const conflict = {...SEGWIT_REF, publicKey: `03${PUBLIC_KEY.slice(2)}`};
   const incoming = getCardKeyData({...scannedKey(conflict), alias: ''});
   assert.throws(
     () => importCardKey(service, incoming),

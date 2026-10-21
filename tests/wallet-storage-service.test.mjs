@@ -4,11 +4,11 @@ import {test} from 'node:test';
 import {runInAction, toJS} from 'mobx';
 
 import {
+  WalletStorageService,
   getDefaultWallet,
   getKeyWallets,
   getWalletData,
   getWalletReference,
-  WalletStorageService,
 } from '../.bld/app/@services/wallet-storage-service.js';
 
 const KEY_INDEX = '00000001';
@@ -231,7 +231,7 @@ test('a different public key for the same source is rejected without changing th
     {...createKey([SOLANA_SOURCE, EVM_SOURCE]), defaultWallet: reference},
   ]);
   const service = await WalletStorageService.create(storage);
-  const replacement = {...EVM_SOURCE, publicKey: '03' + PUBLIC_KEY.slice(2)};
+  const replacement = {...EVM_SOURCE, publicKey: `03${PUBLIC_KEY.slice(2)}`};
 
   assert.throws(
     () => service.addWallet(KEY_INDEX, replacement),
@@ -530,7 +530,7 @@ test('equivalent derived requests reject inconsistent public keys but keep addre
     () =>
       service.addWallet(KEY_INDEX, {
         ...segwit,
-        publicKey: '03' + PUBLIC_KEY.slice(2),
+        publicKey: `03${PUBLIC_KEY.slice(2)}`,
       }),
     /public key does not match/,
   );

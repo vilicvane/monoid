@@ -23,6 +23,7 @@ import {
   getWalletReference,
   matchesWalletReference,
 } from '../../../../@services/index.js';
+import {createFlowId} from '../../../../@utils/index.js';
 import {ADDRESS_CHAIN_OPTIONS} from '../../../@key/address-type-selector.js';
 import {KeyListPlaceholder} from '../../../@key/key-list.js';
 import {keyTypeColorsCSS} from '../../../@key/key-tags.js';
@@ -951,9 +952,7 @@ const CardContent = observer(
                 onClick={() => {
                   router.safe
                     .copyItems({
-                      copyId: crypto
-                        .getRandomValues(new Uint32Array(4))
-                        .join('-'),
+                      copyId: createFlowId(),
                       sourceCard: card.snapshot(),
                       sourceIndexes: selectedResources.map(item => item.index),
                     })
@@ -1199,12 +1198,28 @@ const CardContent = observer(
                   >
                     Create key
                   </Button>
+                  {!canDelete && (
+                    <Button
+                      color="neutral"
+                      onClick={() => {
+                        setMenu(undefined);
+                        router.safe
+                          .setupCard({
+                            card: {id: card.id, publicKey: card.publicKey},
+                            createBundle: true,
+                          })
+                          .$push();
+                      }}
+                    >
+                      Setup card bundle
+                    </Button>
+                  )}
                   {canDelete ? (
                     <Button color="danger" onClick={() => setMenu('delete')}>
                       Delete
                     </Button>
                   ) : (
-                    (['Access', 'Safe'] as const).map(kind => (
+                    (['Access', 'Secret'] as const).map(kind => (
                       <Button
                         key={kind}
                         color="neutral"
@@ -1217,7 +1232,8 @@ const CardContent = observer(
                       >
                         <span>
                           Update{' '}
-                          {kind === 'Safe' ? <PINKind kind={kind} /> : kind} PIN
+                          {kind === 'Secret' ? <PINKind kind={kind} /> : kind}{' '}
+                          PIN
                         </span>
                       </Button>
                     ))

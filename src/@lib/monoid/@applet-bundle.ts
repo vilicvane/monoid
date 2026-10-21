@@ -5,18 +5,18 @@ export const appletBundle: readonly BundledApplet[] | undefined = [
   {
     stage: 'identity',
     packageAid: 'f06d6f6e6f696400',
-    appletAid: 'f06d6f6e6f696400010000',
+    appletAid: 'f06d6f6e6f69640001',
     codeURL: new URL(
       '../../@assets/applets/monoididentity.bin',
       import.meta.url,
     ),
-    sha256: '685e5c3fc78b233b55d32cb4cd688acf983e95768d7e088c23e0af83c5a9f833',
+    sha256: '6a3db19dbdd046419d9bc37c1e184ab53ee94e96ffa3336d003f12410536927b',
   },
   {
     stage: 'monoid',
     packageAid: 'f06d6f6e6f696402',
-    appletAid: 'f06d6f6e6f696402010000',
+    appletAid: 'f06d6f6e6f69640201',
     codeURL: new URL('../../@assets/applets/monoid.bin', import.meta.url),
-    sha256: '1bf23c15f585e74204ebca17b26a22eeec0f02afe9427a9d72a5e2fec3566045',
+    sha256: '73274c49afc5a14df4be35f607ce63fcba40779fa725ef3d48c236072bbc9b28',
   },
 ];

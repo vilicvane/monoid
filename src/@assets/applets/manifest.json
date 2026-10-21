@@ -2,17 +2,17 @@
   {
     "name": "monoididentity",
     "packageAid": "f06d6f6e6f696400",
-    "appletAid": "f06d6f6e6f696400010000",
-    "capSha256": "17c98f6b2b3ba9c9acf0372f791a3583ac22e6a58a3e3579fa92a7c750955e01",
-    "loadSha256": "685e5c3fc78b233b55d32cb4cd688acf983e95768d7e088c23e0af83c5a9f833",
-    "loadBytes": 7597
+    "appletAid": "f06d6f6e6f69640001",
+    "capSha256": "b342c26d40d39c17633aeabdd73eac2846197d2848743a0526520ace30efaebe",
+    "loadSha256": "6a3db19dbdd046419d9bc37c1e184ab53ee94e96ffa3336d003f12410536927b",
+    "loadBytes": 10706
   },
   {
     "name": "monoid",
     "packageAid": "f06d6f6e6f696402",
-    "appletAid": "f06d6f6e6f696402010000",
-    "capSha256": "fd86a97ae1aece965a38816a6964e6b88abb51474ff266153a8489c7743867a0",
-    "loadSha256": "1bf23c15f585e74204ebca17b26a22eeec0f02afe9427a9d72a5e2fec3566045",
-    "loadBytes": 33861
+    "appletAid": "f06d6f6e6f69640201",
+    "capSha256": "a96f0385a30323ccbc5f0c00d30efc03877b050efcdb8f73496b6699eece84ec",
+    "loadSha256": "73274c49afc5a14df4be35f607ce63fcba40779fa725ef3d48c236072bbc9b28",
+    "loadBytes": 33862
   }
 ]

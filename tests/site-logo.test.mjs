@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-// eslint-disable-next-line @mufan/scoped-modules -- Exercise the built internal module directly.
 import {getSiteLogoUrls, parseHttpUrl} from '../.bld/app/@lib/site-logo.js';
 
 test('resolves relative logos against the site URL and preserves candidate order', () => {

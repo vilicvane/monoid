@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-// eslint-disable-next-line @mufan/scoped-modules -- Exercise the built internal module directly.
 import {
   buildWalletConnectNamespaces,
   getWalletConnectAddressType,
@@ -240,7 +239,7 @@ test('supports required Solana signing and broadcasting', () => {
 });
 
 test('normalizes chain-scoped Solana requests and preserves case-distinct accounts', () => {
-  const anotherAddress = SOLANA_ADDRESS.slice(0, -1) + 'V';
+  const anotherAddress = `${SOLANA_ADDRESS.slice(0, -1)}V`;
   const request = proposal({
     [SOLANA_CHAIN]: namespace(undefined, [], ['accountsChanged']),
   });

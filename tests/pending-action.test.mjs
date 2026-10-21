@@ -3,7 +3,6 @@ import {test} from 'node:test';
 
 import {observable, reaction, runInAction} from 'mobx';
 
-// eslint-disable-next-line @mufan/scoped-modules -- Exercise the pending list without initializing platform services.
 import {
   getPendingActionExpiry,
   getPendingActionTitle,

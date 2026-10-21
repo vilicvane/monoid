@@ -12,6 +12,7 @@ mock.module('../.bld/app/@lib/monoid/@applet-bundle.js', {
 });
 mock.module('../.bld/app/@lib/global-platform/install.js', {
   namedExports: {
+    CardManagerNotFoundError: class extends Error {},
     GlobalPlatformInstaller: {
       open: async transceive => {
         fixture.events.push('open GP');
@@ -81,7 +82,7 @@ beforeEach(() => {
       id: Uint8Array.of(1, 2, 3, 4),
       publicKey: Uint8Array.from([4, ...new Uint8Array(64)]),
       bundle: false,
-      pins: {access: false, safe: false},
+      pins: {access: false, secret: false},
     },
   };
   const code = Uint8Array.of(1, 2, 3);
@@ -91,7 +92,7 @@ beforeEach(() => {
     ...['identity', 'monoid'].map((stage, index) => ({
       stage,
       packageAid: `f06d6f6e6f69640${index * 2}`,
-      appletAid: `f06d6f6e6f69640${index * 2}010000`,
+      appletAid: `f06d6f6e6f69640${index * 2}01`,
       codeURL: new URL(
         `data:application/octet-stream;base64,${Buffer.from(code).toString('base64')}`,
       ),

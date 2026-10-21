@@ -3,14 +3,14 @@ import {afterEach, mock, test} from 'node:test';
 
 import {observable, runInAction, toJS} from 'mobx';
 
-import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
 import {MonoidWrongCardError} from '../.bld/app/@lib/monoid/card-error.js';
+import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
 import {
+  WalletStorageService,
   getWalletData,
   getWalletReference,
   matchesWalletReference,
-  WalletStorageService,
 } from '../.bld/app/@services/wallet-storage-service.js';
 
 let fixture;

@@ -13,8 +13,8 @@ function throwIfCancelled(signal: AbortSignal): void {
 }
 
 function assertPINsNotBlocked(hello: MonoidAppletHello): void {
-  if (hello.pins.safe === 0) {
-    throw new MonoidCardError('Safe PIN blocked');
+  if (hello.pins.secret === 0) {
+    throw new MonoidCardError('Secret PIN blocked');
   }
 
   if (hello.pins.access === 0) {
@@ -32,24 +32,24 @@ export async function initializeMonoidCard(
   assertPINsNotBlocked(hello);
 
   if (!MonoidPIN.is(pin)) {
-    throw new MonoidCardError('Safe PIN must contain 6 to 16 characters');
+    throw new MonoidCardError('Secret PIN must contain 6 to 16 characters');
   }
 
-  if (hello.pins.safe === false && hello.pins.access !== false) {
+  if (hello.pins.secret === false && hello.pins.access !== false) {
     throw new MonoidCardError('Card PIN state needs attention');
   }
 
-  if (hello.pins.access !== false && hello.pins.safe !== false) {
+  if (hello.pins.access !== false && hello.pins.secret !== false) {
     return hello;
   }
 
-  if (hello.pins.safe !== false) {
-    await applet.authenticate({safe: true, pin});
+  if (hello.pins.secret !== false) {
+    await applet.authenticate({secret: true, pin});
     throwIfCancelled(signal);
     await applet.setPIN({pin});
   } else {
-    // A new Safe PIN also initializes an unset Access PIN in firmware.
-    await applet.setPIN({safe: true, pin});
+    // A new Secret PIN also initializes an unset Access PIN in firmware.
+    await applet.setPIN({secret: true, pin});
   }
   throwIfCancelled(signal);
 
@@ -65,7 +65,7 @@ export async function initializeMonoidCard(
 
   assertPINsNotBlocked(initialized);
 
-  if (initialized.pins.access === false || initialized.pins.safe === false) {
+  if (initialized.pins.access === false || initialized.pins.secret === false) {
     throw new MonoidCardError('Card setup incomplete');
   }
 

@@ -2,19 +2,19 @@ import assert from 'node:assert/strict';
 import {afterEach, mock, test} from 'node:test';
 
 import {observable, runInAction, toJS} from 'mobx';
-import {CardStore} from '../.bld/app/@services/card-store.js';
 
 import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
 import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
+import {CardStore} from '../.bld/app/@services/card-store.js';
 import {
+  WalletStorageService,
   assertWalletPublicKeys,
   getWalletData,
   getWalletReference,
   matchesWalletReference,
-  WalletStorageService,
 } from '../.bld/app/@services/wallet-storage-service.js';
 
 let fixture;
@@ -258,6 +258,7 @@ function mount({items, keys = []}) {
     errors: [],
     routes: [],
     copies: [],
+    setups: [],
     authCount: 0,
     clears: 0,
     storage,
@@ -398,7 +399,7 @@ function mount({items, keys = []}) {
     id: bytes(state.view.card.id),
     publicKey: bytes(state.view.card.publicKey),
     bundle: false,
-    pins: {access: 5, safe: 5},
+    pins: {access: 5, secret: 5},
   };
   state.applet = {
     async createRandomKey(request) {
@@ -461,6 +462,7 @@ function mount({items, keys = []}) {
       safe: {
         $exact: {},
         copyItems: options => ({$push: () => state.copies.push(options)}),
+        setupCard: options => ({$push: () => state.setups.push(options)}),
       },
       $backTo: () => () => state.routes.push('safe'),
     },
@@ -479,12 +481,31 @@ function mount({items, keys = []}) {
 
 afterEach(() => owners.splice(0).forEach(owner => owner.unmount()));
 
+test('Setup card bundle passes the current card identity and starts in bundle mode without scanning', () => {
+  const state = mount({items: cardItems(INDEX, [wallet(0)])});
+  state.menuButton().props.onClick();
+  const setup = state.popupButton('Setup card bundle');
+  assert.ok(setup);
+  setup.props.onClick();
+  assert.deepEqual(state.setups, [
+    {
+      card: {id: state.card.id, publicKey: state.card.publicKey},
+      createBundle: true,
+    },
+  ]);
+  assert.equal(state.popup(), undefined);
+  assert.deepEqual(state.scans, []);
+  state.select(INDEX);
+  state.menuButton().props.onClick();
+  assert.equal(state.popupButton('Setup card bundle'), undefined);
+});
+
 test('Card actions remains available without a selection and cancelling deletion never starts a scan', () => {
   const state = mount({items: cardItems(INDEX, [wallet(0)])});
   assert.equal(state.menuButton().props.disabled, false);
   state.menuButton().props.onClick();
   assert.ok(state.popupButton('Update Access PIN'));
-  assert.ok(state.popupButton('Update Safe PIN'));
+  assert.ok(state.popupButton('Update Secret PIN'));
   assert.equal(state.popupButton('Delete'), undefined);
   state.popup().props.onDismiss();
 
@@ -494,7 +515,7 @@ test('Card actions remains available without a selection and cancelling deletion
   assert.equal(state.popup().props['aria-label'], 'Card actions');
   assert.equal(state.menuButton().props['aria-expanded'], true);
   assert.equal(state.popupButton('Update Access PIN'), undefined);
-  assert.equal(state.popupButton('Update Safe PIN'), undefined);
+  assert.equal(state.popupButton('Update Secret PIN'), undefined);
   state.popupButton('Delete').props.onClick();
   assert.equal(state.popup().props['aria-label'], 'Delete items');
   assert.equal(state.popup().props.initialFocus, 'dialog');
@@ -514,7 +535,7 @@ test('Card actions remains available without a selection and cancelling deletion
   assert.equal(state.menuButton().props.disabled, false);
 });
 
-for (const kind of ['Access', 'Safe']) {
+for (const kind of ['Access', 'Secret']) {
   test(`an empty card can open ${kind} PIN settings and keeps the menu disabled until completion`, () => {
     const state = mount({items: []});
     state.menuButton().props.onClick();
@@ -1278,7 +1299,7 @@ test('importing a preview does not save unrelated phone records to the card or i
   });
   const write = state.write;
   state.write = async (...args) => {
-    const result = await write(...args);
+    await write(...args);
     return {
       ...metadata(INDEX, [known, preview, discovered]),
       derivations: [known, preview, discovered],

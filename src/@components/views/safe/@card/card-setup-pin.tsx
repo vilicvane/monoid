@@ -8,7 +8,10 @@ import {
   MonoidWrongCardError,
   initializeMonoidCard,
 } from '../../../../@lib/monoid/index.js';
-import {isCredentialRequestCancelled} from '../../../../@services/index.js';
+import {
+  type MonoidPINSession,
+  isCredentialRequestCancelled,
+} from '../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {
   MonoidScanStatePromptContentHighlight,
@@ -39,16 +42,18 @@ function isInitialized(hello: MonoidAppletHello): boolean {
   return (
     hello.pins.access !== false &&
     hello.pins.access !== 0 &&
-    hello.pins.safe !== false &&
-    hello.pins.safe !== 0
+    hello.pins.secret !== false &&
+    hello.pins.secret !== 0
   );
 }
 
 export function CardSetupPIN({
   hello,
+  pinSession,
   onFinished,
 }: {
   hello: MonoidAppletHello;
+  pinSession?: MonoidPINSession;
   onFinished: (initialized: boolean, latestHello?: MonoidAppletHello) => void;
 }): ReactNode {
   const {errorService, monoidCredentialsStore} = useEntrances();
@@ -58,6 +63,7 @@ export function CardSetupPIN({
     ensureSetup: false,
     auth: false,
     retryOnError: false,
+    pinSession,
   });
   const finish = useRef(onFinished);
   finish.current = onFinished;
@@ -92,8 +98,8 @@ export function CardSetupPIN({
           showInput({
             type: 'password',
             ...getPINInputPlaceholder(
-              'Safe',
-              hello.pins.safe === false ? 'Set' : 'Enter existing',
+              'Secret',
+              hello.pins.secret === false ? 'Set' : 'Enter existing',
             ),
             description,
             center: true,
@@ -113,8 +119,8 @@ export function CardSetupPIN({
           initialized = true;
           return;
         }
-        if (hello.pins.safe === 0)
-          throw new MonoidCardError('Safe PIN blocked');
+        if (hello.pins.secret === 0)
+          throw new MonoidCardError('Secret PIN blocked');
         if (hello.pins.access === 0)
           throw new MonoidCardError('Access PIN blocked');
 
@@ -146,17 +152,17 @@ export function CardSetupPIN({
                     }
 
                     if (
-                      hello.pins.safe === false &&
-                      current.pins.safe !== false
+                      hello.pins.secret === false &&
+                      current.pins.secret !== false
                     ) {
                       throw new MonoidCardError(
-                        'Safe PIN already set, enter existing PIN',
+                        'Secret PIN already set, enter existing PIN',
                       );
                     }
 
                     setState(
-                      current.pins.safe === false
-                        ? 'Setting Safe PIN, hold tight...'
+                      current.pins.secret === false
+                        ? 'Setting Secret PIN, hold tight...'
                         : 'Setting Access PIN, hold tight...',
                     );
                     const result = await initializeMonoidCard(
@@ -204,7 +210,11 @@ export function CardSetupPIN({
             let saved = false;
             if (scanCompleted && accessPINAuthenticated && !signal.aborted) {
               try {
-                await monoidCredentialsStore.setPIN(accessPINId, pin, signal);
+                await (pinSession ?? monoidCredentialsStore).setPIN(
+                  accessPINId,
+                  pin,
+                  signal,
+                );
                 saved = true;
               } catch {
                 // The card setup remains valid if local credential storage fails.
@@ -237,7 +247,15 @@ export function CardSetupPIN({
       disposed = true;
       operation.abort();
     };
-  }, [hello, showInput, scan, toast, errorService, monoidCredentialsStore]);
+  }, [
+    hello,
+    pinSession,
+    showInput,
+    scan,
+    toast,
+    errorService,
+    monoidCredentialsStore,
+  ]);
 
   return (
     <>

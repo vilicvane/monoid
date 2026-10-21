@@ -22,12 +22,23 @@ export type GlobalPlatformInstallProgress =
   | {phase: 'checking' | 'configuring' | 'complete'}
   | {phase: 'uploading'; progress: number};
 
-type RegistryEntry = {
+export type RegistryEntry = {
+  aid: Uint8Array;
   lifecycle: number;
   modules: Uint8Array[];
+  packageAid?: Uint8Array;
+  /** GP tag CE on Java Card cards: raw CAP major, then minor version bytes. */
+  version?: {major: number; minor: number};
 };
 
-/** Bootstrap only: installs missing applets, never deletes or replaces card content. */
+export class CardManagerNotFoundError extends Error {
+  constructor() {
+    super('A supported card manager was not found on this card.');
+    this.name = new.target.name;
+  }
+}
+
+/** Installs missing applets and removes only explicitly selected registry entries. */
 export class GlobalPlatformInstaller {
   private constructor(
     private readonly transceive: CardTransceive,
@@ -37,6 +48,28 @@ export class GlobalPlatformInstaller {
   static async open(
     transceive: CardTransceive,
   ): Promise<GlobalPlatformInstaller> {
+    const aid = await this.selectDomain(transceive);
+    const channel = await openSecureChannel(transceive);
+
+    return new GlobalPlatformInstaller(
+      command => channel.transceive(command),
+      aid,
+    );
+  }
+
+  /** Read registry metadata without authenticating or exposing write operations. */
+  static async inspect(
+    transceive: CardTransceive,
+  ): Promise<Pick<GlobalPlatformInstaller, 'getEntry'>> {
+    const aid = await this.selectDomain(transceive);
+    const reader = new GlobalPlatformInstaller(transceive, aid);
+
+    return {getEntry: (scope, entryAid) => reader.getEntry(scope, entryAid)};
+  }
+
+  private static async selectDomain(
+    transceive: CardTransceive,
+  ): Promise<Uint8Array> {
     // ISDs on the project's NXP cards. Only NOT FOUND permits another SELECT.
     for (const hex of ['a000000151000000', 'a000000003000000']) {
       const aid = hexToUint8Array(hex);
@@ -49,15 +82,10 @@ export class GlobalPlatformInstaller {
       }
 
       successful(response, 'Selecting the card manager');
-      const channel = await openSecureChannel(transceive);
-
-      return new GlobalPlatformInstaller(
-        command => channel.transceive(command),
-        aid,
-      );
+      return aid;
     }
 
-    throw new Error('A supported card manager was not found on this card.');
+    throw new CardManagerNotFoundError();
   }
 
   async install(
@@ -66,7 +94,7 @@ export class GlobalPlatformInstaller {
   ): Promise<void> {
     onProgress({phase: 'checking'});
 
-    const instance = await this.findEntry(0x40, applet.appletAid);
+    const instance = await this.getEntry(0x40, applet.appletAid);
 
     if (instance) {
       if ((instance.lifecycle & 0x87) !== 0x07) {
@@ -79,7 +107,7 @@ export class GlobalPlatformInstaller {
       return;
     }
 
-    const loaded = await this.findEntry(0x10, applet.packageAid);
+    const loaded = await this.getEntry(0x10, applet.packageAid);
 
     if (loaded) {
       if (
@@ -108,7 +136,7 @@ export class GlobalPlatformInstaller {
       'Installing the applet',
     );
 
-    const installed = await this.findEntry(0x40, applet.appletAid);
+    const installed = await this.getEntry(0x40, applet.appletAid);
 
     if (!installed || (installed.lifecycle & 0x87) !== 0x07) {
       throw new Error(
@@ -117,6 +145,38 @@ export class GlobalPlatformInstaller {
     }
 
     onProgress({phase: 'complete'});
+  }
+
+  async removeInstance(appletAid: Uint8Array): Promise<void> {
+    await this.removeEntry(0x40, appletAid);
+  }
+
+  /** Dependencies remain protected by the card; this never requests cascading deletion. */
+  async removePackage(packageAid: Uint8Array): Promise<void> {
+    await this.removeEntry(0x10, packageAid);
+  }
+
+  private async removeEntry(
+    scope: 0x10 | 0x40,
+    aid: Uint8Array,
+  ): Promise<void> {
+    if (!(await this.getEntry(scope, aid))) return;
+
+    successful(
+      await this.transceive(
+        shortCommand(
+          0xe4,
+          0x00,
+          0x00,
+          concat(new Uint8Array([0x4f]), lengthValue(aid)),
+        ),
+      ),
+      scope === 0x40 ? 'Removing the applet instance' : 'Removing the package',
+    );
+
+    if (await this.getEntry(scope, aid)) {
+      throw new Error('The card did not confirm removal from its registry.');
+    }
   }
 
   private async load(
@@ -178,10 +238,13 @@ export class GlobalPlatformInstaller {
     }
   }
 
-  private async findEntry(
-    scope: number,
+  async getEntry(
+    scope: 0x10 | 0x40,
     aid: Uint8Array,
   ): Promise<RegistryEntry | undefined> {
+    if (aid.length < 5 || aid.length > 16) {
+      throw new Error('A card registry AID must contain 5–16 bytes.');
+    }
     const chunks: Uint8Array[] = [];
 
     for (let page = 0; page < 256; page++) {
@@ -221,22 +284,32 @@ export class GlobalPlatformInstaller {
         const fields = readTLV(record.value);
         const entryAid = fields.find(field => field.tag === 0x4f)?.value;
         const lifecycle = fields.find(field => field.tag === 0x9f70)?.value;
+        const packageAid = fields.find(field => field.tag === 0xc4)?.value;
+        const version = fields.find(field => field.tag === 0xce)?.value;
 
         if (
           !entryAid ||
           entryAid.length < 5 ||
           entryAid.length > 16 ||
-          lifecycle?.length !== 1
+          lifecycle?.length !== 1 ||
+          (packageAid !== undefined &&
+            (packageAid.length < 5 || packageAid.length > 16)) ||
+          (version !== undefined && version.length !== 2)
         ) {
           throw new Error('Missing or invalid card registry fields.');
         }
 
         if (equalBytes(entryAid, aid)) {
           return {
+            aid: entryAid,
             lifecycle: lifecycle[0],
             modules: fields
               .filter(field => field.tag === 0x84)
               .map(field => field.value),
+            ...(packageAid !== undefined && {packageAid}),
+            ...(version !== undefined && {
+              version: {major: version[0], minor: version[1]},
+            }),
           };
         }
       }

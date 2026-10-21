@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {beforeEach, mock, test} from 'node:test';
 
@@ -32,7 +33,7 @@ beforeEach(() => {
 
 const target = {
   packageAid: 'f06d6f6e6f696400',
-  appletAid: 'f06d6f6e6f696400010000',
+  appletAid: 'f06d6f6e6f69640001',
 };
 const component = (tag, body) =>
   Buffer.from([tag, body.length >> 8, body.length & 255, ...body]);
@@ -130,7 +131,7 @@ test('preparation bundles Identity and merged Monoid with their current AIDs in 
   const applets = names.map((name, index) => ({
     name,
     packageAid: `f06d6f6e6f69640${index * 2}`,
-    appletAid: `f06d6f6e6f69640${index * 2}010000`,
+    appletAid: `f06d6f6e6f69640${index * 2}01`,
   }));
 
   for (const applet of applets) {
@@ -155,6 +156,23 @@ test('preparation bundles Identity and merged Monoid with their current AIDs in 
     ['identity', 'monoid'],
   );
   assert(names.every(name => writtenFiles.has(`${name}.bin`)));
+  for (const entry of manifest) {
+    const cap = writtenFiles.get(`${entry.name}.cap`);
+    const code = writtenFiles.get(`${entry.name}.bin`);
+    assert.deepEqual(cap, sourceFiles.get(`${entry.name}.cap`));
+    assert.deepEqual(code, readAppletPackage(cap, entry).code);
+    assert.equal(
+      entry.capSha256,
+      createHash('sha256').update(cap).digest('hex'),
+    );
+    assert.equal(
+      entry.loadSha256,
+      createHash('sha256').update(code).digest('hex'),
+    );
+    assert.equal(entry.loadBytes, code.length);
+    assert(writtenFiles.get('@applet-bundle.ts').includes(entry.loadSha256));
+    assert(writtenFiles.get('@applet-bundle.ts').includes(entry.appletAid));
+  }
   assert(!writtenFiles.has('monoidsafe.cap'));
   assert(!writtenFiles.has('monoidsafe.bin'));
 
@@ -163,3 +181,25 @@ test('preparation bundles Identity and merged Monoid with their current AIDs in 
   await assert.rejects(prepareApplets('approved-caps'), /Missing/);
   assert.equal(writtenFiles.size, 0);
 });
+
+for (const legacyName of ['monoididentity', 'monoid']) {
+  test(`preparation rejects the old ${legacyName} AID without changing any bundled files`, async () => {
+    for (const [name, suffix] of [
+      ['monoididentity', '00'],
+      ['monoid', '02'],
+    ]) {
+      sourceFiles.set(
+        `${name}.cap`,
+        capFixture({
+          packageAid: `f06d6f6e6f6964${suffix}`,
+          appletAid: `f06d6f6e6f6964${suffix}01${name === legacyName ? '0000' : ''}`,
+        }).zip(),
+      );
+    }
+    await assert.rejects(
+      prepareApplets('approved-caps'),
+      /Unexpected applet AID/,
+    );
+    assert.equal(writtenFiles.size, 0);
+  });
+}

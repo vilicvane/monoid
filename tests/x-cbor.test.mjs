@@ -122,11 +122,13 @@ test('CBOR packing leaves non-plain objects available to their encoder', () => {
 });
 
 test('CBOR encoding rejects undefined array entries instead of removing them', () => {
+  const sparse = new Array(2);
+  sparse[1] = 1;
   for (const input of [
     [undefined, 1],
     [1, undefined],
     [1, [undefined]],
-    [, 1],
+    sparse,
   ]) {
     const before = structuredClone(input);
 

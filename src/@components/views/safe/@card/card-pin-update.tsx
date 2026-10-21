@@ -110,7 +110,7 @@ export const CardPINUpdate = observer(
 
       const run = async (): Promise<void> => {
         try {
-          currentPIN = await readPIN('Safe', 'Enter current');
+          currentPIN = await readPIN('Secret', 'Enter current');
           if (currentPIN === undefined) return;
           newPIN = await readPIN(kind, 'Enter new');
           if (newPIN === undefined) return;

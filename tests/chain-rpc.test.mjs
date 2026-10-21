@@ -9,7 +9,6 @@ import {
   toUtf8String,
 } from 'ethers';
 
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Exercise the service without initializing platform services.
 import {ChainService} from '../.bld/app/@services/chain-service.js';
 
 function mockRPC(context, Provider, respond) {

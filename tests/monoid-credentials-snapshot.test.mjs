@@ -263,6 +263,126 @@ test('a page PIN session reuses one unlock across cards and scan cleanup', async
   assert.equal(state.authentications.length, 2);
 });
 
+test('explicit preauthorization, reset credential removal and new PIN save share one access', async () => {
+  const state = fixture({[CARD]: PIN, [OTHER_CARD]: OTHER_PIN});
+  const session = state.store.createPINSession();
+  await session.authenticate();
+  assert.equal(state.authentications.length, 1);
+  assert.equal(state.authentications[0].reason, 'Unlock Access PINs');
+  assert.deepEqual(state.calls, []);
+
+  await session.removePIN(CARD);
+  assert.deepEqual(await session.getPINs(), {[OTHER_CARD]: OTHER_PIN});
+  assertSaved(state, {[OTHER_CARD]: OTHER_PIN});
+  await session.setPIN(CARD, 'Replacement PIN');
+
+  assert.deepEqual(state.calls, ['get', 'set', 'set']);
+  assert.equal(state.authentications.length, 1);
+  assertSaved(state, {[CARD]: 'Replacement PIN', [OTHER_CARD]: OTHER_PIN});
+  assert.deepEqual(await session.getPINs(), {
+    [CARD]: 'Replacement PIN',
+    [OTHER_CARD]: OTHER_PIN,
+  });
+  await session[Symbol.asyncDispose]();
+  assert.equal(state.disposals, 1);
+  assert.equal(state.authentications[0].signal.aborted, true);
+});
+
+test('unconditional removal clears the cached target while preserving other local PIN changes', async () => {
+  const state = fixture({[CARD]: PIN, [OTHER_CARD]: OTHER_PIN});
+  const session = state.store.createPINSession();
+  await session.getPINs();
+  session.rememberPIN(CARD, 'Unsaved target PIN');
+  session.rememberPIN(THIRD_CARD, 'Unsaved other PIN');
+  session.forgetPIN(OTHER_CARD, OTHER_PIN);
+
+  await session.removePIN(CARD);
+
+  assert.deepEqual(await session.getPINs(), {
+    [THIRD_CARD]: 'Unsaved other PIN',
+  });
+  assertSaved(state, {[OTHER_CARD]: OTHER_PIN});
+  assert.equal(session.hasUnsavedPIN(THIRD_CARD, 'Unsaved other PIN'), true);
+  await session[Symbol.asyncDispose]();
+});
+
+test('conditional removal preserves a different manually entered PIN in the session', async () => {
+  const state = fixture({[CARD]: PIN, [OTHER_CARD]: OTHER_PIN});
+  const session = state.store.createPINSession();
+  await session.getPINs();
+  session.rememberPIN(CARD, 'New manual PIN');
+
+  await session.removePIN(CARD, PIN);
+
+  assertSaved(state, {[OTHER_CARD]: OTHER_PIN});
+  assert.deepEqual(await session.getPINs(), {
+    [CARD]: 'New manual PIN',
+    [OTHER_CARD]: OTHER_PIN,
+  });
+  assert.equal(session.hasUnsavedPIN(CARD, 'New manual PIN'), true);
+  await session[Symbol.asyncDispose]();
+});
+
+test('conditional removal retains a concurrently changed saved PIN and refreshes the stale cached target', async () => {
+  const state = fixture({[CARD]: PIN, [OTHER_CARD]: OTHER_PIN});
+  const session = state.store.createPINSession();
+  await session.getPINs();
+  await new MonoidCredentialsStore(state.backend).setPIN(CARD, 'New saved PIN');
+  state.calls.length = 0;
+
+  await session.removePIN(CARD, PIN);
+
+  assert.deepEqual(state.calls, ['get']);
+  assertSaved(state, {[CARD]: 'New saved PIN', [OTHER_CARD]: OTHER_PIN});
+  assert.deepEqual(await session.getPINs(), {
+    [CARD]: 'New saved PIN',
+    [OTHER_CARD]: OTHER_PIN,
+  });
+  await session[Symbol.asyncDispose]();
+});
+
+for (const code of ['BIOMETRIC_UNAVAILABLE', 'CANCELLED']) {
+  test(`explicit preauthorization propagates ${code} without manual-PIN fallback or implicit retry`, async () => {
+    const state = fixture({[CARD]: PIN});
+    const session = state.store.createPINSession();
+    state.onAuthenticate = () => {
+      throw {code, message: 'private native details'};
+    };
+    await assert.rejects(session.authenticate(), error => {
+      assert.equal(error.code, code);
+      assert.equal(error.message.includes('private'), false);
+      return true;
+    });
+    state.onAuthenticate = undefined;
+    await assert.rejects(session.authenticate(), {code});
+    assert.equal(state.authentications.length, 1);
+    assert.deepEqual(state.calls, []);
+    session.clear();
+    await session.authenticate();
+    assert.equal(state.authentications.length, 2);
+    await session[Symbol.asyncDispose]();
+  });
+}
+
+test('cancelling preauthorization disposes a late access and does not read or mutate stored PINs', async () => {
+  const state = fixture({[CARD]: PIN});
+  const session = state.store.createPINSession();
+  const pending = Promise.withResolvers();
+  state.onAuthenticate = () => pending.promise;
+  const operation = new AbortController();
+  const rejected = assert.rejects(session.authenticate(operation.signal), {
+    code: 'CANCELLED',
+  });
+  await setImmediate();
+  operation.abort();
+  pending.resolve();
+  await rejected;
+  await session[Symbol.asyncDispose]();
+  assert.equal(state.disposals, 1);
+  assert.deepEqual(state.calls, []);
+  assertSaved(state, {[CARD]: PIN});
+});
+
 test('manual PIN saves refresh the page snapshot without another unlock', async () => {
   const state = fixture({[CARD]: PIN});
   const session = state.store.createPINSession();

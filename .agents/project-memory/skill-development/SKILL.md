@@ -5,10 +5,11 @@ description: Monoid app development basics, sibling firmware, Capacitor iOS/Andr
 
 # Monoid app development
 
-Source: `../records.md`, records 13, 14, 25–38 and 42–45. Treat these records as authoritative and keep them up to date.
+Source: `../records.md`, records 13, 14, 25–38 and 42–46. Treat these records as authoritative and keep them up to date.
 
 - The app (Ionic React + Capacitor, iOS and Android) drives the card applets of the sibling repo `monoid-javacard`, which owns the card protocol. The app mirrors its commands as x-value schemas in `src/@lib/monoid/monoid-applet.ts`, on top of the generic `CBORApplet`/`Applet` transport in `src/@lib`.
 - The project is old: point out whenever the user's choices conflict with the interactions its existing code implies.
+- The phone's HTTP development WebView is not a secure context: `crypto.randomUUID` is unavailable even when it works in Node or desktop localhost. Use the shared `createFlowId()` from `@utils` for flow IDs; it uses `crypto.getRandomValues`, which remains available over HTTP. Preserve the same constraint for QR/NFC scan IDs. For route regressions, test the real route initializer with `randomUUID` absent; a mocked button handler misses this failure. The user chose project-memory guidance, not a lint restriction (record 46).
 - When a wallet list is the main content of a page (including Transactions wallet selection), use the shared roomy layout by default. Embedded account summaries opt into `WalletAccountList`'s `compact` spacing; `compactContent` separately controls the gap between tags and address.
 - Verify from the repo root with `npx tsc --build --pretty false` and `npx prettier --check <files>`.
 - Run ESLint from `src`, e.g. `Push-Location src; npx eslint --report-unused-disable-directives '<path>'; Pop-Location`. From the root it fails with "TSConfig does not include this file". Quote `@`-prefixed paths in PowerShell.

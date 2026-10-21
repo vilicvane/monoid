@@ -3,7 +3,6 @@ import {test} from 'node:test';
 
 import {reaction} from 'mobx';
 
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Exercise the service without initializing platform services.
 import {AddressBookService} from '../.bld/app/@services/address-book-service.js';
 
 const ADDRESS = '0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC';

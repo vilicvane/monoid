@@ -19,6 +19,11 @@ export const FEATURES = [
     name: 'Solana',
     description: 'View your Solana transaction history.',
   },
+  {
+    route: 'cardApplets',
+    name: 'Card Applets',
+    description: 'Manage card applets.',
+  },
 ] as const;
 
 export type FeatureRoute = (typeof FEATURES)[number]['route'];

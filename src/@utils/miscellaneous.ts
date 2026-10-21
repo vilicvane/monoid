@@ -1,5 +1,10 @@
 import type {TransformNominal} from '../@x-value/index.js';
 
+/** Unlike randomUUID, getRandomValues is available in HTTP WebViews. */
+export function createFlowId(): string {
+  return crypto.getRandomValues(new Uint32Array(4)).join('-');
+}
+
 export function hexToUint8Array<T extends string>(
   hex: T,
 ): TransformNominal<T, Uint8Array, '- hex'>;

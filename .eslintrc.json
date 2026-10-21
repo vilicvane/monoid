@@ -6,12 +6,16 @@
     "/dist/",
     "/android/",
     "/ios/",
-    "/plugins/keyboard/"
+    "/vite.config.js",
+    "/capacitor.config.js",
+    "/plugins/",
+    "/workers/"
   ],
   "extends": ["plugin:@mufan/javascript"],
   "overrides": [
     {
       "files": "**/*.{js,mjs}",
+      "env": {"es2022": true},
       "parserOptions": {
         "sourceType": "module"
       }
@@ -32,8 +36,16 @@
       }
     },
     {
+      "files": ["tests/**/*.test.mjs"],
+      "rules": {
+        "@mufan/import": "off",
+        "@mufan/scoped-modules": "off"
+      }
+    },
+    {
       "files": ["vite.config.ts", "capacitor.config.ts"],
-      "extends": ["plugin:@mufan/typescript", "plugin:@mufan/dev"]
+      "extends": ["plugin:@mufan/typescript", "plugin:@mufan/dev"],
+      "parserOptions": {"project": "tsconfig.node.json"}
     }
   ]
 }

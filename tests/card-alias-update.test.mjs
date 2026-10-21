@@ -18,7 +18,7 @@ function hello(card = CARD) {
     id: bytes(card.id),
     publicKey: bytes(card.publicKey),
     bundle: false,
-    pins: {access: 5, safe: 5},
+    pins: {access: 5, secret: 5},
   };
 }
 

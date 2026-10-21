@@ -6,9 +6,22 @@ import type {EvmTransactionReplacementKind} from './@lib/evm-transaction-replace
 import type {CardInformation} from './@lib/global-platform/card-information.js';
 import type {AddressChain} from './@lib/wallet-address.js';
 import type {WalletConnectAuthentication} from './@lib/wallet-connect-authentication.js';
+import {createFlowId} from './@utils/index.js';
 
 export const ROUTE_SCHEMA = {
   features: true,
+  cardApplets: {
+    $state: (
+      state:
+        | {
+            cardInformation?: CardInformation;
+            returnTo?: 'safe' | 'copy' | 'bundle';
+            copyId?: string;
+            bundleId?: string;
+          }
+        | undefined,
+    ) => state ?? {},
+  },
   bitcoin: {
     wallet: {
       $state: undefined! as {address: string},
@@ -98,10 +111,16 @@ export const ROUTE_SCHEMA = {
       },
     },
     setupCard: {
-      $state: undefined! as {
+      $state: (state: {
         cardInformation?: CardInformation;
+        card?: Pick<ScannedCardData, 'id' | 'publicKey'>;
+        createBundle?: boolean;
         copyId?: string;
-      },
+        bundleId?: string;
+      }) => ({
+        ...state,
+        bundleId: state.bundleId ?? createFlowId(),
+      }),
     },
     card: {
       $state: undefined! as {

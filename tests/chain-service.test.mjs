@@ -1,11 +1,8 @@
-/* global globalThis */
-
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
 import {reaction} from 'mobx';
 
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Exercise the service without initializing platform services.
 import {ChainService} from '../.bld/app/@services/chain-service.js';
 
 const NOW = 1_000_000_000;

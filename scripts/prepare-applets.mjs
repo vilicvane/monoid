@@ -12,13 +12,13 @@ const targets = [
     name: 'monoididentity',
     stage: 'identity',
     packageAid: 'f06d6f6e6f696400',
-    appletAid: 'f06d6f6e6f696400010000',
+    appletAid: 'f06d6f6e6f69640001',
   },
   {
     name: 'monoid',
     stage: 'monoid',
     packageAid: 'f06d6f6e6f696402',
-    appletAid: 'f06d6f6e6f696402010000',
+    appletAid: 'f06d6f6e6f69640201',
   },
 ];
 

@@ -8,6 +8,7 @@ import {BitcoinTransactionView} from './views/bitcoin-transaction-view.js';
 import {BitcoinTransactionsView} from './views/bitcoin-transactions-view.js';
 import {BitcoinWalletView} from './views/bitcoin-wallet-view.js';
 import {BitcoinWalletsView} from './views/bitcoin-wallets-view.js';
+import {CardManagementView} from './views/card/card-management-view.js';
 import {EthereumTransactionHistoryView} from './views/ethereum-transaction-history-view.js';
 import {EthereumTransactionReplacementView} from './views/ethereum-transaction-replacement-view.js';
 import {EthereumTransactionsView} from './views/ethereum-transactions-view.js';
@@ -37,6 +38,7 @@ export const Views = (): ReactNode => {
       <WalletConnectRequests />
       <SessionsRequestFab />
       <Route view={router.features.$view()} component={FeaturesView} />
+      <Route view={router.cardApplets.$view()} component={CardManagementView} />
       <Route
         view={router.bitcoin.$exact.$view()}
         component={BitcoinWalletsView}

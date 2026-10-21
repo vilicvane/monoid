@@ -3,7 +3,6 @@ import {test} from 'node:test';
 
 import {routra} from 'routra';
 
-// eslint-disable-next-line @mufan/scoped-modules -- Exercise the app's routes without initializing platform services.
 import {ROUTE_SCHEMA} from '../.bld/app/@routes.js';
 
 async function createRouter() {
@@ -16,7 +15,42 @@ function matchingRoots(router, activity) {
   return Object.keys(ROUTE_SCHEMA).filter(name => router[name][activity]);
 }
 
-for (const feature of ['sessions', 'ethereum', 'solana', 'bitcoin']) {
+test('Bundle setup opens distinct flows from Card in HTTP WebViews and retains a supplied flow ID', async t => {
+  const webCrypto = globalThis.crypto;
+  t.mock.getter(globalThis, 'crypto', () => ({
+    getRandomValues: webCrypto.getRandomValues.bind(webCrypto),
+  }));
+  const router = await createRouter();
+  const card = {id: '01020304', publicKey: `04${'01'.repeat(64)}`};
+  await router.safe.card({card}).$push().$completed;
+
+  const ids = [];
+  for (let i = 0; i < 2; i++) {
+    await router.safe.setupCard({card, createBundle: true}).$push().$completed;
+    assert.equal(router.safe.setupCard.$exact.$active, true);
+    assert.deepEqual({...router.$state.card}, card);
+    assert.equal(router.$state.createBundle, true);
+    assert.equal(typeof router.$state.bundleId, 'string');
+    assert.ok(router.$state.bundleId.length > 0);
+    ids.push(router.$state.bundleId);
+    await router.$back().$completed;
+    assert.equal(router.safe.card.$exact.$active, true);
+  }
+  assert.notEqual(ids[0], ids[1]);
+
+  await router.safe
+    .setupCard({card, createBundle: true, bundleId: ids[0]})
+    .$push().$completed;
+  assert.equal(router.$state.bundleId, ids[0]);
+});
+
+for (const feature of [
+  'sessions',
+  'ethereum',
+  'solana',
+  'bitcoin',
+  'cardApplets',
+]) {
   test(`opening ${feature} from the hub preserves a return to the hub`, async () => {
     const router = await createRouter();
     assert.equal(router.$ableToBack, false);

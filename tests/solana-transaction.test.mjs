@@ -264,9 +264,9 @@ test('rejects malformed base64, empty transactions, and noncanonical padding', (
   for (const invalid of [
     '',
     'not base64!',
-    valid + '\n',
-    ' ' + valid,
-    valid + '=',
+    `${valid}\n`,
+    ` ${valid}`,
+    `${valid}=`,
     'AQ=',
     'AR==',
   ]) {

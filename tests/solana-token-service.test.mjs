@@ -1,5 +1,3 @@
-/* global globalThis */
-
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
@@ -7,7 +5,6 @@ import {setImmediate} from 'node:timers/promises';
 import {base58} from '@scure/base';
 import {reaction} from 'mobx';
 
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Test the service without platform initialization.
 import {SolanaTokenService} from '../.bld/app/@services/solana-token-service.js';
 
 const MAINNET = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';

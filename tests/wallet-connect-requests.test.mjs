@@ -4,7 +4,6 @@ import {mock, test} from 'node:test';
 import {observable, runInAction} from 'mobx';
 import {routra} from 'routra';
 
-// eslint-disable-next-line @mufan/scoped-modules -- Exercise the app's routes without initializing platform services.
 import {ROUTE_SCHEMA} from '../.bld/app/@routes.js';
 
 let entrances;
@@ -62,6 +61,7 @@ function fixture(context) {
     router: {
       $path: 'features',
       features: route(),
+      cardApplets: route(),
       bitcoin: Object.assign(route(), {
         wallet: Object.assign(route(), {send: route()}),
       }),
@@ -99,7 +99,13 @@ test('a settled feature hub presents a new request once', context => {
   assert.deepEqual(pushed, [1]);
 });
 
-for (const feature of ['features', 'ethereum', 'solana', 'bitcoin']) {
+for (const feature of [
+  'features',
+  'cardApplets',
+  'ethereum',
+  'solana',
+  'bitcoin',
+]) {
   for (const transition of ['$transition', '$switching']) {
     test(`${feature} ${transition} delays automatic request navigation until settled`, context => {
       const {router, requests, pushed} = fixture(context);
@@ -118,7 +124,7 @@ for (const feature of ['features', 'ethereum', 'solana', 'bitcoin']) {
   }
 }
 
-for (const feature of ['ethereum', 'solana', 'bitcoin']) {
+for (const feature of ['cardApplets', 'ethereum', 'solana', 'bitcoin']) {
   test(`browsing ${feature} allows new requests to open`, context => {
     const {router, requests, pushed} = fixture(context);
     runInAction(() => {
@@ -200,6 +206,31 @@ for (const feature of ['ethereum', 'solana']) {
     assert.deepEqual({...router.$state}, {address: 'wallet-address'});
   });
 }
+
+test('Card Applets request navigation waits for a cancelled back gesture and preserves the maintenance route', async context => {
+  const {requests} = fixture(context);
+  const router = routra(ROUTE_SCHEMA, {});
+  entrances.router = router;
+  await router.features.$reset().$completed;
+  await router.cardApplets({returnTo: 'copy', copyId: 'pending-copy'}).$push()
+    .$completed;
+  WalletConnectRequests();
+
+  const swipe = router.$back.$switch({progress: 0.4});
+  runInAction(() => requests.set(1, {id: 1}));
+  assert.equal(router.sessions.request.$matched, false);
+  assert.equal(router.cardApplets.$exact.$active, true);
+
+  swipe.$abort();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(router.sessions.request.$exact.$active, true);
+  assert.equal(router.$state.id, 1);
+
+  await router.$back().$completed;
+  assert.equal(router.cardApplets.$exact.$active, true);
+  assert.equal(router.$state.returnTo, 'copy');
+  assert.equal(router.$state.copyId, 'pending-copy');
+});
 
 for (const kind of ['speed-up', 'cancel']) {
   test(`actual Ethereum ${kind} review keeps incoming requests manual on exit`, async context => {

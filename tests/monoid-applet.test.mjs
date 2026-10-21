@@ -131,7 +131,7 @@ test('Hello always includes the stable Identity, Bundle and both PIN states', as
       id: bytes('01020304'),
       publicKey: identityPublicKey,
       bundle,
-      pins: {access: false, safe: 0},
+      pins: {access: false, secret: 0},
     };
     const {applet, commands} = await createSession(response);
 
@@ -154,6 +154,40 @@ test('System information uses the numeric transient memory values emitted by the
 
   assert.deepEqual(await applet.systemInformation({}), response);
   assertRequest(commands, 0x2f, {});
+});
+
+test('Bundle creation sends the complete member list and preserves all response packets', async () => {
+  const publicKeys = [
+    identityPublicKey,
+    new Uint8Array(identityPublicKey).fill(0x42, 1),
+  ];
+  const response = {
+    bundle: new Uint8Array(32).fill(0x43),
+    packets: [{publicKey: publicKeys[1], data: new Uint8Array(246).fill(0x44)}],
+  };
+  const {applet, commands} = await createSession(response);
+  assert.deepEqual(await applet.createBundle({publicKeys}), response);
+  assertRequest(commands, 0x23, {publicKeys});
+});
+
+test('Bundle join puts the creator key before the enrollment packet across request fragments', async () => {
+  const response = {bundle: new Uint8Array(32).fill(0x45)};
+  const request = {
+    senderPublicKey: identityPublicKey,
+    data: new Uint8Array(311).fill(0x46),
+  };
+  const {applet, commands} = await createSession(response);
+  assert.deepEqual(await applet.joinBundle(request), response);
+  assertRequest(commands, 0x24, request);
+});
+
+test('full Reset uses 0xff with empty request and response and does not authenticate first', async () => {
+  const {applet, commands} = await createSession({});
+  assert.deepEqual(await applet.reset({}), {});
+  assertRequest(commands, 0xff, {});
+  assert.equal(commands.length, 1);
+  assert.equal(applet.importBundle, undefined);
+  assert.equal(applet.resetBundle, undefined);
 });
 
 test('raw key requests include their explicit curve type', async () => {
@@ -620,14 +654,14 @@ test('Authenticate and SetPIN follow their different firmware field orders', asy
     [
       'authenticate',
       0x21,
-      {safe: true, pin: '123456'},
-      'a26473616665f56370696e66313233343536',
+      {secret: true, pin: '123456'},
+      'a266736563726574f56370696e66313233343536',
     ],
     [
       'setPIN',
       0x22,
-      {pin: '123456', safe: true},
-      'a26370696e663132333435366473616665f5',
+      {pin: '123456', secret: true},
+      'a26370696e6631323334353666736563726574f5',
     ],
   ]) {
     const {applet, commands} = await createSession({});

@@ -2,6 +2,7 @@ import bitcoin from '@web3icons/core/svgs/networks/mono/bitcoin.svg.js';
 import ethereum from '@web3icons/core/svgs/networks/mono/ethereum.svg.js';
 import solana from '@web3icons/core/svgs/networks/mono/solana.svg.js';
 import walletConnect from '@web3icons/core/svgs/wallets/mono/wallet-connect.svg.js';
+import {CreditCard as creditCard} from 'lucide-react';
 
 import {
   FEATURES as FEATURE_DEFINITIONS,
@@ -18,6 +19,7 @@ const FEATURE_VISUALS: Record<
   bitcoin: {icon: bitcoin, color: '#f7931a'},
   ethereum: {icon: ethereum, color: '#627eea'},
   solana: {icon: solana, color: '#9945ff'},
+  cardApplets: {icon: creditCard, color: 'var(--ion-color-safe)'},
 };
 
 export const FEATURES = FEATURE_DEFINITIONS.map(feature => ({

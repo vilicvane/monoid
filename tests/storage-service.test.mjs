@@ -1,10 +1,8 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Exercise the storage boundary without platform initialization.
-import {StorageService} from '../.bld/app/@services/storage-service.js';
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Reproduce startup with an absent token cache.
 import {SolanaTokenService} from '../.bld/app/@services/solana-token-service.js';
+import {StorageService} from '../.bld/app/@services/storage-service.js';
 
 test('normalizes absent storage values before initializing token metadata', async () => {
   for (const value of [null, undefined]) {

@@ -13,7 +13,7 @@ const hello = {
   id: bytes(card.id),
   publicKey: bytes(card.publicKey),
   bundle: false,
-  pins: {access: 5, safe: 5},
+  pins: {access: 5, secret: 5},
 };
 const oldPIN = 'old-pin',
   newPIN = 'new-pin';
@@ -41,13 +41,13 @@ function fixture() {
   return {calls, controller, applet, run};
 }
 
-for (const kind of ['Access', 'Safe']) {
-  test(`${kind} PIN update authenticates with current Safe PIN and returns the Identity ID`, async () => {
+for (const kind of ['Access', 'Secret']) {
+  test(`${kind} PIN update authenticates with current Secret PIN and returns the Identity ID`, async () => {
     const state = fixture();
     assert.equal(await state.run(kind), card.id);
     assert.deepEqual(state.calls, [
-      ['authenticate', {safe: true, pin: oldPIN}],
-      ['setPIN', {pin: newPIN, ...(kind === 'Safe' && {safe: true})}],
+      ['authenticate', {secret: true, pin: oldPIN}],
+      ['setPIN', {pin: newPIN, ...(kind === 'Secret' && {secret: true})}],
     ]);
   });
 }
@@ -65,7 +65,7 @@ test('a different full Safe identity is rejected before any credential is sent',
 });
 
 for (const tries of [4, 0]) {
-  test(`invalid Safe PIN with ${tries} tries left never changes or retries the PIN`, async () => {
+  test(`invalid Secret PIN with ${tries} tries left never changes or retries the PIN`, async () => {
     const state = fixture();
     let attempts = 0;
     state.applet.authenticate = async () => {
@@ -74,19 +74,19 @@ for (const tries of [4, 0]) {
     };
     await assert.rejects(state.run(), {
       message: tries
-        ? 'Incorrect Safe PIN, tries remaining: 4'
-        : 'Safe PIN blocked',
+        ? 'Incorrect Secret PIN, tries remaining: 4'
+        : 'Secret PIN blocked',
     });
     assert.equal(attempts, 1);
     assert.deepEqual(state.calls, []);
   });
 }
 
-test('a blocked or uninitialized Safe does not consume authentication attempts', async () => {
+test('a blocked or uninitialized Secret PIN does not consume authentication attempts', async () => {
   for (const pin of [0, false]) {
     const state = fixture();
     await assert.rejects(
-      state.run('Safe', {...hello, pins: {...hello.pins, safe: pin}}),
+      state.run('Secret', {...hello, pins: {...hello.pins, secret: pin}}),
     );
     assert.deepEqual(state.calls, []);
   }

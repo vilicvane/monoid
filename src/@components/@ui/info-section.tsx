@@ -30,6 +30,19 @@ export const InfoSectionDivider = styled.hr`
   opacity: 0.3;
 `;
 
+export const InfoLegend = styled(Tag).attrs({as: 'legend'})`
+  position: relative;
+  z-index: 1;
+  width: fit-content;
+  max-width: 100%;
+  margin-left: calc(
+    var(--info-fieldset-label-inset) - var(--info-fieldset-padding) - var(
+        --info-fieldset-border-width
+      )
+  );
+  ${darkTagCSS}
+`;
+
 export const InfoFieldset = styled(InfoSection).attrs({as: 'fieldset'})<{
   $equalPadding?: boolean;
 }>`
@@ -60,19 +73,16 @@ export const InfoFieldset = styled(InfoSection).attrs({as: 'fieldset'})<{
     border-radius: var(--info-border-radius);
     pointer-events: none;
   }
-`;
 
-export const InfoLegend = styled(Tag).attrs({as: 'legend'})`
-  position: relative;
-  z-index: 1;
-  width: fit-content;
-  max-width: 100%;
-  margin-left: calc(
-    var(--info-fieldset-label-inset) - var(--info-fieldset-padding) - var(
-        --info-fieldset-border-width
-      )
-  );
-  ${darkTagCSS}
+  &:has(> legend${InfoLegend}) {
+    /* The native fieldset border leaves a gap beneath its legend. */
+    border-color: var(--ion-color-light-shade);
+    border-radius: var(--info-border-radius);
+
+    &::before {
+      content: none;
+    }
+  }
 `;
 
 export const InfoFieldsetHeader = styled.legend`
@@ -119,6 +129,22 @@ export const InfoSectionItemLabel = styled.div`
 export const InfoSectionItemContent = styled.div`
   max-width: 100%;
   overflow-wrap: anywhere;
+`;
+
+export const InfoSectionFlowItem = styled(InfoSectionItem)`
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 16px;
+
+  > ${InfoSectionItemLabel} {
+    flex-grow: 1;
+  }
+
+  > ${InfoSectionItemContent} {
+    flex-basis: max-content;
+    min-width: 0;
+  }
 `;
 
 export const InfoFieldsetValue = styled(InfoSectionItemContent)`

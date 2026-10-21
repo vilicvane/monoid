@@ -41,7 +41,7 @@ export const MonoidAppletHello = x.object({
   bundle: x.union([XUint8Array, x.literal(false)]),
   pins: x.object({
     access: x.union([x.number, x.literal(false)]),
-    safe: x.union([x.number, x.literal(false)]),
+    secret: x.union([x.number, x.literal(false)]),
   }),
 });
 export type MonoidAppletHello = x.TypeOf<typeof MonoidAppletHello>;
@@ -127,7 +127,7 @@ export const monoidCommandDefinitions = {
   authenticate: {
     ins: 0x21,
     request: x.object({
-      safe: x.literal(true).optional(),
+      secret: x.literal(true).optional(),
       pin: x.string,
     }),
     response: x.object({}),
@@ -137,8 +137,29 @@ export const monoidCommandDefinitions = {
     ins: 0x22,
     request: x.object({
       pin: MonoidPIN,
-      safe: x.literal(true).optional(),
+      secret: x.literal(true).optional(),
     }),
+    response: x.object({}),
+  },
+
+  createBundle: {
+    ins: 0x23,
+    request: x.object({publicKeys: x.array(PublicKey)}),
+    response: x.object({
+      bundle: XUint8Array,
+      packets: x.array(x.object({publicKey: PublicKey, data: XUint8Array})),
+    }),
+  },
+
+  joinBundle: {
+    ins: 0x24,
+    request: x.object({senderPublicKey: PublicKey, data: XUint8Array}),
+    response: x.object({bundle: XUint8Array}),
+  },
+
+  reset: {
+    ins: 0xff,
+    request: x.object({}),
     response: x.object({}),
   },
 
@@ -187,7 +208,7 @@ export const monoidCommandDefinitions = {
     }),
   },
 
-  // Secret items cannot be read as plaintext, even with Safe authentication.
+  // Secret items cannot be read as plaintext, even with Secret PIN authentication.
   get: {
     ins: 0x32,
     request: x.object({index: SafeIndex}),
@@ -225,7 +246,7 @@ export const monoidCommandDefinitions = {
     response: x.object({}),
   },
 
-  // Safe authentication is required. Enrolled cards export for their Bundle;
+  // Secret PIN authentication is required. Enrolled cards export for their Bundle;
   // otherwise recipientPublicKey is required for asymmetric transfer.
   exportItem: {
     ins: 0x36,
@@ -240,7 +261,8 @@ export const monoidCommandDefinitions = {
     }),
   },
 
-  // Preserve the original index and metadata, including omitted versus empty fields.
+  // Secret PIN authentication is required. Preserve the original index and
+  // metadata, including omitted versus empty fields.
   importItem: {
     ins: 0x37,
     request: x.object({

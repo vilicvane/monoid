@@ -3,7 +3,6 @@ import {test} from 'node:test';
 
 import {reaction} from 'mobx';
 
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Exercise the service without initializing platform services.
 import {EvmCallHistoryService} from '../.bld/app/@services/evm-call-history-service.js';
 
 const ADDRESS = '0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC';

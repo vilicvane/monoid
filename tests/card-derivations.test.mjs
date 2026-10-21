@@ -648,7 +648,9 @@ test('native address records read equivalent ordinary keys once and keep Taproot
     ],
   );
   assert.deepEqual(
-    result.derivations.map(({publicKey, ...parameters}) => parameters),
+    result.derivations.map(
+      ({publicKey: _publicKey, ...parameters}) => parameters,
+    ),
     wallets,
   );
   assert.equal(result.derivations[0].publicKey, SECP_PUBLIC_KEY);

@@ -4,7 +4,6 @@ import {test} from 'node:test';
 import {buildAuthObject, formatMessage} from '@walletconnect/utils';
 import {Wallet, verifyMessage} from 'ethers';
 
-// eslint-disable-next-line @mufan/scoped-modules -- Exercise the built internal module directly.
 import {
   buildWalletConnectAuthentication,
   getWalletConnectRequestExpiry,

@@ -10,11 +10,11 @@ import {
   readCardKeyAddress,
   readCardWalletDerivations,
 } from '../.bld/app/@components/views/safe/card-address.js';
-import {isCardKeyItem} from '../.bld/app/@components/views/safe/common.js';
 import {
   encodeCardDerivationRecord,
   getCardDerivationItemIndex,
 } from '../.bld/app/@components/views/safe/card-derivations.js';
+import {isCardKeyItem} from '../.bld/app/@components/views/safe/common.js';
 import {scanCardItems} from '../.bld/app/@components/views/safe/scan-card.js';
 import {parseDerivationPath} from '../.bld/app/@lib/bip39.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
@@ -564,7 +564,7 @@ test('Taproot output, path, and derivation curve stay separate despite equal-loo
   assert.equal(requests[0].taproot, undefined);
   assert.equal(requests[1].taproot, true);
   assert.deepEqual(
-    derived.map(({publicKey, ...wallet}) => wallet),
+    derived.map(({publicKey: _publicKey, ...wallet}) => wallet),
     wallets,
   );
 });

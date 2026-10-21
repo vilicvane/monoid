@@ -335,7 +335,7 @@ function fixture(t, overrides = {}) {
       }
     },
     hidden(hidden) {
-      document.hidden = hidden;
+      globalThis.document.hidden = hidden;
       for (const listener of [...visibilityListeners]) listener();
     },
     nativeEvent(name, event) {

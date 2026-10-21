@@ -108,6 +108,8 @@ export class CardState implements ScannedCardData {
   readonly publicKey: PublicKeyHex;
   bundle: string | false;
   items: CardItem[];
+  /** Reset invalidates the initialization assumed by the original Card scan. */
+  requiresPINSetup = false;
 
   constructor(card: ScannedCardData) {
     this.id = card.id;
@@ -165,12 +167,18 @@ export class CardStore {
     return this.cards.get(`${identity.id}:${identity.publicKey}`);
   }
 
+  /** An interrupted applet replacement makes the scanned resource list stale. */
+  forget(identity: CardIdentity): void {
+    this.cards.delete(`${identity.id}:${identity.publicKey}`);
+  }
+
   set(card: ScannedCardData): CardState {
     const existing = this.get(card);
 
     if (existing) {
       existing.bundle = card.bundle;
       existing.items = card.items.map(item => new CardItem(item));
+      existing.requiresPINSetup = false;
       return existing;
     }
 

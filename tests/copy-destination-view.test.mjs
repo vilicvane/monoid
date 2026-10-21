@@ -3,10 +3,6 @@ import {afterEach, mock, test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
 
 import {
-  MonoidCardError,
-  MonoidWrongCardError,
-} from '../.bld/app/@lib/monoid/card-error.js';
-import {
   CardBackupSession,
   assertBackupBundle,
   assertBackupCard,
@@ -17,6 +13,10 @@ import {
   encodeCardDerivationRecord,
   getCardDerivationItemIndex,
 } from '../.bld/app/@components/views/safe/card-derivations.js';
+import {
+  MonoidCardError,
+  MonoidWrongCardError,
+} from '../.bld/app/@lib/monoid/card-error.js';
 
 let fixture;
 let rendering;
@@ -121,22 +121,19 @@ mock.module('../.bld/app/@components/@monoid/use-isodep-scan-prompt.js', {
     },
   },
 });
-mock.module(
-  '../.bld/app/@components/views/safe/@card/read-copy-destination.js',
-  {
-    namedExports: {
-      readCopyDestination: async (sessionId, applet, onStatus, signal) => {
-        fixture.reads.push({sessionId, applet, signal});
-        onStatus('Reading card information, hold tight...');
-        return fixture.readPending
-          ? fixture.readPending.promise
-          : fixture.needsSetup
-            ? {type: 'setup', cardInformation: fixture.cardInformation}
-            : {type: 'ready', hello: fixture.hello};
-      },
+mock.module('../.bld/app/@components/views/safe/@card/read-card-for-setup.js', {
+  namedExports: {
+    readCardForSetup: async (sessionId, applet, onStatus, signal) => {
+      fixture.reads.push({sessionId, applet, signal});
+      onStatus('Reading card information, hold tight...');
+      return fixture.readPending
+        ? fixture.readPending.promise
+        : fixture.needsSetup
+          ? {type: 'setup', cardInformation: fixture.cardInformation}
+          : {type: 'ready', hello: fixture.hello};
     },
   },
-);
+});
 mock.module('../.bld/app/@components/views/safe/@card/card-backup-session.js', {
   namedExports: {
     CardBackupSession: class extends CardBackupSession {
@@ -249,7 +246,7 @@ function hello(number, initialized = true, bundle = false) {
     id: Uint8Array.of(0, 0, 0, number),
     publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(number)),
     bundle,
-    pins: {access: initialized ? 5 : false, safe: initialized ? 5 : false},
+    pins: {access: initialized ? 5 : false, secret: initialized ? 5 : false},
   };
 }
 
@@ -342,13 +339,13 @@ function mount({
       $backTo: () => undefined,
       safe: {
         $exact: {},
-        setupCard: data => ({
-          $push() {
-            state.routes.push({type: 'setup', ...data});
-            state.view.$match.$exact.$active = false;
-          },
-        }),
       },
+      cardApplets: data => ({
+        $push() {
+          state.routes.push({type: 'setup', ...data});
+          state.view.$match.$exact.$active = false;
+        },
+      }),
     },
     copyItemsStore,
     monoidApplet: {},
@@ -435,6 +432,7 @@ test('an uninstalled destination opens Setup only after scan cleanup and preserv
       type: 'setup',
       cardInformation: state.cardInformation,
       copyId: state.view.copyId,
+      returnTo: 'copy',
     },
   ]);
   assert.deepEqual(state.initializations, []);
@@ -829,11 +827,17 @@ test('single-item import shows the count and changes to Checking card during fin
     () => {},
   );
   state.click('Scan a destination card');
+  assert.equal(state.monoidScans.length, 0);
+  state.inputs.at(-1).finished.resolve(PIN);
+  await state.flush();
   const scan = state.monoidScans[0];
+  assert.equal(scan.options.auth, undefined);
   const progress = [];
+  const authentication = [];
   scan.validate(hello(2));
   await scan.callback(
     {
+      authenticate: async request => authentication.push(request),
       importItem: async () => {},
       list: async () => {
         assert.equal(progress.at(-1), 'Checking card, hold tight...');
@@ -892,7 +896,13 @@ test('single-item import shows the count and changes to Checking card during fin
   );
   assert.ok(find(state.tree, node => node.type === 'OperationComplete'));
 
-  assert.deepEqual(progress, ['0/1', '1/1', 'Checking card, hold tight...']);
+  assert.deepEqual(authentication, [{secret: true, pin: PIN}]);
+  assert.deepEqual(progress, [
+    'Authenticating, hold tight...',
+    '0/1',
+    '1/1',
+    'Checking card, hold tight...',
+  ]);
   assert.equal(session.backup.complete, true);
   assert.deepEqual(state.errors, []);
 });

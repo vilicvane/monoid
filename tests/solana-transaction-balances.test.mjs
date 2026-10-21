@@ -3,7 +3,6 @@ import {test} from 'node:test';
 
 import {base58} from '@scure/base';
 
-// eslint-disable-next-line @mufan/scoped-modules -- Test the pure compiled RPC parser.
 import {
   getSolanaTokenBalanceChanges,
   parseSolanaTransactionBalances,

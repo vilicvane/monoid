@@ -10,6 +10,7 @@ import {
   shortCommand,
   successful,
 } from './commands.js';
+import {CardManagerNotFoundError} from './install.js';
 
 export type CardInformation = {
   cardManagerAid: string;
@@ -113,7 +114,7 @@ async function selectCardManager(transceive: CardTransceive): Promise<string> {
     return aid;
   }
 
-  throw new Error('A supported card manager was not found');
+  throw new CardManagerNotFoundError();
 }
 
 async function readOptionalData(

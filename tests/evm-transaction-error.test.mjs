@@ -22,7 +22,7 @@ test('decodes standard revert messages, panic codes and unknown error selectors'
       `0x4e487b71${coder.encode(['uint256'], [0x11]).slice(2)}`,
       'Panic (0x11).',
     ],
-    ['0xdeadbeef' + '00'.repeat(32), 'Custom error (0xdeadbeef).'],
+    [`0xdeadbeef${'00'.repeat(32)}`, 'Custom error (0xdeadbeef).'],
     ['0x', 'Execution reverted.'],
     ['0x08c379a000', 'Execution reverted.'],
   ]) {

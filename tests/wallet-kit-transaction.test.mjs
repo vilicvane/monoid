@@ -4,7 +4,6 @@ import {test} from 'node:test';
 
 import {Interface, Transaction, Wallet, keccak256} from 'ethers';
 
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Exercise the service without starting platform services.
 import {WalletKitService} from '../.bld/app/@services/wallet-kit-service.js';
 
 const {parseWalletConnectTransactionRequest} = await import(

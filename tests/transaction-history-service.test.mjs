@@ -4,7 +4,6 @@ import {test} from 'node:test';
 import {Interface, Transaction, Wallet} from 'ethers';
 import {reaction} from 'mobx';
 
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Exercise the service without initializing platform services.
 import {TransactionHistoryService} from '../.bld/app/@services/transaction-history-service.js';
 
 // Public fixture keys only; these accounts must never hold funds.

@@ -5,7 +5,6 @@ import {test} from 'node:test';
 import {base58} from '@scure/base';
 import {reaction} from 'mobx';
 
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Exercise storage without platform services.
 import {SolanaTransactionHistoryService} from '../.bld/app/@services/solana-transaction-history-service.js';
 
 const CHAIN = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';

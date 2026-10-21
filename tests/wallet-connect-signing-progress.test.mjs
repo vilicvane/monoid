@@ -4,7 +4,6 @@ import {setImmediate} from 'node:timers/promises';
 
 import {base58} from '@scure/base';
 
-/* eslint-disable @mufan/scoped-modules, @mufan/import -- Load built modules without initializing platform services. */
 import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
 import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
 import {buildWalletConnectAuthentication} from '../.bld/app/@lib/wallet-connect-authentication.js';
@@ -13,7 +12,6 @@ import {
   getKeyWallets,
   matchesWalletReference,
 } from '../.bld/app/@services/wallet-storage-service.js';
-/* eslint-enable @mufan/scoped-modules, @mufan/import */
 
 let fixture;
 const owners = [];

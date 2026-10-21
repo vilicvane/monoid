@@ -3,8 +3,9 @@ import {afterEach, mock, test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
 
 import {observable, runInAction} from 'mobx';
-import {MonoidPINSession} from '../.bld/app/@services/monoid-credentials-store.js';
+
 import {MonoidWrongCardError} from '../.bld/app/@lib/monoid/card-error.js';
+import {MonoidPINSession} from '../.bld/app/@services/monoid-credentials-store.js';
 
 let fixture;
 const owners = [];
@@ -95,7 +96,7 @@ function mount(kind = 'Access') {
     id: bytes(state.card.id),
     publicKey: bytes(state.card.publicKey),
     bundle: false,
-    pins: {access: 5, safe: 5},
+    pins: {access: 5, secret: 5},
   };
   state.applet = {
     authenticate: async request => {
@@ -167,14 +168,14 @@ function mount(kind = 'Access') {
 }
 afterEach(() => owners.splice(0).forEach(state => state.cleanup?.()));
 
-for (const kind of ['Access', 'Safe']) {
+for (const kind of ['Access', 'Secret']) {
   test(`${kind} PIN flow confirms input, validates the card and stores only Access PIN under the Identity ID`, async () => {
     const state = mount(kind);
     await state.prepare();
     assert.deepEqual(
       state.inputs.map(input => input.options.placeholder),
       [
-        'Enter current Safe PIN',
+        'Enter current Secret PIN',
         `Enter new ${kind} PIN`,
         `Confirm new ${kind} PIN`,
       ],
@@ -201,9 +202,9 @@ for (const kind of ['Access', 'Safe']) {
     await state.tap();
     assert.deepEqual(state.saved, []);
     await state.finishScan();
-    assert.deepEqual(state.auth, [{safe: true, pin: 'old-safe'}]);
+    assert.deepEqual(state.auth, [{secret: true, pin: 'old-safe'}]);
     assert.deepEqual(state.writes, [
-      {pin: 'new-pin', ...(kind === 'Safe' && {safe: true})},
+      {pin: 'new-pin', ...(kind === 'Secret' && {secret: true})},
     ]);
     assert.deepEqual(
       state.saved,

@@ -38,8 +38,11 @@ const keyFamilies = [
 
 const fixtures = {
   hello: [{}],
-  authenticate: [{pin: '123456'}, {safe: true, pin: '123456'}],
-  setPIN: [{pin: '123456'}, {pin: '123456', safe: true}],
+  authenticate: [{pin: '123456'}, {secret: true, pin: '123456'}],
+  setPIN: [{pin: '123456'}, {pin: '123456', secret: true}],
+  createBundle: [{publicKeys: [identityPublicKey, identityPublicKey]}],
+  joinBundle: [{senderPublicKey: identityPublicKey, data: context}],
+  reset: [{}],
   systemInformation: [{}],
   list: [{}, {type: 'seed', keyPrefix: context}, {type: 0x1001}],
   view: [{index}],
@@ -175,15 +178,15 @@ for (const [name, requests] of Object.entries(fixtures)) {
   });
 }
 
-test('the assertion detects an Authenticate schema with pin before safe', () => {
-  const wrongOrder = x.object({pin: x.string, safe: x.literal(true)});
+test('the assertion detects an Authenticate schema with pin before secret', () => {
+  const wrongOrder = x.object({pin: x.string, secret: x.literal(true)});
 
   assert.throws(
-    () => assertEncodedOrder(0x21, wrongOrder, {safe: true, pin: '123456'}),
+    () => assertEncodedOrder(0x21, wrongOrder, {secret: true, pin: '123456'}),
     error => {
       assert.match(error.message, /INS 0x21, \$/);
-      assert.deepEqual(error.actual, ['pin', 'safe']);
-      assert.deepEqual(error.expected, ['safe', 'pin']);
+      assert.deepEqual(error.actual, ['pin', 'secret']);
+      assert.deepEqual(error.expected, ['secret', 'pin']);
 
       return true;
     },

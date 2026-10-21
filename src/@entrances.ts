@@ -15,6 +15,8 @@ import {
   AddressBookService,
   AppPreferencesService,
   BitcoinWalletService,
+  CardBundleStore,
+  CardMaintenanceService,
   CardStore,
   ChainService,
   CopyItemsStore,
@@ -120,6 +122,18 @@ export class Entrances {
   @entrance
   get cardStore() {
     return new CardStore();
+  }
+
+  @entrance
+  get cardBundleStore() {
+    return new CardBundleStore();
+  }
+
+  @entrance
+  get cardMaintenanceService() {
+    return this.storageService.then(storage =>
+      CardMaintenanceService.create(storage),
+    );
   }
 
   @entrance
@@ -264,9 +278,7 @@ export class Entrances {
 
   @entrance
   get monoidStorageService() {
-    return this.storageService.then(
-      storageService => new MonoidStorageService(storageService),
-    );
+    return this.storageService.then(() => new MonoidStorageService());
   }
 
   @entrance

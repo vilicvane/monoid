@@ -1,5 +1,3 @@
-/* global globalThis */
-
 import assert from 'node:assert/strict';
 import {mock, test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';

@@ -22,7 +22,12 @@ import {
 import type {Router} from '../../../../@routes.js';
 import {isCredentialRequestCancelled} from '../../../../@services/index.js';
 import {popOutAnimationCSS} from '../../../@animations.js';
-import {MonoidCard, MonoidCardFrame} from '../../../@monoid/monoid-card.js';
+import {
+  CardGrid,
+  CardPlaceholder,
+  CardPreview,
+  CardPreviewButton,
+} from '../../../@monoid/card-preview.js';
 import {
   MonoidScanStatePromptContentHighlight,
   useMonoidScanPrompt,
@@ -77,7 +82,7 @@ import {
   readBackupCardIdentity,
 } from './card-backup-session.js';
 import {CopyItemsState} from './copy-items-state.js';
-import {readCopyDestination} from './read-copy-destination.js';
+import {readCardForSetup} from './read-card-for-setup.js';
 
 const Description = styled.p`
   margin: 0;
@@ -115,77 +120,12 @@ const Items = styled(List)`
   }
 `;
 
-const CardGrid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  width: 100%;
-  max-width: 300px;
-`;
-
 const CopySteps = styled(Steps)<{$exiting: boolean}>`
   ${props => props.$exiting && popOutAnimationCSS}
 
   @media (prefers-reduced-motion: reduce) {
     animation-duration: 1ms;
   }
-`;
-
-const CardPreviewButton = styled.button`
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: none;
-  color: var(--ion-color-dark);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-
-  &:disabled {
-    cursor: default;
-  }
-
-  &:focus-visible {
-    outline: 2px solid var(--ion-color-primary);
-    outline-offset: 3px;
-  }
-`;
-
-const CardPreview = styled(MonoidCard)<{
-  $interrupted?: boolean;
-  $pending?: boolean;
-}>`
-  --monoid-card-background: ${props =>
-    props.$pending
-      ? 'var(--ion-color-light)'
-      : 'var(--ion-color-dark-contrast)'};
-  --monoid-card-logo-width: calc(72 / 430 * 100%);
-  --monoid-card-logo-background: ${props =>
-    props.$interrupted
-      ? 'var(--ion-color-warning)'
-      : 'var(--ion-color-primary)'};
-  --monoid-card-description-color: ${props =>
-    props.$interrupted
-      ? 'var(--color-text-warning)'
-      : 'var(--ion-color-primary)'};
-
-  box-sizing: border-box;
-  border: 0.5px solid var(--ion-color-medium-tint);
-`;
-
-const CardPlaceholder = styled(MonoidCardFrame)`
-  --monoid-card-background: var(--ion-color-light);
-
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 12px;
-  border: 0.5px solid var(--ion-color-light-shade);
-  color: var(--ion-color-light-shade);
-  font-size: 24px;
-  text-align: center;
 `;
 
 const ConflictDescription = styled(ListItemDescription)`
@@ -311,7 +251,7 @@ export const CopyItemsView = observer(
     const [confirmRestart, setConfirmRestart] = useState(false);
     const [details, setDetails] = useState<'items' | CardBackupIdentity>();
     const [destination, setDestination] = useState<CardBackupIdentity>();
-    const [safePINInput, showSafePINInput] = useInputModal();
+    const [secretPINInput, showSecretPINInput] = useInputModal();
     const [accessPINInput, scanWithAccess] = useMonoidScanPrompt({
       auth: 'access',
       ensureSetup: false,
@@ -435,7 +375,7 @@ export const CopyItemsView = observer(
       await scanRawDestination(
         'Scan a destination card',
         async (sessionId, setStateContent, signal) => {
-          const result = await readCopyDestination(
+          const result = await readCardForSetup(
             sessionId,
             monoidApplet,
             setStateContent,
@@ -455,8 +395,8 @@ export const CopyItemsView = observer(
           if (targets.some(target => target.publicKey === identity.publicKey)) {
             throw new MonoidCardError('Card already added');
           }
-          if (hello.pins.safe === 0)
-            throw new MonoidCardError('Safe PIN blocked');
+          if (hello.pins.secret === 0)
+            throw new MonoidCardError('Secret PIN blocked');
           if (hello.pins.access === 0)
             throw new MonoidCardError('Access PIN blocked');
           scanned = hello;
@@ -464,22 +404,24 @@ export const CopyItemsView = observer(
       );
       if (!mounted.current || !isViewActive()) return;
       if (cardInformation) {
-        router.safe.setupCard({cardInformation, copyId: view.copyId}).$push();
+        router
+          .cardApplets({cardInformation, returnTo: 'copy', copyId: view.copyId})
+          .$push();
         return;
       }
       if (!scanned) return;
 
-      if (scanned.pins.access !== false && scanned.pins.safe !== false) {
+      if (scanned.pins.access !== false && scanned.pins.secret !== false) {
         await session.addTarget(scanned);
         return;
       }
 
       const expected = scanned;
       const identity = readBackupCardIdentity(expected);
-      const isNew = expected.pins.safe === false;
-      let pin = await showSafePINInput({
+      const isNew = expected.pins.secret === false;
+      let pin = await showSecretPINInput({
         type: 'password',
-        ...getPINInputPlaceholder('Safe', isNew ? 'Set' : 'Enter existing'),
+        ...getPINInputPlaceholder('Secret', isNew ? 'Set' : 'Enter existing'),
         description:
           expected.pins.access === false ? (
             <>
@@ -498,7 +440,7 @@ export const CopyItemsView = observer(
         if (pin === undefined || !mounted.current || !isViewActive()) return;
         if (!MonoidPIN.is(pin)) {
           toast({
-            message: 'Safe PIN must contain 6 to 16 characters',
+            message: 'Secret PIN must contain 6 to 16 characters',
             color: 'danger',
             position: 'top',
           });
@@ -527,7 +469,7 @@ export const CopyItemsView = observer(
             try {
               setState(
                 isNew
-                  ? 'Setting Safe PIN, hold tight...'
+                  ? 'Setting Secret PIN, hold tight...'
                   : 'Setting Access PIN, hold tight...',
               );
               const initialized = await initializeBackupTarget(
@@ -594,9 +536,9 @@ export const CopyItemsView = observer(
       } else if (!backup.targetsConfirmed) {
         await session.confirmTargets();
       } else if (exported < transfers.length) {
-        let pin = await showSafePINInput({
+        let pin = await showSecretPINInput({
           type: 'password',
-          ...getPINInputPlaceholder('Safe', 'Enter source card'),
+          ...getPINInputPlaceholder('Secret', 'Enter source card'),
           center: true,
           maxLength: 16,
         });
@@ -604,7 +546,7 @@ export const CopyItemsView = observer(
         if (!mounted.current || !isViewActive() || pin === undefined) return;
         if (!MonoidPIN.is(pin)) {
           throw new MonoidCardError(
-            'Safe PIN must contain 6 to 16 characters.',
+            'Secret PIN must contain 6 to 16 characters.',
           );
         }
 
@@ -618,7 +560,7 @@ export const CopyItemsView = observer(
               </MonoidScanStatePromptContentHighlight>
             </>,
             async (applet, setState, hello, signal) => {
-              setState('Authenticating with Safe PIN, hold tight...');
+              setState('Authenticating, hold tight...');
               await session.exportItems(applet, hello, pin!, signal, () => {
                 setState(
                   <CopyProgress
@@ -645,15 +587,31 @@ export const CopyItemsView = observer(
         }
       } else if (!backup.complete) {
         let target: CardBackupTarget | undefined;
+        let pin = await showSecretPINInput({
+          type: 'password',
+          ...getPINInputPlaceholder('Secret', 'Enter destination card'),
+          center: true,
+          maxLength: 16,
+        });
+
+        if (!mounted.current || !isViewActive() || pin === undefined) return;
+        if (!MonoidPIN.is(pin)) {
+          throw new MonoidCardError(
+            'Secret PIN must contain 6 to 16 characters',
+          );
+        }
+
         try {
-          await scanWithAccess(
+          await scan(
             'Scan a destination card',
             async (applet, setState, hello, signal) => {
               copyState.markInterrupted(target!.publicKey, false);
               copyState.startImport(target!.publicKey);
+              setState('Authenticating, hold tight...');
               await session.importItems(
                 applet,
                 hello,
+                pin!,
                 signal,
                 (_current, _total, stage) => {
                   if (stage === 'verifying') {
@@ -703,6 +661,8 @@ export const CopyItemsView = observer(
             copyState.markInterrupted(interruptedTarget.publicKey, true);
           }
           throw error;
+        } finally {
+          pin = undefined;
         }
       } else {
         backToSafe?.();
@@ -888,7 +848,7 @@ export const CopyItemsView = observer(
         </View>
         {accessPINInput}
         {scanContent}
-        {safePINInput}
+        {secretPINInput}
         {details && backup && isViewActive() && (
           <DetailsPopup
             aria-label={

@@ -3,12 +3,11 @@ import {generateKeyPairSync, sign as signBytes} from 'node:crypto';
 import {EventEmitter, getEventListeners} from 'node:events';
 import {mock, test} from 'node:test';
 
-import {buildAuthObject, formatMessage} from '@walletconnect/utils';
 import {base58} from '@scure/base';
+import {buildAuthObject, formatMessage} from '@walletconnect/utils';
 import {Wallet} from 'ethers';
 import {reaction} from 'mobx';
 
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Import the service without starting platform services.
 import {
   WalletKitService,
   getWalletKitSessionAddressTypes,

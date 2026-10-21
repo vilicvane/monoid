@@ -20,6 +20,7 @@ export function WalletConnectRequests(): null {
       if (
         [
           router.features,
+          router.cardApplets,
           router.bitcoin,
           router.sessions,
           router.ethereum,

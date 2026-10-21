@@ -1,12 +1,9 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-import {AppletISOError} from '../.bld/app/@lib/applet.js';
-import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
-import {initializeMonoidCard} from '../.bld/app/@lib/monoid/initialize-card.js';
 import {
-  assertBackupCard,
   CardBackupSession,
+  assertBackupCard,
   getBackupCardIdentity,
   initializeBackupTarget,
 } from '../.bld/app/@components/views/safe/@card/card-backup-session.js';
@@ -14,6 +11,9 @@ import {
   encodeCardDerivationRecord,
   getCardDerivationItemIndex,
 } from '../.bld/app/@components/views/safe/card-derivations.js';
+import {AppletISOError} from '../.bld/app/@lib/applet.js';
+import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {initializeMonoidCard} from '../.bld/app/@lib/monoid/initialize-card.js';
 import {ADDRESS_TYPES} from '../.bld/app/@lib/wallet-address.js';
 
 const PIN = 'Safe-42';
@@ -23,13 +23,13 @@ const hex = bytes => Buffer.from(bytes).toString('hex');
 const bytes = value => Uint8Array.from(Buffer.from(value, 'hex'));
 const index = number => bytes(`1234000000000000000${number}`);
 
-function hello(identity, {accessPIN = 5, safePIN = 5, ...overrides} = {}) {
+function hello(identity, {accessPIN = 5, secretPIN = 5, ...overrides} = {}) {
   return {
     version: 1,
     id: bytes(`1000000${identity}`),
     publicKey: Uint8Array.from([4, ...new Array(64).fill(identity)]),
     bundle: false,
-    pins: {access: accessPIN, safe: safePIN},
+    pins: {access: accessPIN, secret: secretPIN},
     ...overrides,
   };
 }
@@ -39,6 +39,14 @@ function destination(identity) {
     hello: hello(identity),
     calls: [],
     records: new Map(),
+    authentications: [],
+    async authenticate(request) {
+      this.authentications.push(request);
+      assert.equal(request.secret, true);
+      if (request.pin !== PIN) {
+        throw new CBORAppletError({code: 'INVALID_PIN', tries: 4});
+      }
+    },
     async importItem(request) {
       this.calls.push(['importItem', structuredClone(request)]);
       assert.equal(
@@ -162,7 +170,7 @@ test('an asymmetric source can copy into an enrolled destination using its publi
   await session.addTarget(target.hello);
   await session.confirmTargets();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
 
   assert.equal(session.backup.complete, true);
   assert.equal(session.backup.source.bundle, false);
@@ -200,12 +208,12 @@ test('a same-bundle transfer omits asymmetric keys and verifies the live destina
   }
   target.hello.bundle = new Uint8Array(32).fill(2);
   await assert.rejects(
-    session.importItems(target, target.hello, signal(), progress),
+    session.importItems(target, target.hello, PIN, signal(), progress),
     /same bundle/,
   );
   assert.deepEqual(target.calls, []);
   target.hello.bundle = new Uint8Array(32).fill(1);
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   for (const [name, request] of target.calls) {
     if (name === 'importItem')
       assert.equal('senderPublicKey' in request, false);
@@ -264,7 +272,7 @@ test('a scanned Card snapshot starts at destination selection and exports withou
   await session.addTarget(target.hello);
   await session.confirmTargets();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   assert.deepEqual(
     source.calls.map(([method]) => method),
     ['authenticate', 'exportItem', 'exportItem'],
@@ -396,7 +404,7 @@ test('direct Copy validates linked records with Get and transfers both physical 
     [hex(root.index), hex(companion.index)],
   );
   await session.exportItems(source, source.hello, PIN, signal(), progress);
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   assert.deepEqual(
     source.calls
       .filter(([method]) => method === 'exportItem')
@@ -514,7 +522,7 @@ for (const [type, addressType] of [
       await session.addTarget(target.hello);
       await session.confirmTargets();
       await session.exportItems(source, source.hello, PIN, signal(), progress);
-      await session.importItems(target, target.hello, signal(), progress);
+      await session.importItems(target, target.hello, PIN, signal(), progress);
 
       assert.deepEqual(
         [...target.records.keys()],
@@ -556,7 +564,7 @@ for (const [type, addressType] of [
     };
     target.records.set(hex(companion.index), structuredClone(existing));
 
-    await session.importItems(target, target.hello, signal(), progress);
+    await session.importItems(target, target.hello, PIN, signal(), progress);
 
     const [copiedKey, conflictedRecord] = session.backup.targets[0].items;
     assert.equal(copiedKey.index, hex(root.index));
@@ -573,7 +581,7 @@ for (const [type, addressType] of [
     assert.equal(session.backup.complete, false);
 
     const callCount = target.calls.length;
-    await session.importItems(target, target.hello, signal(), progress);
+    await session.importItems(target, target.hello, PIN, signal(), progress);
     assert.deepEqual(
       target.calls
         .slice(callCount)
@@ -597,7 +605,7 @@ test('an orphan derivation record can be selected and copied on its own', async 
   await session.addTarget(target.hello);
   await session.confirmTargets();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   assert.deepEqual([...target.records.keys()], [hex(orphan.index)]);
   assert.equal(session.backup.complete, true);
 });
@@ -633,7 +641,7 @@ test('a companion import with a lost response retries only that physical record 
       throw new Error('Response lost');
   };
   await assert.rejects(
-    session.importItems(target, target.hello, signal(), progress),
+    session.importItems(target, target.hello, PIN, signal(), progress),
     /Response lost/,
   );
   assert.deepEqual(
@@ -647,7 +655,7 @@ test('a companion import with a lost response retries only that physical record 
   );
   const sourceCalls = source.calls.length;
   target.afterImport = undefined;
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   assert.equal(source.calls.length, sourceCalls);
   assert.deepEqual(
     target.calls
@@ -700,7 +708,7 @@ test('resetting from the Card snapshot starts a new copy with the requested sele
   await session.addTarget(target.hello);
   await session.confirmTargets();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   assert.equal(session.backup.importStarted, true);
   const copied = structuredClone(target.records);
   const selected = [hex(index(2))];
@@ -722,7 +730,7 @@ test('resetting from the Card snapshot starts a new copy with the requested sele
 test('backup preserves all item types and exact Export metadata within the page session', async () => {
   const {source, target, session, artifact} = await ready();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
 
   assert.equal(session.backup.complete, true);
   assert.equal(session.backup.items.length, 3);
@@ -766,7 +774,7 @@ test('a Card selection copies only the requested wallet key and non-key resource
   await session.addTarget(target.hello);
   await session.confirmTargets();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   assert.deepEqual(
     source.calls
       .filter(([method]) => method === 'exportItem')
@@ -815,7 +823,7 @@ test('a requested item missing from the card rejects the whole handoff without c
   await session.addTarget(target.hello);
   await session.confirmTargets();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   assert.deepEqual([...target.records.keys()], [hex(index(1))]);
   assert.equal(session.backup.complete, true);
 });
@@ -836,7 +844,7 @@ test('same display ID with another public key is rejected before any authenticat
   await session.exportItems(source, source.hello, PIN, signal(), progress);
   const wrongTarget = hello(3, {id: target.hello.id});
   await assert.rejects(
-    session.importItems(target, wrongTarget, signal(), progress),
+    session.importItems(target, wrongTarget, PIN, signal(), progress),
     /Wrong card/,
   );
   assert.equal(target.calls.length, 0);
@@ -848,7 +856,7 @@ test('identity validation rejects invalid, uninitialized, and blocked source or 
     /valid identity/,
   );
   assert.throws(
-    () => getBackupCardIdentity(hello(1, {safePIN: false})),
+    () => getBackupCardIdentity(hello(1, {secretPIN: false})),
     /Initialize/,
   );
   assert.throws(
@@ -860,14 +868,14 @@ test('identity validation rejects invalid, uninitialized, and blocked source or 
     /blocked/i,
   );
   assert.throws(
-    () => getBackupCardIdentity(hello(1, {safePIN: 0})),
+    () => getBackupCardIdentity(hello(1, {secretPIN: 0})),
     /blocked/i,
   );
   const {session, source, target} = await ready();
   await assert.rejects(
     session.exportItems(
       source,
-      hello(1, {safePIN: 0}),
+      hello(1, {secretPIN: 0}),
       PIN,
       signal(),
       progress,
@@ -877,19 +885,34 @@ test('identity validation rejects invalid, uninitialized, and blocked source or 
   assert.equal(source.calls.length, 1);
   await session.exportItems(source, source.hello, PIN, signal(), progress);
   await assert.rejects(
-    session.importItems(target, hello(2, {safePIN: 0}), signal(), progress),
+    session.importItems(
+      target,
+      hello(2, {secretPIN: 0}),
+      PIN,
+      signal(),
+      progress,
+    ),
     /blocked/i,
   );
   await assert.rejects(
-    session.importItems(target, hello(2, {accessPIN: 0}), signal(), progress),
+    session.importItems(
+      target,
+      hello(2, {accessPIN: 0}),
+      PIN,
+      signal(),
+      progress,
+    ),
     /blocked/i,
   );
   assert.equal(target.calls.length, 0);
   assert.equal(session.backup.complete, false);
 });
 
-function uninitializedTarget({hasSafePIN = false} = {}) {
-  const first = hello(2, {safePIN: hasSafePIN ? 5 : false, accessPIN: false});
+function uninitializedTarget({hasSecretPIN = false} = {}) {
+  const first = hello(2, {
+    secretPIN: hasSecretPIN ? 5 : false,
+    accessPIN: false,
+  });
   const state = {
     first,
     fresh: structuredClone(first),
@@ -914,7 +937,7 @@ function uninitializedTarget({hasSafePIN = false} = {}) {
   return state;
 }
 
-test('a new destination sets only the Safe PIN and verifies initialized Access PIN state with Hello', async () => {
+test('a new destination sets only the Secret PIN and verifies initialized Access PIN state with Hello', async () => {
   const state = uninitializedTarget();
   const result = await initializeBackupTarget(
     state.applet,
@@ -925,11 +948,11 @@ test('a new destination sets only the Safe PIN and verifies initialized Access P
   );
 
   assert.deepEqual(state.calls, [
-    ['setPIN', {safe: true, pin: PIN}],
+    ['setPIN', {secret: true, pin: PIN}],
     ['hello', {}],
   ]);
   assert.equal(result.pins.access, 5);
-  assert.equal(result.pins.safe, 5);
+  assert.equal(result.pins.secret, 5);
   assert.deepEqual(result.publicKey, state.first.publicKey);
   assert.deepEqual(
     getBackupCardIdentity(result),
@@ -937,8 +960,8 @@ test('a new destination sets only the Safe PIN and verifies initialized Access P
   );
 });
 
-test('initializing a missing Access PIN authenticates with the existing Safe PIN without changing it', async () => {
-  const state = uninitializedTarget({hasSafePIN: true});
+test('initializing a missing Access PIN authenticates with the existing Secret PIN without changing it', async () => {
+  const state = uninitializedTarget({hasSecretPIN: true});
   const result = await initializeBackupTarget(
     state.applet,
     state.fresh,
@@ -948,16 +971,16 @@ test('initializing a missing Access PIN authenticates with the existing Safe PIN
   );
 
   assert.deepEqual(state.calls, [
-    ['authenticate', {safe: true, pin: PIN}],
+    ['authenticate', {secret: true, pin: PIN}],
     ['setPIN', {pin: PIN}],
     ['hello', {}],
   ]);
   assert.equal(result.pins.access, 5);
-  assert.equal(result.pins.safe, 5);
+  assert.equal(result.pins.secret, 5);
 });
 
 test('initialization rejects a different full public key before authentication or mutation even with the same display ID', async () => {
-  const state = uninitializedTarget({hasSafePIN: true});
+  const state = uninitializedTarget({hasSecretPIN: true});
   const wrong = hello(3, {id: state.first.id});
   await assert.rejects(
     initializeBackupTarget(state.applet, wrong, state.first, PIN, signal()),
@@ -966,9 +989,9 @@ test('initialization rejects a different full public key before authentication o
   assert.deepEqual(state.calls, []);
 });
 
-test('a Safe PIN configured after the first scan is never overwritten by the initialization flow', async () => {
+test('a Secret PIN configured after the first scan is never overwritten by the initialization flow', async () => {
   const state = uninitializedTarget();
-  state.fresh.pins.safe = 5;
+  state.fresh.pins.secret = 5;
   await assert.rejects(
     initializeBackupTarget(
       state.applet,
@@ -983,7 +1006,7 @@ test('a Safe PIN configured after the first scan is never overwritten by the ini
 });
 
 test('an already restored destination returns its fresh ready state without changing its PIN again', async () => {
-  const state = uninitializedTarget({hasSafePIN: true});
+  const state = uninitializedTarget({hasSecretPIN: true});
   const result = await initializeBackupTarget(
     state.applet,
     state.result,
@@ -997,7 +1020,7 @@ test('an already restored destination returns its fresh ready state without chan
 
 for (const stopAfter of ['before-start', 'authenticate', 'setPIN', 'hello']) {
   test(`initialization cancellation after ${stopAfter} starts no later card command`, async () => {
-    const state = uninitializedTarget({hasSafePIN: true});
+    const state = uninitializedTarget({hasSecretPIN: true});
     const controller = new AbortController();
     if (stopAfter === 'before-start') controller.abort();
     else if (stopAfter === 'authenticate')
@@ -1028,8 +1051,8 @@ for (const stopAfter of ['before-start', 'authenticate', 'setPIN', 'hello']) {
   });
 }
 
-test('incorrect existing Safe PIN is attempted once and never followed by a write', async () => {
-  const state = uninitializedTarget({hasSafePIN: true});
+test('incorrect existing Secret PIN is attempted once and never followed by a write', async () => {
+  const state = uninitializedTarget({hasSecretPIN: true});
   state.onAuthenticate = () => {
     throw new CBORAppletError({code: 'INVALID_PIN', tries: 4});
   };
@@ -1061,8 +1084,8 @@ for (const invalidResult of [
     const state = uninitializedTarget();
     if (invalidResult === 'access-unset') state.result.pins.access = false;
     else if (invalidResult === 'access-blocked') state.result.pins.access = 0;
-    else if (invalidResult === 'safe-unset') state.result.pins.safe = false;
-    else if (invalidResult === 'safe-blocked') state.result.pins.safe = 0;
+    else if (invalidResult === 'safe-unset') state.result.pins.secret = false;
+    else if (invalidResult === 'safe-blocked') state.result.pins.secret = 0;
     else if (invalidResult === 'monoid-id-changed')
       state.result.id = hello(3).id;
     else state.result.publicKey = hello(3).publicKey;
@@ -1084,8 +1107,8 @@ for (const invalidResult of [
   });
 }
 
-test('shared initialization preserves an invalid Safe PIN error for interactive retry', async () => {
-  const state = uninitializedTarget({hasSafePIN: true});
+test('shared initialization preserves an invalid Secret PIN error for interactive retry', async () => {
+  const state = uninitializedTarget({hasSecretPIN: true});
   const invalidPIN = new CBORAppletError({code: 'INVALID_PIN', tries: 4});
   state.onAuthenticate = () => {
     throw invalidPIN;
@@ -1095,17 +1118,17 @@ test('shared initialization preserves an invalid Safe PIN error for interactive 
     initializeMonoidCard(state.applet, state.fresh, PIN, signal()),
     error => error === invalidPIN,
   );
-  assert.deepEqual(state.calls, [['authenticate', {safe: true, pin: PIN}]]);
+  assert.deepEqual(state.calls, [['authenticate', {secret: true, pin: PIN}]]);
 });
 
 for (const invalidState of ['access-blocked', 'safe-blocked', 'safe-unset']) {
   test(`shared initialization starts no commands when ${invalidState}`, async () => {
-    const state = uninitializedTarget({hasSafePIN: true});
+    const state = uninitializedTarget({hasSecretPIN: true});
     if (invalidState === 'access-blocked') state.fresh.pins.access = 0;
-    else if (invalidState === 'safe-blocked') state.fresh.pins.safe = 0;
+    else if (invalidState === 'safe-blocked') state.fresh.pins.secret = 0;
     else {
       state.fresh.pins.access = 5;
-      state.fresh.pins.safe = false;
+      state.fresh.pins.secret = false;
     }
 
     await assert.rejects(
@@ -1126,7 +1149,7 @@ test('shared initialization rejects invalid PIN formats before writing a new Saf
 });
 
 test('shared initialization returns a card with both PINs set without any commands', async () => {
-  const state = uninitializedTarget({hasSafePIN: true});
+  const state = uninitializedTarget({hasSecretPIN: true});
   state.fresh.pins.access = 5;
   const result = await initializeMonoidCard(
     state.applet,
@@ -1139,7 +1162,7 @@ test('shared initialization returns a card with both PINs set without any comman
   assert.equal(result, state.fresh);
 });
 
-test('wrong Safe PIN is attempted once and never exports or retains the PIN', async () => {
+test('wrong Secret PIN is attempted once and never exports or retains the PIN', async () => {
   const {session, source} = await ready();
   await assert.rejects(
     session.exportItems(source, source.hello, 'Wrong-PIN', signal(), progress),
@@ -1151,6 +1174,48 @@ test('wrong Safe PIN is attempted once and never exports or retains the PIN', as
   );
   assert.equal(session.busy, false);
   assert.equal(JSON.stringify(session.backup).includes('Wrong-PIN'), false);
+});
+
+test('destination import verifies Secret PIN before writing and does not retain a failed PIN', async () => {
+  const {session, source, target} = await ready();
+  await session.exportItems(source, source.hello, PIN, signal(), progress);
+
+  await assert.rejects(
+    session.importItems(target, target.hello, 'Wrong-PIN', signal(), progress),
+    /Incorrect Secret PIN, 4 tries left/,
+  );
+
+  assert.deepEqual(target.authentications, [{secret: true, pin: 'Wrong-PIN'}]);
+  assert.deepEqual(target.calls, []);
+  assert.equal(session.backup.importStarted, false);
+  assert.equal(JSON.stringify(session.backup).includes('Wrong-PIN'), false);
+});
+
+test('an import resumed after SELECT authenticates the destination again before sending more items', async () => {
+  const {session, source, target} = await ready();
+  await session.exportItems(source, source.hello, PIN, signal(), progress);
+  let authenticated = false;
+  target.authenticate = async request => {
+    assert.deepEqual(request, {secret: true, pin: PIN});
+    target.authentications.push(request);
+    authenticated = true;
+  };
+  target.beforeImport = request => {
+    assert.equal(authenticated, true);
+    if (hex(request.index) === hex(index(2))) throw new Error('Tag lost');
+  };
+
+  await assert.rejects(
+    session.importItems(target, target.hello, PIN, signal(), progress),
+    /Tag lost/,
+  );
+  authenticated = false;
+  target.beforeImport = () => assert.equal(authenticated, true);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
+
+  assert.equal(target.authentications.length, 2);
+  assert.equal(session.backup.complete, true);
+  assert.equal(JSON.stringify(session.backup).includes(PIN), false);
 });
 
 test('an interrupted export retries only remaining items within the same session', async () => {
@@ -1189,7 +1254,7 @@ test('lost Import acknowledgement retries the same artifact without re-export or
     if (hex(request.index) === hex(index(2))) throw new Error('Response lost');
   };
   await assert.rejects(
-    session.importItems(target, target.hello, signal(), progress),
+    session.importItems(target, target.hello, PIN, signal(), progress),
     /Response lost/,
   );
   assert.equal(session.backup.targets[0].items[0].imported, true);
@@ -1200,7 +1265,7 @@ test('lost Import acknowledgement retries the same artifact without re-export or
   )[1];
   target.afterImport = undefined;
   const start = target.calls.length;
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   assert.deepEqual(target.calls[start], ['importItem', firstAttempt]);
   assert.equal(target.records.size, 3);
   assert.equal(session.backup.complete, true);
@@ -1211,7 +1276,7 @@ test('conflicts preserve target data and allow independent remaining items to fi
   await session.exportItems(source, source.hello, PIN, signal(), progress);
   const conflicting = {index: index(2), data: bytes('deadbeef')};
   target.records.set(hex(index(2)), conflicting);
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   assert.equal(session.backup.complete, false);
   assert.equal(session.backup.targets[0].items[1].conflict, true);
   assert.deepEqual(
@@ -1219,7 +1284,7 @@ test('conflicts preserve target data and allow independent remaining items to fi
     [true, false, true],
   );
   assert.deepEqual(target.records.get(hex(index(2))), conflicting);
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   assert.equal(session.backup.targets[0].items[1].conflict, true);
   assert.deepEqual(target.records.get(hex(index(2))), conflicting);
 });
@@ -1231,8 +1296,12 @@ test('cancellation after acknowledged Import retains that item and starts no nex
   const reported = [];
   target.afterImport = () => controller.abort();
   await assert.rejects(
-    session.importItems(target, target.hello, controller.signal, (...value) =>
-      reported.push(value),
+    session.importItems(
+      target,
+      target.hello,
+      PIN,
+      controller.signal,
+      (...value) => reported.push(value),
     ),
     {code: 'CANCELLED'},
   );
@@ -1301,7 +1370,7 @@ test('Import reports a separate verification stage and counts only acknowledged 
     return originalList.call(this, request);
   };
 
-  await session.importItems(target, target.hello, signal(), (...value) =>
+  await session.importItems(target, target.hello, PIN, signal(), (...value) =>
     reported.push(value),
   );
 
@@ -1328,8 +1397,12 @@ test('cancellation during verification preserves imported items and retries only
   };
 
   await assert.rejects(
-    session.importItems(target, target.hello, controller.signal, (...value) =>
-      reported.push(value),
+    session.importItems(
+      target,
+      target.hello,
+      PIN,
+      controller.signal,
+      (...value) => reported.push(value),
     ),
     {code: 'CANCELLED'},
   );
@@ -1347,7 +1420,7 @@ test('cancellation during verification preserves imported items and retries only
   assert.equal(session.backup.targets[0].complete, false);
 
   target.list = originalList;
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   assert.equal(
     target.calls.filter(([method]) => method === 'importItem').length,
     3,
@@ -1359,7 +1432,7 @@ test('cancellation during verification preserves imported items and retries only
 test('a new page session starts fresh and repeated identical imports preserve existing target items', async () => {
   const {session, source, target} = await ready();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   const existing = structuredClone(target.records);
 
   const next = new CardBackupSession();
@@ -1375,7 +1448,7 @@ test('a new page session starts fresh and repeated identical imports preserve ex
   await next.addTarget(target.hello);
   await next.confirmTargets();
   await next.exportItems(source, source.hello, PIN, signal(), progress);
-  await next.importItems(target, target.hello, signal(), progress);
+  await next.importItems(target, target.hello, PIN, signal(), progress);
 
   assert.equal(next.backup.complete, true);
   assert.deepEqual(target.records, existing);
@@ -1450,7 +1523,7 @@ test('the initial selection remains fixed through destination changes and the so
   );
   await session.confirmTargets();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   assert.equal(session.backup.complete, true);
   assert.equal(target.records.size, 2);
   assert.equal(target.records.has(hex(index(2))), false);
@@ -1502,6 +1575,7 @@ test('multiple destinations receive their own ciphertext and can finish in eithe
   await session.importItems(
     secondTarget,
     secondTarget.hello,
+    PIN,
     signal(),
     (current, total) => {
       importedProgress.push([current, total]);
@@ -1514,7 +1588,7 @@ test('multiple destinations receive their own ciphertext and can finish in eithe
     [false, true],
   );
   assert.equal(session.backup.complete, false);
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   assert.deepEqual(
     session.backup.targets.map(card => card.complete),
     [true, true],
@@ -1553,6 +1627,7 @@ test('destination duplicates use the complete public key, while equal display ID
   await session.importItems(
     secondTarget,
     secondTarget.hello,
+    PIN,
     signal(),
     progress,
   );
@@ -1596,13 +1671,14 @@ test('removing a destination before confirmation excludes it from export and imp
     ),
   );
   await assert.rejects(
-    session.importItems(target, target.hello, signal(), progress),
+    session.importItems(target, target.hello, PIN, signal(), progress),
     /Wrong card|destination|added/i,
   );
   assert.equal(target.calls.length, 0);
   await session.importItems(
     secondTarget,
     secondTarget.hello,
+    PIN,
     signal(),
     progress,
   );
@@ -1648,10 +1724,11 @@ test('an interrupted export for a later destination preserves earlier destinatio
     session.backup.targets[0].items.map(item => item.exported.data),
     previous,
   );
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   await session.importItems(
     secondTarget,
     secondTarget.hello,
+    PIN,
     signal(),
     progress,
   );
@@ -1663,12 +1740,18 @@ test('conflicts and interrupted imports remain isolated to their destination', a
   await session.exportItems(source, source.hello, PIN, signal(), progress);
   const conflicting = {index: index(2), data: bytes('deadbeef')};
   target.records.set(hex(index(2)), conflicting);
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   secondTarget.afterImport = request => {
     if (hex(request.index) === hex(index(2))) throw new Error('Response lost');
   };
   await assert.rejects(
-    session.importItems(secondTarget, secondTarget.hello, signal(), progress),
+    session.importItems(
+      secondTarget,
+      secondTarget.hello,
+      PIN,
+      signal(),
+      progress,
+    ),
     /Response lost/,
   );
   assert.deepEqual(
@@ -1686,6 +1769,7 @@ test('conflicts and interrupted imports remain isolated to their destination', a
   await session.importItems(
     secondTarget,
     secondTarget.hello,
+    PIN,
     signal(),
     progress,
   );
@@ -1738,7 +1822,7 @@ test('adding a destination after a partial export clears previous artifacts befo
         .sort(),
       [1, 2, 3].map(value => hex(index(value))),
     );
-    await session.importItems(card, card.hello, signal(), progress);
+    await session.importItems(card, card.hello, PIN, signal(), progress);
   }
   assert.equal(session.backup.complete, true);
 });
@@ -1763,13 +1847,14 @@ test('removing a destination after export clears artifacts and reexports only to
     ),
   );
   await assert.rejects(
-    session.importItems(target, target.hello, signal(), progress),
+    session.importItems(target, target.hello, PIN, signal(), progress),
     /Wrong card|destination|added/i,
   );
   assert.equal(target.calls.length, 0);
   await session.importItems(
     secondTarget,
     secondTarget.hello,
+    PIN,
     signal(),
     progress,
   );
@@ -1789,7 +1874,7 @@ test('invalid destination edits preserve confirmed artifacts', async () => {
     assert.deepEqual(session.backup, before);
   }
   const sourceCalls = source.calls.length;
-  await session.importItems(target, target.hello, signal(), progress);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
   assert.equal(source.calls.length, sourceCalls);
   assert.equal(session.backup.complete, true);
 });
@@ -1799,14 +1884,14 @@ test('wrong-card and cancelled import preflight leave destinations editable', as
   await session.exportItems(source, source.hello, PIN, signal(), progress);
   assert.equal(session.backup.importStarted, false);
   await assert.rejects(
-    session.importItems(target, hello(3), signal(), progress),
+    session.importItems(target, hello(3), PIN, signal(), progress),
     /Wrong card|destination|added/i,
   );
   assert.equal(session.backup.importStarted, false);
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(
-    session.importItems(target, target.hello, controller.signal, progress),
+    session.importItems(target, target.hello, PIN, controller.signal, progress),
     {code: 'CANCELLED'},
   );
   assert.equal(target.calls.length, 0);
@@ -1831,7 +1916,7 @@ for (const failure of ['before-acknowledgement', 'after-card-commit']) {
     if (failure === 'before-acknowledgement') target.beforeImport = failImport;
     else target.afterImport = failImport;
     await assert.rejects(
-      session.importItems(target, target.hello, signal(), progress),
+      session.importItems(target, target.hello, PIN, signal(), progress),
       /Import response unavailable/,
     );
     assert.equal(target.calls.length, 1);
@@ -1852,7 +1937,7 @@ for (const failure of ['before-acknowledgement', 'after-card-commit']) {
     const sourceCalls = source.calls.length;
     target.beforeImport = undefined;
     target.afterImport = undefined;
-    await session.importItems(target, target.hello, signal(), progress);
+    await session.importItems(target, target.hello, PIN, signal(), progress);
     assert.deepEqual(target.calls[1], ['importItem', firstArtifact]);
     assert.equal(source.calls.length, sourceCalls);
     assert.equal(target.records.size, 3);
@@ -1865,7 +1950,7 @@ test('final List must contain all acknowledged items before reporting completion
   await session.exportItems(source, source.hello, PIN, signal(), progress);
   target.list = async () => ({items: [{index: index(1)}, {index: index(3)}]});
   await assert.rejects(
-    session.importItems(target, target.hello, signal(), progress),
+    session.importItems(target, target.hello, PIN, signal(), progress),
     /not found/,
   );
   assert.equal(session.backup.complete, false);

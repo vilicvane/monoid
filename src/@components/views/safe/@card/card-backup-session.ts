@@ -151,7 +151,7 @@ export function getBackupCardIdentity(
 
   assertBackupPINsNotBlocked(hello);
 
-  if (hello.pins.access === false || hello.pins.safe === false) {
+  if (hello.pins.access === false || hello.pins.secret === false) {
     throw new MonoidCardError('Initialize card from Safe');
   }
 
@@ -168,8 +168,8 @@ export function assertBackupBundle(
 }
 
 function assertBackupPINsNotBlocked(hello: MonoidAppletHello): void {
-  if (hello.pins.safe === 0) {
-    throw new MonoidCardError('Safe PIN blocked');
+  if (hello.pins.secret === 0) {
+    throw new MonoidCardError('Secret PIN blocked');
   }
 
   if (hello.pins.access === 0) {
@@ -196,6 +196,37 @@ function throwIfCancelled(signal: AbortSignal): void {
   }
 }
 
+async function authenticateSecretPIN(
+  applet: MonoidApplet,
+  pin: string,
+  signal: AbortSignal,
+): Promise<void> {
+  if (!MonoidPIN.is(pin)) {
+    throw new MonoidCardError('Secret PIN must contain 6 to 16 characters');
+  }
+
+  throwIfCancelled(signal);
+
+  try {
+    await applet.authenticate({secret: true, pin});
+  } catch (error) {
+    if (
+      error instanceof CBORAppletError &&
+      MonoidAppletInvalidPINError.is(error.source)
+    ) {
+      throw new MonoidCardError(
+        error.source.tries === 0
+          ? 'Secret PIN blocked'
+          : `Incorrect Secret PIN, ${error.source.tries} ${error.source.tries === 1 ? 'try' : 'tries'} left`,
+      );
+    }
+
+    throw error;
+  }
+
+  throwIfCancelled(signal);
+}
+
 export async function initializeBackupTarget(
   applet: MonoidApplet,
   hello: MonoidAppletHello,
@@ -213,18 +244,18 @@ export async function initializeBackupTarget(
   assertBackupPINsNotBlocked(hello);
   throwIfCancelled(signal);
 
-  if (hello.pins.access !== false && hello.pins.safe !== false) {
+  if (hello.pins.access !== false && hello.pins.secret !== false) {
     return hello;
   }
 
-  if (expected.pins.safe === false && hello.pins.safe !== false) {
+  if (expected.pins.secret === false && hello.pins.secret !== false) {
     throw new MonoidCardError(
       'This card has already been initialized. Add it again to continue.',
     );
   }
 
   if (!MonoidPIN.is(pin)) {
-    throw new MonoidCardError('Safe PIN must contain 6 to 16 characters.');
+    throw new MonoidCardError('Secret PIN must contain 6 to 16 characters.');
   }
 
   try {
@@ -238,8 +269,8 @@ export async function initializeBackupTarget(
     ) {
       throw new MonoidCardError(
         error.source.tries === 0
-          ? 'Safe PIN blocked'
-          : `Incorrect Safe PIN, ${error.source.tries} ${error.source.tries === 1 ? 'try' : 'tries'} left`,
+          ? 'Secret PIN blocked'
+          : `Incorrect Secret PIN, ${error.source.tries} ${error.source.tries === 1 ? 'try' : 'tries'} left`,
       );
     }
 
@@ -490,32 +521,7 @@ export class CardBackupSession {
         throw new MonoidCardError('Confirm the destination cards first.');
       }
 
-      if (hello.pins.safe === 0) {
-        throw new MonoidCardError('Safe PIN blocked');
-      }
-
-      if (!MonoidPIN.is(pin)) {
-        throw new MonoidCardError('Safe PIN must contain 6 to 16 characters.');
-      }
-
-      throwIfCancelled(signal);
-
-      try {
-        await applet.authenticate({safe: true, pin});
-      } catch (error) {
-        if (
-          error instanceof CBORAppletError &&
-          MonoidAppletInvalidPINError.is(error.source)
-        ) {
-          throw new MonoidCardError(
-            error.source.tries === 0
-              ? 'Safe PIN blocked'
-              : `Incorrect Safe PIN, ${error.source.tries} ${error.source.tries === 1 ? 'try' : 'tries'} left`,
-          );
-        }
-
-        throw error;
-      }
+      await authenticateSecretPIN(applet, pin, signal);
 
       const transfers = backup.targets.flatMap(target => target.items);
       let completed = transfers.filter(item => item.exported).length;
@@ -562,6 +568,7 @@ export class CardBackupSession {
   importItems(
     applet: MonoidApplet,
     hello: MonoidAppletHello,
+    pin: string,
     signal: AbortSignal,
     onProgress: (
       current: number,
@@ -596,6 +603,10 @@ export class CardBackupSession {
           'Export all selected items for this destination from the source first.',
         );
       }
+
+      // Secret authorization is bound to this SELECT/session, never to the
+      // retained copy state. Authenticate again before each import attempt.
+      await authenticateSecretPIN(applet, pin, signal);
 
       const senderPublicKey = PublicKey.satisfies(
         hexToUint8Array(backup.source.publicKey),

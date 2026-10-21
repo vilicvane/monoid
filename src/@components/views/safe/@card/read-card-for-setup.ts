@@ -8,17 +8,17 @@ import {
   MonoidAppletHello,
 } from '../../../../@lib/monoid/index.js';
 
-export type CopyDestination =
+export type CardSetupScan =
   | {type: 'ready'; hello: MonoidAppletHello}
   | {type: 'setup'; cardInformation: CardInformation};
 
-/** Read an installed destination or collect information for the setup page. */
-export async function readCopyDestination(
+/** Read an installed card or collect information for the setup page. */
+export async function readCardForSetup(
   sessionId: string,
   monoidApplet: MonoidApplet,
   onStatus: (content: string) => void,
   signal: AbortSignal,
-): Promise<CopyDestination> {
+): Promise<CardSetupScan> {
   signal.throwIfAborted();
   let applet: MonoidApplet;
 

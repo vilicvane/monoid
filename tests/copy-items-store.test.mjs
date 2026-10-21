@@ -16,7 +16,7 @@ function hello(number) {
     id: Uint8Array.of(0, 0, 0, number),
     publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(number)),
     bundle: false,
-    pins: {access: 5, safe: 5},
+    pins: {access: 5, secret: 5},
   };
 }
 
@@ -38,7 +38,7 @@ function getFlow(store, id, sourceCard, sourceIndexes) {
   );
 }
 
-test('Routra returns to the same Copy flow after Setup removes and recreates its view', async t => {
+test('Routra returns to the same Copy flow after Card maintenance removes and recreates its view', async t => {
   const store = new CopyItemsStore();
   const router = routra(ROUTE_SCHEMA, {});
   await router.safe.$reset().$completed;
@@ -60,17 +60,17 @@ test('Routra returns to the same Copy flow after Setup removes and recreates its
     first.sourceIndexes,
   );
   await flow.session.addTarget(hello(2));
-  await router.safe
-    .setupCard({cardInformation: {}, copyId: first.copyId})
+  await router
+    .cardApplets({cardInformation: {}, returnTo: 'copy', copyId: first.copyId})
     .$push().$completed;
   assert.equal(views.$entries.length, 0);
-  const setupView = router.safe.setupCard.$view().$entries[0];
+  const setupView = router.cardApplets.$view().$entries[0];
   await store.get(setupView.copyId).session.addTarget(hello(3));
   const backup = flow.session.backup;
   const history = JSON.parse(JSON.stringify(router.$snapshot));
   const back = router.$backTo(router.safe.copyItems.$exact);
   assert.ok(back);
-  assert.equal(router.safe.setupCard.$active, true);
+  assert.equal(router.cardApplets.$active, true);
   await back().$completed;
 
   const returned = views.$entries[0];

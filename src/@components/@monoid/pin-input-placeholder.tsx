@@ -3,16 +3,16 @@ import {styled} from 'styled-components';
 
 import type {InputModalOptions} from '../@ui/use-input-modal.js';
 
-const Kind = styled.span<{$safe: boolean}>`
-  color: ${({$safe}) => ($safe ? 'var(--ion-color-warning)' : 'white')};
+const Kind = styled.span<{$secret: boolean}>`
+  color: ${({$secret}) => ($secret ? 'var(--ion-color-warning)' : 'white')};
 `;
 
-export function PINKind({kind}: {kind: 'Access' | 'Safe'}): ReactNode {
-  return <Kind $safe={kind === 'Safe'}>{kind}</Kind>;
+export function PINKind({kind}: {kind: 'Access' | 'Secret'}): ReactNode {
+  return <Kind $secret={kind === 'Secret'}>{kind}</Kind>;
 }
 
 export function getPINInputPlaceholder(
-  kind: 'Access' | 'Safe',
+  kind: 'Access' | 'Secret',
   prefix = 'Enter',
 ): Pick<InputModalOptions, 'placeholder' | 'placeholderContent'> {
   return {

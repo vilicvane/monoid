@@ -220,7 +220,7 @@ test('accepts mainnet legacy, SegWit and Taproot recipients and rejects wrong ne
   for (const address of [
     'mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn',
     `${segwit.address.slice(0, -1)}q`,
-    'bitcoin:' + segwit.address,
+    `bitcoin:${segwit.address}`,
   ]) {
     assert.throws(() => validateBitcoinAddress(address), /mainnet/);
   }

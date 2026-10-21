@@ -6,7 +6,7 @@ import {createContext, runInContext} from 'node:vm';
 
 import ts from 'typescript';
 
-// eslint-disable-next-line @mufan/import, import/no-relative-packages -- Exercise the private wrapper with a native mock, without registering Capacitor.
+// eslint-disable-next-line import/no-relative-packages -- Exercise the private wrapper with a native mock, without registering Capacitor.
 import {createBiometricVault} from '../plugins/biometric-vault/dist/esm/access.js';
 
 function deferred() {

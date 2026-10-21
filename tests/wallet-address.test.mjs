@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
 import {base58} from '@scure/base';
-import {getBytes, SigningKey} from 'ethers';
+import {SigningKey, getBytes} from 'ethers';
 
 import {parseDerivationPath} from '../.bld/app/@lib/bip39.js';
 import {

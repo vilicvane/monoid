@@ -5,9 +5,7 @@ import {reaction} from 'mobx';
 import {routra} from 'routra';
 import {BrowserRouterPlugin} from 'routra/browser';
 
-// eslint-disable-next-line @mufan/scoped-modules -- Exercise startup routes without initializing platform services.
 import {ROUTE_SCHEMA} from '../.bld/app/@routes.js';
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Exercise persisted preferences without initializing platform services.
 import {AppPreferencesService} from '../.bld/app/@services/app-preferences-service.js';
 
 function storageFixture(context, initial) {

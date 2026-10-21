@@ -1,6 +1,6 @@
 import classNames from 'classNames';
 import type {ReactNode} from 'react';
-import {useCallback, useId, useRef, useState} from 'react';
+import {useCallback, useEffect, useId, useRef, useState} from 'react';
 import {createPortal} from 'react-dom';
 import {styled} from 'styled-components';
 
@@ -114,9 +114,19 @@ export type InputModalOptions = {
   maxLength?: number;
 };
 
+type InputModalInstance = {
+  id: number;
+  options: InputModalOptions;
+  resolve: (value: string | undefined) => void;
+  release: () => void;
+};
+
 export function useInputModal(): [
   ReactNode,
-  (options: InputModalOptions) => Promise<string | undefined>,
+  (
+    options: InputModalOptions,
+    signal?: AbortSignal,
+  ) => Promise<string | undefined>,
 ] {
   const {
     portals: {popup},
@@ -125,23 +135,61 @@ export function useInputModal(): [
   const [value, setValue] = useState('');
   const descriptionId = useId();
   const nextInstanceId = useRef(0);
+  const activeInstance = useRef<InputModalInstance | undefined>(undefined);
   const [completion, setCompletion] = useState<{
     value: string | undefined;
   }>();
+  const [instance, setInstance] = useState<InputModalInstance>();
 
-  const [instance, setInstance] = useState<{
-    id: number;
-    options: InputModalOptions;
-    resolve: (value: string | undefined) => void;
-  }>();
+  const close = useCallback(
+    (
+      current: InputModalInstance,
+      result: string | undefined,
+      updateState = true,
+    ) => {
+      if (activeInstance.current !== current) return;
+      activeInstance.current = undefined;
+      current.release();
+      if (updateState) {
+        setValue('');
+        setCompletion(undefined);
+        setInstance(undefined);
+      }
+      current.resolve(result);
+    },
+    [],
+  );
 
-  const show = useCallback((options: InputModalOptions) => {
-    return new Promise<string | undefined>(resolve => {
-      setValue(options.defaultValue ?? '');
-      setCompletion(undefined);
-      setInstance({id: nextInstanceId.current++, options, resolve});
-    });
-  }, []);
+  useEffect(
+    () => () => {
+      if (activeInstance.current) {
+        close(activeInstance.current, undefined, false);
+      }
+    },
+    [close],
+  );
+
+  const show = useCallback(
+    (options: InputModalOptions, signal?: AbortSignal) => {
+      if (signal?.aborted) return Promise.resolve(undefined);
+      return new Promise<string | undefined>(resolve => {
+        if (activeInstance.current) close(activeInstance.current, undefined);
+        const cancel = (): void => close(current, undefined);
+        const current: InputModalInstance = {
+          id: nextInstanceId.current++,
+          options,
+          resolve,
+          release: () => signal?.removeEventListener('abort', cancel),
+        };
+        activeInstance.current = current;
+        setValue(options.defaultValue ?? '');
+        setCompletion(undefined);
+        setInstance(current);
+        signal?.addEventListener('abort', cancel, {once: true});
+      });
+    },
+    [close],
+  );
 
   let content: ReactNode;
 
@@ -155,10 +203,10 @@ export function useInputModal(): [
         center = false,
         maxLength,
       },
-      resolve,
     } = instance;
 
     const complete = (value: string | undefined): void => {
+      if (activeInstance.current !== instance) return;
       setCompletion(current => current ?? {value});
     };
 
@@ -174,10 +222,7 @@ export function useInputModal(): [
                 return;
               }
 
-              setValue('');
-              setCompletion(undefined);
-              setInstance(undefined);
-              resolve(completion.value);
+              close(instance, completion.value);
             }}
           >
             <InputField className={classNames({center})}>

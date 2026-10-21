@@ -1,12 +1,9 @@
-/* global globalThis */
-
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-import {reaction} from 'mobx';
 import {Interface} from 'ethers';
+import {reaction} from 'mobx';
 
-// eslint-disable-next-line @mufan/scoped-modules, @mufan/import -- Test the service without platform initialization.
 import {EvmTokenService} from '../.bld/app/@services/evm-token-service.js';
 
 const TOKEN = {

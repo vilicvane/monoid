@@ -240,8 +240,8 @@ export function useMonoidScanPrompt({
         type: 'password',
         ...(request.type === 'setup'
           ? getPINInputPlaceholder(
-              'Safe',
-              request.hello.pins.safe === false ? 'Set' : 'Enter existing',
+              'Secret',
+              request.hello.pins.secret === false ? 'Set' : 'Enter existing',
             )
           : getPINInputPlaceholder('Access')),
         description:
@@ -421,19 +421,19 @@ export function useMonoidScanPrompt({
 
           if (
             ensureSetup &&
-            (hello.pins.access === false || hello.pins.safe === false)
+            (hello.pins.access === false || hello.pins.secret === false)
           ) {
             if (!allowSetup) {
               result = {type: 'uninitialized'};
               return;
             }
 
-            if (hello.pins.safe === 0 || hello.pins.access === 0) {
+            if (hello.pins.secret === 0 || hello.pins.access === 0) {
               result = {
                 type: 'error',
                 error: new MonoidCardError(
-                  hello.pins.safe === 0
-                    ? 'Safe PIN blocked'
+                  hello.pins.secret === 0
+                    ? 'Secret PIN blocked'
                     : 'Access PIN blocked',
                 ),
                 retry: false,
@@ -443,10 +443,10 @@ export function useMonoidScanPrompt({
 
             const setupHello = hello;
 
-            // Re-prompt if another operation initialized the Safe since input.
+            // Re-prompt if another operation set the Secret PIN since input.
             if (
               !setup ||
-              (setup.hello.pins.safe === false && hello.pins.safe !== false)
+              (setup.hello.pins.secret === false && hello.pins.secret !== false)
             ) {
               result = {
                 type: 'input',
@@ -456,8 +456,8 @@ export function useMonoidScanPrompt({
             }
 
             setStateContent(
-              hello.pins.safe === false
-                ? 'Setting Safe PIN, hold tight...'
+              hello.pins.secret === false
+                ? 'Setting Secret PIN, hold tight...'
                 : 'Setting Access PIN, hold tight...',
             );
 
@@ -480,7 +480,7 @@ export function useMonoidScanPrompt({
                 if (error.source.tries === 0) {
                   result = {
                     type: 'error',
-                    error: new MonoidCardError('Safe PIN blocked', {
+                    error: new MonoidCardError('Secret PIN blocked', {
                       cause: error,
                     }),
                     retry: false,
@@ -494,10 +494,10 @@ export function useMonoidScanPrompt({
                     type: 'setup',
                     hello: {
                       ...setupHello,
-                      pins: {...setupHello.pins, safe: error.source.tries},
+                      pins: {...setupHello.pins, secret: error.source.tries},
                     },
                   },
-                  message: `Incorrect Safe PIN, tries remaining: ${error.source.tries}`,
+                  message: `Incorrect Secret PIN, tries remaining: ${error.source.tries}`,
                 };
                 return;
               }
@@ -507,7 +507,7 @@ export function useMonoidScanPrompt({
 
             if (disposed) return;
 
-            // Only an unset Access PIN inherits the Safe PIN during setup.
+            // Only an unset Access PIN inherits the Secret PIN during setup.
             if (needsAccessPIN) {
               enteredPIN = {id, pin: setup.pin};
               initializedAccessPIN = true;
@@ -727,7 +727,9 @@ export function useMonoidScanPrompt({
               result = {
                 type: 'redirect',
                 navigate: () =>
-                  router.safe.setupCard({cardInformation}).$replace(),
+                  router
+                    .cardApplets({cardInformation, returnTo: 'safe'})
+                    .$replace(),
               };
             }
           : undefined,
@@ -776,7 +778,7 @@ export function useMonoidScanPrompt({
     allowInstallRedirect,
     auth,
     retryOnError,
-    router.safe,
+    router,
     appletCallbackAndPromise,
     showPINInput,
     toast,

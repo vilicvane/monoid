@@ -25,7 +25,7 @@ mock.module('../.bld/app/@utils/index.js', {
   },
 });
 
-const {GlobalPlatformInstaller} = await import(
+const {CardManagerNotFoundError, GlobalPlatformInstaller} = await import(
   '../.bld/app/@lib/global-platform/install.js'
 );
 const {exchange, readTLV} = await import(
@@ -126,15 +126,16 @@ function cardScript(steps) {
 
       return step.response ?? response();
     },
-    done() {
+    done(expectedDeletes = 0) {
       assert.equal(
         position,
         steps.length,
         'All expected exchanges must complete.',
       );
-      assert.ok(
-        calls.every(apdu => apdu[1] !== 0xe4),
-        'Never send DELETE.',
+      assert.equal(
+        calls.filter(apdu => apdu[1] === 0xe4).length,
+        expectedDeletes,
+        'Only explicitly expected DELETE commands are allowed.',
       );
     },
   };
@@ -628,3 +629,263 @@ test('TLV decoding supports two-byte tags and BER lengths, and rejects truncated
     assert.throws(() => readTLV(bytes(malformed)), undefined, malformed);
   }
 });
+
+test('public registry lookup exposes the instance AID and its package without inferring a version', async () => {
+  const card = cardScript([
+    {command: select()},
+    {command: status(0x40, safe.appletAid), response: response(installedSafe)},
+  ]);
+  const installer = await GlobalPlatformInstaller.open(card.transceive);
+
+  assert.deepEqual(await installer.getEntry(0x40, safe.appletAid), {
+    aid: safe.appletAid,
+    lifecycle: 0x07,
+    modules: [],
+    packageAid: safe.packageAid,
+  });
+  card.done();
+});
+
+test('public registry lookup preserves pagination, all modules, and raw major/minor version bytes', async () => {
+  // GP v2.3 Table 11-37 Note 1: CE is CAP major then minor, not BCD.
+  const secondModule = bytes('f06d6f6e6f69640002');
+  const multipleModules = bytes(
+    'e332 4f08f06d6f6e6f696400 9f700101 ce0212fe 8409f06d6f6e6f69640002 8409f06d6f6e6f69640001 cc08a000000151000000',
+  );
+  const card = cardScript([
+    {command: select()},
+    {
+      command: status(0x10, safe.packageAid),
+      response: response(unrelatedPackage, 0x6310),
+    },
+    {
+      command: status(0x10, safe.packageAid, true),
+      response: response(multipleModules),
+    },
+  ]);
+  const installer = await GlobalPlatformInstaller.open(card.transceive);
+
+  assert.deepEqual(await installer.getEntry(0x10, safe.packageAid), {
+    aid: safe.packageAid,
+    lifecycle: 0x01,
+    modules: [secondModule, safe.appletAid],
+    version: {major: 0x12, minor: 0xfe},
+  });
+  card.done();
+});
+
+test('missing optional registry metadata remains unknown', async () => {
+  const withoutVersion = bytes(
+    'e323 4f08f06d6f6e6f696400 9f700101 8409f06d6f6e6f69640001 cc08a000000151000000',
+  );
+  const card = cardScript([
+    {command: select()},
+    {
+      command: status(0x10, safe.packageAid),
+      response: response(withoutVersion),
+    },
+  ]);
+  const installer = await GlobalPlatformInstaller.open(card.transceive);
+
+  assert.deepEqual(await installer.getEntry(0x10, safe.packageAid), {
+    aid: safe.packageAid,
+    lifecycle: 0x01,
+    modules: [safe.appletAid],
+  });
+  card.done();
+});
+
+test('inspection selects the card manager and reads metadata without authenticating or exposing write methods', async () => {
+  const card = cardScript([
+    {command: select(), response: response(undefined, 0x6a82)},
+    {command: select(alternateDomain)},
+    {command: status(0x40, safe.appletAid), response: response(installedSafe)},
+  ]);
+  const reader = await GlobalPlatformInstaller.inspect(card.transceive);
+
+  assert.deepEqual(Object.keys(reader), ['getEntry']);
+  assert.equal((await reader.getEntry(0x40, safe.appletAid)).lifecycle, 0x07);
+  assert.equal(channelOpens, 0);
+  card.done();
+});
+
+test('an inspection registry authentication failure is not mistaken for an absent applet', async () => {
+  const card = cardScript([
+    {command: select()},
+    {
+      command: status(0x40, safe.appletAid),
+      response: response(undefined, 0x6982),
+    },
+  ]);
+  const reader = await GlobalPlatformInstaller.inspect(card.transceive);
+
+  await assert.rejects(
+    reader.getEntry(0x40, safe.appletAid),
+    error => error.sw === 0x6982,
+  );
+  assert.equal(channelOpens, 0);
+  card.done();
+});
+
+for (const factory of ['open', 'inspect']) {
+  test(`${factory} reports a missing card manager with its explicit error type`, async () => {
+    const card = cardScript([
+      {command: select(), response: response(undefined, 0x6a82)},
+      {command: select(alternateDomain), response: response(undefined, 0x6a82)},
+    ]);
+    await assert.rejects(
+      GlobalPlatformInstaller[factory](card.transceive),
+      CardManagerNotFoundError,
+    );
+    assert.equal(channelOpens, 0);
+    card.done();
+  });
+}
+
+function deleteCommand(aid) {
+  return command(0xe4, 0x00, 0x00, join(bytes('4f'), lv(aid)));
+}
+
+for (const [method, scope, aid, record] of [
+  ['removeInstance', 0x40, safe.appletAid, installedSafe],
+  ['removePackage', 0x10, safe.packageAid, loadedSafe],
+]) {
+  test(`${method} checks the precise AID, deletes without cascading, then confirms absence`, async () => {
+    const card = cardScript([
+      {command: select()},
+      {command: status(scope, aid), response: response(record)},
+      {command: deleteCommand(aid)},
+      absent(scope, aid),
+    ]);
+    const installer = await GlobalPlatformInstaller.open(card.transceive);
+
+    await installer[method](aid);
+    card.done(1);
+  });
+
+  test(`${method} skips an already absent entry without issuing DELETE`, async () => {
+    const card = cardScript([{command: select()}, absent(scope, aid)]);
+    const installer = await GlobalPlatformInstaller.open(card.transceive);
+
+    await installer[method](aid);
+    card.done();
+  });
+
+  test(`${method} stops on an unknown initial registry response before DELETE`, async () => {
+    const card = cardScript([
+      {command: select()},
+      {command: status(scope, aid), response: response(undefined, 0x6a82)},
+    ]);
+    const installer = await GlobalPlatformInstaller.open(card.transceive);
+
+    await assert.rejects(installer[method](aid), error => error.sw === 0x6a82);
+    card.done();
+  });
+
+  for (const failure of [new Error('DELETE response lost'), 0x6985, 0x6a88]) {
+    test(`${method} stops after ${failure instanceof Error ? 'a lost DELETE response' : `DELETE ${failure.toString(16)}`} without retry or verification`, async () => {
+      const card = cardScript([
+        {command: select()},
+        {command: status(scope, aid), response: response(record)},
+        {
+          command: deleteCommand(aid),
+          ...(failure instanceof Error
+            ? {error: failure}
+            : {response: response(undefined, failure)}),
+        },
+      ]);
+      const installer = await GlobalPlatformInstaller.open(card.transceive);
+
+      await assert.rejects(installer[method](aid), error =>
+        failure instanceof Error ? error === failure : error.sw === failure,
+      );
+      card.done(1);
+    });
+  }
+
+  test(`${method} rejects a still-present registry entry after DELETE without replaying it`, async () => {
+    const card = cardScript([
+      {command: select()},
+      {command: status(scope, aid), response: response(record)},
+      {command: deleteCommand(aid)},
+      {command: status(scope, aid), response: response(record)},
+    ]);
+    const installer = await GlobalPlatformInstaller.open(card.transceive);
+
+    await assert.rejects(installer[method](aid), /did not confirm removal/);
+    card.done(1);
+  });
+
+  test(`${method} preserves an unknown post-DELETE registry error without retry`, async () => {
+    const failure = new Error('Registry response lost');
+    const card = cardScript([
+      {command: select()},
+      {command: status(scope, aid), response: response(record)},
+      {command: deleteCommand(aid)},
+      {command: status(scope, aid), error: failure},
+    ]);
+    const installer = await GlobalPlatformInstaller.open(card.transceive);
+
+    await assert.rejects(installer[method](aid), error => error === failure);
+    card.done(1);
+  });
+}
+
+test('a package with multiple modules remains protected by dependency rejection, without forced or related deletion', async () => {
+  const multipleModules = bytes(
+    'e332 4f08f06d6f6e6f696400 9f700101 ce020100 8409f06d6f6e6f69640002 8409f06d6f6e6f69640001 cc08a000000151000000',
+  );
+  const card = cardScript([
+    {command: select()},
+    {
+      command: status(0x10, safe.packageAid),
+      response: response(multipleModules),
+    },
+    {
+      command: deleteCommand(safe.packageAid),
+      response: response(undefined, 0x6985),
+    },
+  ]);
+  const installer = await GlobalPlatformInstaller.open(card.transceive);
+
+  await assert.rejects(
+    installer.removePackage(safe.packageAid),
+    error => error.sw === 0x6985,
+  );
+  card.done(1);
+});
+
+for (const [label, scope, aid, malformed] of [
+  [
+    'one-byte CE version',
+    0x10,
+    safe.packageAid,
+    bytes(
+      'e326 4f08f06d6f6e6f696400 9f700101 ce0101 8409f06d6f6e6f69640001 cc08a000000151000000',
+    ),
+  ],
+  [
+    'invalid C4 package AID',
+    0x40,
+    safe.appletAid,
+    bytes(
+      'e324 4f09f06d6f6e6f69640001 9f700107 c503000000 c404f06d6f6e cc08a000000151000000',
+    ),
+  ],
+]) {
+  test(`${label} is rejected before removal rather than treated as known metadata`, async () => {
+    const card = cardScript([
+      {command: select()},
+      {command: status(scope, aid), response: response(malformed)},
+    ]);
+    const installer = await GlobalPlatformInstaller.open(card.transceive);
+
+    await assert.rejects(
+      scope === 0x10
+        ? installer.removePackage(aid)
+        : installer.removeInstance(aid),
+      /invalid card registry fields/,
+    );
+    card.done();
+  });
+}
