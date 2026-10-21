@@ -85,3 +85,7 @@
 ## a4d5a46
 
 47. [agent] a rejected Access/Secret PIN or other application failure must end the iOS NFC sheet with its error indicator, even when the APDU transport succeeded. Carry trusted PIN/card text (generic fallback for other errors) through `closeSession.errorMessage`, retain it until `stopScan`, and preserve native cleanup before PIN input or app error handling. This presentation must not change transport events, consume extra PIN attempts, or replay operations; success retains an explicit completion message or otherwise clears its final text. See [29.md](29.md). NFC business-failure completion.
+
+## 815eee4
+
+48. [user] disable app rotation and redeploy during iPhone testing. [agent] keep the iPhone interface portrait-only through `UISupportedInterfaceOrientations`; Capacitor reads this native configuration. iPhone orientation.
