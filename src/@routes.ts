@@ -29,9 +29,10 @@ export const ROUTE_SCHEMA = {
             copyId?: string;
             bundleId?: string;
             extensionId?: string;
+            maintenanceSyncId?: string;
           }
         | undefined,
-    ) => state ?? {},
+    ) => ({...state, maintenanceSyncId: state?.maintenanceSyncId}),
   },
   bitcoin: {
     wallet: {

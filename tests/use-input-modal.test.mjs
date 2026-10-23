@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import {afterEach, mock, test} from 'node:test';
+import {afterEach, beforeEach, mock, test} from 'node:test';
 
 let rendering;
 const owners = [];
+const keyboardRequests = [];
 
 mock.module('react', {
   namedExports: {
@@ -69,6 +70,17 @@ mock.module('styled-components', {
 mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => ({portals: {popup: 'popup'}})},
 });
+mock.module('../.bld/app/@lib/input-keyboard.js', {
+  namedExports: {
+    showInputKeyboard: input => {
+      const request = {input, cancelled: false};
+      keyboardRequests.push(request);
+      return () => {
+        request.cancelled = true;
+      };
+    },
+  },
+});
 mock.module('../.bld/app/@components/@animations.js', {
   namedExports: {fadeInAnimationCSS: '', fadeOutAnimationCSS: ''},
 });
@@ -112,6 +124,8 @@ function mount() {
       state.callbackIndex = 0;
       state.effectIndex = 0;
       [state.content, state.show] = useInputModal();
+      const input = state.input();
+      if (input) input.props.ref.current = state.inputElement;
       for (const {index, effect, dependencies} of state.pendingEffects) {
         state.effects[index]?.cleanup?.();
         state.effects[index] = {dependencies, cleanup: effect()};
@@ -119,6 +133,7 @@ function mount() {
       state.pendingEffects = [];
       return state.content;
     },
+    inputElement: {},
     input() {
       return find(state.content, node => node.type === 'input');
     },
@@ -167,6 +182,10 @@ function trackedController() {
 
 afterEach(() => {
   for (const state of owners.splice(0)) state.unmount();
+});
+
+beforeEach(() => {
+  keyboardRequests.length = 0;
 });
 
 test('an already aborted request resolves without opening or replacing input', async () => {
@@ -298,4 +317,52 @@ test('unmount resolves pending input and releases the signal without state write
   assert.equal(state.stateWrites, writes);
   controller.abort();
   assert.equal(state.stateWrites, writes);
+});
+
+test('input edits do not repeat keyboard requests and completion cancels before exit', async () => {
+  const state = mount();
+  const result = state.show({type: 'password'});
+  state.render();
+  assert.equal(keyboardRequests.length, 1);
+  assert.equal(keyboardRequests[0].input, state.inputElement);
+  state.type('test-pin');
+  assert.equal(keyboardRequests.length, 1);
+
+  state.input().props.onKeyDown({key: 'Enter'});
+  assert.equal(keyboardRequests[0].cancelled, true);
+  state.render();
+  assert.equal(keyboardRequests.length, 1);
+  state.finishAnimation();
+  assert.equal(await result, 'test-pin');
+});
+
+test('abort, replacement, blur and unmount cancel keyboard work with the owning prompt', async () => {
+  const state = mount();
+  const controller = new AbortController();
+  const first = state.show({}, controller.signal);
+  state.render();
+  controller.abort();
+  assert.equal(keyboardRequests[0].cancelled, true);
+  assert.equal(await first, undefined);
+
+  const second = state.show({});
+  state.render();
+  const oldInput = state.input();
+  const third = state.show({});
+  assert.equal(keyboardRequests[1].cancelled, true);
+  assert.equal(await second, undefined);
+  state.render();
+  oldInput.props.onBlur();
+  assert.equal(keyboardRequests[2].cancelled, false);
+  state.input().props.onBlur();
+  assert.equal(keyboardRequests[2].cancelled, true);
+  state.render();
+  state.finishAnimation();
+  assert.equal(await third, undefined);
+
+  const fourth = state.show({});
+  state.render();
+  state.unmount();
+  assert.equal(keyboardRequests[3].cancelled, true);
+  assert.equal(await fourth, undefined);
 });

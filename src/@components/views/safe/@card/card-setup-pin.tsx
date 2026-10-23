@@ -138,6 +138,20 @@ export function CardSetupPIN({
         if (hello.pins.access === 0)
           throw new MonoidCardError('Access PIN blocked');
 
+        await using temporarySession = pinSession
+          ? undefined
+          : monoidCredentialsStore.createPINSession();
+        const setupPINSession = pinSession ?? temporarySession!;
+        if (hello.pins.access === false) {
+          try {
+            await waitForOperation(setupPINSession.getPINs(signal), signal);
+          } catch (error) {
+            setupPINSession.clear();
+            throw error;
+          }
+          signal.throwIfAborted();
+        }
+
         pin = await readPIN();
         if (pin === undefined) return;
         signal.throwIfAborted();
@@ -230,11 +244,7 @@ export function CardSetupPIN({
             let saved = false;
             if (scanCompleted && accessPINAuthenticated && !signal.aborted) {
               try {
-                await (pinSession ?? monoidCredentialsStore).setPIN(
-                  accessPINId,
-                  pin,
-                  signal,
-                );
+                await setupPINSession.setPIN(accessPINId, pin, signal);
                 saved = true;
               } catch {
                 // The card setup remains valid if local credential storage fails.

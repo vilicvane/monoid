@@ -3,6 +3,7 @@ import {test} from 'node:test';
 
 import {CardSyncSession} from '../.bld/app/@components/views/safe/@card/card-sync-session.js';
 import {
+  decodeCardDerivationRecord,
   encodeCardDerivationRecord,
   getCardDerivationItemIndex,
 } from '../.bld/app/@components/views/safe/card-derivations.js';
@@ -701,4 +702,540 @@ test('seed chain code participates in equality and oversized merged data fails b
   await add(session, empty);
   assert.throws(() => session.prepare(), /card limits/);
   assert.equal(mutationCalls(empty).length, 0);
+});
+
+// Header fields model Bundle envelopes; the fixture payload remains readable
+// JSON so a restore can prove whose complete item was actually re-exported.
+function recoveryCard(id, bundle, entries = []) {
+  const card = mockCard(id, bundle, entries);
+  const exportItem = card.exportItem;
+  const importItem = card.importItem;
+  card.exportItem = async request => {
+    const result = await exportItem(request);
+    const data = new Uint8Array(160 + result.data.length);
+    data[0] = 2;
+    data.set(card.hello.bundle, 1);
+    data.set(card.hello.publicKey, 33);
+    data.set(result.data, 160);
+    return {...result, data};
+  };
+  card.importItem = request =>
+    importItem({...request, data: request.data.subarray(160)});
+  return card;
+}
+
+const identity = card => ({
+  id: hex(card.hello.id),
+  publicKey: hex(card.hello.publicKey),
+  bundle: card.hello.bundle === false ? false : hex(card.hello.bundle),
+});
+
+test('recovery freshly exports merged peer contents, including the target-only Secret, without writing the target', async () => {
+  const session = new CardSyncSession();
+  const commonIndex = '03010000000000000002';
+  const companion = addressType => ({
+    index: getCardDerivationItemIndex(commonIndex),
+    type: 0x0f01,
+    key: commonIndex,
+    secret: false,
+    data: hex(
+      encodeCardDerivationRecord({
+        index: commonIndex,
+        wallets: [{addressType}],
+      }),
+    ),
+  });
+  const first = recoveryCard(1, 1, [
+    root({alias: 'Only on target'}),
+    root({index: commonIndex, alias: 'First'}),
+    companion('evm'),
+  ]);
+  const peer = recoveryCard(2, 1, [
+    root({index: commonIndex, alias: 'Second'}),
+    companion('bitcoin-taproot'),
+    plain(),
+  ]);
+  await add(session, first);
+  await add(session, peer);
+  session.prepare();
+  await write(session, peer);
+  assert.equal(session.cards[1].complete, true);
+  assert.equal(session.cards[0].complete, false);
+  assert.deepEqual(mutationCalls(first), []);
+  assert.equal(first.records.has(publicIndex), false);
+  assert.equal(peer.records.get(commonIndex).alias, 'First');
+  const cached = session.cards[1].items.find(item => item.index === keyIndex);
+  assert.equal(
+    hex(bytes(cached.exported.data).subarray(33, 98)),
+    identity(first).publicKey,
+  );
+  peer.calls.length = 0;
+  const progress = [];
+
+  const recovery = await session.exportRecovery(
+    peer,
+    peer.hello,
+    identity(first),
+    signal(),
+    update => progress.push(update),
+  );
+
+  assert.deepEqual(recovery.source, identity(peer));
+  assert.equal(recovery.items.length, peer.records.size);
+  assert.ok(peer.calls.every(([kind]) => kind === 'export'));
+  assert.equal(peer.calls.length, peer.records.size);
+  assert.deepEqual(
+    progress.map(({current}) => current),
+    [0, 1, 2, 3, 4],
+  );
+  assert.ok(
+    progress.every(({stage, total}) => stage === 'exporting' && total === 4),
+  );
+  for (const item of recovery.items) {
+    assert.equal(
+      hex(bytes(item.data).subarray(33, 98)),
+      identity(peer).publicKey,
+    );
+    assert.equal('fingerprint' in item, false);
+    assert.equal('derivationRecord' in item, false);
+  }
+  const restored = recoveryCard(1, 1);
+  for (const item of recovery.items) {
+    await restored.importItem({
+      index: bytes(item.index),
+      key: item.key === undefined ? undefined : bytes(item.key),
+      alias: item.alias,
+      data: bytes(item.data),
+    });
+  }
+  assert.deepEqual(
+    [...restored.records].sort(([a], [b]) => a.localeCompare(b)),
+    [...peer.records].sort(([a], [b]) => a.localeCompare(b)),
+  );
+  assert.equal(session.cards[0].complete, false);
+  assert.deepEqual(mutationCalls(first), []);
+});
+
+test('three-card recovery merges every Secret and derivation before exporting the last peer without writing the target', async () => {
+  const session = new CardSyncSession();
+  const seedIndex = '02400000000000000001';
+  const recordIndex = getCardDerivationItemIndex(seedIndex);
+  const wallets = [0, 1, 2].map(account => ({
+    addressType: 'evm',
+    seed: 'Bitcoin seed',
+    curve: 'secp256k1',
+    path: `m/44'/60'/0'/0/${account}`,
+  }));
+  const uniqueSecrets = [1, 2, 3].map(id =>
+    root({
+      index: `0301000000000000000${id}`,
+      data: `${id}${id}`,
+      alias: `Secret ${id}`,
+    }),
+  );
+  const uniquePublic = [1, 2, 3].map(id =>
+    plain({index: `1000000000000000000${id}`, data: `${id}a`}),
+  );
+  const seed = root({index: seedIndex, type: 'seed', data: '64'});
+  const record = entries => ({
+    index: recordIndex,
+    type: 0x0f01,
+    key: seedIndex,
+    secret: false,
+    data: hex(encodeCardDerivationRecord({index: seedIndex, wallets: entries})),
+  });
+  const cards = [1, 2, 3].map((id, index) =>
+    recoveryCard(id, 1, [
+      uniqueSecrets[index],
+      uniquePublic[index],
+      {...seed, alias: ['', 'Shared seed', 'Later name'][index]},
+      record(index === 0 ? [wallets[0]] : [wallets[index], wallets[0]]),
+    ]),
+  );
+  const [target, second, third] = cards;
+  const originalTarget = structuredClone([...target.records]);
+  for (const card of cards) await add(session, card);
+  session.prepare();
+  for (const card of cards) card.calls.length = 0;
+
+  await write(session, third);
+  assert.deepEqual(
+    session.cards.map(card => card.complete),
+    [false, false, true],
+  );
+  await write(session, second);
+  assert.deepEqual(
+    session.cards.map(card => card.complete),
+    [false, true, true],
+  );
+  assert.equal(session.phase, 'write');
+  assert.ok(
+    cards.every(card => !card.calls.some(([kind]) => kind === 'export')),
+  );
+
+  const expected = [
+    ...uniqueSecrets,
+    ...uniquePublic,
+    {...seed, alias: 'Shared seed'},
+    record(wallets),
+  ];
+  const contents = entries =>
+    [...entries]
+      .map(({index, secret, key, alias, data}) => ({
+        index,
+        secret,
+        key,
+        alias,
+        data,
+      }))
+      .sort((left, right) => left.index.localeCompare(right.index));
+  for (const peer of [second, third]) {
+    assert.deepEqual(contents(peer.records.values()), contents(expected));
+    assert.deepEqual(
+      decodeCardDerivationRecord(bytes(peer.records.get(recordIndex).data))
+        .wallets,
+      wallets,
+    );
+  }
+  const beforeExport = second.calls.length;
+  const recovery = await session.exportRecovery(
+    second,
+    second.hello,
+    identity(target),
+    signal(),
+  );
+  assert.deepEqual(recovery.source, identity(second));
+  assert.equal(recovery.items.length, expected.length);
+  assert.equal(second.calls.length - beforeExport, expected.length);
+  assert.ok(
+    second.calls.slice(beforeExport).every(([kind]) => kind === 'export'),
+  );
+  assert.ok(third.calls.every(([kind]) => kind !== 'export'));
+  for (const item of recovery.items) {
+    assert.equal(
+      hex(bytes(item.data).subarray(33, 98)),
+      identity(second).publicKey,
+    );
+  }
+
+  const restored = recoveryCard(1, 1);
+  for (const item of recovery.items) {
+    await restored.importItem({
+      index: bytes(item.index),
+      key: item.key === undefined ? undefined : bytes(item.key),
+      alias: item.alias,
+      data: bytes(item.data),
+    });
+  }
+  assert.deepEqual(contents(restored.records.values()), contents(expected));
+  assert.deepEqual([...target.records], originalTarget);
+  assert.deepEqual(mutationCalls(target), []);
+});
+
+test('the last of multiple peers can export recovery after completion releases every cached payload', async () => {
+  const session = new CardSyncSession();
+  const entries = [
+    root({key: '', alias: ''}),
+    root({index: '03010000000000000002', data: '34'}),
+    plain(),
+  ];
+  const target = recoveryCard(1, 1, entries);
+  const second = recoveryCard(2, 1, entries.slice(0, 1));
+  const third = recoveryCard(3, 1, entries.slice(1));
+  for (const card of [target, second, third]) await add(session, card);
+  session.prepare();
+  assert.deepEqual(
+    session.cards.map(card => card.complete),
+    [true, false, false],
+  );
+  await write(session, third);
+  assert.equal(session.phase, 'write');
+  await write(session, second);
+  assert.equal(session.phase, 'complete');
+  assert.ok(
+    session.cards.every(card =>
+      card.items.every(
+        item =>
+          !('data' in item) &&
+          !('fingerprint' in item) &&
+          !('exported' in item),
+      ),
+    ),
+  );
+  second.calls.length = 0;
+  const recovery = await session.exportRecovery(
+    second,
+    second.hello,
+    identity(target),
+    signal(),
+  );
+  assert.deepEqual(recovery.source, identity(second));
+  assert.deepEqual(
+    second.calls.map(([kind, index]) => [kind, index]),
+    entries.map(item => ['export', item.index]),
+  );
+  const restored = recoveryCard(1, 1);
+  for (const item of recovery.items) {
+    await restored.importItem({
+      index: bytes(item.index),
+      key: item.key === undefined ? undefined : bytes(item.key),
+      alias: item.alias,
+      data: bytes(item.data),
+    });
+  }
+  assert.deepEqual([...restored.records], [...target.records]);
+  assert.deepEqual(mutationCalls(target), []);
+});
+
+test('an unchanged peer still exports a complete recovery after sync payloads are released', async () => {
+  const session = new CardSyncSession();
+  const entries = [root({key: '', alias: ''}), plain()];
+  const first = recoveryCard(1, 1, entries);
+  const peer = recoveryCard(2, 1, entries);
+  await add(session, first);
+  await add(session, peer);
+  assert.equal(session.noSyncRequired, true);
+  session.prepare();
+  assert.equal(session.phase, 'complete');
+  assert.ok(session.cards[1].items.every(item => item.exported === undefined));
+  peer.calls.length = 0;
+  await write(session, peer);
+  assert.deepEqual(peer.calls, []);
+  const recovery = await session.exportRecovery(
+    peer,
+    peer.hello,
+    identity(first),
+    signal(),
+  );
+  assert.deepEqual(peer.calls, [
+    ['export', keyIndex],
+    ['export', publicIndex],
+  ]);
+  assert.equal(recovery.items[0].key, '');
+  assert.equal(recovery.items[0].alias, '');
+  assert.equal(recovery.items[1].key, undefined);
+  assert.equal(recovery.items[1].alias, undefined);
+});
+
+test('recovery refuses an unfinished peer before issuing any export', async () => {
+  const session = new CardSyncSession();
+  const first = recoveryCard(1, 1, [root()]);
+  const peer = recoveryCard(2, 1);
+  await add(session, first);
+  await add(session, peer);
+  session.prepare();
+  peer.calls.length = 0;
+  await assert.rejects(
+    session.exportRecovery(peer, peer.hello, identity(first), signal()),
+    /Sync the card first/,
+  );
+  assert.deepEqual(peer.calls, []);
+});
+
+for (const changedIdentity of [
+  'self',
+  'unknown peer',
+  'peer ID',
+  'peer bundle',
+  'target ID',
+  'target bundle',
+]) {
+  test(`recovery rejects ${changedIdentity} before exporting`, async () => {
+    const session = new CardSyncSession();
+    const first = recoveryCard(1, 1, [plain()]);
+    const peer = recoveryCard(2, 1, [plain()]);
+    await add(session, first);
+    await add(session, peer);
+    session.prepare();
+    const target = identity(first);
+    const hello = structuredClone(peer.hello);
+    if (changedIdentity === 'self') Object.assign(target, identity(peer));
+    if (changedIdentity === 'unknown peer')
+      hello.publicKey = recoveryCard(3, 1).hello.publicKey;
+    if (changedIdentity === 'peer ID') hello.id = bytes('12345678');
+    if (changedIdentity === 'peer bundle')
+      hello.bundle = new Uint8Array(32).fill(2);
+    if (changedIdentity === 'target ID') target.id = '12345678';
+    if (changedIdentity === 'target bundle') target.bundle = '02'.repeat(32);
+    peer.calls.length = 0;
+    await assert.rejects(
+      session.exportRecovery(peer, hello, target, signal()),
+      /same bundle|Card changed|card in this sync/,
+    );
+    assert.deepEqual(peer.calls, []);
+  });
+}
+
+for (const peerBundle of [false, 2]) {
+  test(`recovery rejects a collected peer in ${peerBundle === false ? 'no' : 'another'} Bundle`, async () => {
+    const session = new CardSyncSession();
+    const first = recoveryCard(1, 1, [plain()]);
+    const peer = recoveryCard(2, peerBundle, [plain()]);
+    await add(session, first);
+    await add(session, peer);
+    session.prepare();
+    peer.calls.length = 0;
+    await assert.rejects(
+      session.exportRecovery(peer, peer.hello, identity(first), signal()),
+      /same bundle/,
+    );
+    assert.deepEqual(peer.calls, []);
+  });
+}
+
+for (const field of ['alias', 'key']) {
+  test(`recovery rejects changed ${field} without accepting the exported item`, async () => {
+    const session = new CardSyncSession();
+    const first = recoveryCard(1, 1, [plain()]);
+    const peer = recoveryCard(2, 1, [plain()]);
+    await add(session, first);
+    await add(session, peer);
+    session.prepare();
+    // Missing and explicitly empty authenticated metadata must stay distinct.
+    peer.records.get(publicIndex)[field] = '';
+    const progress = [];
+    await assert.rejects(
+      session.exportRecovery(
+        peer,
+        peer.hello,
+        identity(first),
+        signal(),
+        update => progress.push(update),
+      ),
+      /Card changed/,
+    );
+    assert.deepEqual(
+      progress.map(({current}) => current),
+      [0],
+    );
+    assert.equal(session.cards[1].complete, true);
+  });
+}
+
+for (const invalid of [
+  'version',
+  'truncated',
+  'bundle',
+  'sender',
+  'oversized',
+]) {
+  test(`recovery rejects an invalid ${invalid} envelope`, async () => {
+    const session = new CardSyncSession();
+    const first = recoveryCard(1, 1, [plain()]);
+    const peer = recoveryCard(2, 1, [plain()]);
+    await add(session, first);
+    await add(session, peer);
+    session.prepare();
+    const exportItem = peer.exportItem;
+    peer.exportItem = async request => {
+      const exported = await exportItem(request);
+      if (invalid === 'version') exported.data[0] = 1;
+      if (invalid === 'truncated')
+        exported.data = exported.data.subarray(0, 159);
+      if (invalid === 'bundle') exported.data[1] ^= 1;
+      if (invalid === 'sender') exported.data.set(first.hello.publicKey, 33);
+      if (invalid === 'oversized') {
+        const data = new Uint8Array(8192);
+        data.set(exported.data);
+        exported.data = data;
+      }
+      return exported;
+    };
+    const progress = [];
+    await assert.rejects(
+      session.exportRecovery(
+        peer,
+        peer.hello,
+        identity(first),
+        signal(),
+        update => progress.push(update),
+      ),
+    );
+    assert.deepEqual(
+      progress.map(({current}) => current),
+      [0],
+    );
+    assert.equal(session.busy, false);
+  });
+}
+
+test('interrupted recovery export retains peer write ACKs and only returns a complete archive on explicit retry', async () => {
+  const session = new CardSyncSession();
+  const first = recoveryCard(1, 1, [root(), plain()]);
+  const peer = recoveryCard(2, 1);
+  await add(session, first);
+  await add(session, peer);
+  session.prepare();
+  await write(session, peer);
+  const exportItem = peer.exportItem;
+  const failure = new Error('Export interrupted');
+  peer.exportItem = request => {
+    if (hex(request.index) === publicIndex) throw failure;
+    return exportItem(request);
+  };
+  const progress = [];
+  await assert.rejects(
+    session.exportRecovery(
+      peer,
+      peer.hello,
+      identity(first),
+      signal(),
+      update => progress.push(update),
+    ),
+    error => error === failure,
+  );
+  assert.deepEqual(
+    progress.map(({current}) => current),
+    [0, 1],
+  );
+  assert.equal(session.cards[1].complete, true);
+  assert.equal(session.cards[1].completed, 2);
+  assert.equal(session.busy, false);
+  assert.deepEqual(mutationCalls(first), []);
+  const mutations = mutationCalls(peer).length;
+  peer.exportItem = exportItem;
+  const recovery = await session.exportRecovery(
+    peer,
+    peer.hello,
+    identity(first),
+    signal(),
+  );
+  assert.equal(recovery.items.length, 2);
+  assert.equal(mutationCalls(peer).length, mutations);
+});
+
+test('cancellation after a recovery export ACK counts that item but returns no partial archive', async () => {
+  const session = new CardSyncSession();
+  const entries = [root(), plain()];
+  const first = recoveryCard(1, 1, entries);
+  const peer = recoveryCard(2, 1, entries);
+  await add(session, first);
+  await add(session, peer);
+  session.prepare();
+  const exportItem = peer.exportItem;
+  const abort = new AbortController();
+  peer.calls.length = 0;
+  peer.exportItem = async request => {
+    const result = await exportItem(request);
+    abort.abort();
+    return result;
+  };
+  const progress = [];
+  await assert.rejects(
+    session.exportRecovery(
+      peer,
+      peer.hello,
+      identity(first),
+      abort.signal,
+      update => progress.push(update),
+    ),
+    error => error.code === 'CANCELLED',
+  );
+  assert.deepEqual(
+    progress.map(({current}) => current),
+    [0, 1],
+  );
+  assert.deepEqual(peer.calls, [['export', keyIndex]]);
+  assert.equal(session.cards[1].complete, true);
+  assert.equal(session.busy, false);
 });

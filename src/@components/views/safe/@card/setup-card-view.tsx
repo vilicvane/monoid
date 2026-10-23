@@ -424,6 +424,10 @@ export const SetupCardView = observer(
       let accessPINId: MonoidIdHex | undefined;
       try {
         if (!reset.attempted) {
+          // One vault authorization covers removing the old ID and saving the new ID.
+          await pinSession.authenticate(operation.signal);
+          operation.signal.throwIfAborted();
+          if (!isActive()) return;
           pin = await requestSecretPIN(
             'Set',
             <>
@@ -432,8 +436,6 @@ export const SetupCardView = observer(
             operation.signal,
           );
           if (pin === undefined) return;
-          // One vault authorization covers removing the old ID and saving the new ID.
-          await pinSession.authenticate(operation.signal);
           operation.signal.throwIfAborted();
           if (!isActive()) return;
         }

@@ -184,6 +184,9 @@ const {SyncCardsView} = await import(
 const {SyncCardsStore} = await import(
   '../.bld/app/@services/sync-cards-store.js'
 );
+const {SyncCardsState} = await import(
+  '../.bld/app/@components/views/safe/@card/sync-cards-state.js'
+);
 
 function deferred() {
   let resolve;
@@ -281,6 +284,7 @@ function mount({
   canBack = true,
   canBackToCard = !!source,
   canBackToSafe = true,
+  canBackToApplets = true,
   store = new SyncCardsStore(),
   syncId = 'sync-flow',
 } = {}) {
@@ -300,6 +304,7 @@ function mount({
     previewItems: [],
     localKeys: [],
     progress: [],
+    savedRecoveries: [],
     mounted: true,
     slot: create => (state.slots[state.index++] ??= create()),
     render() {
@@ -382,19 +387,30 @@ function mount({
   const cardStore = new CardStore();
   if (source) cardStore.set(source);
   const safeRoute = {$exact: {}, card: {$exact: {}}};
+  const appletsRoute = {$exact: {}};
   state.entrances = {
     walletStorageService: {keys: state.localKeys},
     router: {
       $backTo: target =>
         canBack &&
         ((target === safeRoute.card.$exact && canBackToCard) ||
+          (target === appletsRoute.$exact && canBackToApplets) ||
           (target === safeRoute.$exact && canBackToSafe))
           ? () => state.backs.push(target)
           : undefined,
       safe: safeRoute,
+      cardApplets: appletsRoute,
     },
     cardStore,
     syncCardsStore: store,
+    cardMaintenanceService: {
+      async saveBundleRecovery(draft, recovery, activeSignal) {
+        activeSignal.throwIfAborted();
+        if (state.saveRecovery)
+          await state.saveRecovery(draft, recovery, activeSignal);
+        state.savedRecoveries.push({draft, recovery});
+      },
+    },
     monoidCredentialsStore: {
       createPINSession() {
         assert.fail('Sync must not open an Access PIN vault session');
@@ -1112,3 +1128,565 @@ test('completed writes have no return button without matching route history', as
   assert.equal(state.button('Back to Card'), undefined);
   assert.deepEqual(state.backs, []);
 });
+
+function maintenancePeer(number, itemNumber = number) {
+  const bundle = new Uint8Array(32).fill(1);
+  const peer = publicCard(itemNumber);
+  peer.hello = hello(number, bundle);
+  peer.exports = [];
+  peer.applet.exportItem = async ({index}) => {
+    peer.exports.push(hex(index));
+    const data = new Uint8Array(160);
+    data[0] = 2;
+    data.set(bundle, 1);
+    data.set(peer.hello.publicKey, 33);
+    return {data};
+  };
+  return peer;
+}
+
+async function mountMaintenance({
+  addPeer = true,
+  identical = true,
+  peerCount = 1,
+} = {}) {
+  const bundle = new Uint8Array(32).fill(1);
+  const target = publicCard(1);
+  target.hello = hello(1, bundle);
+  const peers = Array.from({length: peerCount}, (_, index) =>
+    maintenancePeer(index + 2, identical ? 1 : index + 2),
+  );
+  const [peer] = peers;
+  const exports = peer.exports;
+  const draft = {
+    id: 'maintenance',
+    mode: 'reinstall',
+    phase: 'ready',
+    card: {
+      ...readBackupCardIdentity(target.hello),
+      appletAid: 'f06d6f6e6f69640201',
+    },
+  };
+  const flow = new SyncCardsState(undefined, draft);
+  await flow.session.add(target.applet, target.hello, signal(), PIN);
+  if (addPeer)
+    for (const peer of peers)
+      await flow.session.add(peer.applet, peer.hello, signal(), PIN);
+  const store = new SyncCardsStore();
+  store.getOrCreate('maintenance-sync', () => flow);
+  const state = mount({store, syncId: 'maintenance-sync'});
+  Object.assign(state, {target, peer, peers, exports, draft});
+  state.startMaintenanceScan = async () => {
+    const before = state.scans.length;
+    const inputs = state.inputs.length;
+    state.click(
+      state.button('Scan a pending card')
+        ? 'Scan a pending card'
+        : 'Scan a card to export',
+    );
+    await state.flush();
+    if (state.inputs.length > inputs) {
+      state.inputs.at(-1).finished.resolve(PIN);
+      await state.flush();
+    }
+    assert.equal(state.scans.length, before + 1);
+  };
+  return state;
+}
+
+test('maintenance keeps the target fixed while allowing multiple other Bundle cards', async () => {
+  const state = await mountMaintenance({addPeer: false});
+  const targetButton = find(
+    state.render(),
+    node =>
+      node.type === 'CardPreviewButton' &&
+      node.props['aria-label'] === 'Card 00000001',
+  );
+  targetButton.props.onClick();
+  assert.ok(find(state.render(), node => node.type === 'DetailsPopup'));
+  assert.equal(state.button('Read card'), undefined);
+  assert.equal(state.button('Remove card'), undefined);
+  find(state.tree, node => node.type === 'DetailsPopup').props.onDismiss();
+  await state.startScan('Add another card');
+  const scan = await state.tap(state.peer.hello, state.peer.applet);
+  assert.equal(scan.error, undefined);
+  await state.finishScan();
+  assert.equal(state.session.cards.length, 2);
+  assert.ok(state.button('Add another card'));
+  assert.ok(find(state.render(), node => node.type === 'CardPlaceholder'));
+  for (const number of [3, 4]) {
+    const peer = maintenancePeer(number);
+    await state.startScan('Add another card');
+    const scan = await state.tap(peer.hello, peer.applet);
+    assert.equal(scan.error, undefined);
+    await state.finishScan();
+    assert.equal(state.session.cards.length, number);
+    assert.ok(state.button('Add another card'));
+    assert.ok(find(state.render(), node => node.type === 'CardPlaceholder'));
+  }
+  assert.ok(state.button('Continue'));
+  assert.equal(state.button('Back to Card Applets'), undefined);
+});
+
+for (const written of [false, true]) {
+  test(`maintenance Start over returns to Card Applets ${written ? 'after peer writes' : 'during collection'}`, async () => {
+    const state = await mountMaintenance({peerCount: 2, identical: false});
+    if (written) {
+      state.click('Continue');
+      await state.flush();
+      await state.startMaintenanceScan();
+      const scan = await state.tap(state.peer.hello, state.peer.applet);
+      assert.equal(scan.error, undefined);
+      await state.finishScan();
+      assert.ok(state.peer.requests.length > 0);
+    }
+    const writtenRequests = [...state.peer.requests];
+    const restart = () =>
+      find(
+        state.render(),
+        node =>
+          node.type === 'ViewHeaderButton' &&
+          node.props['aria-label'] === 'Start over',
+      );
+    assert.ok(restart());
+    restart().props.onClick();
+    find(state.render(), node => node.type === 'ConfirmPopup').props.onCancel();
+    assert.equal(state.session.cards.length, 3);
+    assert.deepEqual(state.backs, []);
+
+    restart().props.onClick();
+    find(
+      state.render(),
+      node => node.type === 'ConfirmPopup',
+    ).props.onConfirm();
+    assert.equal(state.session.cards.length, 0);
+    assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+    assert.deepEqual(state.peer.requests, writtenRequests);
+    assert.deepEqual(state.target.requests, []);
+    assert.deepEqual(state.savedRecoveries, []);
+    assert.equal(state.flow.maintenanceSaved, false);
+  });
+}
+
+test('maintenance preparation has no Start over without a return to Card Applets', async () => {
+  const state = await mountMaintenance();
+  state.entrances.router.$backTo = () => undefined;
+  assert.equal(
+    find(
+      state.render(),
+      node =>
+        node.type === 'ViewHeaderButton' &&
+        node.props['aria-label'] === 'Start over',
+    ),
+    undefined,
+  );
+});
+
+for (const wrong of ['self', 'different bundle', 'no bundle']) {
+  test(`maintenance rejects ${wrong} before credentials or writes`, async () => {
+    const state = await mountMaintenance({addPeer: false});
+    await state.startScan('Add another card');
+    const rejected =
+      wrong === 'self'
+        ? state.target.hello
+        : hello(3, wrong === 'no bundle' ? false : new Uint8Array(32).fill(2));
+    const scan = await state.tap(rejected, {
+      authenticate: () => assert.fail('Do not authenticate a rejected card'),
+      list: () => assert.fail('Do not read a rejected card'),
+    });
+    assert.ok(scan.error instanceof MonoidCardError);
+    assert.equal(state.session.cards.length, 1);
+    assert.equal(state.savedRecoveries.length, 0);
+    assert.deepEqual(state.backs, []);
+  });
+}
+
+for (const identical of [true, false]) {
+  test(`maintenance ${identical ? 'no-op' : 'pending'} peer authenticates and exports before returning after NFC cleanup`, async () => {
+    const state = await mountMaintenance({identical});
+    const {target, peer} = state;
+    assert.equal(state.session.noSyncRequired, identical);
+    assert.ok(state.button('Continue'));
+    state.click('Continue');
+    await state.flush();
+    assert.ok(
+      state.button(identical ? 'Scan a card to export' : 'Scan a pending card'),
+    );
+    assert.equal(state.button('Back to Card Applets'), undefined);
+    const authenticationCount = peer.authentications.length;
+    await state.startMaintenanceScan();
+    const scan = await state.tap(peer.hello, peer.applet);
+    assert.equal(scan.error, undefined);
+    assert.equal(peer.authentications.length, authenticationCount + 1);
+    assert.equal(state.exports.length, identical ? 1 : 2);
+    assert.equal(state.savedRecoveries.length, 1);
+    assert.equal(state.savedRecoveries[0].draft, state.draft);
+    assert.equal(
+      state.savedRecoveries[0].recovery.source.publicKey,
+      hex(peer.hello.publicKey),
+    );
+    assert.equal(
+      state.savedRecoveries[0].recovery.items.length,
+      identical ? 1 : 2,
+    );
+    assert.deepEqual(
+      target.requests,
+      [],
+      'the target is untouched until after installation',
+    );
+    assert.deepEqual(
+      peer.requests,
+      identical ? [] : [['create', '0fff0000000000000001']],
+    );
+    assert.equal(state.previewSignals.length, 0);
+    assert.deepEqual(state.backs, [], 'native cleanup precedes route handoff');
+    await state.finishScan();
+    assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+    assert.equal(state.flow.maintenanceSaved, true);
+  });
+}
+
+for (const order of [
+  [0, 1],
+  [1, 0],
+  [2, 0, 1],
+]) {
+  test(`maintenance syncs ${order.length} peers in order ${order.map(index => index + 2).join(', ')} and archives only the last peer`, async () => {
+    const state = await mountMaintenance({
+      peerCount: order.length,
+      identical: false,
+    });
+    state.click('Continue');
+    await state.flush();
+    for (const [step, index] of order.entries()) {
+      const peer = state.peers[index];
+      const last = step === order.length - 1;
+      await state.startMaintenanceScan();
+      const scan = await state.tap(peer.hello, peer.applet);
+      assert.equal(scan.error, undefined);
+      assert.deepEqual(
+        state.target.requests,
+        [],
+        'the maintenance target must remain unchanged',
+      );
+      assert.equal(state.savedRecoveries.length, last ? 1 : 0);
+      assert.equal(state.flow.maintenanceSaved, last);
+      assert.deepEqual(
+        state.backs,
+        [],
+        'native NFC cleanup must finish before return',
+      );
+      for (const [peerIndex, candidate] of state.peers.entries()) {
+        assert.equal(
+          candidate.exports.length,
+          last && peerIndex === index ? order.length + 1 : 0,
+        );
+      }
+      await state.finishScan();
+      if (!last) {
+        assert.deepEqual(state.backs, []);
+        assert.ok(state.button('Scan a pending card'));
+        const completedCard = find(
+          state.render(),
+          node =>
+            node.type === 'CardPreview' && node.props.id === hex(peer.hello.id),
+        );
+        assert.equal(completedCard.props.description, 'synced');
+      }
+    }
+    const recovery = state.savedRecoveries[0].recovery;
+    assert.equal(
+      recovery.source.publicKey,
+      hex(state.peers[order.at(-1)].hello.publicKey),
+    );
+    assert.deepEqual(
+      recovery.items.map(item => item.index).sort(),
+      Array.from(
+        {length: order.length + 1},
+        (_, index) => `0fff000000000000000${index + 1}`,
+      ),
+    );
+    assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+    assert.equal(state.previewSignals.length, 0);
+  });
+}
+
+test('an already complete maintenance peer skips authentication and export while another peer is pending', async () => {
+  const state = await mountMaintenance({peerCount: 2, identical: false});
+  const [completePeer, pendingPeer] = state.peers;
+  for (const number of [1, 3]) {
+    await completePeer.applet.create({
+      index: bytes(`0fff000000000000000${number}`),
+      secret: false,
+      data: Uint8Array.of(number),
+    });
+  }
+  await state.session.add(
+    completePeer.applet,
+    completePeer.hello,
+    signal(),
+    PIN,
+  );
+  state.click('Continue');
+  await state.flush();
+  assert.equal(
+    state.session.cards.find(
+      card => card.publicKey === hex(completePeer.hello.publicKey),
+    ).complete,
+    true,
+  );
+  assert.equal(
+    state.session.cards.find(
+      card => card.publicKey === hex(pendingPeer.hello.publicKey),
+    ).complete,
+    false,
+  );
+  const authentications = completePeer.authentications.length;
+  const writes = [...completePeer.requests];
+  await state.startMaintenanceScan();
+  const skipped = await state.tap(completePeer.hello, completePeer.applet);
+  assert.equal(skipped.error, undefined);
+  assert.deepEqual(skipped.result, {message: 'Already synced'});
+  assert.equal(completePeer.authentications.length, authentications);
+  assert.deepEqual(completePeer.requests, writes);
+  assert.deepEqual(completePeer.exports, []);
+  assert.deepEqual(state.savedRecoveries, []);
+  await state.finishScan();
+  assert.ok(state.button('Scan a pending card'));
+  await state.startMaintenanceScan();
+  const final = await state.tap(pendingPeer.hello, pendingPeer.applet);
+  assert.equal(final.error, undefined);
+  assert.equal(state.savedRecoveries.length, 1);
+  assert.equal(
+    state.savedRecoveries[0].recovery.source.publicKey,
+    hex(pendingPeer.hello.publicKey),
+  );
+  assert.deepEqual(state.target.requests, []);
+  await state.finishScan();
+  assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+});
+
+for (const selected of [0, 1, 2]) {
+  test(`all no-op peers permit peer ${selected + 2} to authenticate and supply the recovery archive`, async () => {
+    const state = await mountMaintenance({peerCount: 3});
+    state.click('Continue');
+    await state.flush();
+    assert.equal(state.session.phase, 'complete');
+    assert.ok(state.button('Scan a card to export'));
+    const peer = state.peers[selected];
+    const authentications = peer.authentications.length;
+    await state.startMaintenanceScan();
+    const scan = await state.tap(peer.hello, peer.applet);
+    assert.equal(scan.error, undefined);
+    assert.equal(peer.authentications.length, authentications + 1);
+    assert.equal(state.savedRecoveries.length, 1);
+    assert.equal(
+      state.savedRecoveries[0].recovery.source.publicKey,
+      hex(peer.hello.publicKey),
+    );
+    assert.equal(peer.exports.length, 1);
+    assert.ok(state.peers.every(candidate => candidate.requests.length === 0));
+    assert.deepEqual(state.target.requests, []);
+    await state.finishScan();
+    assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+  });
+}
+
+test('a failed last-peer export can retry from a different completed peer without repeating writes', async () => {
+  const state = await mountMaintenance({peerCount: 2, identical: false});
+  const [first, last] = state.peers;
+  state.click('Continue');
+  await state.flush();
+  await state.startMaintenanceScan();
+  const firstScan = await state.tap(first.hello, first.applet);
+  assert.equal(firstScan.error, undefined);
+  await state.finishScan();
+  const failure = new Error('Peer export interrupted');
+  last.applet.exportItem = async () => {
+    throw failure;
+  };
+  await state.startMaintenanceScan();
+  const failed = await state.tap(last.hello, last.applet);
+  assert.equal(failed.error, failure);
+  assert.ok(
+    state.session.cards
+      .filter(card => card.publicKey !== state.draft.card.publicKey)
+      .every(card => card.complete),
+  );
+  assert.deepEqual(state.savedRecoveries, []);
+  assert.deepEqual(state.backs, []);
+  assert.ok(state.button('Scan a card to export'));
+  const writes = state.peers.map(peer => [...peer.requests]);
+  const authentications = first.authentications.length;
+  await state.startMaintenanceScan();
+  const retry = await state.tap(first.hello, first.applet);
+  assert.equal(retry.error, undefined);
+  assert.equal(first.authentications.length, authentications + 1);
+  assert.deepEqual(
+    state.peers.map(peer => peer.requests),
+    writes,
+  );
+  assert.equal(
+    state.savedRecoveries[0].recovery.source.publicKey,
+    hex(first.hello.publicKey),
+  );
+  assert.equal(state.savedRecoveries[0].recovery.items.length, 3);
+  assert.deepEqual(state.target.requests, []);
+  await state.finishScan();
+  assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+});
+
+for (const wrong of ['self', 'unknown peer', 'different bundle']) {
+  test(`maintenance write rejects ${wrong} before credentials or writes`, async () => {
+    const state = await mountMaintenance({peerCount: 2, identical: false});
+    state.click('Continue');
+    await state.flush();
+    await state.startMaintenanceScan();
+    const rejected =
+      wrong === 'self'
+        ? state.target.hello
+        : wrong === 'unknown peer'
+          ? hello(9, new Uint8Array(32).fill(1))
+          : {...state.peer.hello, bundle: new Uint8Array(32).fill(2)};
+    const scan = await state.tap(rejected, {
+      authenticate: () => assert.fail('Do not authenticate a rejected card'),
+    });
+    assert.ok(scan.error instanceof MonoidCardError);
+    assert.deepEqual(state.savedRecoveries, []);
+    assert.deepEqual(state.backs, []);
+    assert.ok(state.peers.every(peer => peer.requests.length === 0));
+  });
+}
+
+test('clicking a particular maintenance peer still binds the scan to that card', async () => {
+  const state = await mountMaintenance({peerCount: 2, identical: false});
+  state.click('Continue');
+  await state.flush();
+  find(
+    state.render(),
+    node =>
+      node.type === 'CardPreviewButton' &&
+      node.props['aria-label'] === 'Card 00000002',
+  ).props.onClick();
+  state.click('Sync card');
+  state.inputs.at(-1).finished.resolve(PIN);
+  await state.flush();
+  const scan = await state.tap(state.peers[1].hello, {
+    authenticate: () =>
+      assert.fail('Explicit card selection must bind the scan'),
+  });
+  assert.ok(scan.error instanceof MonoidWrongCardError);
+  assert.deepEqual(state.savedRecoveries, []);
+  assert.deepEqual(state.backs, []);
+});
+
+test('maintenance validates the peer before reusing its cached Secret PIN', async () => {
+  const state = await mountMaintenance();
+  state.click('Continue');
+  await state.flush();
+  await state.startMaintenanceScan();
+  const scan = await state.tap(state.target.hello, {
+    authenticate: () =>
+      assert.fail('Do not authenticate the target during peer recovery'),
+  });
+  assert.ok(scan.error instanceof MonoidCardError);
+  assert.deepEqual(state.exports, []);
+  assert.deepEqual(state.savedRecoveries, []);
+  assert.deepEqual(state.backs, []);
+});
+
+test('failed recovery persistence keeps peer progress and allows an explicit fresh export retry', async () => {
+  const state = await mountMaintenance({identical: false});
+  const failure = new Error('Recovery storage unavailable');
+  state.saveRecovery = async () => {
+    throw failure;
+  };
+  state.click('Continue');
+  await state.flush();
+  await state.startMaintenanceScan();
+  const scan = await state.tap(state.peer.hello, state.peer.applet);
+  assert.equal(scan.error, failure);
+  assert.equal(state.session.cards[1].complete, true);
+  assert.equal(state.flow.maintenanceSaved, false);
+  assert.deepEqual(state.savedRecoveries, []);
+  assert.deepEqual(state.backs, []);
+  assert.ok(state.button('Scan a card to export'));
+  const mutations = [...state.peer.requests];
+  const authenticationCount = state.peer.authentications.length;
+  state.saveRecovery = undefined;
+  await state.startMaintenanceScan();
+  const retry = await state.tap(state.peer.hello, state.peer.applet);
+  assert.equal(retry.error, undefined);
+  assert.equal(state.peer.authentications.length, authenticationCount + 1);
+  assert.deepEqual(
+    state.peer.requests,
+    mutations,
+    'acknowledged peer writes are not replayed',
+  );
+  assert.equal(
+    state.exports.length,
+    4,
+    'retry exports a complete fresh archive',
+  );
+  assert.deepEqual(state.backs, []);
+  await state.finishScan();
+  assert.equal(state.savedRecoveries.length, 1);
+  assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+});
+
+test('maintenance waits for durable recovery saving before marking the flow ready to return', async () => {
+  const state = await mountMaintenance();
+  const saving = deferred();
+  state.saveRecovery = () => saving.promise;
+  state.click('Continue');
+  await state.flush();
+  await state.startMaintenanceScan();
+  const tapping = state.tap(state.peer.hello, state.peer.applet);
+  await state.flush();
+  assert.equal(state.exports.length, 1);
+  assert.equal(state.flow.maintenanceSaved, false);
+  assert.deepEqual(state.backs, []);
+  assert.equal(state.button('Back to Card Applets'), undefined);
+  saving.resolve();
+  await tapping;
+  assert.equal(state.flow.maintenanceSaved, true);
+  assert.deepEqual(state.backs, []);
+  await state.finishScan();
+  assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+});
+
+for (const leavingAt of ['PIN', 'authentication', 'NFC cleanup']) {
+  test(`maintenance never returns after leaving during ${leavingAt}`, async () => {
+    const state = await mountMaintenance();
+    state.click('Continue');
+    await state.flush();
+    const authenticate = deferred();
+    if (leavingAt === 'authentication')
+      state.peer.applet.authenticate = () => authenticate.promise;
+    if (leavingAt === 'PIN') {
+      state.click('Scan a card to export');
+      runInAction(() => {
+        state.view.$leaving = true;
+      });
+      state.inputs.at(-1).finished.resolve(PIN);
+      await state.flush();
+      assert.equal(state.scans.length, 0);
+    } else {
+      await state.startMaintenanceScan();
+      const tapping = state.tap(state.peer.hello, state.peer.applet);
+      await state.flush();
+      if (leavingAt === 'NFC cleanup') await tapping;
+      runInAction(() => {
+        state.view.$leaving = true;
+      });
+      authenticate.resolve();
+      await tapping;
+      if (leavingAt === 'NFC cleanup') await state.finishScan();
+    }
+    assert.deepEqual(state.backs, []);
+    if (leavingAt !== 'NFC cleanup') {
+      assert.deepEqual(state.savedRecoveries, []);
+      assert.deepEqual(state.exports, []);
+    }
+  });
+}

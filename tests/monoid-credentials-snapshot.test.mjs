@@ -24,29 +24,29 @@ function fixture(pins = {}) {
     disposals: 0,
     backend: {
       async authenticate(options) {
-        state.authentications.push(options);
-        await state.onAuthenticate?.();
+        const authorization = state.authentications.push(options);
+        await state.onAuthenticate?.(authorization);
         const cancel = () => state.calls.push('close');
         options.signal?.addEventListener('abort', cancel, {once: true});
         return {
-          get: options => state.backend.get(options),
-          set: options => state.backend.set(options),
+          get: options => state.backend.get(options, authorization),
+          set: options => state.backend.set(options, authorization),
           remove: options => state.backend.remove(options),
           [Symbol.asyncDispose]: async () => {
             options.signal?.removeEventListener('abort', cancel);
             state.disposals++;
-            await state.onDispose?.();
+            await state.onDispose?.(authorization);
           },
         };
       },
-      async get() {
+      async get(_options, authorization) {
         state.calls.push('get');
-        await state.onGet?.();
+        await state.onGet?.(authorization);
         return {value: state.value};
       },
-      async set({value}) {
+      async set({value}, authorization) {
         state.calls.push('set');
-        await state.onSet?.(value);
+        await state.onSet?.(value, authorization);
         state.value = value;
       },
       async remove() {
@@ -546,21 +546,250 @@ for (const code of ['BIOMETRIC_UNAVAILABLE', 'CANCELLED']) {
   });
 }
 
-test('expired authorization fails a save without another prompt or replay', async () => {
+for (const expiredOperation of ['read', 'write']) {
+  test(`an expired save ${expiredOperation} renews once and persists the PIN`, async () => {
+    const state = fixture({[CARD]: PIN});
+    const session = state.store.createPINSession();
+    if (expiredOperation === 'read') {
+      await session.authenticate();
+      state.onGet = authorization => {
+        if (authorization === 1) throw {code: 'AUTHORIZATION_EXPIRED'};
+      };
+    } else {
+      await session.getPINs();
+      session.rememberPIN(OTHER_CARD, OTHER_PIN);
+      state.onSet = (_value, authorization) => {
+        if (authorization === 1) throw {code: 'AUTHORIZATION_EXPIRED'};
+      };
+    }
+
+    await session.setPIN(OTHER_CARD, OTHER_PIN);
+
+    assert.equal(state.authentications.length, 2);
+    assert.equal(state.disposals, 1);
+    assert.equal(
+      state.authentications[0].signal,
+      state.authentications[1].signal,
+    );
+    assert.equal(state.authentications[1].signal.aborted, false);
+    assert.deepEqual(
+      state.calls,
+      expiredOperation === 'read'
+        ? ['get', 'get', 'set']
+        : ['get', 'set', 'get', 'set'],
+    );
+    assertSaved(state, {[CARD]: PIN, [OTHER_CARD]: OTHER_PIN});
+    assert.ok((await session.getPINs())[OTHER_CARD] === OTHER_PIN);
+    assert.equal(session.hasUnsavedPIN(OTHER_CARD, OTHER_PIN), false);
+    await session[Symbol.asyncDispose]();
+    assert.equal(state.disposals, 2);
+  });
+}
+
+for (const code of ['CANCELLED', 'APP_INACTIVE', 'ACCESS_CLOSED', 'IO_ERROR']) {
+  test(`a save rejected with ${code} does not renew or retry`, async () => {
+    const state = fixture({[CARD]: PIN});
+    const session = state.store.createPINSession();
+    await session.getPINs();
+    session.rememberPIN(OTHER_CARD, OTHER_PIN);
+    state.onSet = () => {
+      throw {code};
+    };
+
+    await assert.rejects(session.setPIN(OTHER_CARD, OTHER_PIN), {code});
+
+    assert.equal(state.authentications.length, 1);
+    assert.deepEqual(state.calls, ['get', 'set']);
+    assertSaved(state, {[CARD]: PIN});
+    assert.equal(session.hasUnsavedPIN(OTHER_CARD, OTHER_PIN), true);
+    await session[Symbol.asyncDispose]();
+  });
+}
+
+test('a second expiry fails the save without another renewal', async () => {
+  const state = fixture({[CARD]: PIN});
+  const session = state.store.createPINSession();
+  await session.getPINs();
+  session.rememberPIN(OTHER_CARD, OTHER_PIN);
+  state.onSet = () => {
+    throw {code: 'AUTHORIZATION_EXPIRED'};
+  };
+
+  await assert.rejects(session.setPIN(OTHER_CARD, OTHER_PIN), {
+    code: 'AUTHORIZATION_EXPIRED',
+  });
+
+  assert.equal(state.authentications.length, 2);
+  assert.deepEqual(state.calls, ['get', 'set', 'get', 'set']);
+  assertSaved(state, {[CARD]: PIN});
+  assert.equal(session.hasUnsavedPIN(OTHER_CARD, OTHER_PIN), true);
+  await session[Symbol.asyncDispose]();
+  assert.equal(state.disposals, 2);
+});
+
+test('rejecting renewed authorization does not retry the save or authorize again', async () => {
   const state = fixture({[CARD]: PIN});
   const session = state.store.createPINSession();
   await session.getPINs();
   state.onSet = () => {
     throw {code: 'AUTHORIZATION_EXPIRED'};
   };
+  state.onAuthenticate = () => {
+    throw {code: 'CANCELLED'};
+  };
+
   await assert.rejects(session.setPIN(OTHER_CARD, OTHER_PIN), {
-    code: 'AUTHORIZATION_EXPIRED',
+    code: 'CANCELLED',
   });
-  await assert.rejects(session.setPIN(OTHER_CARD, OTHER_PIN), {
-    code: 'AUTHORIZATION_EXPIRED',
-  });
-  assert.equal(state.authentications.length, 1);
+
+  assert.equal(state.authentications.length, 2);
+  assert.deepEqual(state.calls, ['get', 'set']);
   assertSaved(state, {[CARD]: PIN});
+  await session[Symbol.asyncDispose]();
+  assert.equal(state.disposals, 1);
+});
+
+for (const cancelledDuring of ['failed-write', 'disposal', 'authentication']) {
+  test(`cancelling during ${cancelledDuring} prevents renewed credential writes`, async () => {
+    const state = fixture({[CARD]: PIN});
+    const session = state.store.createPINSession();
+    await session.getPINs();
+    session.rememberPIN(OTHER_CARD, OTHER_PIN);
+    const started = Promise.withResolvers();
+    const held = Promise.withResolvers();
+    const hold = () => {
+      started.resolve();
+      return held.promise;
+    };
+    state.onSet = async (_value, authorization) => {
+      if (authorization !== 1) return;
+      if (cancelledDuring === 'failed-write') await hold();
+      throw {code: 'AUTHORIZATION_EXPIRED'};
+    };
+    state.onDispose = authorization => {
+      if (cancelledDuring === 'disposal' && authorization === 1) return hold();
+    };
+    state.onAuthenticate = authorization => {
+      if (cancelledDuring === 'authentication' && authorization === 2)
+        return hold();
+    };
+    const scan = new AbortController();
+    const rejected = assert.rejects(
+      session.setPIN(OTHER_CARD, OTHER_PIN, scan.signal),
+      {code: 'CANCELLED'},
+    );
+
+    await started.promise;
+    scan.abort();
+    held.resolve();
+    await rejected;
+    await session[Symbol.asyncDispose]();
+
+    const authorizationCount = cancelledDuring === 'authentication' ? 2 : 1;
+    assert.equal(state.authentications.length, authorizationCount);
+    assert.equal(state.disposals, authorizationCount);
+    assert.ok(state.authentications.every(({signal}) => signal.aborted));
+    assert.deepEqual(
+      state.calls.filter(call => call !== 'close'),
+      ['get', 'set'],
+    );
+    assertSaved(state, {[CARD]: PIN});
+    assert.equal(session.hasUnsavedPIN(OTHER_CARD, OTHER_PIN), false);
+  });
+}
+
+test('concurrent saves share one renewal and preserve both PIN updates', async () => {
+  const state = fixture({[CARD]: PIN});
+  const session = state.store.createPINSession();
+  await session.getPINs();
+  state.onGet = authorization => {
+    if (authorization === 1) throw {code: 'AUTHORIZATION_EXPIRED'};
+  };
+  state.onSet = (_value, authorization) => {
+    if (authorization === 1) throw {code: 'AUTHORIZATION_EXPIRED'};
+  };
+  const renewing = Promise.withResolvers();
+  const held = Promise.withResolvers();
+  state.onAuthenticate = authorization => {
+    if (authorization === 2) {
+      renewing.resolve();
+      return held.promise;
+    }
+  };
+
+  const saving = Promise.all([
+    session.setPIN(OTHER_CARD, OTHER_PIN),
+    session.setPIN(THIRD_CARD, PIN),
+  ]);
+  await renewing.promise;
+  held.resolve();
+  await saving;
+
+  assert.equal(state.authentications.length, 2);
+  assert.equal(state.disposals, 1);
+  assertSaved(state, {[CARD]: PIN, [OTHER_CARD]: OTHER_PIN, [THIRD_CARD]: PIN});
+  const pins = await session.getPINs();
+  assert.ok(pins[OTHER_CARD] === OTHER_PIN);
+  assert.ok(pins[THIRD_CARD] === PIN);
+  assert.equal(session.hasUnsavedPIN(OTHER_CARD, OTHER_PIN), false);
+  assert.equal(session.hasUnsavedPIN(THIRD_CARD, PIN), false);
+  await session[Symbol.asyncDispose]();
+  assert.equal(state.disposals, 2);
+});
+
+test('a renewed save preserves external vault updates and unrelated local PIN edits', async () => {
+  const state = fixture({[CARD]: PIN});
+  const session = state.store.createPINSession();
+  await session.getPINs();
+  session.rememberPIN(OTHER_CARD, OTHER_PIN);
+  session.rememberPIN(THIRD_CARD, 'Unsaved PIN');
+  session.forgetPIN(CARD, PIN);
+  state.onSet = (_value, authorization) => {
+    if (authorization === 1) throw {code: 'AUTHORIZATION_EXPIRED'};
+  };
+  const renewing = Promise.withResolvers();
+  const held = Promise.withResolvers();
+  state.onAuthenticate = authorization => {
+    if (authorization === 2) {
+      renewing.resolve();
+      return held.promise;
+    }
+  };
+  const saving = session.setPIN(OTHER_CARD, OTHER_PIN);
+  await renewing.promise;
+  try {
+    await new MonoidCredentialsStore(state.backend).setPIN(CARD, 'Updated PIN');
+  } finally {
+    held.resolve();
+  }
+  await saving;
+
+  assert.equal(state.authentications.length, 3);
+  assertSaved(state, {[CARD]: 'Updated PIN', [OTHER_CARD]: OTHER_PIN});
+  assert.deepEqual(await session.getPINs(), {
+    [OTHER_CARD]: OTHER_PIN,
+    [THIRD_CARD]: 'Unsaved PIN',
+  });
+  assert.equal(session.hasUnsavedPIN(OTHER_CARD, OTHER_PIN), false);
+  assert.equal(session.hasUnsavedPIN(THIRD_CARD, 'Unsaved PIN'), true);
+  await session[Symbol.asyncDispose]();
+});
+
+test('an expired removal does not renew authorization or replay the mutation', async () => {
+  const state = fixture({[CARD]: PIN, [OTHER_CARD]: OTHER_PIN});
+  const session = state.store.createPINSession();
+  await session.getPINs();
+  state.onSet = () => {
+    throw {code: 'AUTHORIZATION_EXPIRED'};
+  };
+
+  await assert.rejects(session.removePIN(CARD, PIN), {
+    code: 'AUTHORIZATION_EXPIRED',
+  });
+
+  assert.equal(state.authentications.length, 1);
+  assert.deepEqual(state.calls, ['get', 'set']);
+  assertSaved(state, {[CARD]: PIN, [OTHER_CARD]: OTHER_PIN});
   await session[Symbol.asyncDispose]();
 });
 

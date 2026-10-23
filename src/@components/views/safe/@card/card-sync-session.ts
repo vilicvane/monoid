@@ -16,6 +16,10 @@ import {
   MonoidCardError,
   monoidCommandDefinitions,
 } from '../../../../@lib/monoid/index.js';
+import {
+  type CardMaintenanceBundleRecovery,
+  assertCardMaintenanceBundleRecovery,
+} from '../../../../@services/card-maintenance-service.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 import {xCBOR} from '../../../../@x-value/index.js';
 import {
@@ -102,7 +106,7 @@ function replaceItem(
   };
 }
 
-async function authenticate(
+export async function authenticateCardSync(
   applet: MonoidApplet,
   hello: MonoidAppletHello,
   pin: string | undefined,
@@ -396,7 +400,13 @@ export class CardSyncSession {
       if (this.phase !== 'collect')
         throw new MonoidCardError('Start sync again to add cards');
       const identity = readBackupCardIdentity(hello);
-      await authenticate(applet, hello, secretPIN, signal, onAuthenticated);
+      await authenticateCardSync(
+        applet,
+        hello,
+        secretPIN,
+        signal,
+        onAuthenticated,
+      );
       const listed = await applet.list({});
       const secrets =
         identity.bundle === false
@@ -624,7 +634,13 @@ export class CardSyncSession {
       if (card.complete) return card;
 
       const execution = this.executions.get(identity.publicKey)!;
-      await authenticate(applet, hello, secretPIN, signal, onAuthenticated);
+      await authenticateCardSync(
+        applet,
+        hello,
+        secretPIN,
+        signal,
+        onAuthenticated,
+      );
       await this.reconcilePending(applet, execution, signal, onProgress);
 
       while (execution.next < execution.plan.operations.length) {
@@ -658,6 +674,87 @@ export class CardSyncSession {
       this.update({confirmedSnapshot: snapshot(execution.expected)});
       this.finish(cards);
       return this.cards.find(item => item.publicKey === identity.publicKey)!;
+    });
+  }
+
+  /** The caller authenticates first; only the peer can issue the target's recovery envelopes. */
+  async exportRecovery(
+    applet: MonoidApplet,
+    hello: MonoidAppletHello,
+    target: CardSyncIdentity,
+    signal: AbortSignal,
+    onProgress?: ProgressCallback,
+  ): Promise<CardMaintenanceBundleRecovery> {
+    return this.exclusive(async () => {
+      cancelled(signal);
+      const identity = readBackupCardIdentity(hello);
+      const source = this.cards.find(
+        card => card.publicKey === identity.publicKey,
+      );
+      const destination = this.cards.find(
+        card => card.publicKey === target.publicKey,
+      );
+      if (!source) throw new MonoidCardError('Scan a card in this sync');
+      if (
+        source.id !== identity.id ||
+        source.bundle !== identity.bundle ||
+        !destination ||
+        destination.id !== target.id ||
+        destination.bundle !== target.bundle
+      )
+        changed();
+      if (!source.complete) throw new MonoidCardError('Sync the card first');
+      if (
+        identity.bundle === false ||
+        identity.bundle !== target.bundle ||
+        identity.publicKey === target.publicKey
+      )
+        throw new MonoidCardError('Scan another card in the same bundle');
+
+      const recovery: CardMaintenanceBundleRecovery = {
+        source: {...identity, bundle: identity.bundle},
+        items: [],
+      };
+      assertCardMaintenanceBundleRecovery(target, recovery);
+      this.report(
+        {stage: 'exporting', current: 0, total: source.items.length},
+        onProgress,
+      );
+      for (const item of source.items) {
+        cancelled(signal);
+        // Imported items may still cache the target's original envelopes. Fresh
+        // peer exports remain valid after the target's Monoid is replaced.
+        const exported = await applet.exportItem({
+          index: hexToUint8Array(item.index),
+        });
+        const archived = {
+          index: item.index,
+          secret: item.secret,
+          key:
+            exported.key === undefined
+              ? undefined
+              : uint8ArrayToHex(exported.key),
+          alias: exported.alias,
+          data: uint8ArrayToHex(exported.data),
+        };
+        if (archived.key !== item.key || archived.alias !== item.alias)
+          changed();
+        assertCardMaintenanceBundleRecovery(target, {
+          source: recovery.source,
+          items: [archived],
+        });
+        recovery.items.push(archived);
+        this.report(
+          {
+            stage: 'exporting',
+            current: recovery.items.length,
+            total: source.items.length,
+          },
+          onProgress,
+        );
+      }
+      cancelled(signal);
+      return recovery;
     });
   }
 

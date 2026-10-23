@@ -58,7 +58,10 @@ import {
   type CardBackupIdentity,
   readBackupCardIdentity,
 } from './card-backup-session.js';
-import type {CardSyncProgress} from './card-sync-session.js';
+import {
+  type CardSyncProgress,
+  authenticateCardSync,
+} from './card-sync-session.js';
 import {CardSecretPINSession} from './card-secret-pin-session.js';
 import {SyncCardsState} from './sync-cards-state.js';
 
@@ -118,6 +121,7 @@ export const SyncCardsView = observer(
       cardStore,
       walletStorageService,
       syncCardsStore,
+      cardMaintenanceService,
       errorService,
     } = useEntrances();
     const isViewActive = useViewActive(view);
@@ -132,7 +136,22 @@ export const SyncCardsView = observer(
       ),
     );
     const session = flow.session;
+    const maintenance = flow.maintenance;
+    const maintenanceTarget =
+      maintenance &&
+      session.cards.find(card => card.publicKey === maintenance.card.publicKey);
+    const maintenancePeers = maintenance
+      ? session.cards.filter(
+          card => card.publicKey !== maintenance.card.publicKey,
+        )
+      : [];
+    const pendingPeers = maintenancePeers.filter(card => !card.complete);
     const collecting = session.phase === 'collect';
+    const needsRecoveryExport =
+      !!maintenance &&
+      !collecting &&
+      !pendingPeers.length &&
+      !flow.maintenanceSaved;
     const [scanContent, scan] = useMonoidScanPrompt({
       auth: false,
       ensureSetup: false,
@@ -146,7 +165,10 @@ export const SyncCardsView = observer(
     const mounted = useRef(true);
     const operation = useRef<AbortController | undefined>(undefined);
     const busy = working || session.busy;
-    const complete = session.phase === 'complete' && !busy;
+    const complete =
+      (maintenance ? flow.maintenanceSaved : session.phase === 'complete') &&
+      !busy;
+    const activeStep = complete && !maintenance ? 3 : collecting ? 1 : 2;
     const source = !flow.sourceConsumed ? flow.sourceCard : undefined;
     const bundles = [
       ...new Set(
@@ -166,8 +188,14 @@ export const SyncCardsView = observer(
       view.card || flow.sourceCard
         ? router.$backTo(router.safe.card.$exact)
         : undefined;
-    const back = backToCard ?? router.$backTo(router.safe.$exact);
-    const backLabel = backToCard ? 'Back to Card' : 'Back to Safe';
+    const back = maintenance
+      ? router.$backTo(router.cardApplets.$exact)
+      : (backToCard ?? router.$backTo(router.safe.$exact));
+    const backLabel = maintenance
+      ? 'Back to Card Applets'
+      : backToCard
+        ? 'Back to Card'
+        : 'Back to Safe';
 
     useEffect(() => {
       mounted.current = true;
@@ -237,7 +265,11 @@ export const SyncCardsView = observer(
           ? [expected]
           : collecting
             ? []
-            : session.cards.filter(card => !card.complete),
+            : maintenance
+              ? pendingPeers.length
+                ? pendingPeers
+                : maintenancePeers
+              : session.cards.filter(card => !card.complete),
         (card, pinSignal) =>
           showPINInput(
             {
@@ -260,6 +292,8 @@ export const SyncCardsView = observer(
               </>
             ) : collecting ? (
               'Scan a card'
+            ) : needsRecoveryExport ? (
+              'Scan a card to export'
             ) : (
               'Scan a pending card'
             ),
@@ -276,13 +310,10 @@ export const SyncCardsView = observer(
               ]);
               activeSignal.throwIfAborted();
               const identity = readBackupCardIdentity(hello);
-              if (
-                !collecting &&
-                session.cards.some(
-                  card =>
-                    card.publicKey === identity.publicKey && card.complete,
-                )
-              ) {
+              const scanned = session.cards.find(
+                card => card.publicKey === identity.publicKey,
+              );
+              if (!collecting && scanned?.complete && !needsRecoveryExport) {
                 return {message: 'Already synced'};
               }
               const {pin, onAuthenticated} = credentials(identity);
@@ -344,6 +375,17 @@ export const SyncCardsView = observer(
                   );
                   flow.consumeSource();
                 } else {
+                  // Completed peers still need a fresh authenticated export;
+                  // ordinary Sync intentionally skips auth for no-op writes.
+                  if (maintenance && scanned?.complete) {
+                    await authenticateCardSync(
+                      applet,
+                      hello,
+                      pin,
+                      activeSignal,
+                      onAuthenticated,
+                    );
+                  }
                   await session.write(
                     applet,
                     hello,
@@ -354,6 +396,29 @@ export const SyncCardsView = observer(
                     },
                     onAuthenticated,
                   );
+                  if (
+                    maintenance &&
+                    maintenanceTarget &&
+                    session.cards.every(
+                      card =>
+                        card.publicKey === maintenanceTarget.publicKey ||
+                        card.complete,
+                    )
+                  ) {
+                    const archive = await session.exportRecovery(
+                      applet,
+                      hello,
+                      maintenanceTarget,
+                      activeSignal,
+                      progress => setState(progressContent(progress)),
+                    );
+                    await cardMaintenanceService.saveBundleRecovery(
+                      maintenance,
+                      archive,
+                      activeSignal,
+                    );
+                    flow.finishMaintenance();
+                  }
                 }
               } catch (error) {
                 flow.markInterrupted(identity.publicKey, true);
@@ -368,6 +433,7 @@ export const SyncCardsView = observer(
                 !mounted.current ||
                 !isViewActive() ||
                 collecting ||
+                maintenance ||
                 !isPreviewCard ||
                 confirmed?.id !== identity.id ||
                 confirmed.publicKey !== identity.publicKey
@@ -419,6 +485,13 @@ export const SyncCardsView = observer(
                 });
               }
               if (expected) assertSyncCard(hello, expected);
+              if (maintenance && maintenanceTarget) {
+                const identity = readBackupCardIdentity(hello);
+                if (identity.publicKey === maintenanceTarget.publicKey)
+                  throw new MonoidCardError('Scan another card in this bundle');
+                if (identity.bundle !== maintenanceTarget.bundle)
+                  throw new MonoidCardError('Scan a card in the same bundle');
+              }
               if (!collecting) {
                 const identity = readBackupCardIdentity(hello);
                 const target = session.cards.find(
@@ -432,6 +505,9 @@ export const SyncCardsView = observer(
           );
         },
       );
+      // Return only after NFC cleanup. Installation still requires an explicit
+      // action on the original Card Applets page.
+      if (flow.maintenanceSaved && isViewActive()) back?.();
     };
 
     const readCard = (expected?: CardBackupIdentity): void => {
@@ -470,9 +546,13 @@ export const SyncCardsView = observer(
               description={
                 collecting
                   ? `items ${formatCardResourceCount(getCardResourceGroups(card.items))}`
-                  : card.complete
-                    ? 'synced'
-                    : `items ${card.completed}/${card.total}`
+                  : maintenance && card === maintenanceTarget
+                    ? 'restore later'
+                    : needsRecoveryExport
+                      ? 'scan to export'
+                      : card.complete
+                        ? 'synced'
+                        : `items ${card.completed}/${card.total}`
               }
               $pending={!collecting && !card.completed && !card.complete}
               $interrupted={flow.interruptedCards.has(card.publicKey)}
@@ -499,15 +579,17 @@ export const SyncCardsView = observer(
         <View>
           <ViewHeader>
             <ViewHeaderTitle>Sync cards</ViewHeaderTitle>
-            {session.cards.length > 0 && !complete && (
-              <ViewHeaderButton
-                disabled={busy}
-                aria-label="Start over"
-                onClick={() => setConfirmRestart(true)}
-              >
-                <AppIcon icon={rotateCcw} />
-              </ViewHeaderButton>
-            )}
+            {session.cards.length > 0 &&
+              !complete &&
+              (!maintenance || back) && (
+                <ViewHeaderButton
+                  disabled={busy}
+                  aria-label="Start over"
+                  onClick={() => setConfirmRestart(true)}
+                >
+                  <AppIcon icon={rotateCcw} />
+                </ViewHeaderButton>
+              )}
           </ViewHeader>
           <ViewContent
             footer={
@@ -520,7 +602,7 @@ export const SyncCardsView = observer(
               ) : collecting ? (
                 <>
                   {session.cards.length >= 2 &&
-                    (session.noSyncRequired ? (
+                    (session.noSyncRequired && !maintenance ? (
                       back && (
                         <Button
                           color="neutral"
@@ -553,7 +635,9 @@ export const SyncCardsView = observer(
                   disabled={busy}
                   onClick={() => readCard()}
                 >
-                  Scan a pending card
+                  {needsRecoveryExport
+                    ? 'Scan a card to export'
+                    : 'Scan a pending card'}
                 </Button>
               )
             }
@@ -562,29 +646,41 @@ export const SyncCardsView = observer(
               <OperationComplete />
             ) : (
               <SyncSteps
-                $exiting={complete}
+                $exiting={complete && !maintenance}
                 onAnimationEnd={event => {
-                  if (complete && event.target === event.currentTarget)
+                  if (
+                    complete &&
+                    !maintenance &&
+                    event.target === event.currentTarget
+                  )
                     flow.exitSteps();
                 }}
               >
                 <Step
                   title="Add cards"
                   numero={1}
-                  activeNumero={complete ? 3 : collecting ? 1 : 2}
+                  activeNumero={activeStep}
                   processing={busy && collecting}
                 >
                   {cards}
-                  {bundles.length > 0 && (
+                  {maintenance ? (
                     <InfoMessage>
-                      Secret items stay within each bundle.
+                      {maintenance.phase === 'manual-restore'
+                        ? 'Add cards from this bundle to restore items.'
+                        : 'Add cards from this bundle. This card will be restored after installation.'}
                     </InfoMessage>
+                  ) : (
+                    bundles.length > 0 && (
+                      <InfoMessage>
+                        Secret items stay within each bundle.
+                      </InfoMessage>
+                    )
                   )}
                 </Step>
                 <Step
                   title="Sync cards"
                   numero={2}
-                  activeNumero={complete ? 3 : collecting ? 1 : 2}
+                  activeNumero={activeStep}
                   processing={busy && !collecting}
                 >
                   {cards}
@@ -620,19 +716,22 @@ export const SyncCardsView = observer(
               )}
             </CardResourceList>
             <Buttons data-popup-animation-group>
-              {(collecting || !selectedCard.complete) && (
-                <Button
-                  color="primary"
-                  disabled={busy}
-                  onClick={() => {
-                    setDetails(undefined);
-                    readCard(selectedCard);
-                  }}
-                >
-                  {collecting ? 'Read card' : 'Sync card'}
-                </Button>
-              )}
-              {collecting && (
+              {selectedCard !== maintenanceTarget &&
+                (collecting ||
+                  !selectedCard.complete ||
+                  needsRecoveryExport) && (
+                  <Button
+                    color="primary"
+                    disabled={busy}
+                    onClick={() => {
+                      setDetails(undefined);
+                      readCard(selectedCard);
+                    }}
+                  >
+                    {collecting ? 'Read card' : 'Sync card'}
+                  </Button>
+                )}
+              {collecting && selectedCard !== maintenanceTarget && (
                 <Button
                   color="neutral"
                   disabled={busy}
@@ -656,6 +755,7 @@ export const SyncCardsView = observer(
               setConfirmRestart(false);
               secretPINs.clear();
               flow.restart();
+              if (maintenance) back?.();
             }}
           >
             Changes already written to cards will remain.

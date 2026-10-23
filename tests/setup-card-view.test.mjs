@@ -208,6 +208,7 @@ mock.module('../.bld/app/@components/@ui/use-input-modal.js', {
     useInputModal: () => [
       null,
       (options, signal) => {
+        fixture.events.push('pin-input');
         const input = {...deferred(), options, signal};
         if (signal?.aborted) input.resolve(undefined);
         else
@@ -646,6 +647,7 @@ function mount(
     },
     async answerBundlePIN(...values) {
       const pin = values.length ? values[0] : 'Safe-42';
+      for (let index = 0; index < 10; index++) await Promise.resolve();
       state.bundleInputs.at(-1).resolve(pin);
       for (let index = 0; index < 10; index++) await Promise.resolve();
     },
@@ -932,7 +934,9 @@ test('an existing Bundle is reset and initialized during Add with one tap before
     'Confirm',
   ]);
   const adding = confirmation.props.onConfirm();
+  for (let index = 0; index < 10; index++) await Promise.resolve();
   assert.equal(state.bundleInputs.at(-1).options.placeholder, 'Set Secret PIN');
+  assert.deepEqual(state.events, ['vault-authenticate', 'pin-input']);
   assert.deepEqual(state.scans, []);
   assert.equal(state.card('00000001'), undefined);
   await state.answerBundlePIN('New-42');
@@ -983,10 +987,81 @@ test('cancelling the new Secret PIN prompt leaves the existing bundled card unch
   assert.equal(state.replacementSource.items.length, 1);
   assert.equal(state.card('00000001'), undefined);
   assert.equal(
-    state.credentialCalls.some(call => call.type === 'authenticate'),
-    false,
+    state.credentialCalls.filter(call => call.type === 'authenticate').length,
+    1,
   );
+  assert.equal(state.credentialCalls.at(-1).type, 'clear');
 });
+
+test('resetting a Bundle card unlocks the vault before requesting its new Secret PIN', async () => {
+  const state = await replacementCard();
+  state.credentialPending = deferred();
+  const adding = state.confirmation().props.onConfirm();
+  for (let index = 0; index < 10; index++) await Promise.resolve();
+  assert.deepEqual(state.events, ['vault-authenticate']);
+  assert.deepEqual(state.bundleInputs, []);
+  assert.deepEqual(state.scans, []);
+  state.credentialPending.resolve();
+  await state.answerBundlePIN(undefined);
+  await adding;
+  assert.deepEqual(state.events, ['vault-authenticate', 'pin-input']);
+  assert.equal(state.credentialCalls.at(-1).type, 'clear');
+  assert.deepEqual(state.scans, []);
+});
+
+test('cancelling vault unlock during Bundle replacement never requests a PIN or starts NFC', async () => {
+  const state = await replacementCard();
+  state.credentialFailure = Object.assign(new Error('Cancelled'), {
+    code: 'CANCELLED',
+  });
+  await state.confirmation().props.onConfirm();
+  assert.deepEqual(state.bundleInputs, []);
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.bundleCalls, []);
+  assert.equal(state.credentialCalls.at(-1).type, 'clear');
+  assert.equal(state.replacementSource.items.length, 1);
+  assert.deepEqual(state.errors, []);
+});
+
+for (const destination of ['inactive', 'leaving', 'unmounted']) {
+  test(`Bundle replacement does not request a PIN after vault unlock when Setup becomes ${destination}`, async () => {
+    const state = await replacementCard();
+    state.credentialPending = deferred();
+    const adding = state.confirmation().props.onConfirm();
+    if (destination === 'unmounted') state.unmount();
+    else {
+      if (destination === 'inactive') state.view.$match.$exact.$active = false;
+      else state.view.$leaving = true;
+      state.render();
+    }
+    state.credentialPending.resolve();
+    await adding;
+    assert.deepEqual(state.bundleInputs, []);
+    assert.deepEqual(state.scans, []);
+    assert.deepEqual(state.bundleCalls, []);
+    assert.equal(state.credentialCalls.at(-1).type, 'clear');
+    assert.deepEqual(state.errors, []);
+  });
+
+  test(`Bundle replacement does not scan after PIN entry when Setup becomes ${destination}`, async () => {
+    const state = await replacementCard();
+    const adding = state.confirmation().props.onConfirm();
+    for (let index = 0; index < 10; index++) await Promise.resolve();
+    assert.equal(state.bundleInputs.length, 1);
+    if (destination === 'unmounted') state.unmount();
+    else {
+      if (destination === 'inactive') state.view.$match.$exact.$active = false;
+      else state.view.$leaving = true;
+      state.render();
+    }
+    state.bundleInputs[0].resolve('New-42');
+    await adding;
+    assert.deepEqual(state.scans, []);
+    assert.deepEqual(state.bundleCalls, []);
+    assert.equal(state.credentialCalls.at(-1).type, 'clear');
+    assert.deepEqual(state.errors, []);
+  });
+}
 
 for (const leaveBeforeConfigure of [false, true]) {
   test(`a PIN set while resetting a Bundle card ${leaveBeforeConfigure ? 'expires when leaving Setup' : 'is reused for round two under the new card identity'}`, async () => {
@@ -1068,6 +1143,10 @@ test('a lost initialization response resumes by reading the known new identity w
     1,
   );
   assert.equal(state.bundleInputs.length, 1);
+  assert.equal(
+    state.credentialCalls.filter(call => call.type === 'authenticate').length,
+    1,
+  );
 });
 
 for (const destination of ['inactive', 'leaving', 'unmounted']) {
@@ -1611,6 +1690,10 @@ test('two-round setup authenticates each member and completes only after the fin
   assert.equal(state.bundleScans.length, 2);
   assert.deepEqual(state.openedSessions, ['bundle-session', 'bundle-session']);
   assert.deepEqual(state.helloRequests, [{}, {}]);
+  assert.equal(
+    state.credentialCalls.some(call => call.type === 'authenticate'),
+    false,
+  );
 });
 
 for (const outcome of ['complete', 'uncertain']) {

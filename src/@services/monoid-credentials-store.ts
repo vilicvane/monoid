@@ -411,6 +411,27 @@ export class MonoidPINSession implements AsyncDisposable {
     return (this.access ??= this.store.authenticate(owner));
   }
 
+  private renewAccess(
+    owner: AbortSignal,
+    expired: Promise<BiometricVaultAccess>,
+  ): Promise<BiometricVaultAccess> {
+    throwIfCancelled(owner);
+    if (this.access === expired) {
+      // Concurrent saves share the replacement authorization. Keep the page's
+      // owner and PIN cache; clearing the session would cancel the save itself.
+      this.access = expired
+        .then(async access => {
+          await access[Symbol.asyncDispose]();
+          throwIfCancelled(owner);
+          return this.store.authenticate(owner);
+        })
+        .catch(error => {
+          throw credentialError(error);
+        });
+    }
+    return this.getAccess(owner);
+  }
+
   private async request<T>(
     signal: AbortSignal | undefined,
     operation: (owner: AbortSignal) => Promise<T>,
@@ -481,13 +502,29 @@ export class MonoidPINSession implements AsyncDisposable {
     return this.request(
       signal,
       async owner => {
-        const snapshot = await this.store.setPIN(
-          id,
-          pin,
-          owner,
-          this.unlocked,
-          () => this.getAccess(owner),
-        );
+        let access: Promise<BiometricVaultAccess> | undefined;
+        const save = (): Promise<MonoidPINs> =>
+          this.store.setPIN(id, pin, owner, this.unlocked, () => {
+            access = this.getAccess(owner);
+            return access;
+          });
+
+        let snapshot: MonoidPINs;
+        try {
+          snapshot = await save();
+        } catch (error) {
+          if (
+            credentialError(error).code !== 'AUTHORIZATION_EXPIRED' ||
+            !access
+          ) {
+            throw error;
+          }
+          // Expiry rejects before a vault write commits. Reauthorize once and
+          // retry only this local save, never the completed card operation.
+          await this.renewAccess(owner, access);
+          throwIfCancelled(owner);
+          snapshot = await save();
+        }
         if (owner.aborted) return;
         this.unlocked = snapshot;
         this.pins ??= {...snapshot};

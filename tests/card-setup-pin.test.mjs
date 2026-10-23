@@ -8,6 +8,10 @@ import {
 } from '../.bld/app/@lib/monoid/card-error.js';
 import {initializeMonoidCard} from '../.bld/app/@lib/monoid/initialize-card.js';
 import {MonoidAppletInvalidPINError} from '../.bld/app/@lib/monoid/monoid-applet.js';
+import {
+  MonoidCredentialsStore,
+  MonoidPINSession,
+} from '../.bld/app/@services/monoid-credentials-store.js';
 import {CardSecretPINSession} from '../.bld/app/@components/views/safe/@card/card-secret-pin-session.js';
 
 let fixture;
@@ -121,12 +125,16 @@ function mount({
   pinSession,
   secretPINSession,
   onInitialized,
+  unlock,
 } = {}) {
   const state = {
     inputs: [],
     scans: [],
     commands: [],
     saved: [],
+    sessions: [],
+    unlocks: [],
+    releases: [],
     toasts: [],
     errors: [],
     results: [],
@@ -163,11 +171,32 @@ function mount({
       };
     },
   };
-  state.store = {
-    setPIN: async (id, pin, signal) => {
-      state.saved.push({id, pin, signal});
-      await state.onSave?.(signal);
+  state.store = new MonoidCredentialsStore({
+    authenticate: async ({signal}) => {
+      state.unlocks.push({signal});
+      await unlock?.(signal);
+      return {
+        get: async () => ({value: null}),
+        set: async () => {},
+        [Symbol.asyncDispose]: async () => {},
+      };
     },
+  });
+  const save = state.store.setPIN.bind(state.store);
+  state.store.setPIN = async (id, pin, signal, ...args) => {
+    state.saved.push({id, pin, signal, abortedAtSave: signal.aborted});
+    await state.onSave?.(signal);
+    return save(id, pin, signal, ...args);
+  };
+  state.store.createPINSession = () => {
+    const session = new MonoidPINSession(state.store);
+    const dispose = session[Symbol.asyncDispose].bind(session);
+    session[Symbol.asyncDispose] = async () => {
+      state.releases.push(session);
+      await dispose();
+    };
+    state.sessions.push(session);
+    return session;
   };
   state.prompt = options => {
     const input = {...deferred(), options};
@@ -194,6 +223,7 @@ function mount({
     },
   };
   state.answer = async value => {
+    await setImmediate();
     state.inputs.at(-1).resolve(value);
     await setImmediate();
   };
@@ -308,8 +338,11 @@ test('leaving during initialization cannot repopulate the page Secret PIN cache'
   assert.deepEqual(state.results, [false]);
 });
 
-test('a new card opens the Secret PIN prompt immediately and stores the verified default Access PIN only after scan exit', async () => {
+test('a new card unlocks storage before Secret PIN input and saves through that session after scan exit', async () => {
   const state = mount();
+  assert.equal(state.inputs.length, 0);
+  await setImmediate();
+  assert.equal(state.unlocks.length, 1);
   assert.equal(state.inputs.length, 1);
   assert.deepEqual(state.scans, []);
   const {options} = state.inputs[0];
@@ -347,14 +380,20 @@ test('a new card opens the Secret PIN prompt immediately and stores the verified
   assert.equal(state.saved[0].id, '11223344');
   assert.equal(state.saved[0].pin, PIN);
   assert.notEqual(state.saved[0].signal, state.scans[0].controller.signal);
-  assert.equal(state.saved[0].signal.aborted, false);
+  assert.equal(state.saved[0].abortedAtSave, false);
+  assert.equal(state.saved[0].signal.aborted, true, 'temporary scope released');
   assert.deepEqual(state.errors, []);
   assert.deepEqual(state.toasts, []);
+  assert.equal(state.unlocks.length, 1);
+  assert.deepEqual(state.releases, state.sessions);
 });
 
 test('a provided page PIN session owns the scan and saves the verified Access PIN after scan exit', async () => {
   const saves = [];
   const pinSession = {
+    async getPINs() {
+      return {};
+    },
     async setPIN(id, pin, signal) {
       saves.push({id, pin, signal});
     },
@@ -380,8 +419,11 @@ test('a provided page PIN session owns the scan and saves the verified Access PI
   state.unmount();
 });
 
-test('an expired page PIN session warns without falling back to another authentication', async () => {
+test('an exhausted session save warns without the view starting another authentication', async () => {
   const pinSession = {
+    async getPINs() {
+      return {};
+    },
     async setPIN() {
       throw {code: 'AUTHORIZATION_EXPIRED'};
     },
@@ -461,6 +503,7 @@ for (const blocked of ['accessPIN', 'secretPIN']) {
 
 test('an existing Secret PIN initializes only the missing Access PIN', async () => {
   const state = mount({accessPIN: false, secretPIN: 5});
+  await setImmediate();
   assert.equal(
     state.inputs[0].options.placeholder,
     'Enter existing Secret PIN',
@@ -520,6 +563,7 @@ test('a newly set Secret PIN returns its fresh state so retry initializes only t
   assert.equal(state.latestHellos[0], changed);
 
   const retry = mount({hello: state.latestHellos[0]});
+  await setImmediate();
   assert.equal(
     retry.inputs[0].options.placeholder,
     'Enter existing Secret PIN',
@@ -555,6 +599,7 @@ test('cancelling before the second scan leaves setup available without writing o
 for (const stage of ['input', 'scan']) {
   test(`unmounting during ${stage} prevents late work and completion callbacks`, async () => {
     const state = mount();
+    await setImmediate();
     if (stage === 'scan') await state.answer(PIN);
     state.unmount();
     if (stage === 'input') await state.answer(PIN);
@@ -710,4 +755,116 @@ test('an unverified write never acknowledges setup to its owner', async () => {
 
   assert.deepEqual(acknowledged, []);
   assert.deepEqual(state.results, []);
+});
+
+test('setup waits for vault unlock before opening Secret PIN input and disposes its temporary session', async () => {
+  const unlock = deferred();
+  const state = mount({unlock: () => unlock.promise});
+  await setImmediate();
+  assert.equal(state.unlocks.length, 1);
+  assert.deepEqual(state.inputs, []);
+  assert.deepEqual(state.scans, []);
+  unlock.resolve();
+  await state.answer(PIN);
+  await state.tap();
+  await state.finishScan();
+  assert.equal(state.unlocks.length, 1);
+  assert.deepEqual(state.releases, state.sessions);
+});
+
+for (const code of ['CANCELLED', 'IO_ERROR']) {
+  test(`setup ${code} vault failure stops before input and releases its temporary session`, async () => {
+    const state = mount({
+      unlock: async () => {
+        throw {code};
+      },
+    });
+    await state.finished.promise;
+    assert.deepEqual(state.inputs, []);
+    assert.deepEqual(state.scans, []);
+    assert.deepEqual(state.commands, []);
+    assert.deepEqual(state.saved, []);
+    assert.deepEqual(state.results, [false]);
+    assert.deepEqual(state.releases, state.sessions);
+    assert.equal(state.errors.length, code === 'CANCELLED' ? 0 : 1);
+  });
+}
+
+test('setup retries unlock through the same borrowed session after cancellation', async () => {
+  let attempts = 0;
+  let releases = 0;
+  const pinSession = new MonoidPINSession(
+    new MonoidCredentialsStore({
+      authenticate: async () => {
+        if (++attempts === 1) throw {code: 'CANCELLED'};
+        return {
+          get: async () => ({value: null}),
+          set: async () => {},
+          [Symbol.asyncDispose]: async () => {
+            releases++;
+          },
+        };
+      },
+    }),
+  );
+  const first = mount({pinSession});
+  await first.finished.promise;
+  first.unmount();
+  assert.deepEqual(first.inputs, []);
+  assert.deepEqual(first.scans, []);
+  const retry = mount({pinSession});
+  await setImmediate();
+  assert.equal(attempts, 2);
+  assert.equal(retry.inputs.length, 1);
+  assert.deepEqual(retry.scans, []);
+  await retry.answer(undefined);
+  await retry.finished.promise;
+  assert.deepEqual(first.errors, []);
+  assert.deepEqual(retry.errors, []);
+  assert.equal(releases, 0, 'successful retry keeps the borrowed session');
+  await pinSession[Symbol.asyncDispose]();
+});
+
+test('unmounting during setup vault unlock prevents late input and releases the temporary session', async () => {
+  const unlock = deferred();
+  const state = mount({unlock: () => unlock.promise});
+  await setImmediate();
+  state.unmount();
+  unlock.resolve();
+  await setImmediate();
+  assert.deepEqual(state.inputs, []);
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.commands, []);
+  assert.deepEqual(state.results, []);
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.releases, state.sessions);
+});
+
+test('unavailable protected storage preserves manual setup and warns without a second vault prompt', async () => {
+  const state = mount({
+    unlock: async () => {
+      throw {code: 'BIOMETRIC_UNAVAILABLE'};
+    },
+  });
+  await state.answer(PIN);
+  await state.tap();
+  await state.finishScan();
+  assert.equal(state.unlocks.length, 1);
+  assert.deepEqual(state.results, [true]);
+  assert.deepEqual(state.toasts, [
+    {message: 'Access PIN was not saved on this device', color: 'warning'},
+  ]);
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.releases, state.sessions);
+});
+
+test('existing Access PIN does not trigger a vault unlock before PIN input', async () => {
+  const state = mount({accessPIN: 5, secretPIN: false});
+  assert.equal(state.inputs.length, 1);
+  assert.deepEqual(state.unlocks, []);
+  await state.answer(undefined);
+  await state.finished.promise;
+  assert.deepEqual(state.unlocks, []);
+  assert.deepEqual(state.saved, []);
+  assert.deepEqual(state.results, [false]);
 });

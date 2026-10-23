@@ -249,9 +249,11 @@ export function useBundleCardAddition({
     let accessPINId: MonoidIdHex | undefined;
     try {
       if (!reset.attempted) {
+        await pinSession.authenticate(operation.signal);
+        operation.signal.throwIfAborted();
+        if (!isActive()) return;
         pin = await requestSecretPIN(operation.signal);
         if (pin === undefined) return;
-        await pinSession.authenticate(operation.signal);
         operation.signal.throwIfAborted();
         if (!isActive()) return;
       }

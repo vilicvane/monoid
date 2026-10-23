@@ -4,6 +4,14 @@ import type {SyncCardsState} from '../@components/views/safe/index.js';
 export class SyncCardsStore {
   private readonly flows = new Map<string, SyncCardsState>();
 
+  get(id: string): SyncCardsState | undefined {
+    return this.flows.get(id);
+  }
+
+  delete(id: string): void {
+    this.flows.delete(id);
+  }
+
   getOrCreate(id: string, create: () => SyncCardsState): SyncCardsState {
     let flow = this.flows.get(id);
     if (!flow) {

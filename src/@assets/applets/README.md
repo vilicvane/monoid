@@ -88,13 +88,20 @@ Copy/Sync transfer public credential records without granting access or inferrin
 a Seed association; Secret transfers retain their existing protocol boundaries.
 
 Update and Reinstall preserve applet grant scopes (`aid`, `types`, `keys`, `seed`),
-never installation tokens or `tokenHash`. Non-Bundle cards restore their archived
-items first, then rebind grants to the new applet instances and verify the scopes.
-Bundle cards require copying items to another bundle card before replacement and
-restoring them manually afterward. Their saved grants remain available through
-Restore applet access; pending grant recovery blocks another ordinary replacement.
-This is same-card maintenance recovery; Copy and Sync never migrate grants to
-another card.
+never installation tokens or `tokenHash`. Non-Bundle cards archive their items
+directly. Replacing Monoid on a Bundle card first opens Sync cards with that card
+as the first source. One or more other members receive the combined items, in any
+scan order. After all other members are synced, the last scanned member freshly
+exports the complete result; if no member needs writes, any other member can export.
+The app validates and persists those peer-origin envelopes
+before allowing replacement; a card cannot recover from its own Bundle exports.
+After installation, items are fully restored and verified before grant dependencies
+are checked and access is rebound to the installed applet instances. Recovery data
+remains available until both item and grant verification succeed, including across
+app restarts. Previously reinstalled Bundle cards use Sync items to prepare the
+same recovery without another replacement. This is same-card maintenance recovery;
+ordinary Copy and Sync never migrate grants to another card. See
+the [sync workflow](../../../docs/card-sync.md) for ordering and merge rules.
 
 Before replacement, the installer reads all loaded packages and applet instances.
 Unrelated packages remain untouched. It rejects unknown modules or extra instances

@@ -20,5 +20,12 @@ The final height is also reported when the animation ends. The existing
 will/did events remain available, and the animation callback is removed when
 the plugin is destroyed. The iOS implementation is unchanged.
 
+Android `show()` binds to the currently focused native view and waits for its
+window to regain focus before posting one IME request. It does not change focus
+or retry after the user dismisses the keyboard. Pending requests are canceled by
+`hide()`, another `show()`, loss of the captured view's focus or attachment, and
+activity stop or destruction. The promise resolves when the request is dispatched
+or canceled; keyboard events report actual visibility.
+
 Monoid disables `resizeOnFullScreen`, keeps the WebView and popup backdrop at
 full height, and uses this event to move the app content with the keyboard.

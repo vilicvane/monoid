@@ -6,7 +6,10 @@ import type {RouteComponentProps} from 'routra-react';
 import {type MonoidIdHex, MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import type {Router} from '../../../../@routes.js';
-import type {MonoidPINSession} from '../../../../@services/index.js';
+import {
+  type MonoidPINSession,
+  isCredentialRequestCancelled,
+} from '../../../../@services/index.js';
 import {useMonoidScanPrompt} from '../../../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
 import {useToast} from '../../../@ui/toast.js';
@@ -110,6 +113,15 @@ export const CardPINUpdate = observer(
 
       const run = async (): Promise<void> => {
         try {
+          if (kind === 'Access') {
+            try {
+              await waitForOperation(pinSession.getPINs(signal), signal);
+            } catch (error) {
+              pinSession.clear();
+              throw error;
+            }
+            signal.throwIfAborted();
+          }
           currentPIN = await readPIN('Secret', 'Enter current');
           if (currentPIN === undefined) return;
           newPIN = await readPIN(kind, 'Enter new');
@@ -179,7 +191,11 @@ export const CardPINUpdate = observer(
             }
           }
         } catch (error) {
-          if (active() && !signal.aborted)
+          if (
+            active() &&
+            !signal.aborted &&
+            !isCredentialRequestCancelled(error)
+          )
             errorService.catch(Promise.reject(error));
         } finally {
           currentPIN = undefined;

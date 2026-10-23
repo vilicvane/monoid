@@ -5,6 +5,7 @@ import {createPortal} from 'react-dom';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
+import {showInputKeyboard} from '../../@lib/input-keyboard.js';
 import {fadeInAnimationCSS, fadeOutAnimationCSS} from '../@animations.js';
 
 import {PopupBackdrop} from './popup-backdrop.js';
@@ -119,6 +120,7 @@ type InputModalInstance = {
   options: InputModalOptions;
   resolve: (value: string | undefined) => void;
   release: () => void;
+  cancelKeyboard?: () => void;
 };
 
 export function useInputModal(): [
@@ -136,6 +138,7 @@ export function useInputModal(): [
   const descriptionId = useId();
   const nextInstanceId = useRef(0);
   const activeInstance = useRef<InputModalInstance | undefined>(undefined);
+  const inputRef = useRef<HTMLInputElement>(null);
   const [completion, setCompletion] = useState<{
     value: string | undefined;
   }>();
@@ -169,6 +172,26 @@ export function useInputModal(): [
     [close],
   );
 
+  useEffect(() => {
+    if (
+      !instance ||
+      completion ||
+      activeInstance.current !== instance ||
+      !inputRef.current
+    ) {
+      return;
+    }
+
+    const cancelKeyboard = showInputKeyboard(inputRef.current);
+    instance.cancelKeyboard = cancelKeyboard;
+    return () => {
+      cancelKeyboard();
+      if (instance.cancelKeyboard === cancelKeyboard) {
+        instance.cancelKeyboard = undefined;
+      }
+    };
+  }, [instance, completion]);
+
   const show = useCallback(
     (options: InputModalOptions, signal?: AbortSignal) => {
       if (signal?.aborted) return Promise.resolve(undefined);
@@ -179,7 +202,10 @@ export function useInputModal(): [
           id: nextInstanceId.current++,
           options,
           resolve,
-          release: () => signal?.removeEventListener('abort', cancel),
+          release: () => {
+            signal?.removeEventListener('abort', cancel);
+            current.cancelKeyboard?.();
+          },
         };
         activeInstance.current = current;
         setValue(options.defaultValue ?? '');
@@ -207,6 +233,7 @@ export function useInputModal(): [
 
     const complete = (value: string | undefined): void => {
       if (activeInstance.current !== instance) return;
+      instance.cancelKeyboard?.();
       setCompletion(current => current ?? {value});
     };
 
@@ -227,6 +254,7 @@ export function useInputModal(): [
           >
             <InputField className={classNames({center})}>
               <Input
+                ref={inputRef}
                 className={classNames({
                   'rich-placeholder': placeholderContent != null,
                 })}

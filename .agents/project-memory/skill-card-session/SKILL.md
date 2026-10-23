@@ -5,7 +5,7 @@ description: Monoid NFC card sessions, Access/Safe PIN ownership, biometric vaul
 
 # Monoid card sessions
 
-Source: `../records.md`, especially records 29–32, 34, 38–41 and 47, and `../29.md`. Treat records
+Source: `../records.md`, especially records 29–32, 34, 38–41 and 47–48, and `../29.md` and `../48.md`. Treat records
 as authoritative and keep them up to date. Records 19–24 describe an older WIP;
 do not reintroduce their plain-storage design or assume those TODOs still exist.
 
@@ -16,6 +16,24 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   sessions may span related operations; temporary sessions dispose with the scan.
   They retain plaintext only for the owning flow. Persistent storage uses the
   biometric vault; the unencrypted backend is an explicit development-only option.
+- When both vault unlock and manual PIN input are required, unlock first, then
+  open the PIN input. Reuse that session for later Access PIN saving; do not add
+  unlocks to Secret-only operations. Access PIN setup/update uses `getPINs` to
+  preserve manual fallback when protected storage is unavailable. See `../48.md`.
+  After unlock, check cancellation/page activity before input or NFC. Clear a
+  failed unlock session so an explicit retry can authorize again. Keep successful
+  borrowed sessions page-owned and dispose temporary sessions when finished.
+- If Access PIN saving reports `AUTHORIZATION_EXPIRED`, `MonoidPINSession.setPIN`
+  disposes the expired access, shares one renewed unlock and retries only the
+  local save once. Preserve the native 60-second lifetime; never replay card
+  work or renew on cancellation/background/closed access/other storage errors.
+  Abort and page exit cancel renewal. A failed renewal or second expiry keeps
+  the existing save warning. Read/removal operations do not automatically renew.
+- Keep PIN inputs remounted per prompt. On Android, DOM autofocus after biometric
+  unlock may not open the IME: use the shared input modal's explicit keyboard
+  request, which waits for native window focus. Cancel pending keyboard work on
+  prompt close/replacement/abort/unmount. Never blur/refocus to recover the IME
+  (blur cancels the input), or reopen it after a user dismissal. See `../48.md`.
 - A missing PIN ends the current reader before presenting a modal. Bind typed
   PINs to the card's `hello.id`, verify the intended card before credentials, and
   authenticate again on every tap. Do not await a web modal inside a live card

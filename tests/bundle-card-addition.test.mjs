@@ -135,9 +135,14 @@ mock.module('../.bld/app/@components/@ui/use-input-modal.js', {
   namedExports: {
     useInputModal: () => [
       'pin-input',
-      async options => {
-        fixture.inputs.push(options);
-        return fixture.pin;
+      async (options, signal) => {
+        const owner = fixture;
+        owner.events.push('pin-input');
+        owner.inputs.push(options);
+        const pin = owner.inputPending
+          ? await owner.inputPending.promise
+          : owner.pin;
+        return signal?.aborted ? undefined : pin;
       },
     ],
   },
@@ -198,11 +203,21 @@ function mount(options = {}) {
     inputs: [],
     toasts: [],
     errors: [],
+    events: [],
+    credentialCalls: [],
     result: {type: 'ready', hello: hello()},
     pin: undefined,
     pinSession: {
-      clear() {},
-      async authenticate() {},
+      clear() {
+        state.credentialCalls.push({type: 'clear'});
+      },
+      async authenticate(signal) {
+        state.events.push('vault-authenticate');
+        state.credentialCalls.push({type: 'authenticate', signal});
+        await state.credentialPending?.promise;
+        if (state.credentialFailure) throw state.credentialFailure;
+        signal?.throwIfAborted();
+      },
     },
     slot(create) {
       const index = this.cursor++;
@@ -263,6 +278,7 @@ test('an initialized target is added after native cleanup without a PIN prompt',
   state.scans[0].resolve();
   await operation;
   assert.deepEqual(state.added, [state.result.hello]);
+  assert.deepEqual(state.credentialCalls, []);
 });
 
 test('a verified target is retained when navigation happens during native cleanup', async () => {
@@ -381,6 +397,7 @@ test('resetting an extension target remembers its new Secret PIN only for the re
   state.render();
   const adding = find(state.hook.content, 'confirm-popup').props.onConfirm();
   for (let index = 0; index < 10; index++) await Promise.resolve();
+  assert.deepEqual(state.events, ['vault-authenticate', 'pin-input']);
   await state.tap();
   state.scans.at(-1).resolve();
   await adding;
@@ -411,7 +428,86 @@ test('resetting an extension target remembers its new Secret PIN only for the re
     },
   );
   assert.equal(prompted, true);
+  assert.equal(
+    state.credentialCalls.filter(call => call.type === 'authenticate').length,
+    1,
+  );
+  assert.equal(state.credentialCalls.at(-1).type, 'clear');
 });
+
+async function resetCandidate() {
+  const state = mount();
+  await state.hook.acceptCard(hello({bundle: new Uint8Array(32).fill(2)}));
+  state.render();
+  return state;
+}
+
+test('an extension reset waits for vault unlock before requesting its new Secret PIN', async () => {
+  const state = await resetCandidate();
+  state.credentialPending = deferred();
+  state.inputPending = deferred();
+  const adding = find(state.hook.content, 'confirm-popup').props.onConfirm();
+  for (let index = 0; index < 10; index++) await Promise.resolve();
+  assert.deepEqual(state.events, ['vault-authenticate']);
+  assert.deepEqual(state.inputs, []);
+  assert.deepEqual(state.scans, []);
+  state.credentialPending.resolve();
+  for (let index = 0; index < 10; index++) await Promise.resolve();
+  assert.deepEqual(state.events, ['vault-authenticate', 'pin-input']);
+  assert.equal(state.inputs[0].placeholder, 'Set Secret PIN');
+  assert.deepEqual(state.scans, []);
+  state.inputPending.resolve(undefined);
+  await adding;
+  assert.equal(state.credentialCalls.at(-1).type, 'clear');
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.added, []);
+});
+
+test('cancelling vault unlock during an extension reset does not request a PIN or scan', async () => {
+  const state = await resetCandidate();
+  state.credentialFailure = Object.assign(new Error('Cancelled'), {
+    code: 'CANCELLED',
+  });
+  await find(state.hook.content, 'confirm-popup').props.onConfirm();
+  assert.deepEqual(state.inputs, []);
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.added, []);
+  assert.equal(state.credentialCalls.at(-1).type, 'clear');
+  assert.deepEqual(state.errors, []);
+});
+
+for (const destination of ['inactive', 'unmounted']) {
+  test(`an extension reset does not request a PIN after vault unlock when its page becomes ${destination}`, async () => {
+    const state = await resetCandidate();
+    state.credentialPending = deferred();
+    const adding = find(state.hook.content, 'confirm-popup').props.onConfirm();
+    if (destination === 'unmounted') state.unmount();
+    else state.deactivate();
+    state.credentialPending.resolve();
+    await adding;
+    assert.deepEqual(state.inputs, []);
+    assert.deepEqual(state.scans, []);
+    assert.deepEqual(state.added, []);
+    assert.equal(state.credentialCalls.at(-1).type, 'clear');
+    assert.deepEqual(state.errors, []);
+  });
+
+  test(`an extension reset does not scan after PIN entry when its page becomes ${destination}`, async () => {
+    const state = await resetCandidate();
+    state.inputPending = deferred();
+    const adding = find(state.hook.content, 'confirm-popup').props.onConfirm();
+    for (let index = 0; index < 10; index++) await Promise.resolve();
+    assert.equal(state.inputs.length, 1);
+    if (destination === 'unmounted') state.unmount();
+    else state.deactivate();
+    state.inputPending.resolve('New-42');
+    await adding;
+    assert.deepEqual(state.scans, []);
+    assert.deepEqual(state.added, []);
+    assert.equal(state.credentialCalls.at(-1).type, 'clear');
+    assert.deepEqual(state.errors, []);
+  });
+}
 
 test('an installed target retaining its original bundle opens reset confirmation without mutation or another scan', async () => {
   const state = mount();

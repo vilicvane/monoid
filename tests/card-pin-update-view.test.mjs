@@ -5,7 +5,11 @@ import {setImmediate} from 'node:timers/promises';
 import {observable, runInAction} from 'mobx';
 
 import {MonoidWrongCardError} from '../.bld/app/@lib/monoid/card-error.js';
-import {MonoidPINSession} from '../.bld/app/@services/monoid-credentials-store.js';
+import {
+  MonoidCredentialsStore,
+  MonoidPINSession,
+  isCredentialRequestCancelled,
+} from '../.bld/app/@services/monoid-credentials-store.js';
 
 let fixture;
 const owners = [];
@@ -30,6 +34,9 @@ mock.module('mobx-react-lite', {
 });
 mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => fixture.entrances},
+});
+mock.module('../.bld/app/@services/index.js', {
+  namedExports: {isCredentialRequestCancelled},
 });
 mock.module('../.bld/app/@components/@ui/toast.js', {
   namedExports: {useToast: () => fixture.toast},
@@ -71,7 +78,7 @@ function deferred() {
   });
   return {promise, resolve, reject};
 }
-function mount(kind = 'Access') {
+function mount(kind = 'Access', {unlock, pinSession} = {}) {
   const state = {
     kind,
     inputs: [],
@@ -79,6 +86,8 @@ function mount(kind = 'Access') {
     auth: [],
     writes: [],
     saved: [],
+    unlocks: [],
+    releases: 0,
     toasts: [],
     errors: [],
     done: false,
@@ -106,14 +115,28 @@ function mount(kind = 'Access') {
       state.writes.push(request);
     },
   };
-  state.store = {
-    getPINs: async () => ({[state.card.id]: 'old-access'}),
-    setPIN: async (id, pin) => {
-      state.saved.push({id, pin});
-      return {[id]: pin};
+  state.vaultPINs = {[state.card.id]: 'old-access'};
+  state.store = new MonoidCredentialsStore({
+    authenticate: async ({signal}) => {
+      state.unlocks.push(signal);
+      await unlock?.(signal);
+      return {
+        get: async () => ({value: JSON.stringify(state.vaultPINs)}),
+        set: async ({value}) => {
+          state.vaultPINs = JSON.parse(value);
+        },
+        [Symbol.asyncDispose]: async () => {
+          state.releases++;
+        },
+      };
     },
+  });
+  const save = state.store.setPIN.bind(state.store);
+  state.store.setPIN = async (id, pin, ...args) => {
+    state.saved.push({id, pin});
+    return save(id, pin, ...args);
   };
-  state.pinSession = new MonoidPINSession(state.store);
+  state.pinSession = pinSession ?? new MonoidPINSession(state.store);
   state.prompt = options => {
     const request = {...deferred(), options};
     state.inputs.push(request);
@@ -137,6 +160,7 @@ function mount(kind = 'Access') {
     },
   };
   state.answer = async value => {
+    await setImmediate();
     state.inputs.at(-1).resolve(value);
     await setImmediate();
   };
@@ -191,6 +215,7 @@ for (const kind of ['Access', 'Secret']) {
     assert.equal(state.scanOptions.ensureSetup, false);
     assert.equal(state.scanOptions.retryOnError, false);
     assert.deepEqual(state.saved, []);
+    assert.equal(state.unlocks.length, kind === 'Access' ? 1 : 0);
     await assert.rejects(
       state.tap({
         ...state.hello,
@@ -211,6 +236,7 @@ for (const kind of ['Access', 'Secret']) {
       kind === 'Access' ? [{id: state.card.id, pin: 'new-pin'}] : [],
     );
     assert.deepEqual(state.toasts, [{message: `${kind} PIN updated`}]);
+    assert.equal(state.releases, 0, 'the borrowed page session stays open');
   });
 }
 
@@ -294,4 +320,101 @@ test('dismissing during setPIN waits for the ACK, retains the new cached PIN, an
   assert.deepEqual(state.saved, []);
   assert.equal(state.toasts.length, 1);
   assert.equal(state.toasts[0].color, 'warning');
+});
+
+test('Access PIN input waits for vault unlock and reuses the borrowed authorization for saving', async () => {
+  const unlock = deferred();
+  const state = mount('Access', {unlock: () => unlock.promise});
+  await setImmediate();
+  assert.equal(state.unlocks.length, 1);
+  assert.deepEqual(state.inputs, []);
+  assert.deepEqual(state.scans, []);
+  unlock.resolve();
+  await state.prepare();
+  await state.tap();
+  await state.finishScan();
+  assert.equal(state.unlocks.length, 1);
+  assert.equal(state.releases, 0);
+});
+
+for (const code of ['CANCELLED', 'IO_ERROR']) {
+  test(`Access PIN ${code} vault failure stops before input or scanning`, async () => {
+    const state = mount('Access', {
+      unlock: async () => {
+        throw {code};
+      },
+    });
+    await state.finished.promise;
+    assert.deepEqual(state.inputs, []);
+    assert.deepEqual(state.scans, []);
+    assert.deepEqual(state.writes, []);
+    assert.equal(state.errors.length, code === 'CANCELLED' ? 0 : 1);
+  });
+}
+
+test('Access PIN retries unlock through the same borrowed session after cancellation', async () => {
+  let attempts = 0;
+  const first = mount('Access', {
+    unlock: async () => {
+      if (++attempts === 1) throw {code: 'CANCELLED'};
+    },
+  });
+  await first.finished.promise;
+  first.cleanup();
+  assert.deepEqual(first.inputs, []);
+  assert.deepEqual(first.scans, []);
+  const retry = mount('Access', {pinSession: first.pinSession});
+  await setImmediate();
+  assert.equal(attempts, 2);
+  assert.equal(retry.inputs.length, 1);
+  assert.deepEqual(retry.scans, []);
+  await retry.answer(undefined);
+  await retry.finished.promise;
+  assert.deepEqual(first.errors, []);
+  assert.deepEqual(retry.errors, []);
+  assert.equal(
+    first.releases,
+    0,
+    'successful retry keeps the borrowed session',
+  );
+});
+
+test('leaving or unmounting during Access PIN vault unlock cannot open a late input', async () => {
+  for (const unmount of [false, true]) {
+    const unlock = deferred();
+    const state = mount('Access', {unlock: () => unlock.promise});
+    await setImmediate();
+    if (unmount) state.cleanup();
+    else
+      runInAction(() => {
+        state.view.$leaving = true;
+      });
+    unlock.resolve();
+    await setImmediate();
+    assert.deepEqual(state.inputs, []);
+    assert.deepEqual(state.scans, []);
+    assert.deepEqual(state.writes, []);
+    assert.deepEqual(state.errors, []);
+    assert.equal(state.releases, 1);
+  }
+});
+
+test('unavailable protected storage still allows changing Access PIN without a second unlock attempt', async () => {
+  const state = mount('Access', {
+    unlock: async () => {
+      throw {code: 'BIOMETRIC_UNAVAILABLE'};
+    },
+  });
+  await state.prepare();
+  await state.tap();
+  await state.finishScan();
+  assert.equal(state.unlocks.length, 1);
+  assert.deepEqual(state.writes, [{pin: 'new-pin'}]);
+  assert.deepEqual(state.toasts, [
+    {
+      message: 'Access PIN updated, but not saved on this device',
+      color: 'warning',
+    },
+  ]);
+  assert.deepEqual(state.errors, []);
 });
