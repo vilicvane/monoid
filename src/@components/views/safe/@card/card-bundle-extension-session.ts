@@ -241,6 +241,7 @@ export class CardBundleExtensionSession {
     hello: MonoidAppletHello,
     pin: string,
     signal: AbortSignal,
+    onAuthenticated?: () => void,
   ): Promise<void> {
     return this.exclusive(async () => {
       this.validateCard(hello);
@@ -259,10 +260,12 @@ export class CardBundleExtensionSession {
             error.source.tries === 0
               ? 'Secret PIN blocked'
               : `Incorrect Secret PIN, tries remaining: ${error.source.tries}`,
+            {cause: error},
           );
         }
         throw error;
       }
+      onAuthenticated?.();
       throwIfCancelled(signal);
 
       switch (this.phase) {

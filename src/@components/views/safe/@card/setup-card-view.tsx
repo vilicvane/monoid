@@ -49,12 +49,14 @@ import {
 } from '../../../@view/index.js';
 import type {ScannedCardData} from '../common.js';
 
+import {readBackupCardIdentity} from './card-backup-session.js';
 import {CardBundleSession} from './card-bundle-session.js';
 import {
   type CardResetIdentity,
   CardResetSession,
 } from './card-reset-session.js';
 import {CardSetupPIN} from './card-setup-pin.js';
+import {CardSecretPINSession} from './card-secret-pin-session.js';
 import {readCardForSetup} from './read-card-for-setup.js';
 
 type BundleCandidate =
@@ -108,6 +110,7 @@ export const SetupCardView = observer(
     const [pinSession] = useState(() =>
       monoidCredentialsStore.createPINSession(),
     );
+    const [secretPINSession] = useState(() => new CardSecretPINSession());
     const bundleEnabled = flow.bundleEnabled;
     const [pinInput, showPINInput] = useInputModal();
     const [selectedCard, setSelectedCard] = useState<string>();
@@ -173,8 +176,9 @@ export const SetupCardView = observer(
         mounted.current = false;
         cardOperation.current?.abort();
         pinSession.clear();
+        secretPINSession.clear();
       };
-    }, [pinSession]);
+    }, [pinSession, secretPINSession]);
 
     useEffect(
       () =>
@@ -243,10 +247,11 @@ export const SetupCardView = observer(
               setPendingBundleCard(undefined);
               cardOperation.current?.abort();
               pinSession.clear();
+              secretPINSession.clear();
             }
           },
         ),
-      [isViewActive, pinSession],
+      [isViewActive, pinSession, secretPINSession],
     );
 
     const isActive = (): boolean => mounted.current && isViewActive();
@@ -307,6 +312,7 @@ export const SetupCardView = observer(
           await bundleSession.addCard(hello);
         } else {
           await copyFlow?.session.addTarget(hello);
+          secretPINSession.clear();
           if (mounted.current) setComplete(true);
         }
         if (mounted.current) setPendingPIN(undefined);
@@ -406,6 +412,7 @@ export const SetupCardView = observer(
     const resetAndAdd = async (reset: CardResetSession): Promise<void> => {
       if (cardOperation.current || !isActive()) return;
       const operation = new AbortController();
+      const pinSignal = secretPINSession.signal;
       cardOperation.current = operation;
       runInAction(() => {
         flow.pendingReset = reset;
@@ -440,7 +447,11 @@ export const SetupCardView = observer(
             </MonoidScanStatePromptContentHighlight>
           </>,
           async (sessionId, setState, scanSignal) => {
-            const signal = AbortSignal.any([scanSignal, operation.signal]);
+            const signal = AbortSignal.any([
+              scanSignal,
+              operation.signal,
+              pinSignal,
+            ]);
             signal.throwIfAborted();
             const applet = await monoidApplet.openSession(sessionId);
             signal.throwIfAborted();
@@ -470,8 +481,14 @@ export const SetupCardView = observer(
               hello.pins.secret === false && hello.pins.access === false,
             );
             if (pin !== undefined) {
+              signal.throwIfAborted();
+              const rememberPIN = secretPINSession.onAuthenticated(
+                readBackupCardIdentity(hello),
+                pin,
+              );
               setState('Setting Secret PIN, hold tight...');
               hello = await initializeMonoidCard(applet, hello, pin, signal);
+              rememberPIN();
               cacheSetup(hello);
               completed = hello;
               setState('Authenticating, hold tight...');
@@ -534,66 +551,87 @@ export const SetupCardView = observer(
       const operation = new AbortController();
       cardOperation.current = operation;
       setBusy(true);
-      let pin: MonoidPIN | undefined;
       let scannedPublicKey: string | undefined;
       try {
-        pin = await requestSecretPIN(
-          'Enter',
-          selected ? <>Card {selected.id}</> : 'For the card you will scan',
-          operation.signal,
-        );
-        if (pin === undefined) return;
-        await scanPrompt(
-          selected ? (
-            <>
-              Scan card{' '}
-              <MonoidScanStatePromptContentHighlight>
-                {selected.id}
-              </MonoidScanStatePromptContentHighlight>
-            </>
-          ) : bundleSession.configuredCount ? (
-            'Scan next card'
-          ) : (
-            'Scan a card'
-          ),
-          async (sessionId, setState, scanSignal) => {
-            const signal = AbortSignal.any([scanSignal, operation.signal]);
-            signal.throwIfAborted();
-            const applet = await monoidApplet.openSession(sessionId);
-            signal.throwIfAborted();
-            const hello = MonoidAppletHello.satisfies(await applet.hello({}));
-            signal.throwIfAborted();
-            if (
-              selected &&
-              (uint8ArrayToHex(hello.id) !== selected.id ||
-                uint8ArrayToHex(hello.publicKey) !== selected.publicKey)
-            ) {
-              throw new MonoidWrongCardError(selected.id);
-            }
-            const member = bundleSession.validateCard(hello);
-            scannedPublicKey = member.publicKey;
-            setInterruptedCard(undefined);
-            setState(
-              bundleSession.bundle
-                ? 'Joining bundle, hold tight...'
-                : 'Creating bundle, hold tight...',
-            );
-            try {
-              await bundleSession.configureCard(applet, hello, pin!, signal);
-            } finally {
-              // An ACK remains authoritative even if navigation follows it.
-              runInAction(() => {
-                for (const member of bundleSession.cards) {
-                  if (member.bundle === undefined) continue;
-                  const cached = cardStore.get({
-                    id: MonoidIdHex.satisfies(member.id),
-                    publicKey: PublicKeyHex.satisfies(member.publicKey),
-                  });
-                  if (cached) cached.bundle = member.bundle;
+        const candidates = selected
+          ? [selected]
+          : bundleSession.cards.filter(card => card.status !== 'complete');
+        await secretPINSession.run(
+          candidates.map(card => ({...card, bundle: card.bundle ?? false})),
+          (card, signal) =>
+            requestSecretPIN(
+              'Enter',
+              card ? <>Card {card.id}</> : 'For the card you will scan',
+              AbortSignal.any([signal, operation.signal]),
+            ),
+          (credentials, pinSignal) =>
+            scanPrompt(
+              selected ? (
+                <>
+                  Scan card{' '}
+                  <MonoidScanStatePromptContentHighlight>
+                    {selected.id}
+                  </MonoidScanStatePromptContentHighlight>
+                </>
+              ) : bundleSession.configuredCount ? (
+                'Scan next card'
+              ) : (
+                'Scan a card'
+              ),
+              async (sessionId, setState, scanSignal) => {
+                const signal = AbortSignal.any([
+                  scanSignal,
+                  operation.signal,
+                  pinSignal,
+                ]);
+                signal.throwIfAborted();
+                const applet = await monoidApplet.openSession(sessionId);
+                signal.throwIfAborted();
+                const hello = MonoidAppletHello.satisfies(
+                  await applet.hello({}),
+                );
+                signal.throwIfAborted();
+                if (
+                  selected &&
+                  (uint8ArrayToHex(hello.id) !== selected.id ||
+                    uint8ArrayToHex(hello.publicKey) !== selected.publicKey)
+                ) {
+                  throw new MonoidWrongCardError(selected.id);
                 }
-              });
-            }
-          },
+                const member = bundleSession.validateCard(hello);
+                const {pin, onAuthenticated} = credentials(
+                  readBackupCardIdentity(hello),
+                );
+                scannedPublicKey = member.publicKey;
+                setInterruptedCard(undefined);
+                setState(
+                  bundleSession.bundle
+                    ? 'Joining bundle, hold tight...'
+                    : 'Creating bundle, hold tight...',
+                );
+                try {
+                  await bundleSession.configureCard(
+                    applet,
+                    hello,
+                    pin,
+                    signal,
+                    onAuthenticated,
+                  );
+                } finally {
+                  // An ACK remains authoritative even if navigation follows it.
+                  runInAction(() => {
+                    for (const member of bundleSession.cards) {
+                      if (member.bundle === undefined) continue;
+                      const cached = cardStore.get({
+                        id: MonoidIdHex.satisfies(member.id),
+                        publicKey: PublicKeyHex.satisfies(member.publicKey),
+                      });
+                      if (cached) cached.bundle = member.bundle;
+                    }
+                  });
+                }
+              },
+            ),
         );
       } catch (error) {
         if (
@@ -606,7 +644,8 @@ export const SetupCardView = observer(
         if (!operation.signal.aborted && !isCredentialRequestCancelled(error))
           throw error;
       } finally {
-        pin = undefined;
+        if (bundleSession.configuredCount === bundleSession.cards.length)
+          secretPINSession.clear();
         if (cardOperation.current === operation)
           cardOperation.current = undefined;
         if (mounted.current) setBusy(false);
@@ -877,6 +916,7 @@ export const SetupCardView = observer(
         {showPINSetup && pendingPIN && isActive() && (
           <CardSetupPIN
             hello={pendingPIN}
+            secretPINSession={secretPINSession}
             onFinished={errorService.catch(async (initialized, current) => {
               if (!isActive()) return;
               setShowPINSetup(false);

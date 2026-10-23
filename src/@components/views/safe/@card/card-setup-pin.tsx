@@ -24,6 +24,9 @@ import {
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 
+import {readBackupCardIdentity} from './card-backup-session.js';
+import type {CardSecretPINSession} from './card-secret-pin-session.js';
+
 function waitForOperation<T>(
   promise: Promise<T>,
   signal: AbortSignal,
@@ -50,11 +53,13 @@ function isInitialized(hello: MonoidAppletHello): boolean {
 export function CardSetupPIN({
   hello,
   pinSession,
+  secretPINSession,
   onInitialized,
   onFinished,
 }: {
   hello: MonoidAppletHello;
   pinSession?: MonoidPINSession;
+  secretPINSession?: CardSecretPINSession;
   onInitialized?: (hello: MonoidAppletHello) => void;
   onFinished: (initialized: boolean, latestHello?: MonoidAppletHello) => void;
 }): ReactNode {
@@ -74,7 +79,9 @@ export function CardSetupPIN({
 
   useEffect(() => {
     const operation = new AbortController();
-    const {signal} = operation;
+    const signal = secretPINSession
+      ? AbortSignal.any([operation.signal, secretPINSession.signal])
+      : operation.signal;
     let disposed = false;
     let pin: MonoidPIN | undefined;
     let writing: Promise<void> | undefined;
@@ -99,16 +106,19 @@ export function CardSetupPIN({
       for (;;) {
         signal.throwIfAborted();
         const value = await waitForOperation(
-          showInput({
-            type: 'password',
-            ...getPINInputPlaceholder(
-              'Secret',
-              hello.pins.secret === false ? 'Set' : 'Enter existing',
-            ),
-            description,
-            center: true,
-            maxLength: 16,
-          }),
+          showInput(
+            {
+              type: 'password',
+              ...getPINInputPlaceholder(
+                'Secret',
+                hello.pins.secret === false ? 'Set' : 'Enter existing',
+              ),
+              description,
+              center: true,
+              maxLength: 16,
+            },
+            signal,
+          ),
           signal,
         );
         if (value === undefined || MonoidPIN.is(value)) return value;
@@ -164,6 +174,11 @@ export function CardSetupPIN({
                       );
                     }
 
+                    const rememberPIN = secretPINSession?.onAuthenticated(
+                      readBackupCardIdentity(current),
+                      pin!,
+                    );
+
                     setState(
                       current.pins.secret === false
                         ? 'Setting Secret PIN, hold tight...'
@@ -177,6 +192,7 @@ export function CardSetupPIN({
                     );
                     latestHello = result;
                     initialized = true;
+                    rememberPIN?.();
                     signal.throwIfAborted();
 
                     if (current.pins.access === false) {
@@ -256,6 +272,7 @@ export function CardSetupPIN({
   }, [
     hello,
     pinSession,
+    secretPINSession,
     showInput,
     scan,
     toast,

@@ -101,12 +101,24 @@ test('Bundle extension opens without randomUUID and returns through Card Applets
   assert.notEqual(router.$state.extensionId, extensionId);
 });
 
+test('Security Key keeps its card identity across the Card Applets installation detour', async () => {
+  const router = await createRouter();
+  const card = {id: '01020304', publicKey: `04${'01'.repeat(64)}`};
+  await router.securityKey({card}).$push().$completed;
+  await router.cardApplets({returnTo: 'securityKey'}).$push().$completed;
+  const back = router.$backTo(router.securityKey.$exact);
+  assert.equal(typeof back, 'function');
+  await back().$completed;
+  assert.deepEqual({...router.$state.card}, card);
+});
+
 for (const feature of [
   'sessions',
   'ethereum',
   'solana',
   'bitcoin',
   'cardApplets',
+  'securityKey',
 ]) {
   test(`opening ${feature} from the hub preserves a return to the hub`, async () => {
     const router = await createRouter();

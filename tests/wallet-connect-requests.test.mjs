@@ -62,6 +62,7 @@ function fixture(context) {
       $path: 'features',
       features: route(),
       cardApplets: route(),
+      securityKey: route(),
       bitcoin: Object.assign(route(), {
         wallet: Object.assign(route(), {send: route()}),
       }),
@@ -102,6 +103,7 @@ test('a settled feature hub presents a new request once', context => {
 for (const feature of [
   'features',
   'cardApplets',
+  'securityKey',
   'ethereum',
   'solana',
   'bitcoin',
@@ -124,7 +126,13 @@ for (const feature of [
   }
 }
 
-for (const feature of ['cardApplets', 'ethereum', 'solana', 'bitcoin']) {
+for (const feature of [
+  'cardApplets',
+  'securityKey',
+  'ethereum',
+  'solana',
+  'bitcoin',
+]) {
   test(`browsing ${feature} allows new requests to open`, context => {
     const {router, requests, pushed} = fixture(context);
     runInAction(() => {

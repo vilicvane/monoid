@@ -1,28 +1,69 @@
 [
   {
     "name": "monoididentity",
+    "stage": "identity",
     "packageAid": "f06d6f6e6f696400",
     "appletAid": "f06d6f6e6f69640001",
-    "sourceModifiedAt": "2026-10-23T04:15:24.570Z",
-    "capSha256": "dda6deac8e5c6aed92ff61b09d046602bc4ddf8a2c65788ab533d642964117ad",
+    "imports": [
+      "a0000000620001",
+      "a0000000620101",
+      "a0000000620102",
+      "a0000000620201"
+    ],
+    "sourceModifiedAt": "2026-10-23T09:38:19.697Z",
+    "capSha256": "0d7baf0efb90408249e208ce0b98a90ff2e927728d89b2d0b949a00e46d6c5e7",
     "loadSha256": "ff28eec49b8b608f7268d02ec9478812f33b2653194ca068eb45a0fd4d6e5e44",
     "loadBytes": 11793
   },
   {
     "name": "monoidlib",
+    "stage": "library",
     "packageAid": "f06d6f6e6f696404",
-    "sourceModifiedAt": "2026-10-23T04:15:25.464Z",
-    "capSha256": "dcd9f7916e78d9369164c360567efae4ed5391679c0f02ab4683f9132fe4682e",
-    "loadSha256": "3b78e14bb648bd2e4c6bcb00db7fcdc5743ffe5d84710554aae25d3c4445022b",
-    "loadBytes": 7826
+    "imports": ["a0000000620001", "a0000000620101"],
+    "sourceModifiedAt": "2026-10-23T09:38:20.688Z",
+    "capSha256": "a1dba0f5c6d7b9564e3b549d9661cfa17088c431832ae66ec78388d75e3945ae",
+    "loadSha256": "1597f1694b2a94a7b2ceb880f310da9f7b5be14a618f94fc8f4183cba880d784",
+    "loadBytes": 7843
   },
   {
     "name": "monoid",
+    "stage": "monoid",
     "packageAid": "f06d6f6e6f696402",
     "appletAid": "f06d6f6e6f69640201",
-    "sourceModifiedAt": "2026-10-23T04:15:26.810Z",
-    "capSha256": "5153ced8fd0f60de4b31373032eaafbee25b765a8799e64a140d57cda6a6e517",
-    "loadSha256": "0ff8ee517c6d4789a85c35024fec3c838340f83b418eee1be40e81c7c169653c",
-    "loadBytes": 38774
+    "dependencies": ["identity", "library"],
+    "imports": [
+      "a0000000620001",
+      "a0000000620101",
+      "f06d6f6e6f696404",
+      "a0000000620102",
+      "f06d6f6e6f696400",
+      "a0000000620201"
+    ],
+    "sourceModifiedAt": "2026-10-23T09:38:22.286Z",
+    "capSha256": "c056fd0d198c6d33431621604ee580b4eed1093505ab346898f216d684eab50e",
+    "loadSha256": "bcc4eac0cbd3a8190a56d71a65a483400bf47e419aa72736a8eeeb70f005015d",
+    "loadBytes": 38748
+  },
+  {
+    "name": "monoidsecuritykey",
+    "stage": "security-key",
+    "packageAid": "f06d6f6e6f696403",
+    "appletAid": "f06d6f6e6f69640301",
+    "instanceAid": "a0000006472f0001",
+    "optional": true,
+    "dependencies": ["library", "monoid"],
+    "imports": [
+      "a0000000620001",
+      "f06d6f6e6f696404",
+      "a0000000620101",
+      "a0000000620102",
+      "f06d6f6e6f696402",
+      "a0000000620201",
+      "a0000000620209"
+    ],
+    "sourceModifiedAt": "2026-10-23T09:38:23.741Z",
+    "capSha256": "b67743528ccf053123f26308c06387879b155ceddda02400beb15581dd4feb7b",
+    "loadSha256": "f579041e1f0263fa95d9619681c71131393aa761f5f89abf5ac80757fb662dee",
+    "loadBytes": 15839
   }
 ]

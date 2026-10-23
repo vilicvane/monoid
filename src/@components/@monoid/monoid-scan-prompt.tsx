@@ -111,6 +111,7 @@ export function useMonoidScanPrompt({
     initialStateContent: ReactNode,
     appletCallback: MonoidScanPromptCallback,
     validateCard?: MonoidScanPromptValidateCard,
+    signal?: AbortSignal,
   ) => Promise<void>,
 ] {
   const {
@@ -133,6 +134,7 @@ export function useMonoidScanPrompt({
         {resolve: () => void; reject: (error: unknown) => void},
         MonoidScanPromptValidateCard | undefined,
         MonoidPINSession,
+        AbortSignal | undefined,
       ]
     >();
 
@@ -183,6 +185,7 @@ export function useMonoidScanPrompt({
       {resolve, reject},
       validateCard,
       scanPINSession,
+      operationSignal,
     ] = appletCallbackAndPromise;
 
     let retryStateContent = initialStateContent;
@@ -204,6 +207,7 @@ export function useMonoidScanPrompt({
     const credentialsRequest = new AbortController();
     let pins: Partial<Record<MonoidIdHex, MonoidPIN>> = {};
     let stop: (() => Promise<void>) | undefined;
+    let stopping: Promise<void> | undefined;
 
     const cancelled = (): Error =>
       Object.assign(new Error('Card scanning was cancelled.'), {
@@ -236,23 +240,26 @@ export function useMonoidScanPrompt({
         });
       }
 
-      void showPINInput({
-        type: 'password',
-        ...(request.type === 'setup'
-          ? getPINInputPlaceholder(
-              'Secret',
-              request.hello.pins.secret === false ? 'Set' : 'Enter existing',
-            )
-          : getPINInputPlaceholder('Access')),
-        description:
-          request.type === 'setup'
-            ? request.hello.pins.access === false
-              ? 'Will be used as initial Access PIN'
-              : 'Access PIN stays the same'
-            : undefined,
-        center: true,
-        maxLength: 16,
-      }).then(value => {
+      void showPINInput(
+        {
+          type: 'password',
+          ...(request.type === 'setup'
+            ? getPINInputPlaceholder(
+                'Secret',
+                request.hello.pins.secret === false ? 'Set' : 'Enter existing',
+              )
+            : getPINInputPlaceholder('Access')),
+          description:
+            request.type === 'setup'
+              ? request.hello.pins.access === false
+                ? 'Will be used as initial Access PIN'
+                : 'Access PIN stays the same'
+              : undefined,
+          center: true,
+          maxLength: 16,
+        },
+        credentialsRequest.signal,
+      ).then(value => {
         if (disposed) {
           return;
         }
@@ -284,7 +291,7 @@ export function useMonoidScanPrompt({
       finishing = true;
       const completed = result;
       result = undefined;
-      const stopped = stop?.();
+      const stopped = (stopping = stop?.());
       stop = undefined;
       setState('hidden');
 
@@ -374,6 +381,7 @@ export function useMonoidScanPrompt({
 
       setState('ready');
       setSessionId(undefined);
+      stopping = undefined;
 
       stop = monoidApplet.standby(
         async applet => {
@@ -621,7 +629,9 @@ export function useMonoidScanPrompt({
             if (!ensureSetup) {
               result = {
                 type: 'error',
-                error: new MonoidCardError('Monoid not installed'),
+                error: new MonoidCardError('Monoid not installed', {
+                  cause: error,
+                }),
                 retry: false,
               };
             } else {
@@ -790,9 +800,7 @@ export function useMonoidScanPrompt({
       startScan();
     };
 
-    void start().catch(fail);
-
-    return () => {
+    const dispose = (): Promise<void> | undefined => {
       disposed = true;
       credentialsRequest.abort();
       pins = {};
@@ -800,7 +808,41 @@ export function useMonoidScanPrompt({
       setupPIN = undefined;
       update = undefined;
       result = undefined;
-      void stop?.().catch(error => errorService.catch(Promise.reject(error)));
+      const stopped = stop?.();
+      stopping = stopped ?? stopping;
+      stop = undefined;
+      return stopped;
+    };
+
+    const abort = (): void => {
+      if (disposed || settled) return;
+      dispose();
+      setState('hidden');
+      // Cancellation also waits for an in-flight native callback and the overlay.
+      // The existing finish path may already own the native stop promise.
+      void Promise.allSettled([
+        stopping,
+        monoidScanPromptPresenter.hide(owner),
+      ]).then(results => {
+        for (const result of results) {
+          if (result.status === 'rejected')
+            errorService.catch(Promise.reject(result.reason));
+        }
+        settled = true;
+        reject(cancelled());
+        setAppletCallbackAndPromise(undefined);
+      });
+    };
+
+    operationSignal?.addEventListener('abort', abort, {once: true});
+    if (operationSignal?.aborted) abort();
+    else void start().catch(fail);
+
+    return () => {
+      operationSignal?.removeEventListener('abort', abort);
+      if (disposed) return;
+      const stopped = dispose();
+      void stopped?.catch(error => errorService.catch(Promise.reject(error)));
 
       if (!settled) {
         reject(cancelled());
@@ -827,7 +869,7 @@ export function useMonoidScanPrompt({
   return [
     pinInput,
     useCallback(
-      async (initialStateContent, appletCallback, validateCard) => {
+      async (initialStateContent, appletCallback, validateCard, signal) => {
         let completed = false;
         try {
           // A borrowed page session survives scan cleanup; a temporary one spans the
@@ -847,6 +889,7 @@ export function useMonoidScanPrompt({
               {resolve, reject},
               validateCard,
               scanPINSession,
+              signal,
             ]);
           });
           completed = true;

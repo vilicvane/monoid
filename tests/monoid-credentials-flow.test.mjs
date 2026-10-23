@@ -91,12 +91,19 @@ mock.module('../.bld/app/@components/@ui/use-input-modal.js', {
     useInputModal: () => {
       const owner = fixture;
       const [, setVisible] = hooks.useState(false);
-      const show = hooks.useCallback(options => {
+      const show = hooks.useCallback((options, signal) => {
         const input = deferred();
         input.options = options;
+        input.signal = signal;
+        const abort = () => {
+          input.closedByAbort = true;
+          input.resolve(undefined);
+        };
+        signal?.addEventListener('abort', abort, {once: true});
         owner.inputs.push(input);
         setVisible(true);
         return input.promise.then(value => {
+          signal?.removeEventListener('abort', abort);
           setVisible(false);
           return value;
         });
@@ -286,10 +293,10 @@ function mount(overrides = {}) {
   };
   state.presenter = new MonoidScanPromptPresenter();
   state.toast = options => state.notifications.push(options);
-  state.business = async (applet, _setContent, hello) => {
+  state.business = async (applet, _setContent, hello, signal) => {
     state.businessCalls++;
     state.businessHello = hello;
-    const result = await state.onBusiness?.(applet, _setContent, hello);
+    const result = await state.onBusiness?.(applet, _setContent, hello, signal);
     state.businessCompleted++;
     return result;
   };
@@ -451,7 +458,12 @@ function mount(overrides = {}) {
   state.owner.flush();
   state.start = () => {
     state.outcome = undefined;
-    state.operation = state.owner.output[1]('Scan card', state.business);
+    state.operation = state.owner.output[1](
+      'Scan card',
+      state.business,
+      undefined,
+      state.operationSignal,
+    );
     state.operation.then(
       () => {
         state.outcome = 'resolved';
@@ -1797,6 +1809,20 @@ test('prompt: callers can handle Safe setup themselves with ensureSetup disabled
   assert.equal(state.outcome, 'resolved');
 });
 
+test('prompt: a caller handling installation receives the original missing-applet cause', async () => {
+  const state = mount({auth: false, ensureSetup: false});
+  await state.missingApplet();
+  await state.finishExit();
+
+  assert.equal(state.errors.length, 1);
+  assert.ok(state.errors[0] instanceof MonoidCardError);
+  assert.equal(state.errors[0].message, 'Monoid not installed');
+  assert.ok(state.errors[0].cause instanceof AppletNotFoundError);
+  assert.equal(state.errors[0].cause.sw, 0x6a82);
+  assert.deepEqual(state.navigations, []);
+  assert.deepEqual(state.authenticationRequests, []);
+});
+
 for (const allowSetup of [undefined, false, true]) {
   test(`prompt: Hello always returns Identity and both PIN states (allowSetup: ${allowSetup})`, async () => {
     const state = mount({allowSetup, savedPINs: {[CARD_ID]: PIN}});
@@ -2185,6 +2211,151 @@ test('prompt: unmount aborts preloading and rejects without accepting a late sna
   assert.equal(state.businessCalls, 0);
   assert.equal(state.outcome, 'rejected');
   assert.equal(state.errors[0].code, 'CANCELLED');
+});
+
+test('prompt: an already-aborted page signal does not open credentials or start scanning', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const state = mount({operationSignal: controller.signal});
+  await state.flush();
+
+  assert.equal(state.gets, 0);
+  assert.equal(state.unlocks, 0);
+  assert.equal(state.scans.length, 0);
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.errors[0].code, 'CANCELLED');
+});
+
+test('prompt: page cancellation aborts preloading and ignores a late PIN snapshot without unmounting', async () => {
+  const controller = new AbortController();
+  const read = deferred();
+  const state = mount({
+    operationSignal: controller.signal,
+    pinSession: true,
+    onGet: () => read.promise,
+  });
+  await state.flush();
+  controller.abort();
+  assert.equal(state.readSignals[0].aborted, true);
+  read.resolve({[CARD_ID]: PIN});
+  await state.flush();
+
+  assert.equal(state.scans.length, 0);
+  assert.equal(state.businessCalls, 0);
+  assert.equal(state.inputs.length, 0);
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.errors[0].code, 'CANCELLED');
+  assert.deepEqual(state.retryErrors, []);
+});
+
+test('prompt: page cancellation closes PIN input and cannot restart NFC from late input', async () => {
+  const controller = new AbortController();
+  const state = mount({operationSignal: controller.signal});
+  await state.tap();
+  await state.finishExit();
+  assert.equal(state.inputs.length, 1);
+  controller.abort();
+  assert.equal(state.inputs[0].signal.aborted, true);
+  assert.equal(state.inputs[0].closedByAbort, true);
+  await state.enterPIN();
+
+  assert.equal(state.scans.length, 1);
+  assert.equal(state.businessCalls, 0);
+  assert.deepEqual(state.authenticated, []);
+  assert.deepEqual(state.writes, []);
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.errors[0].code, 'CANCELLED');
+});
+
+for (const order of ['stop-first', 'animation-first']) {
+  test(`prompt: cancellation during authentication waits for ${order} cleanup and ignores the late PIN verification`, async () => {
+    const controller = new AbortController();
+    const authentication = deferred();
+    const state = mount({
+      operationSignal: controller.signal,
+      pinSession: true,
+    });
+    await state.enterManualPIN();
+    state.onAuthenticate = () => authentication.promise;
+    const tapping = state.tap();
+    await state.flush();
+    assert.deepEqual(state.authenticated, [PIN]);
+    controller.abort();
+    assert.equal(state.scans.at(-1).stopRequested, true);
+    authentication.resolve();
+    await tapping;
+
+    assert.equal(state.businessCalls, 0);
+    assert.equal(state.pinSession.hasUnsavedPIN(CARD_ID, PIN), false);
+    assert.deepEqual(state.writes, []);
+    assert.equal(state.outcome, undefined);
+    if (order === 'stop-first') await state.finishStop();
+    else await state.finishAnimation();
+    assert.equal(state.outcome, undefined);
+    if (order === 'stop-first') await state.finishAnimation();
+    else await state.finishStop();
+    assert.equal(state.outcome, 'rejected');
+    assert.equal(state.errors[0].code, 'CANCELLED');
+    assert.equal(state.scans.length, 2);
+    assert.deepEqual(state.retryErrors, []);
+    assert.deepEqual(state.notifications, []);
+  });
+
+  test(`prompt: cancellation after a completed card command preserves its ACK and awaits ${order} cleanup without replay`, async () => {
+    const controller = new AbortController();
+    const state = mount({operationSignal: controller.signal});
+    await state.enterManualPIN();
+    await state.tap();
+    assert.equal(state.businessCompleted, 1);
+    if (order === 'stop-first') await state.finishStop();
+    else await state.finishAnimation();
+    controller.abort();
+    await state.flush();
+    assert.equal(state.outcome, undefined);
+    if (order === 'stop-first') await state.finishAnimation();
+    else await state.finishStop();
+
+    assert.equal(state.businessCompleted, 1);
+    assert.equal(state.businessCalls, 1);
+    assert.equal(state.scans.length, 2);
+    assert.deepEqual(state.writes, []);
+    assert.deepEqual(state.retryErrors, []);
+    assert.deepEqual(state.notifications, []);
+    assert.equal(state.outcome, 'rejected');
+    assert.equal(state.errors[0].code, 'CANCELLED');
+  });
+}
+
+test('prompt: page cancellation reaches an in-flight business command without replaying or undoing a late ACK', async () => {
+  const controller = new AbortController();
+  const acknowledgement = deferred();
+  let commandSignal;
+  let recordedACK = false;
+  const state = mount({
+    auth: false,
+    operationSignal: controller.signal,
+    onBusiness: async (_applet, _content, _hello, signal) => {
+      commandSignal = signal;
+      await acknowledgement.promise;
+      recordedACK = true;
+    },
+  });
+  const tapping = state.tap();
+  await state.flush();
+  controller.abort();
+  assert.equal(commandSignal.aborted, true);
+  assert.equal(state.outcome, undefined);
+  acknowledgement.resolve();
+  await tapping;
+  await state.finishExit();
+
+  assert.equal(recordedACK, true);
+  assert.equal(state.businessCompleted, 1);
+  assert.equal(state.businessCalls, 1);
+  assert.equal(state.scans.length, 1);
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.errors[0].code, 'CANCELLED');
+  assert.deepEqual(state.retryErrors, []);
 });
 
 test('prompt: unmount during save aborts its signal and suppresses late warnings and retries', async () => {

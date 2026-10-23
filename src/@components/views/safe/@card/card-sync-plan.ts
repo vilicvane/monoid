@@ -1,10 +1,9 @@
 import {MonoidCardError} from '../../../../@lib/monoid/index.js';
-import {uint8ArrayToHex} from '../../../../@utils/index.js';
+import {isCardDerivationItem} from '../card-derivations.js';
 import {
-  encodeCardDerivationRecord,
-  isCardDerivationItem,
-  mergeCardDerivationWallets,
-} from '../card-derivations.js';
+  mergeCardItemData,
+  validateCardCredentialItem,
+} from '../card-item-merge.js';
 import type {ScannedCardItemData} from '../common.js';
 
 export type CardSyncIdentity = {
@@ -109,6 +108,7 @@ export function createCardSyncPlans(
     const indexes = new Set<string>();
 
     for (const item of card.items) {
+      validateCardCredentialItem(item);
       if (indexes.has(item.index)) fail(item.index, 'duplicate item');
       indexes.add(item.index);
       const itemScope = scope(card, item);
@@ -152,18 +152,7 @@ export function createCardSyncPlans(
         first.alias = item.alias;
       }
 
-      if (first.derivationRecord && item.derivationRecord) {
-        first.derivationRecord = {
-          index: first.derivationRecord.index,
-          wallets: mergeCardDerivationWallets(
-            first.derivationRecord.wallets,
-            item.derivationRecord.wallets,
-          ),
-        };
-        first.data = uint8ArrayToHex(
-          encodeCardDerivationRecord(first.derivationRecord),
-        );
-      }
+      previous.item = mergeCardItemData(first, item);
     }
   }
 

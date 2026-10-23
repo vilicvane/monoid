@@ -23,6 +23,7 @@ import {
   getCardDerivationItemIndex,
   isCardDerivationItem,
 } from '../card-derivations.js';
+import {validateCardCredentialItem} from '../card-item-merge.js';
 import type {ScannedCardData} from '../common.js';
 
 import {readBackupCardIdentity} from './card-backup-session.js';
@@ -106,6 +107,7 @@ async function authenticate(
   hello: MonoidAppletHello,
   pin: string | undefined,
   signal: AbortSignal,
+  onAuthenticated?: () => void,
 ): Promise<void> {
   if (hello.pins.secret === false)
     throw new MonoidCardError('Secret PIN not set');
@@ -128,6 +130,7 @@ async function authenticate(
         error.source.tries === 0
           ? 'Secret PIN blocked'
           : `Incorrect Secret PIN, ${error.source.tries} ${error.source.tries === 1 ? 'try' : 'tries'} left`,
+        {cause: error},
       );
     }
 
@@ -135,6 +138,7 @@ async function authenticate(
   }
 
   cancelled(signal);
+  onAuthenticated?.();
 }
 
 async function readFingerprint(
@@ -345,10 +349,13 @@ export class CardSyncSession {
       };
 
       if (item.secret) {
+        // F101 must be public; never try to read an invalid Secret record.
+        validateCardCredentialItem(item);
         item.fingerprint = await readFingerprint(applet, item);
       } else {
         const {data} = await applet.get({index: entry.index});
         item.data = uint8ArrayToHex(data);
+        validateCardCredentialItem(item);
 
         if (isCardDerivationItem(item)) {
           const record = decodeCardDerivationRecord(data);
@@ -383,12 +390,13 @@ export class CardSyncSession {
     signal: AbortSignal,
     secretPIN?: string,
     onProgress?: ProgressCallback,
+    onAuthenticated?: () => void,
   ): Promise<CardSyncCard> {
     return this.exclusive(async () => {
       if (this.phase !== 'collect')
         throw new MonoidCardError('Start sync again to add cards');
       const identity = readBackupCardIdentity(hello);
-      await authenticate(applet, hello, secretPIN, signal);
+      await authenticate(applet, hello, secretPIN, signal, onAuthenticated);
       const listed = await applet.list({});
       const secrets =
         identity.bundle === false
@@ -602,6 +610,7 @@ export class CardSyncSession {
     signal: AbortSignal,
     secretPIN?: string,
     onProgress?: ProgressCallback,
+    onAuthenticated?: () => void,
   ): Promise<CardSyncCard> {
     return this.exclusive(async () => {
       if (this.phase === 'collect')
@@ -615,7 +624,7 @@ export class CardSyncSession {
       if (card.complete) return card;
 
       const execution = this.executions.get(identity.publicKey)!;
-      await authenticate(applet, hello, secretPIN, signal);
+      await authenticate(applet, hello, secretPIN, signal, onAuthenticated);
       await this.reconcilePending(applet, execution, signal, onProgress);
 
       while (execution.next < execution.plan.operations.length) {

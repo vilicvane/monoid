@@ -4,6 +4,7 @@ import {test} from 'node:test';
 import {autorun} from 'mobx';
 
 import {CardBundleSession} from '../.bld/app/@components/views/safe/@card/card-bundle-session.js';
+import {CardSecretPINSession} from '../.bld/app/@components/views/safe/@card/card-secret-pin-session.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 
 const PIN = 'Safe-42';
@@ -107,6 +108,51 @@ function deferred() {
   });
   return {promise, resolve};
 }
+
+test('a verified PIN survives a join retry but an invalid-PIN response removes it without replay', async () => {
+  const {session, members, applets} = await ready([1, 2]);
+  await session.configureCard(applets[0], members[0], PIN, signal());
+  const pins = new CardSecretPINSession();
+  const card = prepared(members[1]);
+  pins.onAuthenticated(card, PIN)();
+  let prompts = 0;
+  const run = () =>
+    pins.run(
+      [card],
+      async () => {
+        prompts++;
+        return PIN;
+      },
+      async (credentials, signal) => {
+        session.validateCard(members[1]);
+        const {pin, onAuthenticated} = credentials(card);
+        await session.configureCard(
+          applets[1],
+          members[1],
+          pin,
+          signal,
+          onAuthenticated,
+        );
+      },
+    );
+  const failure = new CBORAppletError({code: 'INVALID_PIN', tries: 4});
+  applets[1].onAuthenticate = () => {
+    throw failure;
+  };
+  await assert.rejects(run(), error => error.cause === failure);
+  assert.equal(prompts, 0);
+  assert.equal(applets[1].calls.length, 1);
+  applets[1].onAuthenticate = undefined;
+  applets[1].onJoin = () => {
+    throw new Error('Lost response');
+  };
+  await assert.rejects(run(), /Lost response/);
+  assert.equal(prompts, 1);
+  applets[1].onJoin = undefined;
+  await run();
+  assert.equal(prompts, 1);
+  assert.equal(session.phase, 'complete');
+});
 
 test('collection requires distinct initialized cards and freezes the selected membership', async () => {
   const session = new CardBundleSession();

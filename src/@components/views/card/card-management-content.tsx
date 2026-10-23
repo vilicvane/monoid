@@ -9,6 +9,7 @@ import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import type {CardInformation} from '../../../@lib/global-platform/card-information.js';
+import {APPLET_NAMES, type AppletStage} from '../../../@lib/monoid/index.js';
 import {CardPlaceholder, CardPreview} from '../../@monoid/card-preview.js';
 import {AppIcon} from '../../@ui/app-icon.js';
 import {AppletIcon} from '../../@ui/feature-icons.js';
@@ -17,6 +18,7 @@ import {
   IconList,
   LIST_ICON_SIZE,
   ListItem,
+  ListItemButton,
   ListItemContent,
   ListItemDescription,
   ListItemName,
@@ -137,11 +139,12 @@ const Status = styled(AppIcon)<{$status: 'unknown' | 'update' | 'installed'}>`
 `;
 
 export type AppletDisplay = {
-  name: 'identity' | 'monoid';
+  name: AppletStage;
   installed: boolean;
   version?: string;
   unknown?: boolean;
   update?: boolean;
+  selectable?: boolean;
 };
 
 export function CardAppletsContent({
@@ -150,12 +153,14 @@ export function CardAppletsContent({
   recovery,
   manualRestore,
   applets,
+  onSelectApplet,
 }: {
   id?: string;
   bundled?: boolean;
   recovery?: boolean;
   manualRestore?: boolean;
   applets: AppletDisplay[];
+  onSelectApplet?: (stage: AppletStage) => void;
 }): ReactNode {
   return (
     <>
@@ -173,18 +178,13 @@ export function CardAppletsContent({
             : applet.update
               ? 'update'
               : 'installed';
-
-          return (
-            <AppletRow key={applet.name}>
+          const content = (
+            <>
               <Symbol>
                 <AppIcon icon={AppletIcon} aria-hidden="true" />
               </Symbol>
               <ListItemContent>
-                <ListItemName>
-                  {applet.name === 'identity'
-                    ? 'Monoid Identity Applet'
-                    : 'Monoid Applet'}
-                </ListItemName>
+                <ListItemName>{APPLET_NAMES[applet.name]}</ListItemName>
                 <ListItemDescription>
                   {applet.unknown
                     ? 'Unknown'
@@ -212,7 +212,18 @@ export function CardAppletsContent({
                   }
                 />
               )}
-            </AppletRow>
+            </>
+          );
+          return applet.selectable ? (
+            <ListItemButton
+              key={applet.name}
+              type="button"
+              onClick={() => onSelectApplet?.(applet.name)}
+            >
+              {content}
+            </ListItemButton>
+          ) : (
+            <AppletRow key={applet.name}>{content}</AppletRow>
           );
         })}
       </Applets>

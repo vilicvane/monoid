@@ -32,6 +32,8 @@ import {
 } from '../../../@view/index.js';
 
 import {CardBundleExtensionSession} from './card-bundle-extension-session.js';
+import {readBackupCardIdentity} from './card-backup-session.js';
+import {CardSecretPINSession} from './card-secret-pin-session.js';
 import {useBundleCardAddition} from './use-bundle-card-addition.js';
 
 export const ExtendBundleView = observer(
@@ -46,6 +48,7 @@ export const ExtendBundleView = observer(
       ),
     );
     const [working, setWorking] = useState(false);
+    const [secretPINSession] = useState(() => new CardSecretPINSession());
     const [pinInput, showPINInput] = useInputModal();
     const scan = useIsoDepScanPrompt();
     const operation = useRef<AbortController | undefined>(undefined);
@@ -79,6 +82,7 @@ export const ExtendBundleView = observer(
       validateAddition,
       onAdded,
       onNeedsInstall,
+      secretPINSession,
       label: 'Scan new card',
     });
     const acceptInstalledCard = useRef(addition.acceptCard);
@@ -133,15 +137,19 @@ export const ExtendBundleView = observer(
       return () => {
         mounted.current = false;
         operation.current?.abort();
+        secretPINSession.clear();
       };
-    }, []);
+    }, [secretPINSession]);
 
     useEffect(
       () =>
         reaction(isViewActive, active => {
-          if (!active) operation.current?.abort();
+          if (!active) {
+            operation.current?.abort();
+            secretPINSession.clear();
+          }
         }),
-      [isViewActive],
+      [isViewActive, secretPINSession],
     );
 
     const configure = async (): Promise<void> => {
@@ -157,74 +165,101 @@ export const ExtendBundleView = observer(
       const controller = new AbortController();
       operation.current = controller;
       setWorking(true);
-      let pin: MonoidPIN | undefined;
       try {
-        let description: ReactNode = expected
-          ? `Card ${expected.id}`
-          : phase === 'requesting'
-            ? 'For a card in this bundle'
-            : 'For another card in this bundle';
-        for (;;) {
-          const input = await showPINInput(
-            {
-              type: 'password',
-              ...getPINInputPlaceholder('Secret', 'Enter'),
-              description,
-              center: true,
-              maxLength: 16,
-            },
-            controller.signal,
-          );
-          if (input === undefined || !isActive()) return;
-          controller.signal.throwIfAborted();
-          if (MonoidPIN.is(input)) {
-            pin = input;
-            break;
-          }
-          description = 'Use 6 to 16 ASCII characters';
-        }
-
-        await scan(
-          expected ? (
-            <>
-              Scan card{' '}
-              <MonoidScanStatePromptContentHighlight>
-                {expected.id}
-              </MonoidScanStatePromptContentHighlight>
-            </>
-          ) : phase === 'requesting' ? (
-            'Scan a bundle card'
-          ) : (
-            'Scan another bundle card'
-          ),
-          async (sessionId, setState, scanSignal) => {
-            const signal = AbortSignal.any([controller.signal, scanSignal]);
-            signal.throwIfAborted();
-            const applet = await monoidApplet.openSession(sessionId);
-            signal.throwIfAborted();
-            const hello = MonoidAppletHello.satisfies(await applet.hello({}));
-            signal.throwIfAborted();
-            session.validateCard(hello);
-            setState('Authenticating, hold tight...');
-            try {
-              await session.configureCard(applet, hello, pin!, signal);
-            } finally {
-              // Keep a confirmed join even if navigation follows its response.
-              if (session.phase === 'complete' && session.target) {
-                const cached = cardStore.get({
-                  id: MonoidIdHex.satisfies(session.target.id),
-                  publicKey: PublicKeyHex.satisfies(session.target.publicKey),
-                });
-                if (cached) runInAction(() => (cached.bundle = session.bundle));
-              }
+        await secretPINSession.run(
+          expected
+            ? [
+                {
+                  ...expected,
+                  bundle: phase === 'joining' ? false : session.bundle,
+                },
+              ]
+            : [],
+          async (card, pinSignal) => {
+            const signal = AbortSignal.any([controller.signal, pinSignal]);
+            let description: ReactNode = card
+              ? `Card ${card.id}`
+              : phase === 'requesting'
+                ? 'For a card in this bundle'
+                : 'For another card in this bundle';
+            for (;;) {
+              const input = await showPINInput(
+                {
+                  type: 'password',
+                  ...getPINInputPlaceholder('Secret', 'Enter'),
+                  description,
+                  center: true,
+                  maxLength: 16,
+                },
+                signal,
+              );
+              if (input === undefined || !isActive()) return;
+              signal.throwIfAborted();
+              if (MonoidPIN.is(input)) return input;
+              description = 'Use 6 to 16 ASCII characters';
             }
           },
+          (credentials, pinSignal) =>
+            scan(
+              expected ? (
+                <>
+                  Scan card{' '}
+                  <MonoidScanStatePromptContentHighlight>
+                    {expected.id}
+                  </MonoidScanStatePromptContentHighlight>
+                </>
+              ) : phase === 'requesting' ? (
+                'Scan a bundle card'
+              ) : (
+                'Scan another bundle card'
+              ),
+              async (sessionId, setState, scanSignal) => {
+                const signal = AbortSignal.any([
+                  controller.signal,
+                  scanSignal,
+                  pinSignal,
+                ]);
+                signal.throwIfAborted();
+                const applet = await monoidApplet.openSession(sessionId);
+                signal.throwIfAborted();
+                const hello = MonoidAppletHello.satisfies(
+                  await applet.hello({}),
+                );
+                signal.throwIfAborted();
+                session.validateCard(hello);
+                const {pin, onAuthenticated} = credentials(
+                  readBackupCardIdentity(hello),
+                );
+                setState('Authenticating, hold tight...');
+                try {
+                  await session.configureCard(
+                    applet,
+                    hello,
+                    pin,
+                    signal,
+                    onAuthenticated,
+                  );
+                } finally {
+                  // Keep a confirmed join even if navigation follows its response.
+                  if (session.phase === 'complete' && session.target) {
+                    const cached = cardStore.get({
+                      id: MonoidIdHex.satisfies(session.target.id),
+                      publicKey: PublicKeyHex.satisfies(
+                        session.target.publicKey,
+                      ),
+                    });
+                    if (cached)
+                      runInAction(() => (cached.bundle = session.bundle));
+                  }
+                }
+              },
+            ),
         );
       } catch (error) {
         if (!controller.signal.aborted && !isCredentialRequestCancelled(error))
           throw error;
       } finally {
-        pin = undefined;
+        if (session.phase === 'complete') secretPINSession.clear();
         if (operation.current === controller) operation.current = undefined;
         if (mounted.current) setWorking(false);
       }

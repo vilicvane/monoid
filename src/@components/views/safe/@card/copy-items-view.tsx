@@ -84,6 +84,7 @@ import {
 } from './card-backup-session.js';
 import {CopyItemsState} from './copy-items-state.js';
 import {readCardForSetup} from './read-card-for-setup.js';
+import {CardSecretPINSession} from './card-secret-pin-session.js';
 
 const Description = styled.p`
   margin: 0;
@@ -226,6 +227,7 @@ export const CopyItemsView = observer(
     const [pinSession] = useState(() =>
       monoidCredentialsStore.createPINSession(),
     );
+    const [secretPINs] = useState(() => new CardSecretPINSession());
     const backup = session.backup;
     const [workingStep, setWorkingStep] = useState<number>();
     const working = workingStep !== undefined;
@@ -250,24 +252,31 @@ export const CopyItemsView = observer(
       return () => {
         mounted.current = false;
         pinSession.clear();
+        secretPINs.clear();
       };
-    }, [pinSession]);
+    }, [pinSession, secretPINs]);
 
     useEffect(
       () =>
         reaction(
           () => !isViewActive(),
           leaving => {
-            if (leaving) pinSession.clear();
+            if (leaving) {
+              pinSession.clear();
+              secretPINs.clear();
+            }
           },
           {fireImmediately: true},
         ),
-      [pinSession, isViewActive],
+      [pinSession, secretPINs, isViewActive],
     );
 
     useEffect(() => {
-      if (backup?.complete && !working) pinSession.clear();
-    }, [backup?.complete, working, pinSession]);
+      if (backup?.complete && !working) {
+        pinSession.clear();
+        secretPINs.clear();
+      }
+    }, [backup?.complete, working, pinSession, secretPINs]);
 
     const selected = backup?.items.filter(item => item.selected) ?? [];
     const selectedGroups = getCardResourceGroups(selected);
@@ -393,25 +402,35 @@ export const CopyItemsView = observer(
       const expected = scanned;
       const identity = readBackupCardIdentity(expected);
       const isNew = expected.pins.secret === false;
-      let pin = await showSecretPINInput({
-        type: 'password',
-        ...getPINInputPlaceholder('Secret', isNew ? 'Set' : 'Enter existing'),
-        description:
-          expected.pins.access === false ? (
-            <>
-              Will be used as initial <PINKind kind="Access" /> PIN
-            </>
-          ) : (
-            <>
-              <PINKind kind="Access" /> PIN stays the same
-            </>
-          ),
-        center: true,
-        maxLength: 16,
-      });
+      const pinSignal = secretPINs.signal;
+      let pin = await showSecretPINInput(
+        {
+          type: 'password',
+          ...getPINInputPlaceholder('Secret', isNew ? 'Set' : 'Enter existing'),
+          description:
+            expected.pins.access === false ? (
+              <>
+                Will be used as initial <PINKind kind="Access" /> PIN
+              </>
+            ) : (
+              <>
+                <PINKind kind="Access" /> PIN stays the same
+              </>
+            ),
+          center: true,
+          maxLength: 16,
+        },
+        pinSignal,
+      );
 
       try {
-        if (pin === undefined || !mounted.current || !isViewActive()) return;
+        if (
+          pin === undefined ||
+          pinSignal.aborted ||
+          !mounted.current ||
+          !isViewActive()
+        )
+          return;
         if (!MonoidPIN.is(pin)) {
           toast({
             message: 'Secret PIN must contain 6 to 16 characters',
@@ -420,6 +439,7 @@ export const CopyItemsView = observer(
           });
           return;
         }
+        const onAuthenticated = secretPINs.onAuthenticated(identity, pin);
         await scan(
           <>
             Scan destination card{' '}
@@ -427,7 +447,8 @@ export const CopyItemsView = observer(
               {identity.id}
             </MonoidScanStatePromptContentHighlight>
           </>,
-          async (applet, setState, hello, signal) => {
+          async (applet, setState, hello, nativeSignal) => {
+            const signal = AbortSignal.any([nativeSignal, pinSignal]);
             const operation = new AbortController();
             const cancel = (): void => operation.abort();
             signal.addEventListener('abort', cancel, {once: true});
@@ -452,6 +473,7 @@ export const CopyItemsView = observer(
                 expected,
                 pin!,
                 operation.signal,
+                onAuthenticated,
               );
               await session.addTarget(initialized);
             } finally {
@@ -512,42 +534,58 @@ export const CopyItemsView = observer(
       } else if (!backup.targetsConfirmed) {
         await session.confirmTargets();
       } else if (exported < transfers.length) {
-        let pin = await showSecretPINInput({
-          type: 'password',
-          ...getPINInputPlaceholder('Secret', 'Enter source card'),
-          center: true,
-          maxLength: 16,
-        });
-
-        if (!mounted.current || !isViewActive() || pin === undefined) return;
-        if (!MonoidPIN.is(pin)) {
-          throw new MonoidCardError(
-            'Secret PIN must contain 6 to 16 characters.',
-          );
-        }
-
         try {
           copyState.markInterrupted(backup.source.publicKey, false);
-          await scan(
-            <>
-              Scan source card{' '}
-              <MonoidScanStatePromptContentHighlight>
-                {backup.source.id}
-              </MonoidScanStatePromptContentHighlight>
-            </>,
-            async (applet, setState, hello, signal) => {
-              setState('Authenticating, hold tight...');
-              await session.exportItems(applet, hello, pin!, signal, () => {
-                setState(
-                  <CopyProgress
-                    value={getCopyProgress(session.backup!.targets, 'exported')}
-                  >
-                    Exporting items
-                  </CopyProgress>,
-                );
-              });
+          await secretPINs.run(
+            [backup.source],
+            (card, pinSignal) =>
+              showSecretPINInput(
+                {
+                  type: 'password',
+                  ...getPINInputPlaceholder('Secret', 'Enter source card'),
+                  description: card?.id,
+                  center: true,
+                  maxLength: 16,
+                },
+                pinSignal,
+              ),
+            async (credentials, pinSignal) => {
+              await scan(
+                <>
+                  Scan source card{' '}
+                  <MonoidScanStatePromptContentHighlight>
+                    {backup.source.id}
+                  </MonoidScanStatePromptContentHighlight>
+                </>,
+                async (applet, setState, hello, signal) => {
+                  const {pin, onAuthenticated} = credentials(
+                    readBackupCardIdentity(hello),
+                  );
+                  const activeSignal = AbortSignal.any([signal, pinSignal]);
+                  setState('Authenticating, hold tight...');
+                  await session.exportItems(
+                    applet,
+                    hello,
+                    pin,
+                    activeSignal,
+                    () => {
+                      setState(
+                        <CopyProgress
+                          value={getCopyProgress(
+                            session.backup!.targets,
+                            'exported',
+                          )}
+                        >
+                          Exporting items
+                        </CopyProgress>,
+                      );
+                    },
+                    onAuthenticated,
+                  );
+                },
+                hello => assertBackupCard(hello, backup.source),
+              );
             },
-            hello => assertBackupCard(hello, backup.source),
           );
         } catch (error) {
           if (
@@ -558,65 +596,76 @@ export const CopyItemsView = observer(
             copyState.markInterrupted(backup.source.publicKey, true);
           }
           throw error;
-        } finally {
-          pin = undefined;
         }
       } else if (!backup.complete) {
         let target: CardBackupTarget | undefined;
-        let pin = await showSecretPINInput({
-          type: 'password',
-          ...getPINInputPlaceholder('Secret', 'Enter destination card'),
-          center: true,
-          maxLength: 16,
-        });
-
-        if (!mounted.current || !isViewActive() || pin === undefined) return;
-        if (!MonoidPIN.is(pin)) {
-          throw new MonoidCardError(
-            'Secret PIN must contain 6 to 16 characters',
-          );
-        }
-
         try {
-          await scan(
-            'Scan a destination card',
-            async (applet, setState, hello, signal) => {
-              copyState.markInterrupted(target!.publicKey, false);
-              copyState.startImport(target!.publicKey);
-              setState('Authenticating, hold tight...');
-              await session.importItems(applet, hello, pin!, signal, () => {
-                setState(
-                  <CopyProgress
-                    value={getCopyProgress(
-                      session.backup!.targets.filter(
-                        card => card.publicKey === target!.publicKey,
-                      ),
-                      'imported',
-                    )}
-                  >
-                    Importing items
-                  </CopyProgress>,
-                );
-              });
-            },
-            hello => {
-              if (target) {
-                assertBackupCard(hello, target);
-                return;
-              }
-              const identity = getBackupCardIdentity(hello);
-              const matched = targets.find(
-                card => card.publicKey === identity.publicKey,
+          await secretPINs.run(
+            targets.filter(card => !card.complete),
+            (card, pinSignal) =>
+              showSecretPINInput(
+                {
+                  type: 'password',
+                  ...getPINInputPlaceholder('Secret', 'Enter destination card'),
+                  description: card?.id,
+                  center: true,
+                  maxLength: 16,
+                },
+                pinSignal,
+              ),
+            async (credentials, pinSignal) => {
+              await scan(
+                'Scan a destination card',
+                async (applet, setState, hello, signal) => {
+                  const {pin, onAuthenticated} = credentials(
+                    readBackupCardIdentity(hello),
+                  );
+                  const activeSignal = AbortSignal.any([signal, pinSignal]);
+                  copyState.markInterrupted(target!.publicKey, false);
+                  copyState.startImport(target!.publicKey);
+                  setState('Authenticating, hold tight...');
+                  await session.importItems(
+                    applet,
+                    hello,
+                    pin,
+                    activeSignal,
+                    () => {
+                      setState(
+                        <CopyProgress
+                          value={getCopyProgress(
+                            session.backup!.targets.filter(
+                              card => card.publicKey === target!.publicKey,
+                            ),
+                            'imported',
+                          )}
+                        >
+                          Importing items
+                        </CopyProgress>,
+                      );
+                    },
+                    onAuthenticated,
+                  );
+                },
+                hello => {
+                  if (target) {
+                    assertBackupCard(hello, target);
+                    return;
+                  }
+                  const identity = getBackupCardIdentity(hello);
+                  const matched = targets.find(
+                    card => card.publicKey === identity.publicKey,
+                  );
+                  if (!matched) {
+                    throw new MonoidCardError(
+                      'Scan one of the added destination cards.',
+                    );
+                  }
+                  if (matched.complete) {
+                    throw new MonoidCardError('Already copied to this card');
+                  }
+                  target = matched;
+                },
               );
-              if (!matched) {
-                throw new MonoidCardError(
-                  'Scan one of the added destination cards.',
-                );
-              }
-              if (matched.complete) {
-                throw new MonoidCardError('Already copied to this card');
-              }
-              target = matched;
             },
           );
         } catch (error) {
@@ -627,8 +676,6 @@ export const CopyItemsView = observer(
             copyState.markInterrupted(interruptedTarget.publicKey, true);
           }
           throw error;
-        } finally {
-          pin = undefined;
         }
       } else {
         back?.();
@@ -882,6 +929,7 @@ export const CopyItemsView = observer(
                   setConfirmRestart(false);
                   void run(async () => {
                     pinSession.clear();
+                    secretPINs.clear();
                     await copyState.restart();
                   });
                 }}

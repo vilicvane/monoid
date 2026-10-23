@@ -16,6 +16,12 @@ import {
   isCardDerivationItem,
   readCardDerivationRecord,
 } from '../card-derivations.js';
+import {
+  CardItemMergeConflict,
+  isCardCredentialItem,
+  mergeCardItemData,
+  validateCardCredentialItem,
+} from '../card-item-merge.js';
 import {getCardResourceGroups} from '../card-resource-groups.js';
 import type {ScannedCardData, ScannedCardItemData} from '../common.js';
 
@@ -34,7 +40,13 @@ export type CardBackupItem = Pick<
 
 export type CardBackupTransfer = {
   index: string;
-  exported?: {key?: string; alias?: string; data: string};
+  exported?: {
+    key?: string;
+    alias?: string;
+    data: string;
+    /** Only public credential payloads are retained for destination comparison. */
+    plaintext?: string;
+  };
   imported: boolean;
   conflict?: boolean;
 };
@@ -200,6 +212,7 @@ async function authenticateSecretPIN(
   applet: MonoidApplet,
   pin: string,
   signal: AbortSignal,
+  onAuthenticated?: () => void,
 ): Promise<void> {
   if (!MonoidPIN.is(pin)) {
     throw new MonoidCardError('Secret PIN must contain 6 to 16 characters');
@@ -218,6 +231,7 @@ async function authenticateSecretPIN(
         error.source.tries === 0
           ? 'Secret PIN blocked'
           : `Incorrect Secret PIN, ${error.source.tries} ${error.source.tries === 1 ? 'try' : 'tries'} left`,
+        {cause: error},
       );
     }
 
@@ -225,6 +239,52 @@ async function authenticateSecretPIN(
   }
 
   throwIfCancelled(signal);
+  onAuthenticated?.();
+}
+
+async function hasMatchingCredential(
+  applet: MonoidApplet,
+  item: CardBackupTransfer,
+  signal: AbortSignal,
+): Promise<boolean> {
+  const index = SafeIndex.satisfies(hexToUint8Array(item.index));
+  const exported = item.exported!;
+  const source = {
+    index: item.index,
+    secret: false,
+    key: exported.key,
+    data: exported.plaintext,
+  };
+  validateCardCredentialItem(source);
+  let metadata: Awaited<ReturnType<MonoidApplet['view']>>;
+  try {
+    metadata = await applet.view({index});
+  } catch (error) {
+    if (error instanceof CBORAppletError && error.source.code === 'NOT_FOUND') {
+      throwIfCancelled(signal);
+      return false;
+    }
+    throw error;
+  }
+  throwIfCancelled(signal);
+  if (metadata.secret) {
+    validateCardCredentialItem({index: item.index, secret: true});
+  }
+
+  const {data} = await applet.get({index});
+  throwIfCancelled(signal);
+  mergeCardItemData(
+    {
+      index: item.index,
+      secret: metadata.secret,
+      key: metadata.key && uint8ArrayToHex(metadata.key),
+      data: uint8ArrayToHex(data),
+    },
+    source,
+  );
+
+  // Alias is display metadata; identical credentials keep the destination name.
+  return true;
 }
 
 export async function initializeBackupTarget(
@@ -233,6 +293,7 @@ export async function initializeBackupTarget(
   expected: MonoidAppletHello,
   pin: string,
   signal: AbortSignal,
+  onAuthenticated?: () => void,
 ): Promise<MonoidAppletHello> {
   const identity = readBackupCardIdentity(hello);
   const expectedIdentity = readBackupCardIdentity(expected);
@@ -261,6 +322,7 @@ export async function initializeBackupTarget(
   try {
     const initialized = await initializeMonoidCard(applet, hello, pin, signal);
     assertBackupCard(initialized, expectedIdentity);
+    onAuthenticated?.();
     return initialized;
   } catch (error) {
     if (
@@ -271,6 +333,7 @@ export async function initializeBackupTarget(
         error.source.tries === 0
           ? 'Secret PIN blocked'
           : `Incorrect Secret PIN, ${error.source.tries} ${error.source.tries === 1 ? 'try' : 'tries'} left`,
+        {cause: error},
       );
     }
 
@@ -510,6 +573,7 @@ export class CardBackupSession {
     pin: string,
     signal: AbortSignal,
     onProgress: (current: number, total: number) => void,
+    onAuthenticated?: () => void,
   ): Promise<void> {
     return this.exclusive(async () => {
       const backup = this.requireBackup();
@@ -522,7 +586,7 @@ export class CardBackupSession {
         throw new MonoidCardError('Confirm the destination cards first.');
       }
 
-      await authenticateSecretPIN(applet, pin, signal);
+      await authenticateSecretPIN(applet, pin, signal, onAuthenticated);
 
       const transfers = backup.targets.flatMap(target => target.items);
       const bundleExports =
@@ -550,6 +614,26 @@ export class CardBackupSession {
           throwIfCancelled(signal);
           let exported = bundleExports?.get(item.index);
           if (!exported) {
+            let plaintext: string | undefined;
+            if (isCardCredentialItem(item)) {
+              const index = SafeIndex.satisfies(hexToUint8Array(item.index));
+              const metadata = await applet.view({index});
+              throwIfCancelled(signal);
+              if (metadata.secret) {
+                validateCardCredentialItem({index: item.index, secret: true});
+              }
+              const {data} = await applet.get({
+                index,
+              });
+              throwIfCancelled(signal);
+              plaintext = uint8ArrayToHex(data);
+              validateCardCredentialItem({
+                index: item.index,
+                secret: metadata.secret,
+                key: metadata.key && uint8ArrayToHex(metadata.key),
+                data: plaintext,
+              });
+            }
             const result = await applet.exportItem({
               index: SafeIndex.satisfies(hexToUint8Array(item.index)),
               ...(backup.source.bundle === false && {recipientPublicKey}),
@@ -563,7 +647,14 @@ export class CardBackupSession {
               }),
               ...(result.alias !== undefined && {alias: result.alias}),
               data: uint8ArrayToHex(result.data),
+              ...(plaintext !== undefined && {plaintext}),
             };
+            validateCardCredentialItem({
+              index: item.index,
+              secret: false,
+              key: exported.key,
+              data: plaintext,
+            });
             bundleExports?.set(item.index, exported);
           }
           this.updateTransfer(target.publicKey, {...item, exported});
@@ -582,6 +673,7 @@ export class CardBackupSession {
     pin: string,
     signal: AbortSignal,
     onProgress: (current: number, total: number) => void,
+    onAuthenticated?: () => void,
   ): Promise<void> {
     return this.exclusive(async () => {
       const backup = this.requireBackup();
@@ -613,7 +705,7 @@ export class CardBackupSession {
 
       // Secret authorization is bound to this SELECT/session, never to the
       // retained copy state. Authenticate again before each import attempt.
-      await authenticateSecretPIN(applet, pin, signal);
+      await authenticateSecretPIN(applet, pin, signal, onAuthenticated);
 
       const senderPublicKey = PublicKey.satisfies(
         hexToUint8Array(backup.source.publicKey),
@@ -639,17 +731,23 @@ export class CardBackupSession {
           data: hexToUint8Array(exported.data),
         };
 
-        const current = this.requireBackup();
-
-        if (!current.importStarted) {
-          // A lost response may still mean the card committed the import.
-          this.setBackup({...current, importStarted: true});
-        }
-
         try {
-          await applet.importItem(request);
+          if (
+            !isCardCredentialItem(item) ||
+            !(await hasMatchingCredential(applet, item, signal))
+          ) {
+            const current = this.requireBackup();
+            if (!current.importStarted) {
+              // A lost response may still mean the card committed the import.
+              this.setBackup({...current, importStarted: true});
+            }
+            await applet.importItem(request);
+          }
         } catch (error) {
-          if (error instanceof AppletISOError && error.sw === 0x6985) {
+          if (
+            error instanceof CardItemMergeConflict ||
+            (error instanceof AppletISOError && error.sw === 0x6985)
+          ) {
             this.updateTransfer(target.publicKey, {...item, conflict: true});
             throwIfCancelled(signal);
             onProgress(completed, selected.length);

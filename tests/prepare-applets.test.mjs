@@ -66,12 +66,23 @@ const target = {
   appletAid: 'f06d6f6e6f69640001',
 };
 const applets = [
-  {name: 'monoididentity', ...target},
-  {name: 'monoidlib', packageAid: 'f06d6f6e6f696404'},
+  {name: 'monoididentity', stage: 'identity', ...target},
+  {name: 'monoidlib', stage: 'library', packageAid: 'f06d6f6e6f696404'},
   {
     name: 'monoid',
+    stage: 'monoid',
     packageAid: 'f06d6f6e6f696402',
     appletAid: 'f06d6f6e6f69640201',
+    dependencies: ['identity', 'library'],
+  },
+  {
+    name: 'monoidsecuritykey',
+    stage: 'security-key',
+    packageAid: 'f06d6f6e6f696403',
+    appletAid: 'f06d6f6e6f69640301',
+    instanceAid: 'a0000006472f0001',
+    optional: true,
+    dependencies: ['library', 'monoid'],
   },
 ];
 const component = (tag, body) =>
@@ -155,6 +166,44 @@ test('CAP components use VM load order and exclude debug metadata regardless of 
   );
 });
 
+test('CAP imports retain exact package AIDs and reject malformed entries', () => {
+  const {data, zip} = capFixture();
+  const imported = Buffer.from('a0000000620101', 'hex');
+  data.Import = component(4, [1, 5, 1, imported.length, ...imported]);
+  assert.deepEqual(readAppletPackage(zip(), target).imports, [
+    'a0000000620101',
+  ]);
+  for (const invalid of [
+    [1],
+    [1, 5, 1, 7, 0],
+    [0, 1],
+    [1, 5, 1, 4, 0, 0, 0, 0],
+  ]) {
+    data.Import = component(4, invalid);
+    assert.throws(() => readAppletPackage(zip(), target), /Import|import/);
+  }
+});
+
+test('the manifest retains the imports of each bundled CAP', async () => {
+  applets.forEach(applet => setSource(applet));
+  const {data, zip} = capFixture(applets[2]);
+  const imports = ['a0000000620101', 'a0000000620201', target.packageAid];
+  data.Import = component(4, [
+    imports.length,
+    ...imports.flatMap(aid => {
+      const bytes = Buffer.from(aid, 'hex');
+      return [0, 1, bytes.length, ...bytes];
+    }),
+  ]);
+  sourceFiles.set('monoid.cap', Buffer.from(zip()));
+  await prepareApplets('approved-caps');
+  const manifest = JSON.parse(writtenFiles.get('manifest.json'));
+  assert.deepEqual(
+    manifest.find(item => item.stage === 'monoid').imports,
+    imports,
+  );
+});
+
 for (const emptyAppletComponent of [false, true]) {
   test(`library CAP is loadable with ${emptyAppletComponent ? 'an empty' : 'no'} Applet component`, () => {
     const library = applets[1];
@@ -234,8 +283,8 @@ test('CAP without optional Export remains loadable', () => {
   assert(readAppletPackage(zip(), target).code.length > 0);
 });
 
-test('preparation bundles Identity, Library and Monoid with their current AIDs in dependency order', async () => {
-  const names = ['monoididentity', 'monoidlib', 'monoid'];
+test('preparation bundles the required packages and optional Security Key in dependency order', async () => {
+  const names = applets.map(applet => applet.name);
 
   for (const applet of applets) {
     setSource(applet);
@@ -245,18 +294,32 @@ test('preparation bundles Identity, Library and Monoid with their current AIDs i
 
   const manifest = JSON.parse(writtenFiles.get('manifest.json'));
   assert.deepEqual(
-    manifest.map(({name, packageAid, appletAid}) => ({
-      name,
-      packageAid,
-      ...(appletAid ? {appletAid} : {}),
-    })),
+    manifest.map(
+      ({
+        name,
+        stage,
+        packageAid,
+        appletAid,
+        instanceAid,
+        optional,
+        dependencies,
+      }) => ({
+        name,
+        stage,
+        packageAid,
+        ...(appletAid ? {appletAid} : {}),
+        ...(instanceAid ? {instanceAid} : {}),
+        ...(optional ? {optional} : {}),
+        ...(dependencies ? {dependencies} : {}),
+      }),
+    ),
     applets,
   );
   assert.deepEqual(
     [
       ...writtenFiles.get('@applet-bundle.ts').matchAll(/stage: '([^']+)'/g),
     ].map(match => match[1]),
-    ['identity', 'library', 'monoid'],
+    ['identity', 'library', 'monoid', 'security-key'],
   );
   assert(names.every(name => writtenFiles.has(`${name}.bin`)));
   for (const entry of manifest) {
@@ -281,7 +344,16 @@ test('preparation bundles Identity, Library and Monoid with their current AIDs i
   }
   assert(!writtenFiles.has('monoidsafe.cap'));
   assert(!writtenFiles.has('monoidsafe.bin'));
-  assert(!writtenFiles.has('monoidsecuritykey.cap'));
+  const descriptor = writtenFiles.get('@applet-bundle.ts');
+  assert.match(
+    descriptor,
+    /stage: 'security-key'.*appletAid: 'f06d6f6e6f69640301'.*instanceAid: 'a0000006472f0001'.*optional: true.*dependencies: \['library', 'monoid'\]/,
+  );
+  assert.match(
+    descriptor,
+    /stage: 'monoid'.*dependencies: \['identity', 'library'\]/,
+  );
+  assert.equal([...descriptor.matchAll(/optional: true/g)].length, 1);
   assert(
     !writtenFiles.get('@applet-bundle.ts').includes("appletAid: 'undefined'"),
   );
@@ -311,6 +383,26 @@ test('a missing library prevents newer applets from replacing the checked-in bun
   setSource(applets[0], 2, newerTime);
   setSource(applets[2], 2, newerTime);
   sourceFiles.delete('monoidlib.cap');
+
+  await prepareApplets('approved-caps');
+
+  assert.equal(writtenFiles.size, 0);
+});
+
+test('a missing optional source preserves the complete bundled dependency set', async () => {
+  await prepareSavedBundle();
+  setSource(applets[2], 2, newerTime);
+  sourceFiles.delete('monoidsecuritykey.cap');
+
+  await prepareApplets('approved-caps');
+
+  assert.equal(writtenFiles.size, 0);
+});
+
+test('an older optional source cannot be mixed with newer required sources', async () => {
+  await prepareSavedBundle();
+  setSource(applets[2], 2, newerTime);
+  setSource(applets[3], 2, olderTime);
 
   await prepareApplets('approved-caps');
 
@@ -405,6 +497,36 @@ test('fallback validates the checked-in library hash too', async () => {
   );
 
   assert.equal(writtenFiles.size, 0);
+});
+
+test('fallback validates the checked-in optional Security Key hash', async () => {
+  await prepareSavedBundle();
+  sourceFiles.clear();
+  bundledFiles.set('monoidsecuritykey.cap', Buffer.from('tampered applet'));
+
+  await assert.rejects(
+    prepareApplets('approved-caps'),
+    /Bundled CAP hash mismatch/,
+  );
+
+  assert.equal(writtenFiles.size, 0);
+});
+
+test('the Security Key CAP is validated against its module AID, not its installation instance', () => {
+  const securityKey = applets[3];
+  const {zip} = capFixture(securityKey);
+  assert.equal(
+    readAppletPackage(zip(), securityKey).appletAid,
+    securityKey.appletAid,
+  );
+  assert.throws(
+    () =>
+      readAppletPackage(zip(), {
+        ...securityKey,
+        appletAid: securityKey.instanceAid,
+      }),
+    /Unexpected applet AID/,
+  );
 });
 
 test('checked-in CAPs regenerate a missing load image without source files', async () => {

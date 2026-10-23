@@ -133,6 +133,18 @@ mock.module('../.bld/app/@components/@ui/operation-complete.js', {
 mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => fixture.entrances},
 });
+mock.module('../.bld/app/@components/views/safe/@card/card-backup-session.js', {
+  namedExports: {
+    readBackupCardIdentity: hello => ({
+      id: Buffer.from(hello.id).toString('hex'),
+      publicKey: Buffer.from(hello.publicKey).toString('hex'),
+      bundle:
+        hello.bundle === false
+          ? false
+          : Buffer.from(hello.bundle).toString('hex'),
+    }),
+  },
+});
 mock.module('../.bld/app/@services/index.js', {
   namedExports: {
     isCredentialRequestCancelled: error => error?.code === 'CANCELLED',
@@ -976,6 +988,43 @@ test('cancelling the new Secret PIN prompt leaves the existing bundled card unch
   );
 });
 
+for (const leaveBeforeConfigure of [false, true]) {
+  test(`a PIN set while resetting a Bundle card ${leaveBeforeConfigure ? 'expires when leaving Setup' : 'is reused for round two under the new card identity'}`, async () => {
+    const state = await replacementCard();
+    const adding = state.confirmation().props.onConfirm();
+    await state.answerBundlePIN('New-42');
+    await state.tapBundle(state.replacementHello);
+    state.bundleScans.at(-1).resolve();
+    await adding;
+    await state.collect(bundleCard(2));
+    await state.click('Continue');
+    if (leaveBeforeConfigure) {
+      state.view.$match.$exact.$active = false;
+      state.render();
+      state.view.$match.$exact.$active = true;
+      state.render();
+    }
+    const inputCount = state.bundleInputs.length;
+    state.cardButton('00000009').props.onClick();
+    if (leaveBeforeConfigure) {
+      assert.equal(state.bundleInputs.length, inputCount + 1);
+      await state.answerBundlePIN('New-42');
+    } else {
+      assert.equal(state.bundleInputs.length, inputCount);
+    }
+    await state.tapBundle(bundleCard(9));
+    await state.finishBundle();
+    assert.deepEqual(
+      state.bundleCalls.find(
+        call => call.type === 'authenticate' && call.request.secret,
+      ).request,
+      {secret: true, pin: 'New-42'},
+    );
+    assert.equal(state.card('00000009').props.description, 'complete');
+    assert.deepEqual(state.errors, []);
+  });
+}
+
 test('a different physical identity is rejected before deleting its saved PIN or sending Reset', async () => {
   const state = await replacementCard();
   const adding = state.confirmation().props.onConfirm();
@@ -1704,7 +1753,7 @@ test('the generic round-two button configures three members in any order without
     state.click(scanLabel);
     assert.equal(
       textOf(state.bundleInputs.at(-1).options.description),
-      'For the card you will scan',
+      completed.size === 2 ? 'Card 00000001' : 'For the card you will scan',
     );
     await state.answerBundlePIN(`Safe-${identity}`);
     assert.equal(textOf(state.bundleScans.at(-1).label), scanLabel);

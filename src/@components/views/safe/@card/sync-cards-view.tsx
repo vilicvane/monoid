@@ -5,7 +5,6 @@ import {type ReactNode, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
-import {MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import {
   type MonoidAppletHello,
@@ -60,6 +59,7 @@ import {
   readBackupCardIdentity,
 } from './card-backup-session.js';
 import type {CardSyncProgress} from './card-sync-session.js';
+import {CardSecretPINSession} from './card-secret-pin-session.js';
 import {SyncCardsState} from './sync-cards-state.js';
 
 const Description = styled.p`
@@ -139,6 +139,7 @@ export const SyncCardsView = observer(
       retryOnError: false,
     });
     const [pinInput, showPINInput] = useInputModal();
+    const [secretPINs] = useState(() => new CardSecretPINSession());
     const [working, setWorking] = useState(false);
     const [details, setDetails] = useState<string>();
     const [confirmRestart, setConfirmRestart] = useState(false);
@@ -173,8 +174,9 @@ export const SyncCardsView = observer(
       return () => {
         mounted.current = false;
         operation.current?.abort();
+        secretPINs.clear();
       };
-    }, []);
+    }, [secretPINs]);
 
     useEffect(
       () =>
@@ -183,14 +185,19 @@ export const SyncCardsView = observer(
           active => {
             if (!active) {
               operation.current?.abort();
+              secretPINs.clear();
               setDetails(undefined);
               setConfirmRestart(false);
             }
           },
           {fireImmediately: true},
         ),
-      [isViewActive],
+      [isViewActive, secretPINs],
     );
+
+    useEffect(() => {
+      if (complete) secretPINs.clear();
+    }, [complete, secretPINs]);
 
     const run = async (
       callback: (signal: AbortSignal) => Promise<void>,
@@ -223,201 +230,208 @@ export const SyncCardsView = observer(
     ): Promise<void> => {
       const expected = expectedCard ?? source;
       const previewCard = view.card ?? flow.sourceCard;
-      let pin: string | undefined;
-
-      try {
-        signal.throwIfAborted();
-        if (!mounted.current || !isViewActive()) return;
-        pin = await showPINInput({
-          type: 'password',
-          ...getPINInputPlaceholder('Secret', 'Enter card'),
-          description: expected?.id,
-          center: true,
-          maxLength: 16,
-        });
-        if (
-          pin === undefined ||
-          signal.aborted ||
-          !mounted.current ||
-          !isViewActive()
-        )
-          return;
-        if (!MonoidPIN.is(pin)) {
-          throw new MonoidCardError(
-            'Secret PIN must contain 6 to 16 characters',
-          );
-        }
-        await scan(
-          expected ? (
-            <>
-              Scan card{' '}
-              <MonoidScanStatePromptContentHighlight>
-                {expected.id}
-              </MonoidScanStatePromptContentHighlight>
-            </>
-          ) : collecting ? (
-            'Scan a card'
-          ) : (
-            'Scan a pending card'
+      signal.throwIfAborted();
+      if (!mounted.current || !isViewActive()) return;
+      await secretPINs.run(
+        expected
+          ? [expected]
+          : collecting
+            ? []
+            : session.cards.filter(card => !card.complete),
+        (card, pinSignal) =>
+          showPINInput(
+            {
+              type: 'password',
+              ...getPINInputPlaceholder('Secret', 'Enter card'),
+              description: card?.id,
+              center: true,
+              maxLength: 16,
+            },
+            AbortSignal.any([signal, pinSignal]),
           ),
-          async (
-            applet,
-            setState,
-            hello,
-            nativeSignal,
-          ): Promise<void | {message: string}> => {
-            const activeSignal = AbortSignal.any([signal, nativeSignal]);
-            activeSignal.throwIfAborted();
-            const identity = readBackupCardIdentity(hello);
-            if (
-              !collecting &&
-              session.cards.some(
-                card => card.publicKey === identity.publicKey && card.complete,
-              )
-            ) {
-              return {message: 'Already synced'};
-            }
-            flow.markInterrupted(identity.publicKey, false);
-            const isPreviewCard =
-              previewCard?.id === identity.id &&
-              previewCard.publicKey === identity.publicKey;
-            const knownCard =
-              !collecting && isPreviewCard
-                ? cardStore.get(previewCard!)
-                : undefined;
-            const knownItems = knownCard
-              ? knownCard.items.map(item => ({
-                  index: item.index,
-                  type: item.type,
-                  secret: item.secret,
-                  publicKey: item.publicKey,
-                  derivations: [
-                    ...(item.derivations ?? []),
-                    ...Object.values(item.refs).map(
-                      ({addressType, seed, curve, path, publicKey}) => ({
-                        addressType,
-                        seed,
-                        curve,
-                        path,
-                        publicKey,
-                      }),
-                    ),
-                  ],
-                }))
-              : flow.sourceCard?.items;
-            // Confirmed writes invalidate cached previews, including an ACK
-            // received after the owning view unmounts. Progress stays in session.
-            const stopObservingWrites = collecting
-              ? undefined
-              : reaction(
-                  () => session.confirmedSnapshot,
-                  snapshot => {
-                    if (
-                      snapshot?.id === identity.id &&
-                      snapshot.publicKey === identity.publicKey
-                    ) {
-                      cardStore.forget(snapshot);
-                    }
-                  },
-                );
-            try {
-              setState('Authenticating, hold tight...');
-              if (collecting) {
-                await session.add(
-                  applet,
-                  hello,
-                  activeSignal,
-                  pin,
-                  progress => {
-                    setState(progressContent(progress));
-                  },
-                );
-                flow.consumeSource();
-              } else {
-                await session.write(
-                  applet,
-                  hello,
-                  activeSignal,
-                  pin,
-                  progress => {
-                    setState(progressContent(progress));
-                  },
-                );
-              }
-            } catch (error) {
-              flow.markInterrupted(identity.publicKey, true);
-              throw error;
-            } finally {
-              stopObservingWrites?.();
-            }
-
-            const confirmed = session.confirmedSnapshot;
-            if (
-              activeSignal.aborted ||
-              !mounted.current ||
-              !isViewActive() ||
-              collecting ||
-              !isPreviewCard ||
-              confirmed?.id !== identity.id ||
-              confirmed.publicKey !== identity.publicKey
-            )
-              return;
-
-            // Confirmed sync progress survives a later address-preview failure.
-            setState('Reading addresses, hold tight...');
-            const items = await readCardAddressPreviews(
+        async (credentials, pinSignal) => {
+          await scan(
+            expected ? (
+              <>
+                Scan card{' '}
+                <MonoidScanStatePromptContentHighlight>
+                  {expected.id}
+                </MonoidScanStatePromptContentHighlight>
+              </>
+            ) : collecting ? (
+              'Scan a card'
+            ) : (
+              'Scan a pending card'
+            ),
+            async (
               applet,
-              confirmed.items,
-              (current, total) => {
-                setState(
-                  <MonoidScanStatePromptProgress
-                    current={current}
-                    total={total}
-                  >
-                    Reading addresses
-                  </MonoidScanStatePromptProgress>,
-                );
-              },
-              activeSignal,
-              knownItems,
-              walletStorageService.keys,
-            ).catch(error => {
-              if (!activeSignal.aborted && mounted.current && isViewActive()) {
-                toast({
-                  message: 'Card contents saved, address preview unavailable',
-                  color: 'warning',
-                  position: 'top',
+              setState,
+              hello,
+              nativeSignal,
+            ): Promise<void | {message: string}> => {
+              const activeSignal = AbortSignal.any([
+                signal,
+                nativeSignal,
+                pinSignal,
+              ]);
+              activeSignal.throwIfAborted();
+              const identity = readBackupCardIdentity(hello);
+              if (
+                !collecting &&
+                session.cards.some(
+                  card =>
+                    card.publicKey === identity.publicKey && card.complete,
+                )
+              ) {
+                return {message: 'Already synced'};
+              }
+              const {pin, onAuthenticated} = credentials(identity);
+              flow.markInterrupted(identity.publicKey, false);
+              const isPreviewCard =
+                previewCard?.id === identity.id &&
+                previewCard.publicKey === identity.publicKey;
+              const knownCard =
+                !collecting && isPreviewCard
+                  ? cardStore.get(previewCard!)
+                  : undefined;
+              const knownItems = knownCard
+                ? knownCard.items.map(item => ({
+                    index: item.index,
+                    type: item.type,
+                    secret: item.secret,
+                    publicKey: item.publicKey,
+                    derivations: [
+                      ...(item.derivations ?? []),
+                      ...Object.values(item.refs).map(
+                        ({addressType, seed, curve, path, publicKey}) => ({
+                          addressType,
+                          seed,
+                          curve,
+                          path,
+                          publicKey,
+                        }),
+                      ),
+                    ],
+                  }))
+                : flow.sourceCard?.items;
+              // Confirmed writes invalidate cached previews, including an ACK
+              // received after the owning view unmounts. Progress stays in session.
+              const stopObservingWrites = collecting
+                ? undefined
+                : reaction(
+                    () => session.confirmedSnapshot,
+                    snapshot => {
+                      if (
+                        snapshot?.id === identity.id &&
+                        snapshot.publicKey === identity.publicKey
+                      ) {
+                        cardStore.forget(snapshot);
+                      }
+                    },
+                  );
+              try {
+                setState('Authenticating, hold tight...');
+                if (collecting) {
+                  await session.add(
+                    applet,
+                    hello,
+                    activeSignal,
+                    pin,
+                    progress => {
+                      setState(progressContent(progress));
+                    },
+                    onAuthenticated,
+                  );
+                  flow.consumeSource();
+                } else {
+                  await session.write(
+                    applet,
+                    hello,
+                    activeSignal,
+                    pin,
+                    progress => {
+                      setState(progressContent(progress));
+                    },
+                    onAuthenticated,
+                  );
+                }
+              } catch (error) {
+                flow.markInterrupted(identity.publicKey, true);
+                throw error;
+              } finally {
+                stopObservingWrites?.();
+              }
+
+              const confirmed = session.confirmedSnapshot;
+              if (
+                activeSignal.aborted ||
+                !mounted.current ||
+                !isViewActive() ||
+                collecting ||
+                !isPreviewCard ||
+                confirmed?.id !== identity.id ||
+                confirmed.publicKey !== identity.publicKey
+              )
+                return;
+
+              // Confirmed sync progress survives a later address-preview failure.
+              setState('Reading addresses, hold tight...');
+              const items = await readCardAddressPreviews(
+                applet,
+                confirmed.items,
+                (current, total) => {
+                  setState(
+                    <MonoidScanStatePromptProgress
+                      current={current}
+                      total={total}
+                    >
+                      Reading addresses
+                    </MonoidScanStatePromptProgress>,
+                  );
+                },
+                activeSignal,
+                knownItems,
+                walletStorageService.keys,
+              ).catch(error => {
+                if (
+                  !activeSignal.aborted &&
+                  mounted.current &&
+                  isViewActive()
+                ) {
+                  toast({
+                    message: 'Card contents saved, address preview unavailable',
+                    color: 'warning',
+                    position: 'top',
+                  });
+                }
+                if (activeSignal.aborted) throw error;
+                return undefined;
+              });
+              if (items) {
+                cardStore.set({...confirmed, items});
+              }
+            },
+            hello => {
+              signal.throwIfAborted();
+              if (!mounted.current || !isViewActive()) {
+                throw Object.assign(new Error('Sync cancelled'), {
+                  code: 'CANCELLED',
                 });
               }
-              if (activeSignal.aborted) throw error;
-              return undefined;
-            });
-            if (items) {
-              cardStore.set({...confirmed, items});
-            }
-          },
-          hello => {
-            signal.throwIfAborted();
-            if (!mounted.current || !isViewActive()) {
-              throw Object.assign(new Error('Sync cancelled'), {
-                code: 'CANCELLED',
-              });
-            }
-            if (expected) assertSyncCard(hello, expected);
-            if (!collecting) {
-              const identity = readBackupCardIdentity(hello);
-              const target = session.cards.find(
-                card => card.publicKey === identity.publicKey,
-              );
-              if (!target)
-                throw new MonoidCardError('Scan a card added to this sync');
-              assertSyncCard(hello, target);
-            }
-          },
-        );
-      } finally {
-        pin = undefined;
-      }
+              if (expected) assertSyncCard(hello, expected);
+              if (!collecting) {
+                const identity = readBackupCardIdentity(hello);
+                const target = session.cards.find(
+                  card => card.publicKey === identity.publicKey,
+                );
+                if (!target)
+                  throw new MonoidCardError('Scan a card added to this sync');
+                assertSyncCard(hello, target);
+              }
+            },
+          );
+        },
+      );
     };
 
     const readCard = (expected?: CardBackupIdentity): void => {
@@ -640,6 +654,7 @@ export const SyncCardsView = observer(
             onCancel={() => setConfirmRestart(false)}
             onConfirm={() => {
               setConfirmRestart(false);
+              secretPINs.clear();
               flow.restart();
             }}
           >

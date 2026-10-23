@@ -21,11 +21,13 @@ import {ConfirmPopup} from '../../../@ui/confirm-popup.js';
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 
+import {readBackupCardIdentity} from './card-backup-session.js';
 import {
   type CardResetIdentity,
   CardResetSession,
 } from './card-reset-session.js';
 import {CardSetupPIN} from './card-setup-pin.js';
+import type {CardSecretPINSession} from './card-secret-pin-session.js';
 import {readCardForSetup} from './read-card-for-setup.js';
 
 function hasInitializedPINs(hello: MonoidAppletHello): boolean {
@@ -37,12 +39,14 @@ export function useBundleCardAddition({
   validateAddition,
   onAdded,
   onNeedsInstall,
+  secretPINSession,
   label = 'Add a card',
 }: {
   isActive: () => boolean;
   validateAddition: (hello: MonoidAppletHello) => void;
   onAdded: (hello: MonoidAppletHello) => Promise<void>;
   onNeedsInstall: (information: CardInformation) => void;
+  secretPINSession: CardSecretPINSession;
   label?: string;
 }): {
   busy: boolean;
@@ -235,6 +239,7 @@ export function useBundleCardAddition({
   const resetAndAdd = async (reset: CardResetSession): Promise<void> => {
     if (cardOperation.current || !isActive()) return;
     const operation = new AbortController();
+    const pinSignal = secretPINSession.signal;
     cardOperation.current = operation;
     setPendingReset(reset);
     setBusy(true);
@@ -260,7 +265,11 @@ export function useBundleCardAddition({
           </MonoidScanStatePromptContentHighlight>
         </>,
         async (sessionId, setState, scanSignal) => {
-          const signal = AbortSignal.any([scanSignal, operation.signal]);
+          const signal = AbortSignal.any([
+            scanSignal,
+            operation.signal,
+            pinSignal,
+          ]);
           signal.throwIfAborted();
           const applet = await monoidApplet.openSession(sessionId);
           signal.throwIfAborted();
@@ -291,8 +300,14 @@ export function useBundleCardAddition({
           );
           validateScan(hello);
           if (pin !== undefined) {
+            signal.throwIfAborted();
+            const rememberPIN = secretPINSession.onAuthenticated(
+              readBackupCardIdentity(hello),
+              pin,
+            );
             setState('Setting Secret PIN, hold tight...');
             hello = await initializeMonoidCard(applet, hello, pin, signal);
+            rememberPIN();
             cacheSetup(hello);
             completed = hello;
             setState('Authenticating, hold tight...');
@@ -374,6 +389,7 @@ export function useBundleCardAddition({
           <CardSetupPIN
             hello={pendingPIN}
             pinSession={pinSession}
+            secretPINSession={secretPINSession}
             onInitialized={hello => {
               errorService.catch(completeSetup(hello));
             }}

@@ -54,9 +54,8 @@ mock.module('capacitor-isodep-nfc', {
   },
 });
 
-const {installMonoidApplets} = await import(
-  '../.bld/app/@lib/monoid/install.js'
-);
+const {getAppletInstallationPlan, getAppletDependents, installMonoidApplets} =
+  await import('../.bld/app/@lib/monoid/install.js');
 const {createMonoidApplet} = await import('../.bld/app/@lib/monoid/index.js');
 const {describeAppletInstallProgress} = await import(
   '../.bld/app/@lib/monoid/applet-install-progress.js'
@@ -104,6 +103,7 @@ beforeEach(() => {
       ...(stage !== 'library' && {
         appletAid: `f06d6f6e6f6964${suffix}01`,
       }),
+      ...(stage === 'monoid' && {dependencies: ['identity', 'library']}),
       codeURL: new URL(
         `data:application/octet-stream;base64,${Buffer.from(code).toString('base64')}`,
       ),
@@ -169,6 +169,21 @@ test('library progress names the library and keeps percentages on upload only', 
   );
 });
 
+test('removal progress names the current applet and reports completed operations', () => {
+  assert.deepEqual(
+    describeAppletInstallProgress({
+      stage: 'deleting',
+      applet: 'security-key',
+      completed: 1,
+      total: 5,
+    }),
+    {
+      status: 'Removing Monoid Security Key Applet...',
+      count: {completed: 1, total: 5},
+    },
+  );
+});
+
 test('bundle integrity is checked before authenticating or writing to the card', async () => {
   bundle[1].sha256 = '0'.repeat(64);
   await assert.rejects(
@@ -209,11 +224,79 @@ test('a missing package stops before card access', async () => {
   assert.deepEqual(fixture.events, []);
 });
 
-test('a bundle with reordered dependencies stops before card access', async () => {
-  [bundle[0], bundle[1]] = [bundle[1], bundle[0]];
+test('a reordered catalog still installs dependencies before their dependent', async () => {
+  [bundle[0], bundle[2]] = [bundle[2], bundle[0]];
+  await installMonoidApplets('connection', () => {});
+  assert.deepEqual(fixture.events.slice(0, 4), [
+    'open GP',
+    'identity',
+    'library',
+    'monoid',
+  ]);
+});
+
+test('unknown and circular dependencies stop before card access', async () => {
+  bundle[2].dependencies = ['unknown'];
   await assert.rejects(
     installMonoidApplets('connection', () => {}),
-    /incomplete/,
+    /Unknown applet dependency/,
+  );
+  bundle[2].dependencies = ['identity'];
+  bundle[0].dependencies = ['monoid'];
+  await assert.rejects(
+    installMonoidApplets('connection', () => {}),
+    /Circular applet dependency/,
+  );
+  assert.deepEqual(fixture.events, []);
+});
+
+test('optional applets are selected explicitly and retain separate module and instance AIDs', async () => {
+  bundle.push({
+    ...bundle[2],
+    stage: 'security-key',
+    packageAid: 'f06d6f6e6f696403',
+    appletAid: 'f06d6f6e6f69640301',
+    instanceAid: 'a0000006472f0001',
+    optional: true,
+    dependencies: ['library', 'monoid'],
+  });
+  assert.deepEqual(
+    getAppletDependents(['identity']).map(item => item.stage),
+    ['monoid', 'security-key'],
+  );
+  assert.deepEqual(
+    getAppletInstallationPlan().map(item => item.stage),
+    ['identity', 'library', 'monoid'],
+  );
+  await installMonoidApplets('connection', () => {});
+  assert.equal(fixture.events.includes('security-key'), false);
+  fixture.events.length = 0;
+  await installMonoidApplets('connection', () => {}, undefined, [
+    'security-key',
+  ]);
+  assert.deepEqual(fixture.events.slice(0, 5), [
+    'open GP',
+    'identity',
+    'library',
+    'monoid',
+    'security-key',
+  ]);
+  const optional = fixture.packages.at(-1);
+  assert.equal(
+    Buffer.from(optional.appletAid).toString('hex'),
+    'f06d6f6e6f69640301',
+  );
+  assert.equal(
+    Buffer.from(optional.instanceAid).toString('hex'),
+    'a0000006472f0001',
+  );
+});
+
+test('unknown optional selections fail before any card command', async () => {
+  [bundle[0], bundle[1]] = [bundle[1], bundle[0]];
+  await assert.rejects(
+    installMonoidApplets('connection', () => {}, undefined, ['unknown']),
+    /Unknown optional applet/,
   );
   assert.deepEqual(fixture.events, []);
 });

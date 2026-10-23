@@ -177,6 +177,54 @@ test('an existing selectable Safe is preserved without loading or installing any
   assert.equal(channelOpens, 1);
 });
 
+test('installation uses the CAP module and the distinct instance AID in their respective fields', async () => {
+  const instanceAid = bytes('a0000006472f0001');
+  const instanceBody = join(
+    bytes('4f'),
+    lv(instanceAid),
+    bytes('9f700107c4'),
+    lv(safe.packageAid),
+  );
+  const instanceRecord = join(bytes('e3'), lv(instanceBody));
+  const card = cardScript([
+    {command: select()},
+    absent(0x40, instanceAid),
+    {command: status(0x10, safe.packageAid), response: response(loadedSafe)},
+    {
+      command: command(
+        0xe6,
+        0x0c,
+        0,
+        join(
+          lv(safe.packageAid),
+          lv(safe.appletAid),
+          lv(instanceAid),
+          bytes('010002c90000'),
+        ),
+      ),
+    },
+    {command: status(0x40, instanceAid), response: response(instanceRecord)},
+  ]);
+  const installer = await GlobalPlatformInstaller.open(card.transceive);
+  await installer.install({...safe, instanceAid}, () => {});
+  card.done();
+});
+
+test('a selectable distinct instance is preserved without querying the CAP module as an instance', async () => {
+  const instanceAid = bytes('a0000006472f0001');
+  const instanceRecord = join(
+    bytes('e3'),
+    lv(join(bytes('4f'), lv(instanceAid), bytes('9f700107'))),
+  );
+  const card = cardScript([
+    {command: select()},
+    {command: status(0x40, instanceAid), response: response(instanceRecord)},
+  ]);
+  const installer = await GlobalPlatformInstaller.open(card.transceive);
+  await installer.install({...safe, instanceAid}, () => {});
+  card.done();
+});
+
 test('an already loaded library is preserved using only its package registry entry', async () => {
   const card = cardScript([
     {command: select()},
@@ -801,6 +849,47 @@ test('missing optional registry metadata remains unknown', async () => {
   card.done();
 });
 
+test('registry enumeration preserves every package across continuation pages', async () => {
+  const all = new Uint8Array();
+  const card = cardScript([
+    {command: select()},
+    {
+      command: status(0x10, all),
+      response: response(join(loadedSafe, loadedLibrary), 0x6310),
+    },
+    {command: status(0x10, all, true), response: response(unrelatedPackage)},
+  ]);
+  const reader = await GlobalPlatformInstaller.inspect(card.transceive);
+  const entries = await reader.getEntries(0x10);
+  assert.deepEqual(
+    entries.map(entry => hex(entry.aid)),
+    [hex(safe.packageAid), hex(library.packageAid), 'a0000000620204'],
+  );
+  assert.deepEqual(
+    entries.map(entry => entry.modules.map(hex)),
+    [[hex(safe.appletAid)], [], []],
+  );
+  assert.equal(channelOpens, 0);
+  card.done();
+});
+
+test('an absent registry enumeration is empty but authentication failure is not', async () => {
+  for (const sw of [0x6a88, 0x6982]) {
+    const card = cardScript([
+      {command: select()},
+      {
+        command: status(0x10, new Uint8Array()),
+        response: response(undefined, sw),
+      },
+    ]);
+    const reader = await GlobalPlatformInstaller.inspect(card.transceive);
+    if (sw === 0x6a88) assert.deepEqual(await reader.getEntries(0x10), []);
+    else
+      await assert.rejects(reader.getEntries(0x10), error => error.sw === sw);
+    card.done();
+  }
+});
+
 test('inspection selects the card manager and reads metadata without authenticating or exposing write methods', async () => {
   const card = cardScript([
     {command: select(), response: response(undefined, 0x6a82)},
@@ -809,7 +898,7 @@ test('inspection selects the card manager and reads metadata without authenticat
   ]);
   const reader = await GlobalPlatformInstaller.inspect(card.transceive);
 
-  assert.deepEqual(Object.keys(reader), ['getEntry']);
+  assert.deepEqual(Object.keys(reader), ['getEntry', 'getEntries']);
   assert.equal((await reader.getEntry(0x40, safe.appletAid)).lifecycle, 0x07);
   assert.equal(channelOpens, 0);
   card.done();

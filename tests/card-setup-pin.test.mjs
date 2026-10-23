@@ -7,6 +7,8 @@ import {
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
 import {initializeMonoidCard} from '../.bld/app/@lib/monoid/initialize-card.js';
+import {MonoidAppletInvalidPINError} from '../.bld/app/@lib/monoid/monoid-applet.js';
+import {CardSecretPINSession} from '../.bld/app/@components/views/safe/@card/card-secret-pin-session.js';
 
 let fixture;
 const owners = [];
@@ -30,10 +32,23 @@ mock.module('react/jsx-runtime', {
 mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => fixture.entrances},
 });
+mock.module('../.bld/app/@components/views/safe/@card/card-backup-session.js', {
+  namedExports: {
+    readBackupCardIdentity: hello => ({
+      id: Buffer.from(hello.id).toString('hex'),
+      publicKey: Buffer.from(hello.publicKey).toString('hex'),
+      bundle:
+        hello.bundle === false
+          ? false
+          : Buffer.from(hello.bundle).toString('hex'),
+    }),
+  },
+});
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
     MonoidCardError,
     MonoidWrongCardError,
+    MonoidAppletInvalidPINError,
     initializeMonoidCard,
   },
 });
@@ -104,6 +119,7 @@ function mount({
   secretPIN = false,
   hello: initialHello,
   pinSession,
+  secretPINSession,
   onInitialized,
 } = {}) {
   const state = {
@@ -220,6 +236,7 @@ function mount({
   state.tree = CardSetupPIN({
     hello: state.hello,
     pinSession,
+    secretPINSession,
     onInitialized,
     onFinished: (initialized, latestHello) => {
       state.results.push(initialized);
@@ -232,6 +249,64 @@ function mount({
 }
 
 afterEach(() => owners.splice(0).forEach(state => state.unmount()));
+
+const identity = hello => ({
+  id: Buffer.from(hello.id).toString('hex'),
+  publicKey: Buffer.from(hello.publicKey).toString('hex'),
+  bundle:
+    hello.bundle === false ? false : Buffer.from(hello.bundle).toString('hex'),
+});
+
+async function cachedPIN(session, hello) {
+  let pin;
+  await session.run(
+    [identity(hello)],
+    async () => undefined,
+    async credentials => {
+      pin = credentials(identity(hello)).pin;
+    },
+  );
+  return pin;
+}
+
+test('confirmed initialization reuses the Secret PIN within the owning page only', async () => {
+  const secretPINSession = new CardSecretPINSession();
+  const state = mount({secretPINSession});
+  await state.answer(PIN);
+  assert.equal(await cachedPIN(secretPINSession, state.hello), undefined);
+  await state.tap();
+  await state.finishScan();
+  assert.equal(await cachedPIN(secretPINSession, state.hello), PIN);
+  secretPINSession.clear();
+  assert.equal(await cachedPIN(secretPINSession, state.hello), undefined);
+});
+
+test('an already initialized reread does not cache an unverified entered Secret PIN', async () => {
+  const secretPINSession = new CardSecretPINSession();
+  const state = mount({secretPINSession});
+  await state.answer(PIN);
+  await state.tap({...state.current, pins: {access: 5, secret: 5}});
+  await state.finishScan();
+  assert.equal(await cachedPIN(secretPINSession, state.hello), undefined);
+  assert.deepEqual(state.commands, []);
+});
+
+test('leaving during initialization cannot repopulate the page Secret PIN cache', async () => {
+  const secretPINSession = new CardSecretPINSession();
+  const state = mount({secretPINSession});
+  const write = deferred();
+  state.onWrite = () => write.promise;
+  await state.answer(PIN);
+  const tapping = state.tap();
+  const rejected = assert.rejects(tapping, error => error.code === 'CANCELLED');
+  await setImmediate();
+  secretPINSession.clear();
+  write.resolve();
+  await rejected;
+  await state.finished.promise;
+  assert.equal(await cachedPIN(secretPINSession, state.hello), undefined);
+  assert.deepEqual(state.results, [false]);
+});
 
 test('a new card opens the Secret PIN prompt immediately and stores the verified default Access PIN only after scan exit', async () => {
   const state = mount();

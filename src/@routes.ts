@@ -10,12 +10,22 @@ import {createFlowId} from './@utils/index.js';
 
 export const ROUTE_SCHEMA = {
   features: true,
+  securityKey: {
+    $state: (
+      state: {card?: Pick<ScannedCardData, 'id' | 'publicKey'>} | undefined,
+    ) => state ?? {},
+  },
   cardApplets: {
     $state: (
       state:
         | {
             cardInformation?: CardInformation;
-            returnTo?: 'safe' | 'copy' | 'bundle' | 'bundleExtension';
+            returnTo?:
+              | 'safe'
+              | 'copy'
+              | 'bundle'
+              | 'bundleExtension'
+              | 'securityKey';
             copyId?: string;
             bundleId?: string;
             extensionId?: string;

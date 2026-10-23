@@ -327,13 +327,13 @@ function mount({
       assert.notEqual(button.props.disabled, true, `${label} is disabled`);
       button.props.onClick();
     },
-    async startScan(label) {
+    async startScan(label, pin = PIN) {
       const scanCount = state.scans.length;
       const inputCount = state.inputs.length;
       state.click(label);
       assert.equal(state.scans.length, scanCount, 'PIN precedes NFC');
       assert.equal(state.inputs.length, inputCount + 1);
-      state.inputs.at(-1).finished.resolve(PIN);
+      state.inputs.at(-1).finished.resolve(pin);
       await state.flush();
       assert.equal(state.scans.length, scanCount + 1);
       assert.equal(state.scans.at(-1).options.auth, false);
@@ -795,6 +795,75 @@ test('cancelling the write Secret PIN leaves NFC and card data untouched', async
   assert.equal(state.scans.length, 0);
   assert.deepEqual(first.authentications, [{secret: true, pin: PIN}]);
   assert.equal(state.session.cards[0].completed, 0);
+});
+
+test('collection verifies each card PIN once and arbitrary write order reuses the matching PIN', async () => {
+  const state = mount();
+  const cards = [publicCard(1), publicCard(2)];
+  const pins = ['First-42', 'Second-42'];
+  for (let index = 0; index < cards.length; index++) {
+    const card = cards[index];
+    card.applet.authenticate = async request => {
+      assert.deepEqual(request, {secret: true, pin: pins[index]});
+      card.authentications.push(request);
+    };
+    await state.startScan(
+      index ? 'Add another card' : 'Add a card',
+      pins[index],
+    );
+    await state.tap(card.hello, card.applet);
+    await state.finishScan();
+  }
+  state.click('Continue');
+  await state.flush();
+  for (const card of [...cards].reverse()) {
+    state.click('Scan a pending card');
+    await state.flush();
+    assert.equal(
+      state.inputs.length,
+      2,
+      'the write round must not ask for PINs again',
+    );
+    await state.tap(card.hello, card.applet);
+    await state.finishScan();
+    assert.equal(
+      card.authentications.length,
+      2,
+      'each new tap still authenticates',
+    );
+  }
+  assert.equal(state.session.phase, 'complete');
+});
+
+test('leaving Sync clears verified PINs while keeping the collected cards', async () => {
+  const state = mount();
+  const first = publicCard(1);
+  const second = publicCard(2);
+  for (const [card, label] of [
+    [first, 'Add a card'],
+    [second, 'Add another card'],
+  ]) {
+    await state.startScan(label);
+    await state.tap(card.hello, card.applet);
+    await state.finishScan();
+  }
+  state.click('Continue');
+  await state.flush();
+  runInAction(() => {
+    state.view.$match.$exact.$active = false;
+  });
+  runInAction(() => {
+    state.view.$match.$exact.$active = true;
+  });
+  await state.startWriteScan();
+  assert.equal(state.inputs.length, 3);
+  assert.equal(state.session.cards.length, 2);
+  state.scans
+    .at(-1)
+    .finished.reject(
+      Object.assign(new Error('Cancelled'), {code: 'CANCELLED'}),
+    );
+  await state.flush();
 });
 
 for (const alreadyWritten of [false, true]) {

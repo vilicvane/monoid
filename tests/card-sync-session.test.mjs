@@ -8,6 +8,7 @@ import {
 } from '../.bld/app/@components/views/safe/card-derivations.js';
 import {AppletISOError} from '../.bld/app/@lib/applet.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {credential} from './helpers/security-key-credential.mjs';
 
 const PIN = 'Secret-42';
 const signal = () => new AbortController().signal;
@@ -184,6 +185,60 @@ const write = (session, card, pin = PIN) =>
   session.write(card, card.hello, signal(), pin);
 const mutationCalls = card =>
   card.calls.filter(([kind]) => ['create', 'set', 'import'].includes(kind));
+
+test('public credential scopes coexist across Bundles without grant or Seed migration', async () => {
+  const firstCredential = credential(1);
+  const secondCredential = credential(2, {scope: 2});
+  const first = mockCard(1, 1, [root(), firstCredential]);
+  const second = mockCard(2, 2, [root({data: '34'}), secondCredential]);
+  const third = mockCard(3, false);
+  const session = new CardSyncSession();
+  for (const card of [first, second, third]) await add(session, card);
+  session.prepare();
+  for (const card of [first, second, third]) await write(session, card);
+  assert.equal(session.phase, 'complete');
+  for (const card of [first, second, third]) {
+    for (const item of [firstCredential, secondCredential]) {
+      assert.equal(card.records.get(item.index).data, item.data);
+      assert.equal(card.records.get(item.index).key, item.key);
+    }
+    assert.ok(
+      mutationCalls(card).every(
+        ([kind, index]) => kind === 'create' && index.startsWith('f101'),
+      ),
+    );
+  }
+  assert.equal(first.records.get(keyIndex).data, '12');
+  assert.equal(second.records.get(keyIndex).data, '34');
+  assert.equal(third.records.has(keyIndex), false);
+});
+
+test('Sync rejects old and malformed credential collection without publishing a partial card', async () => {
+  for (const item of [
+    credential(1, {fields: [[10, undefined]]}),
+    credential(1, {fields: [[10, new Uint8Array(31)]]}),
+    credential(1, {key: '00'.repeat(64)}),
+    credential(1, {secret: true}),
+  ]) {
+    const session = new CardSyncSession();
+    const card = mockCard(1, 1, [plain(), item]);
+    await assert.rejects(add(session, card), /invalid Security Key credential/);
+    assert.equal(session.cards.length, 0);
+    assert.equal(session.confirmedSnapshot, undefined);
+    assert.deepEqual(mutationCalls(card), []);
+    if (item.secret)
+      assert.equal(
+        card.calls.some(
+          ([name, index]) => name === 'get' && index === item.index,
+        ),
+        false,
+      );
+    assert.equal(
+      card.calls.some(([name]) => name === 'export'),
+      false,
+    );
+  }
+});
 
 test('missing Secret PIN stops before reading or exporting card contents', async () => {
   const session = new CardSyncSession();

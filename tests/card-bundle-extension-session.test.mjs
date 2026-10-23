@@ -4,6 +4,7 @@ import {test} from 'node:test';
 import {reaction} from 'mobx';
 
 import {CardBundleExtensionSession} from '../.bld/app/@components/views/safe/@card/card-bundle-extension-session.js';
+import {CardSecretPINSession} from '../.bld/app/@components/views/safe/@card/card-secret-pin-session.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 
 const PIN = 'Secret-42';
@@ -124,6 +125,80 @@ test('entry requires a full identity in an existing Bundle', () => {
   });
   assert.equal(session.bundle, source.bundle);
   assert.equal(session.phase, 'collecting');
+});
+
+test('a newly initialized target joins with its page PIN and wrong-card validation never consumes it', async () => {
+  const {session, target, targetApplet, source} = await ready('joining');
+  const pins = new CardSecretPINSession();
+  const card = prepared(target);
+  pins.onAuthenticated(card, PIN)();
+  let prompts = 0;
+  let current = source;
+  const run = () =>
+    pins.run(
+      [card],
+      async () => {
+        prompts++;
+        return PIN;
+      },
+      async (credentials, signal) => {
+        session.validateCard(current);
+        const {pin, onAuthenticated} = credentials(prepared(current));
+        await session.configureCard(
+          targetApplet,
+          current,
+          pin,
+          signal,
+          onAuthenticated,
+        );
+      },
+    );
+  await assert.rejects(run(), /Wrong card/);
+  assert.deepEqual(targetApplet.calls, []);
+  current = target;
+  await run();
+  assert.equal(prompts, 0);
+  assert.deepEqual(targetApplet.calls[0], [
+    'authenticate',
+    {secret: true, pin: PIN},
+  ]);
+  assert.equal(session.phase, 'complete');
+});
+
+test('extension keeps the original PIN failure cause and acknowledges only successful Secret authentication', async () => {
+  const {session, source, sourceApplet} = await ready();
+  let authenticated = 0;
+  const failure = new CBORAppletError({code: 'INVALID_PIN', tries: 4});
+  sourceApplet.onAuthenticate = () => {
+    throw failure;
+  };
+  await assert.rejects(
+    session.configureCard(
+      sourceApplet,
+      source,
+      PIN,
+      signal(),
+      () => authenticated++,
+    ),
+    error => error.cause === failure,
+  );
+  assert.equal(authenticated, 0);
+  sourceApplet.onAuthenticate = undefined;
+  sourceApplet.onExtend = () => {
+    throw new Error('Lost response');
+  };
+  await assert.rejects(
+    session.configureCard(
+      sourceApplet,
+      source,
+      PIN,
+      signal(),
+      () => authenticated++,
+    ),
+    /Lost response/,
+  );
+  assert.equal(authenticated, 1);
+  assert.equal(session.phase, 'requesting');
 });
 
 test('only one initialized new card is added and it remains editable until the requester acknowledges', async () => {

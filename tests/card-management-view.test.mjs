@@ -14,6 +14,11 @@ let rendering;
 const owners = [];
 const PIN = 'Secret-42';
 const AID = 'f06d6f6e6f69640201';
+const SECURITY_KEY = {
+  stage: 'security-key',
+  optional: true,
+  dependencies: ['library', 'monoid'],
+};
 
 mock.module('react', {
   namedExports: {
@@ -83,6 +88,22 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
     MonoidCardError,
     MonoidWrongCardError,
     hasAppletBundle: true,
+    APPLET_NAMES: {
+      identity: 'Monoid Identity Applet',
+      library: 'Monoid Library',
+      monoid: 'Monoid Applet',
+      'security-key': 'Monoid Security Key Applet',
+    },
+    getAppletCatalog: () => [
+      {stage: 'identity'},
+      {stage: 'library'},
+      {stage: 'monoid'},
+      SECURITY_KEY,
+    ],
+    getAppletDependents: stages =>
+      stages.some(stage => ['identity', 'library', 'monoid'].includes(stage))
+        ? [SECURITY_KEY]
+        : [],
     readMonoidAppletInstallation: async () => {
       fixture.installationReads = (fixture.installationReads ?? 0) + 1;
       return fixture.installation;
@@ -107,17 +128,28 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
         return fixture.applet;
       },
     }),
-    installMonoidApplets: async () => {
-      fixture.events.push({type: 'install'});
+    installMonoidApplets: async (
+      _session,
+      _progress,
+      _signal,
+      selectedOptionalStages,
+    ) => {
+      fixture.events.push({type: 'install', selectedOptionalStages});
       if (fixture.installError) throw fixture.installError;
-      fixture.installation = installed(fixture.uninitialized);
+      fixture.installation = installed(
+        fixture.uninitialized,
+        selectedOptionalStages,
+      );
       return fixture.uninitialized;
     },
     initializeMonoidCard: async (_applet, hello, pin) => {
       fixture.events.push({type: 'initialize', pin});
       assert.equal(hello.id, fixture.uninitialized.id);
       if (fixture.initializeError) throw fixture.initializeError;
-      fixture.installation = installed(fixture.initialized);
+      fixture.installation = {
+        ...fixture.installation,
+        hello: fixture.initialized,
+      };
       return fixture.initialized;
     },
   },
@@ -179,6 +211,7 @@ for (const [path, names] of [
     'views/card/card-management-content',
     ['CardAppletsContent', 'CardInformationContent', 'CardScanPlaceholder'],
   ],
+  ['views/card/applet-selection-popup', ['AppletSelectionPopup']],
   [
     '@view/index',
     [
@@ -235,11 +268,17 @@ function hello(initialized = true, bundle = false) {
     pins: {access: initialized ? 5 : false, secret: initialized ? 5 : false},
   };
 }
-function installed(hello) {
+function installed(hello, optional = []) {
   return {
     identity: {installed: true, loaded: true, aid: 'f06d6f6e6f69640001'},
     library: {installed: true, loaded: true},
     monoid: {installed: true, loaded: true, aid: AID, version: hello.version},
+    optional: {
+      'security-key': {
+        installed: optional.includes('security-key'),
+        loaded: optional.includes('security-key'),
+      },
+    },
     hello,
   };
 }
@@ -265,6 +304,7 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
       identity: {installed: false, loaded: false},
       library: {installed: false, loaded: false},
       monoid: {installed: false, loaded: false},
+      optional: {'security-key': {installed: false, loaded: false}},
     },
     uninitialized: hello(false, bundle),
     initialized: hello(true, bundle),
@@ -340,10 +380,12 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     matchOperation: () => state.pending,
     get: () => state.pending,
     isUpdateAvailable: () => false,
+    isAppletUpdateAvailable: () => false,
     recordInstallation: async (hello, options) => {
       state.recordedInstallations.push({hello, options});
     },
     prepare: async (_applet, options) => {
+      state.prepareOptions = options;
       state.events.push({
         type: 'prepare',
         mode: options.mode,
@@ -357,8 +399,13 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
       };
       return state.pending;
     },
-    prepareFresh: async () => {
-      state.events.push({type: 'prepare-fresh'});
+    prepareFresh: async (
+      _information,
+      _hello,
+      _signal,
+      selectedOptionalStages,
+    ) => {
+      state.events.push({type: 'prepare-fresh', selectedOptionalStages});
       state.pending = {
         id: 'fresh',
         mode: 'fresh',
@@ -367,23 +414,18 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
       };
       return state.pending;
     },
-    replace: async () => {
-      state.events.push({type: 'replace'});
-      state.pending.phase =
-        state.pending.mode === 'fresh'
-          ? 'setup'
-          : bundle
-            ? 'manual-restore'
-            : 'restore';
+    replace: async (_session, id) => {
+      state.events.push({type: 'replace', id});
+      if (!['ready', 'replacing'].includes(state.pending.phase)) {
+        return state.installation.hello;
+      }
+      if (state.pending.mode === 'fresh') state.pending = undefined;
+      else state.pending.phase = bundle ? 'manual-restore' : 'restore';
       state.installation = installed(state.uninitialized);
       return state.uninitialized;
     },
     restore: async () => {
       state.events.push({type: 'restore'});
-      state.pending = undefined;
-    },
-    complete: async () => {
-      state.events.push({type: 'complete'});
       state.pending = undefined;
     },
   };
@@ -395,6 +437,12 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
   state.entrances = {
     router: {
       safe,
+      securityKey: Object.assign(
+        options => ({
+          $push: () => state.events.push({type: 'open-security-key', options}),
+        }),
+        {$exact: 'securityKey'},
+      ),
       $backTo: route =>
         returnTo === route ? () => state.backs.push(route) : undefined,
     },
@@ -421,9 +469,13 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
 }
 afterEach(() => owners.splice(0).forEach(owner => owner.unmount()));
 
-test('installation asks for Secret PIN before scanning, completes PIN setup, then returns the new card to Copy', async () => {
+test('installation chooses applets before Secret PIN, completes PIN setup, then returns the new card to Copy', async () => {
   const state = mount({returnTo: 'copy'});
   state.click('Install applets');
+  assert.ok(state.node('AppletSelectionPopup'));
+  assert.equal(state.inputs.length, 0);
+  assert.equal(state.scans.length, 0);
+  state.node('AppletSelectionPopup').props.onInstall();
   assert.equal(state.inputs.length, 1);
   assert.match(state.inputs[0].options.placeholder, /Secret PIN/);
   assert.equal(state.scans.length, 0);
@@ -438,7 +490,7 @@ test('installation asks for Secret PIN before scanning, completes PIN setup, the
   assert.deepEqual(state.recordedInstallations, [
     {
       hello: state.uninitialized,
-      options: {identity: true, library: true, monoid: true},
+      options: {identity: true, library: true, monoid: true, optional: []},
     },
   ]);
   assert.equal(
@@ -481,12 +533,13 @@ test('installation keeps the current page during deferred PIN saving and Copy ha
     },
   });
   state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
   await state.answer();
   await state.tap();
   assert.deepEqual(state.recordedInstallations, [
     {
       hello: state.uninitialized,
-      options: {identity: true, library: false, monoid: true},
+      options: {identity: true, library: false, monoid: true, optional: []},
     },
   ]);
   assert.ok(state.node('CardInformationContent'));
@@ -508,6 +561,7 @@ test('installation keeps the current page during deferred PIN saving and Copy ha
 test('the refreshed applet list is shown only after leaving Complete', async () => {
   const state = mount();
   state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
   await state.answer();
   await state.tap();
   assert.ok(state.node('OperationComplete'));
@@ -550,6 +604,7 @@ test('failed installation reports the error and stays on Card information withou
   const state = mount();
   state.installError = new Error('Installing the applet failed (6a80)');
   state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
   await state.answer();
   await state.tap();
   assert.deepEqual(state.errors, [state.installError]);
@@ -562,12 +617,14 @@ test('failed installation reports the error and stays on Card information withou
     false,
   );
   state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
   assert.equal(state.inputs.length, 2);
 });
 
 test('a verified destination is added to the retained Copy flow even when navigation changes while the scanner closes', async () => {
   const state = mount({returnTo: 'copy'});
   state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
   await state.answer();
   await state.tap({finish: false});
   runInAction(() => {
@@ -584,6 +641,7 @@ test('failed PIN setup never marks an installed card complete or adds it to Copy
   const state = mount({returnTo: 'copy'});
   state.initializeError = new Error('PIN response lost');
   state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
   await state.answer();
   await state.tap();
   assert.deepEqual(state.errors, [state.initializeError]);
@@ -610,6 +668,7 @@ for (const [kind, label] of [
       pins: {...state.initialized.pins, [kind]: 0},
     };
     state.click('Install applets');
+    state.node('AppletSelectionPopup').props.onInstall();
     await state.answer();
     await state.tap();
     assert.equal(state.errors.length, 1);
@@ -628,6 +687,7 @@ for (const [kind, label] of [
 test('a different physical card is rejected before installation or any PIN command', async () => {
   const state = mount();
   state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
   await state.answer();
   state.information = {
     ...state.information,
@@ -646,6 +706,7 @@ test('a different physical card is rejected before installation or any PIN comma
 test('leaving while entering Secret PIN cancels the flow before opening the scanner', async () => {
   const state = mount();
   state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
   runInAction(() => {
     state.view.$leaving = true;
   });
@@ -701,8 +762,10 @@ for (const mode of ['update', 'reinstall']) {
     );
     if (mode === 'reinstall') state.click('Card menu');
     state.click(
-      mode === 'update' ? 'Update Monoid Applet' : 'Reinstall Monoid Applet',
+      mode === 'update' ? 'Update applets' : 'Reinstall Monoid Applet',
     );
+    assert.equal(state.inputs.length, 0);
+    state.node('ConfirmPopup').props.onConfirm();
     await state.answer();
     await state.tap();
 
@@ -760,6 +823,7 @@ test('a failed maintenance AID resolution stops before backup or replacement and
   await state.tap();
   state.click('Card menu');
   state.click('Reinstall Monoid Applet');
+  state.node('ConfirmPopup').props.onConfirm();
   await state.answer();
   await state.tap();
 
@@ -793,6 +857,7 @@ test('maintenance rejects a changed card identity before authenticating its prot
   await state.tap();
   state.click('Card menu');
   state.click('Reinstall Monoid Applet');
+  state.node('ConfirmPopup').props.onConfirm();
   await state.answer();
   state.installation = {
     ...state.installation,
@@ -816,6 +881,11 @@ test('fresh installation uses danger confirmation with two explicit actions befo
   await state.tap();
   state.click('Card menu');
   state.click('Fresh install');
+  assert.equal(state.node('AppletSelectionPopup').props.fresh, true);
+  assert.equal(state.node('ConfirmPopup'), undefined);
+  assert.equal(state.inputs.length, 0);
+  state.node('AppletSelectionPopup').props.onChange(['security-key']);
+  state.node('AppletSelectionPopup').props.onInstall();
   const confirm = state.node('ConfirmPopup');
   assert.equal(confirm.props.confirmColor, 'danger');
   assert.deepEqual(confirm.props.confirmText, ['Continue', 'Confirm']);
@@ -830,8 +900,223 @@ test('fresh installation uses danger confirmation with two explicit actions befo
   await state.answer();
   await state.tap();
   const types = state.events.map(event => event.type);
-  assert.ok(types.indexOf('initialize') < types.indexOf('complete'));
+  assert.deepEqual(
+    state.events.find(event => event.type === 'prepare-fresh')
+      .selectedOptionalStages,
+    ['security-key'],
+  );
+  assert.ok(types.indexOf('replace') < types.indexOf('initialize'));
+  assert.equal(state.pending, undefined);
   assert.ok(state.node('OperationComplete'));
+});
+
+test('dismissing applet selection performs no PIN prompt, scan or installation', () => {
+  const state = mount();
+  state.click('Install applets');
+  const selection = state.node('AppletSelectionPopup');
+  assert.deepEqual(selection.props.selected, []);
+  selection.props.onChange(['security-key']);
+  state.node('AppletSelectionPopup').props.onDismiss();
+  assert.equal(state.node('AppletSelectionPopup'), undefined);
+  assert.deepEqual(state.inputs, []);
+  assert.deepEqual(state.scans, []);
+  assert.equal(
+    state.events.some(event => event.type === 'install'),
+    false,
+  );
+});
+
+test('explicit Security Key selection reaches installation and returns to Security Key only on Back', async () => {
+  const state = mount({returnTo: 'securityKey'});
+  state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onChange(['security-key']);
+  assert.equal(state.inputs.length, 0);
+  state.node('AppletSelectionPopup').props.onInstall();
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(
+    state.events.find(event => event.type === 'install').selectedOptionalStages,
+    ['security-key'],
+  );
+  assert.deepEqual(state.recordedInstallations[0].options.optional, [
+    'security-key',
+  ]);
+  assert.ok(state.node('OperationComplete'));
+  assert.deepEqual(state.backs, []);
+  state.click('Back to Security Key');
+  assert.deepEqual(state.backs, ['securityKey']);
+});
+
+for (const mode of ['update', 'reinstall']) {
+  test(`${mode} warns about the dependent Security Key and does nothing until confirmed`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized, ['security-key']);
+    state.maintenance.isUpdateAvailable = () => mode === 'update';
+    state.click('Scan a card');
+    await state.tap();
+    if (mode === 'reinstall') state.click('Card menu');
+    state.click(
+      mode === 'update' ? 'Update applets' : 'Reinstall Monoid Applet',
+    );
+    const confirmation = state.node('ConfirmPopup');
+    assert.equal(confirmation.props.confirmColor, 'warning');
+    assert.deepEqual(confirmation.props.confirmText, ['Continue', 'Confirm']);
+    assert.match(
+      text(confirmation),
+      /Items and applet access will be backed up and restored/,
+    );
+    assert.match(
+      text(confirmation),
+      /Monoid Security Key Applet will be reinstalled/,
+    );
+    assert.match(text(confirmation), /FIDO PIN will be reset/);
+    assert.equal(state.inputs.length, 0);
+    assert.equal(
+      state.events.some(event => event.type === 'prepare'),
+      false,
+    );
+    confirmation.props.onCancel();
+    assert.equal(state.node('ConfirmPopup'), undefined);
+    assert.equal(state.inputs.length, 0);
+    if (mode === 'reinstall') state.click('Card menu');
+    state.click(
+      mode === 'update' ? 'Update applets' : 'Reinstall Monoid Applet',
+    );
+    state.node('ConfirmPopup').props.onConfirm();
+    await state.answer();
+    await state.tap();
+    assert.deepEqual(state.errors, []);
+    assert.equal(state.prepareOptions.mode, mode);
+    assert.deepEqual(state.prepareOptions.selectedOptionalStages, [
+      'security-key',
+    ]);
+    assert.deepEqual(
+      state.prepareOptions.replaceStages,
+      mode === 'update' ? ['library', 'monoid'] : undefined,
+    );
+  });
+}
+
+test('a Security Key-only update preserves Monoid items and selects only its own replacement stage', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized, ['security-key']);
+  state.maintenance.isAppletUpdateAvailable = (_hello, stage) =>
+    stage === 'security-key';
+  state.click('Scan a card');
+  await state.tap();
+  state.click('Update applets');
+  const confirmation = state.node('ConfirmPopup');
+  assert.match(text(confirmation), /Items and applet access will be preserved/);
+  assert.doesNotMatch(text(confirmation), /backed up/);
+  assert.match(text(confirmation), /FIDO PIN will be reset/);
+  assert.equal(state.inputs.length, 0);
+  confirmation.props.onConfirm();
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.prepareOptions.replaceStages, ['security-key']);
+});
+
+test('installing an optional applet preserves a Bundle recovery reminder without resuming it instead', async () => {
+  const state = mount({cardInformation: false, bundle: true});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.pending = {
+    id: 'earlier',
+    mode: 'update',
+    phase: 'manual-restore',
+    card: {appletAid: AID, bundle: true},
+    grants: [],
+  };
+  state.click('Card menu');
+  state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onChange(['security-key']);
+  state.node('AppletSelectionPopup').props.onInstall();
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(
+    state.events.find(event => event.type === 'install').selectedOptionalStages,
+    ['security-key'],
+  );
+  assert.equal(
+    state.events.some(
+      event => event.type === 'replace' || event.type === 'restore',
+    ),
+    false,
+  );
+  assert.equal(state.pending.id, 'earlier');
+  assert.ok(state.node('OperationComplete'));
+});
+
+test('optional installation updates known outdated dependencies after confirmation', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.maintenance.isUpdateAvailable = () => true;
+  state.click('Scan a card');
+  await state.tap();
+  state.click('Card menu');
+  state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onChange(['security-key']);
+  state.node('AppletSelectionPopup').props.onInstall();
+  const confirmation = state.node('ConfirmPopup');
+  assert.equal(confirmation.props.title, 'Update applets');
+  assert.match(text(confirmation), /backed up and restored/);
+  assert.equal(state.inputs.length, 0);
+  confirmation.props.onConfirm();
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.prepareOptions.replaceStages, ['library', 'monoid']);
+  assert.deepEqual(state.prepareOptions.selectedOptionalStages, [
+    'security-key',
+  ]);
+});
+
+test('Security Key maintenance includes known outdated required applets', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized, ['security-key']);
+  state.maintenance.isUpdateAvailable = () => true;
+  state.click('Scan a card');
+  await state.tap();
+  state.node('CardAppletsContent').props.onSelectApplet('security-key');
+  state.click('Reinstall applet');
+  const confirmation = state.node('ConfirmPopup');
+  assert.match(text(confirmation), /backed up and restored/);
+  assert.match(text(confirmation), /FIDO PIN will be reset/);
+  confirmation.props.onConfirm();
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.prepareOptions.replaceStages, [
+    'library',
+    'monoid',
+    'security-key',
+  ]);
+  assert.deepEqual(state.prepareOptions.selectedOptionalStages, [
+    'security-key',
+  ]);
+});
+
+test('the installed Security Key applet opens its Home page with the scanned card identity', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized, ['security-key']);
+  state.click('Scan a card');
+  await state.tap();
+  state.node('CardAppletsContent').props.onSelectApplet('security-key');
+  state.click('Open Security Key');
+  assert.deepEqual(state.events.at(-1), {
+    type: 'open-security-key',
+    options: {
+      card: {
+        id: '01020304',
+        publicKey: Buffer.from(state.initialized.publicKey).toString('hex'),
+      },
+    },
+  });
+  assert.equal(state.inputs.length, 0);
 });
 
 test('a known installed applet remains visible when card-manager information is unavailable', async () => {
@@ -880,4 +1165,221 @@ test('a known Identity Applet is not classified as an unsupported card when Mono
   assert.equal(content.props.applets[0].installed, true);
   assert.equal(content.props.applets[1].unknown, true);
   assert.equal(state.node('CardScanPlaceholder'), undefined);
+});
+
+for (const [mode, label] of [
+  ['reinstall', 'Resume reinstall'],
+  ['update', 'Resume update'],
+  ['fresh', 'Resume fresh install'],
+]) {
+  test(`interrupted ${mode} requires explicit confirmation and resumes its saved plan`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    state.pending = {
+      id: 'interrupted',
+      mode,
+      phase: 'replacing',
+      checkpoint: 'remove-monoid-package',
+      selectedOptionalStages: ['security-key'],
+      replaceStages: ['library', 'monoid', 'security-key'],
+      archive: mode === 'fresh' ? undefined : {items: []},
+      card: {appletAid: AID, bundle: false},
+    };
+    const saved = state.pending;
+    const footer = state.node('ViewContent').props.footer;
+    assert.equal(text(footer), label);
+    state.click(label);
+    const confirmation = state.node('ConfirmPopup');
+    assert.equal(
+      confirmation.props.confirmColor,
+      mode === 'fresh' ? 'danger' : 'warning',
+    );
+    assert.match(
+      text(confirmation),
+      /Monoid Security Key Applet will be reinstalled/,
+    );
+    assert.equal(state.inputs.length, 0);
+    assert.equal(state.scans.length, 1);
+    confirmation.props.onCancel();
+    assert.equal(state.node('ConfirmPopup'), undefined);
+    assert.equal(state.pending, saved);
+    assert.equal(state.inputs.length, 0);
+    state.click(label);
+    state.node('ConfirmPopup').props.onConfirm();
+    assert.equal(
+      state.inputs[0].options.placeholder,
+      mode === 'fresh' ? 'Set Secret PIN' : 'Enter Secret PIN',
+    );
+    await state.answer();
+    await state.tap();
+    assert.deepEqual(state.errors, []);
+    assert.deepEqual(
+      state.events.filter(event => event.type === 'replace'),
+      [{type: 'replace', id: 'interrupted'}],
+    );
+    assert.equal(
+      state.events.some(event =>
+        ['prepare', 'prepare-fresh', 'install'].includes(event.type),
+      ),
+      false,
+    );
+    assert.deepEqual(saved.selectedOptionalStages, ['security-key']);
+    assert.deepEqual(saved.replaceStages, [
+      'library',
+      'monoid',
+      'security-key',
+    ]);
+  });
+}
+
+test('resume confirmation cannot authorize a different saved maintenance operation', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.pending = {
+    id: 'confirmed',
+    mode: 'reinstall',
+    phase: 'replacing',
+    card: {appletAid: AID, bundle: false},
+  };
+  state.click('Resume reinstall');
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.answer();
+  state.pending = {...state.pending, id: 'different'};
+  await state.tap();
+  assert.equal(state.errors.length, 1);
+  assert.equal(
+    state.events.some(event =>
+      ['prepare', 'replace', 'install'].includes(event.type),
+    ),
+    false,
+  );
+});
+
+test('an interrupted replacement disables new installation instead of borrowing its saved operation', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.pending = {
+    id: 'interrupted',
+    mode: 'fresh',
+    phase: 'replacing',
+    card: {appletAid: AID, bundle: false},
+  };
+  state.click('Card menu');
+  for (const label of ['Install applets', 'Fresh install']) {
+    const button = find(
+      state.render(),
+      node => node.type === 'Button' && text(node) === label,
+    );
+    assert.equal(button.props.disabled, true);
+  }
+});
+
+test('a new Install action cannot resume an operation discovered during its scan', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.click('Card menu');
+  state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onChange(['security-key']);
+  state.node('AppletSelectionPopup').props.onInstall();
+  await state.answer();
+  state.pending = {
+    id: 'interrupted',
+    mode: 'reinstall',
+    phase: 'replacing',
+    card: {appletAid: AID, bundle: false},
+  };
+  await state.tap();
+  assert.equal(state.errors.length, 1);
+  assert.match(state.errors[0].message, /Resume card maintenance first/);
+  assert.equal(
+    state.events.some(event =>
+      ['prepare', 'replace', 'install'].includes(event.type),
+    ),
+    false,
+  );
+});
+
+for (const [phase, label, mode, archive, grants] of [
+  ['restore', 'Restore items', 'reinstall', {items: []}, []],
+  ['restore', 'Restore applet access', 'reinstall', undefined, ['grant']],
+  [
+    'manual-restore',
+    'Restore applet access',
+    'reinstall',
+    undefined,
+    ['grant'],
+  ],
+]) {
+  test(`${phase} offers only its remaining ${label} action`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    state.pending = {
+      id: 'remaining',
+      mode,
+      phase,
+      archive,
+      grants,
+      card: {appletAid: AID, bundle: false},
+    };
+    assert.equal(text(state.node('ViewContent').props.footer), label);
+    state.click(label);
+    assert.equal(state.node('ConfirmPopup'), undefined);
+    await state.answer();
+    await state.tap();
+    assert.deepEqual(state.errors, []);
+    assert.equal(
+      state.events.some(event =>
+        ['prepare', 'prepare-fresh', 'install'].includes(event.type),
+      ),
+      false,
+    );
+    assert.ok(state.events.some(event => event.type === 'restore'));
+    assert.equal(
+      state.events.some(event => event.type === 'initialize'),
+      false,
+    );
+    assert.ok(state.node('OperationComplete'));
+  });
+}
+
+test('fresh installation interrupted during PIN setup needs only a new card read, not a saved reinstall', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.click('Card menu');
+  state.click('Fresh install');
+  state.node('AppletSelectionPopup').props.onInstall();
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.answer();
+  state.initializeError = new Error('Card removed');
+  await state.tap();
+  assert.equal(state.pending, undefined);
+  assert.equal(text(state.node('ViewContent').props.footer), 'Scan a card');
+  assert.equal(state.node('OperationComplete'), undefined);
+  state.initializeError = undefined;
+  state.click('Scan a card');
+  await state.tap();
+  assert.equal(text(state.node('ViewContent').props.footer), 'Set Secret PIN');
+  const replacements = state.events.filter(
+    event => event.type === 'replace',
+  ).length;
+  state.click('Set Secret PIN');
+  await state.answer();
+  await state.tap();
+  assert.equal(
+    state.events.filter(event => event.type === 'replace').length,
+    replacements,
+  );
+  assert.ok(state.node('OperationComplete'));
 });

@@ -14,7 +14,9 @@ import {openSecureChannel} from './secure-channel.js';
 
 export type AppletPackage = {
   packageAid: Uint8Array;
+  /** CAP executable module, which can differ from the installed instance. */
   appletAid?: Uint8Array;
+  instanceAid?: Uint8Array;
   code: Uint8Array;
 };
 
@@ -60,11 +62,14 @@ export class GlobalPlatformInstaller {
   /** Read registry metadata without authenticating or exposing write operations. */
   static async inspect(
     transceive: CardTransceive,
-  ): Promise<Pick<GlobalPlatformInstaller, 'getEntry'>> {
+  ): Promise<Pick<GlobalPlatformInstaller, 'getEntry' | 'getEntries'>> {
     const aid = await this.selectDomain(transceive);
     const reader = new GlobalPlatformInstaller(transceive, aid);
 
-    return {getEntry: (scope, entryAid) => reader.getEntry(scope, entryAid)};
+    return {
+      getEntry: (scope, entryAid) => reader.getEntry(scope, entryAid),
+      getEntries: scope => reader.getEntries(scope),
+    };
   }
 
   private static async selectDomain(
@@ -95,8 +100,9 @@ export class GlobalPlatformInstaller {
     onProgress({phase: 'checking'});
 
     const {appletAid} = applet;
+    const instanceAid = applet.instanceAid ?? appletAid;
     const instance = appletAid
-      ? await this.getEntry(0x40, appletAid)
+      ? await this.getEntry(0x40, instanceAid!)
       : undefined;
 
     if (instance) {
@@ -150,7 +156,7 @@ export class GlobalPlatformInstaller {
     const data = concat(
       lengthValue(applet.packageAid),
       lengthValue(appletAid),
-      lengthValue(appletAid),
+      lengthValue(instanceAid!),
       new Uint8Array([1, 0, 2, 0xc9, 0, 0]),
     );
     successful(
@@ -158,7 +164,7 @@ export class GlobalPlatformInstaller {
       'Installing the applet',
     );
 
-    const installed = await this.getEntry(0x40, appletAid);
+    const installed = await this.getEntry(0x40, instanceAid!);
 
     if (!installed || (installed.lifecycle & 0x87) !== 0x07) {
       throw new Error(
@@ -267,6 +273,19 @@ export class GlobalPlatformInstaller {
     if (aid.length < 5 || aid.length > 16) {
       throw new Error('A card registry AID must contain 5–16 bytes.');
     }
+    return (await this.readEntries(scope, aid)).find(entry =>
+      equalBytes(entry.aid, aid),
+    );
+  }
+
+  getEntries(scope: 0x10 | 0x40): Promise<RegistryEntry[]> {
+    return this.readEntries(scope, new Uint8Array());
+  }
+
+  private async readEntries(
+    scope: 0x10 | 0x40,
+    aid: Uint8Array,
+  ): Promise<RegistryEntry[]> {
     const chunks: Uint8Array[] = [];
 
     for (let page = 0; page < 256; page++) {
@@ -281,7 +300,7 @@ export class GlobalPlatformInstaller {
       const {data, sw} = parseResponse(response);
 
       if (sw === 0x6a88 && page === 0) {
-        return undefined;
+        return [];
       }
 
       if (sw !== 0x9000 && sw !== 0x6310) {
@@ -298,7 +317,7 @@ export class GlobalPlatformInstaller {
         continue;
       }
 
-      for (const record of readTLV(concat(...chunks))) {
+      return readTLV(concat(...chunks)).map(record => {
         if (record.tag !== 0xe3) {
           throw new Error('Unsupported card registry format.');
         }
@@ -321,22 +340,18 @@ export class GlobalPlatformInstaller {
           throw new Error('Missing or invalid card registry fields.');
         }
 
-        if (equalBytes(entryAid, aid)) {
-          return {
-            aid: entryAid,
-            lifecycle: lifecycle[0],
-            modules: fields
-              .filter(field => field.tag === 0x84)
-              .map(field => field.value),
-            ...(packageAid !== undefined && {packageAid}),
-            ...(version !== undefined && {
-              version: {major: version[0], minor: version[1]},
-            }),
-          };
-        }
-      }
-
-      return undefined;
+        return {
+          aid: entryAid,
+          lifecycle: lifecycle[0],
+          modules: fields
+            .filter(field => field.tag === 0x84)
+            .map(field => field.value),
+          ...(packageAid !== undefined && {packageAid}),
+          ...(version !== undefined && {
+            version: {major: version[0], minor: version[1]},
+          }),
+        };
+      });
     }
 
     throw new Error('The card registry did not finish responding.');

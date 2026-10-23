@@ -1,12 +1,18 @@
 import assert from 'node:assert/strict';
 import {afterEach, mock, test} from 'node:test';
 
+import {observable} from 'mobx';
+import {CardSecretPINSession} from '../.bld/app/@components/views/safe/@card/card-secret-pin-session.js';
+
 import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
 import {initializeMonoidCard} from '../.bld/app/@lib/monoid/initialize-card.js';
-import {MonoidAppletHello} from '../.bld/app/@lib/monoid/monoid-applet.js';
+import {
+  MonoidAppletHello,
+  MonoidAppletInvalidPINError,
+} from '../.bld/app/@lib/monoid/monoid-applet.js';
 
 let fixture;
 const owners = [];
@@ -49,6 +55,7 @@ mock.module('react/jsx-runtime', {
 });
 mock.module('mobx', {
   namedExports: {
+    observable,
     runInAction: action => action(),
     reaction(expression, effect) {
       const owner = fixture;
@@ -67,9 +74,22 @@ mock.module('mobx', {
 mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => fixture.entrances},
 });
+mock.module('../.bld/app/@components/views/safe/@card/card-backup-session.js', {
+  namedExports: {
+    readBackupCardIdentity: hello => ({
+      id: Buffer.from(hello.id).toString('hex'),
+      publicKey: Buffer.from(hello.publicKey).toString('hex'),
+      bundle:
+        hello.bundle === false
+          ? false
+          : Buffer.from(hello.bundle).toString('hex'),
+    }),
+  },
+});
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
     MonoidAppletHello,
+    MonoidAppletInvalidPINError,
     MonoidCardError,
     MonoidWrongCardError,
     initializeMonoidCard,
@@ -210,6 +230,7 @@ function mount(options = {}) {
     },
   };
   state.options = {
+    secretPINSession: new CardSecretPINSession(),
     isActive: () => state.active,
     validateAddition: options.validateAddition ?? (() => {}),
     onAdded: async value => state.added.push(value),
@@ -323,6 +344,7 @@ test('a target missing PINs uses shared PIN setup and preserves confirmed setup 
   const setup = find(state.hook.content, 'setup-pin');
   assert.equal(setup.props.hello, state.result.hello);
   assert.equal(setup.props.pinSession, state.pinSession);
+  assert.equal(setup.props.secretPINSession, state.options.secretPINSession);
   assert.equal(state.hook.buttonLabel, 'Set Secret PIN');
 
   state.deactivate();
@@ -331,6 +353,64 @@ test('a target missing PINs uses shared PIN setup and preserves confirmed setup 
   setup.props.onFinished(true, initialized);
   await Promise.resolve();
   assert.deepEqual(state.added, [initialized]);
+});
+
+test('resetting an extension target remembers its new Secret PIN only for the replacement identity', async () => {
+  const state = mount();
+  const original = hello({bundle: new Uint8Array(32).fill(2)});
+  let current = original;
+  state.pin = 'New-42';
+  state.pinSession.removePIN = async () => {};
+  state.pinSession.setPIN = async () => {};
+  state.entrances.cardStore.set = card => card;
+  state.entrances.monoidApplet.openSession = async () => ({
+    hello: async () => current,
+    reset: async () => {
+      current = {
+        ...hello({pins: {access: false, secret: false}}),
+        id: Uint8Array.from([5, 6, 7, 8]),
+        publicKey: Uint8Array.from([4, ...new Array(64).fill(34)]),
+      };
+    },
+    setPIN: async () => {
+      current = {...current, pins: {access: 5, secret: 5}};
+    },
+    authenticate: async () => {},
+  });
+  await state.hook.acceptCard(original);
+  state.render();
+  const adding = find(state.hook.content, 'confirm-popup').props.onConfirm();
+  for (let index = 0; index < 10; index++) await Promise.resolve();
+  await state.tap();
+  state.scans.at(-1).resolve();
+  await adding;
+  assert.deepEqual(state.added, [current]);
+  const identity = card => ({
+    id: Buffer.from(card.id).toString('hex'),
+    publicKey: Buffer.from(card.publicKey).toString('hex'),
+    bundle:
+      card.bundle === false ? false : Buffer.from(card.bundle).toString('hex'),
+  });
+  await state.options.secretPINSession.run(
+    [identity(current)],
+    async () => {
+      assert.fail('Initialization already confirmed the new PIN');
+    },
+    async credentials => {
+      assert.equal(credentials(identity(current)).pin, state.pin);
+    },
+  );
+  let prompted = false;
+  await state.options.secretPINSession.run(
+    [identity(original)],
+    async () => {
+      prompted = true;
+    },
+    async () => {
+      assert.fail('Old card identity must not inherit the PIN');
+    },
+  );
+  assert.equal(prompted, true);
 });
 
 test('an installed target retaining its original bundle opens reset confirmation without mutation or another scan', async () => {

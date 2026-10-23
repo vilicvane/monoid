@@ -6,6 +6,7 @@ import {
   encodeCardDerivationRecord,
   getCardDerivationItemIndex,
 } from '../.bld/app/@components/views/safe/card-derivations.js';
+import {credential} from './helpers/security-key-credential.mjs';
 
 const keyIndex = '03010000000000000001';
 const publicIndex = '10000000000000000001';
@@ -202,4 +203,96 @@ test('non-bundle Secrets with the same index remain separate and are never expor
     plans.map(plan => plan.operations.length),
     [0, 0],
   );
+});
+
+test('credential records keep independent indices and skip identical shared items', () => {
+  const first = credential(1);
+  const second = credential(2);
+  const plans = createCardSyncPlans([
+    card(1, 'A', [first]),
+    card(2, 'A', [{...first}, second]),
+  ]);
+  assert.deepEqual(
+    plans[0].operations.map(operation => [
+      operation.kind,
+      operation.after.index,
+    ]),
+    [['create', second.index]],
+  );
+  assert.deepEqual(plans[1].operations, []);
+  assert.deepEqual(
+    plans[0].items.map(item => item.index),
+    [first.index, second.index],
+  );
+});
+
+test('credential payload conflicts stop planning instead of replacing the later card data', () => {
+  const first = credential(1);
+  const second = credential(1, {fields: [[6, 'other name']]});
+  const data = second.data;
+  assert.throws(
+    () => createCardSyncPlans([card(1, 'A', [first]), card(2, 'A', [second])]),
+    /conflicting credential data/,
+  );
+  assert.equal(second.data, data);
+});
+
+test('different credential scopes coexist across Bundles without moving their Secret seeds', () => {
+  const first = credential(1);
+  const second = credential(2, {scope: 2});
+  const plans = createCardSyncPlans([
+    card(1, 'A', [secret(), first]),
+    card(2, 'B', [secret({fingerprint: 'key:2'}), second]),
+    card(3, false, []),
+  ]);
+  assert.deepEqual(
+    plans.map(plan =>
+      plan.items
+        .filter(item => item.index.startsWith('f101'))
+        .map(item => item.index),
+    ),
+    [
+      [first.index, second.index],
+      [first.index, second.index],
+      [first.index, second.index],
+    ],
+  );
+  assert.deepEqual(
+    plans.map(plan =>
+      plan.items.filter(item => item.secret).map(item => item.fingerprint),
+    ),
+    [['key:1'], ['key:2'], []],
+  );
+  assert.ok(
+    plans.every(plan =>
+      plan.operations.every(
+        operation => operation.kind === 'create' && !operation.after.secret,
+      ),
+    ),
+  );
+});
+
+test('same-index valid credentials with a different scope conflict rather than being grouped', () => {
+  assert.throws(
+    () =>
+      createCardSyncPlans([
+        card(1, 'A', [credential(1)]),
+        card(2, 'B', [credential(1, {scope: 2})]),
+      ]),
+    /conflicting item metadata/,
+  );
+});
+
+test('a lone old or malformed credential is rejected before creating a transfer plan', () => {
+  for (const item of [
+    credential(1, {fields: [[10, undefined]]}),
+    credential(1, {fields: [[10, new Uint8Array(31)]]}),
+    credential(1, {key: '00'.repeat(64)}),
+    credential(1, {secret: true}),
+  ]) {
+    assert.throws(
+      () => createCardSyncPlans([card(1, 'A', [item]), card(2, 'B', [])]),
+      /invalid Security Key credential/,
+    );
+  }
 });

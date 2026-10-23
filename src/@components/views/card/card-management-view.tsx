@@ -14,10 +14,14 @@ import {
 import {CardManagerNotFoundError} from '../../../@lib/global-platform/install.js';
 import {getCardInstallationChecks} from '../../../@lib/global-platform/installation-support.js';
 import {
+  APPLET_NAMES,
+  type AppletStage,
   type MonoidAppletHello,
   MonoidCardError,
   MonoidWrongCardError,
   createMonoidApplet,
+  getAppletCatalog,
+  getAppletDependents,
   hasAppletBundle,
   initializeMonoidCard,
   installMonoidApplets,
@@ -66,6 +70,7 @@ import {
   CardInformationContent,
   CardScanPlaceholder,
 } from './card-management-content.js';
+import {AppletSelectionPopup} from './applet-selection-popup.js';
 
 type Installation = Awaited<ReturnType<typeof readMonoidAppletInstallation>>;
 type CardSnapshot = {
@@ -73,7 +78,7 @@ type CardSnapshot = {
   installation?: Installation;
   unsupported?: boolean;
 };
-type Action = CardMaintenanceMode | 'install' | 'restore' | 'setup';
+type Action = CardMaintenanceMode | 'install' | 'resume' | 'restore' | 'setup';
 
 const HeaderActions = styled.div`
   grid-column: 3;
@@ -87,17 +92,32 @@ const HeaderActions = styled.div`
 `;
 
 function Progress({progress}: {progress: CardMaintenanceProgress}): ReactNode {
+  if (progress.stage === 'deleting')
+    return <AppletInstallProgressContent update={progress} />;
   if ('completed' in progress) {
     return (
       <MonoidScanStatePromptProgress
         current={progress.completed}
         total={progress.total}
       >
-        {progress.stage === 'backup' ? 'Exporting items' : 'Restoring items'}
+        {progress.stage === 'backup'
+          ? 'Exporting items'
+          : progress.stage === 'restoring-grants'
+            ? 'Restoring applet access'
+            : 'Restoring items'}
       </MonoidScanStatePromptProgress>
     );
   }
-  if (progress.stage === 'deleting') return 'Removing applets, hold tight...';
+  if (
+    progress.stage === 'verifying-backup' ||
+    progress.stage === 'verifying-restore' ||
+    progress.stage === 'verifying-grants'
+  )
+    return {
+      'verifying-backup': 'Verifying backup, hold tight...',
+      'verifying-restore': 'Verifying recovery, hold tight...',
+      'verifying-grants': 'Verifying applet access, hold tight...',
+    }[progress.stage];
   return <AppletInstallProgressContent update={progress} />;
 }
 
@@ -123,8 +143,15 @@ export const CardManagementView = observer(
     }));
     const [complete, setComplete] = useState(false);
     const [busy, setBusy] = useState(false);
-    const [popup, setPopup] = useState<'details' | 'menu'>();
-    const [confirm, setConfirm] = useState<CardMaintenanceMode>();
+    const [popup, setPopup] = useState<
+      'details' | 'menu' | 'install' | 'fresh' | AppletStage
+    >();
+    const [selectedOptional, setSelectedOptional] = useState<AppletStage[]>([]);
+    const [confirm, setConfirm] = useState<{
+      mode: CardMaintenanceMode;
+      replaceStages?: AppletStage[];
+      operationId?: string;
+    }>();
     const [pinContent, showPIN] = useInputModal();
     const [pinSession] = useState(() =>
       monoidCredentialsStore.createPINSession(),
@@ -167,6 +194,26 @@ export const CardManagementView = observer(
     const recovery = !!pending?.archive;
     const manualRestore = pending?.phase === 'manual-restore';
     const needsResume = pending && !manualRestore;
+    const needsReplacement =
+      pending && ['ready', 'replacing'].includes(pending.phase);
+    const resumeLabel = needsReplacement
+      ? pending.mode === 'fresh'
+        ? 'Resume fresh install'
+        : pending.mode === 'update'
+          ? 'Resume update'
+          : 'Resume reinstall'
+      : recovery
+        ? 'Restore items'
+        : 'Restore applet access';
+    const optionalApplets = getAppletCatalog().filter(
+      applet => applet.optional,
+    );
+    const installedOptional = optionalApplets
+      .filter(applet => {
+        const state = installation?.optional?.[applet.stage];
+        return state?.installed || state?.loaded;
+      })
+      .map(applet => applet.stage);
 
     async function readSnapshot(
       sessionId: string,
@@ -176,6 +223,7 @@ export const CardManagementView = observer(
       const installation = await readMonoidAppletInstallation(
         sessionId,
         signal,
+        {authenticateRegistry: true},
       );
       try {
         information ??= await readCardInformation(sessionId, signal);
@@ -234,8 +282,11 @@ export const CardManagementView = observer(
       action: Action,
       signal: AbortSignal,
     ): Promise<MonoidPIN | undefined> {
+      const fresh =
+        action === 'fresh' ||
+        (action === 'resume' && pending?.mode === 'fresh');
       let description: ReactNode =
-        action === 'install' || action === 'fresh' || action === 'setup' ? (
+        action === 'install' || fresh || action === 'setup' ? (
           <>
             Will be used as initial <PINKind kind="Access" /> PIN
           </>
@@ -247,7 +298,7 @@ export const CardManagementView = observer(
             type: 'password',
             ...getPINInputPlaceholder(
               'Secret',
-              action === 'fresh' ||
+              fresh ||
                 hello?.pins.secret === false ||
                 (action === 'install' &&
                   installation?.identity.installed === false)
@@ -291,7 +342,14 @@ export const CardManagementView = observer(
       if (isActive()) setComplete(true);
     }
 
-    async function perform(action: Action): Promise<void> {
+    async function perform(
+      action: Action,
+      options: {
+        selectedOptionalStages?: readonly AppletStage[];
+        replaceStages?: readonly AppletStage[];
+        operationId?: string;
+      } = {},
+    ): Promise<void> {
       if (!isActive() || controller.current || !hasAppletBundle) return;
       const operation = new AbortController();
       controller.current = operation;
@@ -300,6 +358,7 @@ export const CardManagementView = observer(
       setConfirm(undefined);
       let pin: MonoidPIN | undefined;
       let accessPINId: MonoidIdHex | undefined;
+      let appletsChanged = false;
       let result:
         | {hello: MonoidAppletHello; snapshot: CardSnapshot}
         | undefined;
@@ -323,7 +382,11 @@ export const CardManagementView = observer(
           ) {
             throw new MonoidCardError('Scan the same card');
           }
-          const current = await readMonoidAppletInstallation(sessionId, signal);
+          const current = await readMonoidAppletInstallation(
+            sessionId,
+            signal,
+            {authenticateRegistry: true},
+          );
           signal.throwIfAborted();
           let saved = maintenance.matchOperation({
             hello: current.hello,
@@ -349,9 +412,35 @@ export const CardManagementView = observer(
           }
           if (
             saved?.phase === 'manual-restore' &&
-            (action === 'update' || action === 'reinstall')
+            !saved.grants?.length &&
+            (action === 'update' ||
+              action === 'reinstall' ||
+              action === 'install')
           ) {
             saved = undefined;
+          }
+
+          // A newly chosen action must never inherit an earlier destructive
+          // operation. Resuming binds the user's confirmation to its saved plan.
+          if (options.operationId && saved?.id !== options.operationId) {
+            throw new MonoidCardError('Scan the card again');
+          }
+          if (
+            (action === 'resume' &&
+              (!options.operationId ||
+                !saved ||
+                !['ready', 'replacing'].includes(saved.phase))) ||
+            (action === 'restore' &&
+              (!saved ||
+                !['restore', 'manual-restore'].includes(saved.phase))) ||
+            (action === 'setup' && saved) ||
+            (action === 'fresh' && saved?.mode === 'fresh') ||
+            (saved &&
+              (action === 'install' ||
+                action === 'update' ||
+                action === 'reinstall'))
+          ) {
+            throw new MonoidCardError('Resume card maintenance first');
           }
 
           if (action === 'fresh') {
@@ -359,6 +448,7 @@ export const CardManagementView = observer(
               information,
               current.hello,
               signal,
+              options.selectedOptionalStages,
             );
           } else if (
             (action === 'update' || action === 'reinstall') &&
@@ -378,6 +468,8 @@ export const CardManagementView = observer(
             signal.throwIfAborted();
             saved = await maintenance.prepare(applet, {
               mode: action,
+              selectedOptionalStages: options.selectedOptionalStages,
+              replaceStages: options.replaceStages,
               appletAid,
               cardInformation: information,
               onProgress: progress,
@@ -403,8 +495,15 @@ export const CardManagementView = observer(
               progress,
               signal,
             );
+            appletsChanged = true;
           } else if (action === 'install') {
-            next = await installMonoidApplets(sessionId, progress, signal);
+            next = await installMonoidApplets(
+              sessionId,
+              progress,
+              signal,
+              options.selectedOptionalStages,
+            );
+            appletsChanged = true;
             await maintenance.recordInstallation(next, {
               identity:
                 current.identity.installed === false &&
@@ -413,6 +512,9 @@ export const CardManagementView = observer(
               monoid:
                 current.monoid.installed === false &&
                 current.monoid.loaded === false,
+              optional: (options.selectedOptionalStages ?? []).filter(
+                stage => current.optional?.[stage]?.loaded === false,
+              ),
             });
           } else if (action === 'setup' && current.hello) {
             next = current.hello;
@@ -440,14 +542,18 @@ export const CardManagementView = observer(
               accessPINId = uint8ArrayToHex(next.id);
             }
           }
-          if (saved && maintenance.get(saved.id)?.phase === 'restore') {
+          if (
+            saved &&
+            (maintenance.get(saved.id)?.phase === 'restore' ||
+              (action === 'restore' &&
+                saved.phase === 'manual-restore' &&
+                saved.grants?.length))
+          ) {
             setState('Authenticating, hold tight...');
             await applet.authenticate({secret: true, pin: pin!});
             signal.throwIfAborted();
             await maintenance.restore(applet, saved.id, progress, signal);
           }
-          if (saved?.mode === 'fresh') await maintenance.complete(saved.id);
-
           if (action !== 'setup' || saved) setState('Reading card...');
           const latest =
             action === 'setup' && !saved
@@ -484,16 +590,50 @@ export const CardManagementView = observer(
           } catch (error) {
             errorService.catch(Promise.reject(error));
           }
+        } else if (appletsChanged) {
+          // Installation is recoverable by reading the card again; do not keep
+          // the previous identity or a pending setup action after interruption.
+          setCard({});
         }
         if (controller.current === operation) controller.current = undefined;
         setBusy(false);
       }
     }
 
-    function requestMaintenance(mode: CardMaintenanceMode): void {
+    function requestMaintenance(
+      mode: CardMaintenanceMode,
+      replaceStages?: AppletStage[],
+    ): void {
       setPopup(undefined);
-      if (mode === 'fresh' || hello?.bundle) setConfirm(mode);
-      else void perform(mode);
+      setSelectedOptional(installedOptional);
+      setConfirm({
+        mode,
+        replaceStages:
+          replaceStages && baseUpdateAvailable
+            ? [...new Set<AppletStage>(['library', 'monoid', ...replaceStages])]
+            : replaceStages,
+      });
+    }
+
+    function requestInstall(fresh = false): void {
+      setSelectedOptional(installedOptional);
+      setPopup(fresh ? 'fresh' : 'install');
+    }
+
+    function resumeMaintenance(): void {
+      if (!pending) return;
+      if (needsReplacement) {
+        setSelectedOptional([...(pending.selectedOptionalStages ?? [])]);
+        setConfirm({
+          mode: pending.mode,
+          replaceStages: pending.replaceStages,
+          operationId: pending.id,
+        });
+      } else {
+        void perform('restore', {
+          operationId: pending.id,
+        });
+      }
     }
 
     const backToCopy =
@@ -510,19 +650,54 @@ export const CardManagementView = observer(
       context.returnTo === 'safe'
         ? router.$backTo(router.safe.$exact)
         : undefined;
-    const back = backToCopy ?? backToBundle ?? backToSafe;
+    const backToSecurityKey =
+      context.returnTo === 'securityKey'
+        ? router.$backTo(router.securityKey.$exact)
+        : undefined;
+    const back = backToCopy ?? backToBundle ?? backToSecurityKey ?? backToSafe;
     const backLabel = backToCopy
       ? 'Back to Copy'
       : backToBundle
         ? 'Back to Bundle'
-        : 'Back to Safe';
+        : backToSecurityKey
+          ? 'Back to Security Key'
+          : 'Back to Safe';
+    const canStartMaintenance =
+      !busy && (!pending || (manualRestore && !pending.grants?.length));
     const canMaintain =
-      !busy &&
-      (!pending || manualRestore) &&
-      !!installation?.identity.installed;
+      canStartMaintenance && !!installation?.identity.installed;
     const canFreshInstall =
-      !busy && !!card.information && !!installation?.identity.installed;
-    const updateAvailable = hello && maintenance.isUpdateAvailable(hello);
+      !busy &&
+      pending?.mode !== 'fresh' &&
+      !!card.information &&
+      !!installation?.identity.installed;
+    const baseUpdateAvailable = hello && maintenance.isUpdateAvailable(hello);
+    const optionalUpdates = hello
+      ? installedOptional.filter(stage =>
+          maintenance.isAppletUpdateAvailable(hello, stage),
+        )
+      : [];
+    const updateAvailable = baseUpdateAvailable || optionalUpdates.length > 0;
+    const updateStages: AppletStage[] = baseUpdateAvailable
+      ? ['library', 'monoid']
+      : optionalUpdates;
+    const affectedStages = confirm
+      ? [
+          ...(confirm.mode === 'fresh'
+            ? (['identity', 'library', 'monoid'] as const)
+            : (confirm.replaceStages ?? (['library', 'monoid'] as const))),
+          ...getAppletDependents(
+            confirm.mode === 'fresh'
+              ? ['identity', 'library', 'monoid']
+              : (confirm.replaceStages ?? ['library', 'monoid']),
+          ).map(applet => applet.stage),
+        ]
+      : [];
+    const affectsSecurityKey =
+      affectedStages.includes('security-key') &&
+      (installedOptional.includes('security-key') ||
+        (!!confirm?.operationId && selectedOptional.includes('security-key')));
+    const replacesStorage = affectedStages.includes('monoid');
 
     return (
       <>
@@ -568,9 +743,17 @@ export const CardManagementView = observer(
                 <Button
                   color={recovery ? 'warning' : 'primary'}
                   disabled={busy}
-                  onClick={() => void perform('restore')}
+                  onClick={resumeMaintenance}
                 >
-                  {recovery ? 'Restore items' : 'Continue'}
+                  {resumeLabel}
+                </Button>
+              ) : manualRestore && pending.grants?.length ? (
+                <Button
+                  color="warning"
+                  disabled={busy}
+                  onClick={resumeMaintenance}
+                >
+                  Restore applet access
                 </Button>
               ) : (!card.information && !installation) || card.unsupported ? (
                 <Button
@@ -583,7 +766,7 @@ export const CardManagementView = observer(
               ) : !installation?.monoid.installed && card.information ? (
                 <Button
                   disabled={busy || !hasAppletBundle}
-                  onClick={() => void perform('install')}
+                  onClick={() => requestInstall()}
                 >
                   Install applets
                 </Button>
@@ -594,9 +777,9 @@ export const CardManagementView = observer(
               ) : updateAvailable ? (
                 <Button
                   disabled={busy}
-                  onClick={() => requestMaintenance('update')}
+                  onClick={() => requestMaintenance('update', updateStages)}
                 >
-                  Update Monoid Applet
+                  Update applets
                 </Button>
               ) : (
                 <Button
@@ -628,15 +811,38 @@ export const CardManagementView = observer(
                 bundled={!!(hello?.bundle || pending?.card.bundle)}
                 recovery={recovery}
                 manualRestore={manualRestore}
-                applets={(['identity', 'monoid'] as const).map(name => ({
-                  name,
-                  installed: installation?.[name].installed ?? false,
-                  version: installation?.[name].version?.toString(),
-                  unknown:
-                    installation?.[name].installed === undefined ||
-                    (name === 'monoid' && !!installation?.helloError),
-                  update: name === 'monoid' && updateAvailable,
-                }))}
+                applets={[
+                  ...(['identity', 'monoid'] as const).map(name => ({
+                    name,
+                    installed: installation?.[name].installed ?? false,
+                    version: installation?.[name].version?.toString(),
+                    unknown:
+                      installation?.[name].installed === undefined ||
+                      (name === 'monoid' && !!installation?.helloError),
+                    update: name === 'monoid' && baseUpdateAvailable,
+                  })),
+                  ...optionalApplets
+                    .filter(
+                      applet =>
+                        installation?.optional?.[applet.stage]?.installed ||
+                        installation?.optional?.[applet.stage]?.loaded,
+                    )
+                    .map(applet => ({
+                      name: applet.stage,
+                      selectable: true,
+                      installed:
+                        installation?.optional?.[applet.stage]?.installed ===
+                        true,
+                      unknown:
+                        installation?.optional?.[applet.stage]?.installed !==
+                        true,
+                      update: optionalUpdates.includes(applet.stage),
+                    })),
+                ]}
+                onSelectApplet={stage => {
+                  if (optionalApplets.some(applet => applet.stage === stage))
+                    setPopup(stage);
+                }}
               />
             ) : card.information ? (
               <CardInformationContent information={card.information} />
@@ -659,6 +865,17 @@ export const CardManagementView = observer(
           >
             <DetailsPopupTitle>Card applets</DetailsPopupTitle>
             <DetailsPopupDivider />
+            {optionalApplets.some(
+              applet => !installation?.optional?.[applet.stage]?.installed,
+            ) && (
+              <Button
+                color="primary"
+                disabled={!canStartMaintenance || !hasAppletBundle}
+                onClick={() => requestInstall()}
+              >
+                Install applets
+              </Button>
+            )}
             {!updateAvailable && (
               <Button
                 color="neutral"
@@ -671,32 +888,126 @@ export const CardManagementView = observer(
             <Button
               color="danger"
               disabled={!canFreshInstall}
-              onClick={() => requestMaintenance('fresh')}
+              onClick={() => requestInstall(true)}
             >
               Fresh install
+            </Button>
+          </DetailsPopup>
+        )}
+        {(popup === 'install' || popup === 'fresh') && (
+          <AppletSelectionPopup
+            installation={installation}
+            selected={selectedOptional}
+            fresh={popup === 'fresh'}
+            onChange={setSelectedOptional}
+            onDismiss={() => setPopup(undefined)}
+            onInstall={() => {
+              if (popup === 'fresh') {
+                setPopup(undefined);
+                setConfirm({mode: 'fresh'});
+              } else if (baseUpdateAvailable) {
+                setPopup(undefined);
+                setConfirm({
+                  mode: 'update',
+                  replaceStages: ['library', 'monoid'],
+                });
+              } else
+                void perform('install', {
+                  selectedOptionalStages: selectedOptional,
+                });
+            }}
+          />
+        )}
+        {optionalApplets.some(applet => applet.stage === popup) && (
+          <DetailsPopup
+            aria-label={APPLET_NAMES[popup as AppletStage]}
+            onDismiss={() => setPopup(undefined)}
+          >
+            <DetailsPopupTitle>
+              {APPLET_NAMES[popup as AppletStage]}
+            </DetailsPopupTitle>
+            <DetailsPopupDivider />
+            {popup === 'security-key' && hello && (
+              <Button
+                onClick={() => {
+                  setPopup(undefined);
+                  router
+                    .securityKey({
+                      card: {
+                        id: uint8ArrayToHex(hello.id),
+                        publicKey: uint8ArrayToHex(hello.publicKey),
+                      },
+                    })
+                    .$push();
+                }}
+              >
+                Open Security Key
+              </Button>
+            )}
+            <Button
+              color="neutral"
+              disabled={!canMaintain || !hello}
+              onClick={() =>
+                requestMaintenance(
+                  optionalUpdates.includes(popup as AppletStage)
+                    ? 'update'
+                    : 'reinstall',
+                  [popup as AppletStage],
+                )
+              }
+            >
+              {optionalUpdates.includes(popup as AppletStage)
+                ? 'Update applet'
+                : 'Reinstall applet'}
             </Button>
           </DetailsPopup>
         )}
         {confirm && (
           <ConfirmPopup
             title={
-              confirm === 'fresh' ? 'Fresh install' : 'Replace Monoid Applet'
+              confirm.mode === 'fresh'
+                ? 'Fresh install'
+                : confirm.mode === 'update'
+                  ? 'Update applets'
+                  : 'Reinstall applets'
             }
-            confirmColor={confirm === 'fresh' ? 'danger' : 'warning'}
+            confirmColor={confirm.mode === 'fresh' ? 'danger' : 'warning'}
             confirmText={['Continue', 'Confirm']}
             onCancel={() => setConfirm(undefined)}
-            onConfirm={() => void perform(confirm)}
+            onConfirm={() =>
+              void perform(confirm.operationId ? 'resume' : confirm.mode, {
+                selectedOptionalStages: selectedOptional,
+                replaceStages: confirm.replaceStages,
+                operationId: confirm.operationId,
+              })
+            }
           >
-            {confirm === 'fresh' ? (
+            {confirm.mode === 'fresh' ? (
               <>
                 <p>All items, PINs and bundle membership will be erased.</p>
                 <p>The card will receive a new identity.</p>
               </>
-            ) : (
+            ) : replacesStorage && (hello?.bundle || pending?.card.bundle) ? (
               <>
                 <p>Copy your items to another bundle card before continuing.</p>
                 <p>Restore them from that card after installation.</p>
               </>
+            ) : replacesStorage ? (
+              <p>
+                {confirm.operationId
+                  ? 'Items and applet access will be restored after installation.'
+                  : 'Items and applet access will be backed up and restored.'}
+              </p>
+            ) : (
+              <p>Items and applet access will be preserved.</p>
+            )}
+            {affectsSecurityKey && (
+              <p>
+                {confirm.mode === 'fresh' &&
+                !selectedOptional.includes('security-key')
+                  ? 'Monoid Security Key Applet and its FIDO PIN will be removed.'
+                  : 'Monoid Security Key Applet will be reinstalled. Its FIDO PIN will be reset.'}
+              </p>
             )}
           </ConfirmPopup>
         )}

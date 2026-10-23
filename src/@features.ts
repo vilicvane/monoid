@@ -20,6 +20,11 @@ export const FEATURES = [
     description: 'View your Solana transaction history.',
   },
   {
+    route: 'securityKey',
+    name: 'Security Key',
+    description: 'Manage credentials on your card.',
+  },
+  {
     route: 'cardApplets',
     name: 'Card Applets',
     description: 'Manage card applets.',

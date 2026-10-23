@@ -352,7 +352,7 @@ export const monoidCommandDefinitions = {
     }),
   },
 
-  // Applet grant management requires Secret PIN authentication.
+  // Applet grant management requires Access PIN authentication.
   listAppletGrants: {
     ins: 0x50,
     request: x.object({}),

@@ -23,12 +23,17 @@ import {MonoidCardError} from './card-error.js';
 import {MonoidAppletHello, createMonoidApplet} from './monoid-applet.js';
 
 export type BundledApplet = {
-  stage: 'identity' | 'library' | 'monoid';
+  stage: 'identity' | 'library' | 'monoid' | 'security-key';
   packageAid: string;
   appletAid?: string;
+  instanceAid?: string;
+  optional?: boolean;
+  dependencies?: readonly BundledApplet['stage'][];
   codeURL: URL;
   sha256: string;
 };
+
+export type AppletStage = BundledApplet['stage'];
 
 export type AppletInstallProgress =
   | {stage: 'checking' | 'verifying'}
@@ -40,23 +45,23 @@ export type AppletInstallProgress =
 export const hasAppletBundle = appletBundle !== undefined;
 
 export type AppletReplacementCheckpoint =
-  | 'remove-monoid-instance'
-  | 'remove-monoid-package'
-  | 'remove-library-package'
-  | 'remove-identity-instance'
-  | 'remove-identity-package'
+  | `remove-${AppletStage}-instance`
+  | `remove-${AppletStage}-package`
   | 'install'
   | 'verify';
 
 export type AppletReplacementProgress = {
   stage: 'deleting';
   applet: BundledApplet['stage'];
+  completed: number;
+  total: number;
 };
 
 export type MonoidAppletInstallation = {
   identity: InstalledApplet;
   library: InstalledApplet;
   monoid: InstalledApplet;
+  optional: Partial<Record<AppletStage, InstalledApplet>>;
   hello?: MonoidAppletHello;
   helloError?: unknown;
   registryError?: unknown;
@@ -74,11 +79,80 @@ export type InstalledApplet = {
 };
 
 type LoadedApplet = AppletPackage & {stage: BundledApplet['stage']};
-type LoadedAppletBundle = [
-  LoadedApplet & {appletAid: Uint8Array},
-  LoadedApplet,
-  LoadedApplet & {appletAid: Uint8Array},
-];
+
+export function getAppletCatalog(): readonly BundledApplet[] {
+  return appletBundle ?? [];
+}
+
+/** Resolve dependencies once, keeping the catalog order among independent items. */
+export function getAppletInstallationPlan(
+  selectedOptionalStages: readonly AppletStage[] = [],
+): readonly BundledApplet[] {
+  const catalog = getAppletCatalog();
+  const byStage = new Map(catalog.map(item => [item.stage, item]));
+  if (
+    byStage.size !== catalog.length ||
+    !byStage.get('identity')?.appletAid ||
+    !byStage.has('library') ||
+    byStage.get('library')!.appletAid !== undefined ||
+    !byStage.get('monoid')?.appletAid ||
+    ['identity', 'library', 'monoid'].some(
+      stage => byStage.get(stage as AppletStage)?.optional,
+    )
+  ) {
+    throw new Error('The applet installation package is incomplete');
+  }
+  for (const stage of selectedOptionalStages) {
+    if (!byStage.get(stage)?.optional) {
+      throw new MonoidCardError('Unknown optional applet');
+    }
+  }
+  const result: BundledApplet[] = [];
+  const visiting = new Set<AppletStage>();
+  const added = new Set<AppletStage>();
+  const visit = (stage: AppletStage): void => {
+    if (added.has(stage)) return;
+    const item = byStage.get(stage);
+    if (!item) throw new MonoidCardError('Unknown applet dependency');
+    if (visiting.has(stage))
+      throw new MonoidCardError('Circular applet dependency');
+    visiting.add(stage);
+    for (const dependency of item.dependencies ?? []) visit(dependency);
+    visiting.delete(stage);
+    added.add(stage);
+    result.push(item);
+  };
+  for (const item of catalog) {
+    if (!item.optional || selectedOptionalStages.includes(item.stage)) {
+      visit(item.stage);
+    }
+  }
+  return result;
+}
+
+/** All catalog packages whose imports transitively depend on the changed stages. */
+export function getAppletDependents(
+  stages: readonly AppletStage[],
+): readonly BundledApplet[] {
+  const catalog = getAppletCatalog();
+  const affected = new Set(stages);
+  let changed: boolean;
+  do {
+    changed = false;
+    for (const item of catalog) {
+      if (
+        !affected.has(item.stage) &&
+        item.dependencies?.some(stage => affected.has(stage))
+      ) {
+        affected.add(item.stage);
+        changed = true;
+      }
+    }
+  } while (changed);
+  return catalog.filter(
+    item => affected.has(item.stage) && !stages.includes(item.stage),
+  );
+}
 
 export function getMonoidAppletBundleHashes(): string[] {
   return appletBundle?.map(item => item.sha256) ?? [];
@@ -121,11 +195,17 @@ export function getCardMaintenanceFingerprint(
 export async function readMonoidAppletInstallation(
   sessionId: string,
   signal?: AbortSignal,
+  {authenticateRegistry = false}: {authenticateRegistry?: boolean} = {},
 ): Promise<MonoidAppletInstallation> {
   const result: MonoidAppletInstallation = {
     identity: {installed: undefined},
     library: {installed: undefined},
     monoid: {installed: undefined},
+    optional: Object.fromEntries(
+      getAppletCatalog()
+        .filter(item => item.optional)
+        .map(item => [item.stage, {installed: undefined}]),
+    ),
   };
   const transceive = cardTransceive(sessionId, signal);
   const aids = [
@@ -141,8 +221,10 @@ export async function readMonoidAppletInstallation(
     },
   ];
 
-  try {
-    const registry = await GlobalPlatformInstaller.inspect(transceive);
+  const readRegistry = async (
+    registry: Pick<GlobalPlatformInstaller, 'getEntry'>,
+  ): Promise<void> => {
+    signal?.throwIfAborted();
     for (const {stage, appletAid, packageAid} of aids) {
       const instance = await registry.getEntry(0x40, appletAid);
       const loaded = await registry.getEntry(0x10, packageAid);
@@ -165,6 +247,42 @@ export async function readMonoidAppletInstallation(
       lifecycle: library?.lifecycle,
       packageVersion: library?.version,
     };
+    for (const item of getAppletCatalog().filter(item => item.optional)) {
+      const instanceAid = item.instanceAid ?? item.appletAid;
+      const instance = instanceAid
+        ? await registry.getEntry(0x40, hexToUint8Array(instanceAid))
+        : undefined;
+      const loaded = await registry.getEntry(
+        0x10,
+        hexToUint8Array(item.packageAid),
+      );
+      result.optional[item.stage] = {
+        installed: instanceAid
+          ? !!instance
+          : !!loaded && loaded.lifecycle === 1 && loaded.modules.length === 0,
+        aid: instance && uint8ArrayToHex(instance.aid),
+        loaded: !!loaded,
+        lifecycle: instance?.lifecycle ?? loaded?.lifecycle,
+        packageVersion: loaded?.version,
+      };
+    }
+  };
+
+  try {
+    try {
+      await readRegistry(await GlobalPlatformInstaller.inspect(transceive));
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (
+        !authenticateRegistry ||
+        !(error instanceof AppletISOError && error.sw === 0x6982)
+      ) {
+        throw error;
+      }
+      // Explicit applet-management scans may authenticate to read the complete
+      // inventory before asking the user to confirm affected applets.
+      await readRegistry(await GlobalPlatformInstaller.open(transceive));
+    }
   } catch (error) {
     signal?.throwIfAborted();
     rethrowConnectionError(error);
@@ -256,28 +374,17 @@ function rethrowConnectionError(error: unknown): void {
 
 /** Validate load images before opening a management session or deleting anything. */
 async function loadAppletPackages(
+  selectedOptionalStages: readonly AppletStage[],
   signal?: AbortSignal,
-): Promise<LoadedAppletBundle> {
+): Promise<LoadedApplet[]> {
   signal?.throwIfAborted();
 
   if (!appletBundle) {
     throw new Error('The applet installation package is not available yet.');
   }
 
-  if (
-    appletBundle.length !== 3 ||
-    appletBundle[0].stage !== 'identity' ||
-    !appletBundle[0].appletAid ||
-    appletBundle[1].stage !== 'library' ||
-    appletBundle[1].appletAid !== undefined ||
-    appletBundle[2].stage !== 'monoid' ||
-    !appletBundle[2].appletAid
-  ) {
-    throw new Error('The applet installation package is incomplete.');
-  }
-
   const packages = await Promise.all(
-    appletBundle.map(async item => {
+    getAppletInstallationPlan(selectedOptionalStages).map(async item => {
       const response = await fetch(item.codeURL, {signal});
       signal?.throwIfAborted();
 
@@ -298,12 +405,15 @@ async function loadAppletPackages(
         stage: item.stage,
         packageAid: hexToUint8Array(item.packageAid),
         appletAid: item.appletAid ? hexToUint8Array(item.appletAid) : undefined,
+        instanceAid: item.instanceAid
+          ? hexToUint8Array(item.instanceAid)
+          : undefined,
         code,
       };
     }),
   );
   signal?.throwIfAborted();
-  return packages as LoadedAppletBundle;
+  return packages;
 }
 
 function cardTransceive(
@@ -370,17 +480,18 @@ export async function installMonoidApplets(
   sessionId: string,
   onProgress: (update: AppletInstallProgress) => void,
   signal?: AbortSignal,
+  selectedOptionalStages: readonly AppletStage[] = [],
 ): Promise<MonoidAppletHello> {
   signal?.throwIfAborted();
   onProgress({stage: 'checking'});
-  const packages = await loadAppletPackages(signal);
+  const packages = await loadAppletPackages(selectedOptionalStages, signal);
   const installer = await GlobalPlatformInstaller.open(
     cardTransceive(sessionId, signal),
   );
   await installPackages(installer, packages, onProgress, signal);
   return verifyInstallation(
     sessionId,
-    packages[2].appletAid,
+    packages.find(item => item.stage === 'monoid')!.appletAid!,
     onProgress,
     signal,
   );
@@ -399,6 +510,8 @@ export async function replaceMonoidApplets(
     expectedAppletAid,
     expectedBundle,
     expectedFingerprint,
+    selectedOptionalStages = [],
+    replaceStages,
     onCheckpoint,
     onProgress = () => {},
     signal,
@@ -409,6 +522,8 @@ export async function replaceMonoidApplets(
     expectedAppletAid?: string;
     expectedBundle?: string | false;
     expectedFingerprint: string;
+    selectedOptionalStages?: readonly AppletStage[];
+    replaceStages?: readonly AppletStage[];
     onCheckpoint: (checkpoint: AppletReplacementCheckpoint) => Promise<void>;
     onProgress?: (
       update: AppletInstallProgress | AppletReplacementProgress,
@@ -418,22 +533,71 @@ export async function replaceMonoidApplets(
 ): Promise<MonoidAppletHello> {
   signal?.throwIfAborted();
   onProgress({stage: 'checking'});
-  const packages = await loadAppletPackages(signal);
-  const [identity, library, monoid] = packages;
-  if (!fresh && uint8ArrayToHex(monoid.appletAid) !== expectedAppletAid) {
+  const packages = await loadAppletPackages(selectedOptionalStages, signal);
+  const identity = packages.find(item => item.stage === 'identity')!;
+  const monoid = packages.find(item => item.stage === 'monoid')!;
+  const allPackages = getAppletInstallationPlan(
+    getAppletCatalog()
+      .filter(item => item.optional)
+      .map(item => item.stage),
+  );
+  const replacing: readonly AppletStage[] = fresh
+    ? allPackages.map(item => item.stage)
+    : (replaceStages ?? ['library', 'monoid']);
+  const replacingSet = new Set<AppletStage>(replacing);
+  for (const stage of replacing) {
+    if (!(fresh ? allPackages : packages).some(item => item.stage === stage)) {
+      throw new MonoidCardError('Unknown replacement applet');
+    }
+  }
+  if (!fresh && replacingSet.has('identity')) {
+    throw new MonoidCardError('Identity requires Fresh install');
+  }
+  for (const item of getAppletDependents([...replacingSet])) {
+    if (packages.some(selected => selected.stage === item.stage))
+      replacingSet.add(item.stage);
+  }
+  const replacingPackages = packages.filter(item =>
+    replacingSet.has(item.stage),
+  );
+  const deletingPackages = allPackages
+    .filter(item => replacingSet.has(item.stage))
+    .map(item => ({
+      stage: item.stage,
+      packageAid: hexToUint8Array(item.packageAid),
+      appletAid: item.appletAid ? hexToUint8Array(item.appletAid) : undefined,
+      instanceAid: item.instanceAid
+        ? hexToUint8Array(item.instanceAid)
+        : undefined,
+    }));
+  if (!replacingPackages.length) throw new MonoidCardError('Select an applet');
+  if (!fresh && uint8ArrayToHex(monoid.appletAid!) !== expectedAppletAid) {
     throw new Error('The applet identity changed in this installation package');
   }
   const information = await readCardInformation(sessionId, signal);
   if (getCardMaintenanceFingerprint(information) !== expectedFingerprint) {
     throw new Error('Wrong card');
   }
-  const steps: AppletReplacementCheckpoint[] = [
-    'remove-monoid-instance',
-    'remove-monoid-package',
-    'remove-library-package',
-    ...(fresh
-      ? (['remove-identity-instance', 'remove-identity-package'] as const)
+  const removals = [...deletingPackages].reverse().flatMap(applet => [
+    ...(applet.appletAid
+      ? [
+          {
+            checkpoint:
+              `remove-${applet.stage}-instance` as AppletReplacementCheckpoint,
+            applet,
+            instance: true,
+          },
+        ]
       : []),
+    {
+      checkpoint:
+        `remove-${applet.stage}-package` as AppletReplacementCheckpoint,
+      applet,
+      instance: false,
+    },
+  ]);
+  const steps: AppletReplacementCheckpoint[] = [
+    ...removals.map(step => step.checkpoint),
     'install',
     'verify',
   ];
@@ -445,7 +609,7 @@ export async function replaceMonoidApplets(
   // continuation can proceed without Hello; restoration checks Identity again.
   if (!fresh && position === 0) {
     try {
-      const applet = await createMonoidApplet(monoid.appletAid).openSession(
+      const applet = await createMonoidApplet(monoid.appletAid!).openSession(
         sessionId,
       );
       const hello = await applet.hello({});
@@ -471,15 +635,55 @@ export async function replaceMonoidApplets(
     const installer = await GlobalPlatformInstaller.open(
       cardTransceive(sessionId, signal),
     );
-    if (!fresh && !(await installer.getEntry(0x40, identity.appletAid))) {
+    if (!fresh && !(await installer.getEntry(0x40, identity.appletAid!))) {
       throw new Error('The original Monoid Identity Applet is missing');
     }
-    // Security Key imports both Monoid and Library. Never remove its credentials
-    // or start deleting its dependencies as part of Monoid maintenance.
-    if (await installer.getEntry(0x10, hexToUint8Array('f06d6f6e6f696403'))) {
-      throw new MonoidCardError(
-        'Monoid Security Key depends on these packages',
+    const installedPackages = await installer.getEntries(0x10);
+    // Other platform and application packages stay untouched. Check known
+    // dependents here; non-cascading DELETE lets GP protect any other imports.
+    for (const dependent of getAppletDependents([...replacingSet])) {
+      if (
+        !replacingSet.has(dependent.stage) &&
+        installedPackages.some(
+          item => uint8ArrayToHex(item.aid) === dependent.packageAid,
+        )
+      ) {
+        throw new MonoidCardError('Include dependent applets');
+      }
+    }
+    const installedInstances = await installer.getEntries(0x40);
+    const pendingRemovals = removals.slice(position).filter(removal => {
+      const {applet, instance} = removal;
+      const aid = uint8ArrayToHex(
+        instance
+          ? (applet.instanceAid ?? applet.appletAid!)
+          : applet.packageAid,
       );
+      return (instance ? installedInstances : installedPackages).some(
+        entry => uint8ArrayToHex(entry.aid) === aid,
+      );
+    });
+    let removed = 0;
+    for (const applet of deletingPackages) {
+      const packageAid = uint8ArrayToHex(applet.packageAid);
+      const moduleAid = applet.appletAid && uint8ArrayToHex(applet.appletAid);
+      const instanceAid =
+        applet.appletAid &&
+        uint8ArrayToHex(applet.instanceAid ?? applet.appletAid);
+      const loaded = installedPackages.find(
+        item => uint8ArrayToHex(item.aid) === packageAid,
+      );
+      if (
+        loaded?.modules.some(aid => uint8ArrayToHex(aid) !== moduleAid) ||
+        installedInstances.some(
+          item =>
+            item.packageAid &&
+            uint8ArrayToHex(item.packageAid) === packageAid &&
+            uint8ArrayToHex(item.aid) !== instanceAid,
+        )
+      ) {
+        throw new MonoidCardError('Unknown card applet');
+      }
     }
     for (const step of steps.slice(position)) {
       signal?.throwIfAborted();
@@ -487,10 +691,12 @@ export async function replaceMonoidApplets(
       signal?.throwIfAborted();
       if (step === 'verify') break;
       if (step === 'install') {
-        const installing = fresh ? packages : [library, monoid];
-        for (const applet of installing) {
+        for (const applet of replacingPackages) {
           const instance = applet.appletAid
-            ? await installer.getEntry(0x40, applet.appletAid)
+            ? await installer.getEntry(
+                0x40,
+                applet.instanceAid ?? applet.appletAid,
+              )
             : undefined;
           const loaded = await installer.getEntry(0x10, applet.packageAid);
           // An interrupted LOAD has no instance or item data. Discard only that
@@ -507,21 +713,44 @@ export async function replaceMonoidApplets(
                   )
                 : loaded.modules.length !== 0))
           ) {
+            onProgress({
+              stage: 'deleting',
+              applet: applet.stage,
+              completed: 0,
+              total: 1,
+            });
             await installer.removePackage(applet.packageAid);
+            onProgress({
+              stage: 'deleting',
+              applet: applet.stage,
+              completed: 1,
+              total: 1,
+            });
           }
           await installPackages(installer, [applet], onProgress, signal);
         }
       } else {
-        const applet = step.includes('identity')
-          ? identity
-          : step.includes('library')
-            ? library
-            : monoid;
-        onProgress({stage: 'deleting', applet: applet.stage});
-        if (step.endsWith('instance')) {
-          await installer.removeInstance(applet.appletAid!);
+        const removal = removals.find(removal => removal.checkpoint === step)!;
+        const {applet} = removal;
+        const pending = pendingRemovals.includes(removal);
+        const progress = (): void =>
+          onProgress({
+            stage: 'deleting',
+            applet: applet.stage,
+            completed: removed,
+            total: pendingRemovals.length,
+          });
+        if (pending) progress();
+        if (removal.instance) {
+          await installer.removeInstance(
+            applet.instanceAid ?? applet.appletAid!,
+          );
         } else {
           await installer.removePackage(applet.packageAid);
+        }
+        if (pending) {
+          removed++;
+          progress();
         }
       }
     }
@@ -529,7 +758,7 @@ export async function replaceMonoidApplets(
 
   const hello = await verifyInstallation(
     sessionId,
-    monoid.appletAid,
+    monoid.appletAid!,
     onProgress,
     signal,
   );

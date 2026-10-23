@@ -1,4 +1,7 @@
-import {Bitcoin as BitcoinIcon} from 'lucide-react';
+import {
+  Bitcoin as BitcoinIcon,
+  KeyRound as SecurityKeyIcon,
+} from 'lucide-react';
 
 import {
   FEATURES as FEATURE_DEFINITIONS,
@@ -21,7 +24,8 @@ const FEATURE_VISUALS: Record<
   bitcoin: {icon: BitcoinIcon, color: '#f7931a'},
   ethereum: {icon: EthereumIcon, color: '#627eea'},
   solana: {icon: SolanaIcon, color: '#9945ff'},
-  cardApplets: {icon: CardAppletsIcon, color: 'var(--ion-color-safe)'},
+  cardApplets: {icon: CardAppletsIcon, color: 'var(--ion-color-primary)'},
+  securityKey: {icon: SecurityKeyIcon, color: 'var(--ion-color-safe)'},
 };
 
 export const FEATURES = FEATURE_DEFINITIONS.map(feature => ({
