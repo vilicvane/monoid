@@ -1,6 +1,7 @@
-import {makeAutoObservable, observable} from 'mobx';
+import {makeAutoObservable, observable, runInAction} from 'mobx';
 
 import type {
+  CardBundleExtensionSession,
   CardBundleSession,
   CardResetSession,
 } from '../@components/views/safe/index.js';
@@ -24,6 +25,50 @@ export class BundleSetupState {
 
 export class CardBundleStore {
   private readonly flows = new Map<string, BundleSetupState>();
+  private readonly extensions = new Map<string, CardBundleExtensionSession>();
+  private readonly extensionCards = observable.map<string, MonoidAppletHello>(
+    {},
+    {deep: false},
+  );
+
+  getOrCreateExtension(
+    id: string,
+    createSession: () => CardBundleExtensionSession,
+  ): CardBundleExtensionSession {
+    let session = this.extensions.get(id);
+    if (!session) {
+      session = createSession();
+      this.extensions.set(id, session);
+    }
+    return session;
+  }
+
+  async acceptExtensionCard(
+    id: string,
+    hello: MonoidAppletHello,
+  ): Promise<void> {
+    const session = this.extensions.get(id);
+    if (!session) {
+      throw new MonoidCardError('Bundle extension is no longer available');
+    }
+    if (!['collecting', 'requesting'].includes(session.phase)) {
+      throw new MonoidCardError('New card is already confirmed');
+    }
+    if (!hello.pins.access || !hello.pins.secret) {
+      throw new MonoidCardError('Set up the card first');
+    }
+    // Installation can retain a foreign Bundle. Let the addition flow request
+    // its existing reset confirmation after returning from Card Applets.
+    runInAction(() => this.extensionCards.set(id, hello));
+  }
+
+  getExtensionCard(id: string): MonoidAppletHello | undefined {
+    return this.extensionCards.get(id);
+  }
+
+  consumeExtensionCard(id: string): void {
+    runInAction(() => this.extensionCards.delete(id));
+  }
 
   get(id: string): BundleSetupState | undefined {
     return this.flows.get(id);

@@ -1,4 +1,5 @@
 export type {
+  CardBundleExtensionSession,
   CardBundleSession,
   CardResetSession,
   CopyItemsState,

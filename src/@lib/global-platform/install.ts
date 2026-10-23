@@ -14,7 +14,7 @@ import {openSecureChannel} from './secure-channel.js';
 
 export type AppletPackage = {
   packageAid: Uint8Array;
-  appletAid: Uint8Array;
+  appletAid?: Uint8Array;
   code: Uint8Array;
 };
 
@@ -94,7 +94,10 @@ export class GlobalPlatformInstaller {
   ): Promise<void> {
     onProgress({phase: 'checking'});
 
-    const instance = await this.getEntry(0x40, applet.appletAid);
+    const {appletAid} = applet;
+    const instance = appletAid
+      ? await this.getEntry(0x40, appletAid)
+      : undefined;
 
     if (instance) {
       if ((instance.lifecycle & 0x87) !== 0x07) {
@@ -112,7 +115,9 @@ export class GlobalPlatformInstaller {
     if (loaded) {
       if (
         loaded.lifecycle !== 0x01 ||
-        !loaded.modules.some(aid => equalBytes(aid, applet.appletAid))
+        (appletAid
+          ? !loaded.modules.some(aid => equalBytes(aid, appletAid))
+          : loaded.modules.length !== 0)
       ) {
         throw new Error(
           'An incomplete or different applet package is already on this card. Its data has been left unchanged.',
@@ -122,13 +127,30 @@ export class GlobalPlatformInstaller {
       await this.load(applet, onProgress);
     }
 
+    if (!appletAid) {
+      const library = loaded ?? (await this.getEntry(0x10, applet.packageAid));
+
+      if (
+        !library ||
+        library.lifecycle !== 0x01 ||
+        library.modules.length !== 0
+      ) {
+        throw new Error(
+          'The card did not confirm a loaded library package after installation.',
+        );
+      }
+
+      onProgress({phase: 'complete'});
+      return;
+    }
+
     onProgress({phase: 'configuring'});
 
     // No privileges, no installation parameters, no delegated-management token.
     const data = concat(
       lengthValue(applet.packageAid),
-      lengthValue(applet.appletAid),
-      lengthValue(applet.appletAid),
+      lengthValue(appletAid),
+      lengthValue(appletAid),
       new Uint8Array([1, 0, 2, 0xc9, 0, 0]),
     );
     successful(
@@ -136,7 +158,7 @@ export class GlobalPlatformInstaller {
       'Installing the applet',
     );
 
-    const installed = await this.getEntry(0x40, applet.appletAid);
+    const installed = await this.getEntry(0x40, appletAid);
 
     if (!installed || (installed.lifecycle & 0x87) !== 0x07) {
       throw new Error(

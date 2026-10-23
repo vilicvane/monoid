@@ -10,13 +10,19 @@ export const appletBundle: readonly BundledApplet[] | undefined = [
       '../../@assets/applets/monoididentity.bin',
       import.meta.url,
     ),
-    sha256: '6a3db19dbdd046419d9bc37c1e184ab53ee94e96ffa3336d003f12410536927b',
+    sha256: 'ff28eec49b8b608f7268d02ec9478812f33b2653194ca068eb45a0fd4d6e5e44',
+  },
+  {
+    stage: 'library',
+    packageAid: 'f06d6f6e6f696404',
+    codeURL: new URL('../../@assets/applets/monoidlib.bin', import.meta.url),
+    sha256: '3b78e14bb648bd2e4c6bcb00db7fcdc5743ffe5d84710554aae25d3c4445022b',
   },
   {
     stage: 'monoid',
     packageAid: 'f06d6f6e6f696402',
     appletAid: 'f06d6f6e6f69640201',
     codeURL: new URL('../../@assets/applets/monoid.bin', import.meta.url),
-    sha256: '8de5c4ad096469fd4268723387cfef4aff419c0b526799114dd1478dcaa0b8aa',
+    sha256: '0ff8ee517c6d4789a85c35024fec3c838340f83b418eee1be40e81c7c169653c',
   },
 ];

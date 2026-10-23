@@ -5,7 +5,7 @@ import {encode} from 'cbor2';
 
 let replacement;
 let scannedHello;
-const bundleHashes = ['identity-image', 'monoid-image'];
+const bundleHashes = ['identity-image', 'library-image', 'monoid-image'];
 
 mock.module('../.bld/app/@lib/global-platform/card-information.js', {
   namedExports: {readCardInformation: async () => information},
@@ -23,6 +23,8 @@ mock.module('capacitor-isodep-nfc', {
 mock.module('../.bld/app/@lib/monoid/install.js', {
   namedExports: {
     getMonoidAppletBundleHashes: () => [...bundleHashes],
+    getMonoidAppletBundleHash: stage =>
+      bundleHashes[['identity', 'library', 'monoid'].indexOf(stage)],
     getBundledMonoidAppletAid: () => 'f06d6f6e6f69640201',
     getCardMaintenanceFingerprint: information => {
       if (!information.cplc)
@@ -37,6 +39,7 @@ mock.module('../.bld/app/@lib/monoid/install.js', {
 const {CardMaintenanceService} = await import(
   '../.bld/app/@services/card-maintenance-service.js'
 );
+const {MonoidCardError} = await import('../.bld/app/@lib/monoid/card-error.js');
 const bytes = hex => new Uint8Array(Buffer.from(hex, 'hex'));
 const hex = value => Buffer.from(value).toString('hex');
 const aid = bytes('f06d6f6e6f69640201');
@@ -97,6 +100,8 @@ function cardFixture() {
     aid,
     state: structuredClone(hello),
     items: structuredClone(sourceItems),
+    grants: [],
+    grantListCalls: [],
     listCalls: [],
     exports: [],
     imports: [],
@@ -114,6 +119,10 @@ function cardFixture() {
           this.mismatchList ? this.items.slice(1) : this.items,
         ),
       };
+    },
+    async listAppletGrants(request) {
+      this.grantListCalls.push(request);
+      return {grants: structuredClone(this.grants)};
     },
     async exportItem(request) {
       assert.equal(hex(request.recipientPublicKey), hex(this.state.publicKey));
@@ -140,6 +149,13 @@ function cardFixture() {
 }
 
 beforeEach(() => {
+  bundleHashes.splice(
+    0,
+    bundleHashes.length,
+    'identity-image',
+    'library-image',
+    'monoid-image',
+  );
   scannedHello = structuredClone(hello);
   replacement = async (_session, options) => {
     for (const checkpoint of [
@@ -185,6 +201,55 @@ test('backs up every resource with exact optional metadata and no PIN before rep
   };
   await service.replace('session', operation.id);
   assert.equal(service.get(operation.id).phase, 'restore');
+});
+
+test('applet grants stop automatic replacement before any backup or saved operation, including Bundle cards', async () => {
+  for (const bundle of [false, new Uint8Array(32).fill(0x42)]) {
+    const storage = storageFixture();
+    const service = await CardMaintenanceService.create(storage);
+    const card = cardFixture();
+    card.state.bundle = bundle;
+    card.grants = [
+      {aid: bytes('a0000006472f0001'), tokenHash: new Uint8Array(32)},
+    ];
+    for (const mode of ['update', 'reinstall']) {
+      await assert.rejects(
+        service.prepare(card, {
+          mode,
+          cardInformation: information,
+          appletAid: hex(aid),
+        }),
+        error =>
+          error instanceof MonoidCardError &&
+          /Applet grants require separate recovery/.test(error.message),
+      );
+    }
+    assert.deepEqual(card.grantListCalls, [{}, {}]);
+    assert.deepEqual(card.listCalls, []);
+    assert.deepEqual(card.exports, []);
+    assert.equal(storage.writes.length, 0);
+    assert.equal(service.operations.length, 0);
+  }
+});
+
+test('grant read failure prevents automatic replacement without pretending grants are absent', async () => {
+  const storage = storageFixture();
+  const service = await CardMaintenanceService.create(storage);
+  const card = cardFixture();
+  card.listAppletGrants = async () => {
+    throw new Error('Tag lost');
+  };
+  await assert.rejects(
+    service.prepare(card, {
+      mode: 'update',
+      cardInformation: information,
+      appletAid: hex(aid),
+    }),
+    /Tag lost/,
+  );
+  assert.deepEqual(card.exports, []);
+  assert.equal(storage.writes.length, 0);
+  assert.equal(service.operations.length, 0);
 });
 
 test('a failed export or oversized Import prevents committing a maintenance operation', async () => {
@@ -488,13 +553,90 @@ test('Fresh stores its new Identity and rejects another card when resuming PIN s
   });
 });
 
-test('installation bookkeeping does not label a retained Identity as the new bundle', async () => {
-  const service = await CardMaintenanceService.create(storageFixture());
+test('installation bookkeeping names each component and leaves retained or unknown packages unchanged', async () => {
+  const storage = storageFixture();
+  const service = await CardMaintenanceService.create(storage);
   assert.equal(service.isUpdateAvailable(hello), undefined);
   await service.recordInstallation(hello, {monoid: true});
+  assert.equal(service.isUpdateAvailable(hello), undefined);
+  assert.equal(service.isIdentityUpdateAvailable(hello), undefined);
+  assert.deepEqual((await storage.get()).installations, [
+    {
+      publicKey: hex(hello.publicKey),
+      appletAid: hex(aid),
+      monoidHash: 'monoid-image',
+    },
+  ]);
+  await service.recordInstallation(hello, {library: true});
   assert.equal(service.isUpdateAvailable(hello), false);
   assert.equal(service.isIdentityUpdateAvailable(hello), undefined);
-  bundleHashes[1] = 'new-monoid-image';
+  bundleHashes[1] = 'new-library-image';
   assert.equal(service.isUpdateAvailable(hello), true);
-  bundleHashes[1] = 'monoid-image';
+  await service.recordInstallation(hello, {monoid: true});
+  assert.equal(service.isUpdateAvailable(hello), true);
+  assert.equal(
+    (await storage.get()).installations[0].libraryHash,
+    'library-image',
+  );
+  await service.recordInstallation(hello, {library: true});
+  assert.equal(service.isUpdateAvailable(hello), false);
+  bundleHashes[2] = 'new-monoid-image';
+  assert.equal(service.isUpdateAvailable(hello), true);
+});
+
+test('a known outdated component shows an update even when the other component is unknown', async () => {
+  for (const [stage, index] of [
+    ['monoid', 2],
+    ['library', 1],
+  ]) {
+    const service = await CardMaintenanceService.create(storageFixture());
+    await service.recordInstallation(hello, {[stage]: true});
+    assert.equal(service.isUpdateAvailable(hello), undefined);
+    const oldHash = bundleHashes[index];
+    bundleHashes[index] = `new-${stage}-image`;
+    assert.equal(service.isUpdateAvailable(hello), true);
+    bundleHashes[index] = oldHash;
+  }
+});
+
+test('successful replacement records Library and Monoid without relabeling retained Identity', async () => {
+  const storage = storageFixture();
+  const service = await CardMaintenanceService.create(storage);
+  await service.recordInstallation(hello, {identity: true});
+  bundleHashes[0] = 'new-identity-image';
+  const operation = await service.prepare(cardFixture(), {
+    mode: 'update',
+    cardInformation: information,
+    appletAid: hex(aid),
+  });
+  await service.replace('session', operation.id);
+  assert.equal(service.isUpdateAvailable(hello), false);
+  assert.equal(service.isIdentityUpdateAvailable(hello), true);
+  assert.deepEqual((await storage.get()).installations, [
+    {
+      publicKey: hex(hello.publicKey),
+      appletAid: hex(aid),
+      identityHash: 'identity-image',
+      libraryHash: 'library-image',
+      monoidHash: 'monoid-image',
+    },
+  ]);
+});
+
+test('Fresh replacement records all three installed component hashes', async () => {
+  const storage = storageFixture();
+  const service = await CardMaintenanceService.create(storage);
+  const operation = await service.prepareFresh(information, hello);
+  await service.replace('session', operation.id);
+  assert.equal(service.isUpdateAvailable(hello), false);
+  assert.equal(service.isIdentityUpdateAvailable(hello), false);
+  assert.deepEqual((await storage.get()).installations, [
+    {
+      publicKey: hex(hello.publicKey),
+      appletAid: hex(aid),
+      identityHash: 'identity-image',
+      libraryHash: 'library-image',
+      monoidHash: 'monoid-image',
+    },
+  ]);
 });

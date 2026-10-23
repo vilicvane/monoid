@@ -156,14 +156,14 @@ test('System information uses the numeric transient memory values emitted by the
   assertRequest(commands, 0x2f, {});
 });
 
-test('Bundle creation sends the complete member list and preserves all response packets', async () => {
+test('Bundle creation preserves recipient order and its byte-array response', async () => {
   const publicKeys = [
     identityPublicKey,
     new Uint8Array(identityPublicKey).fill(0x42, 1),
   ];
   const response = {
     bundle: new Uint8Array(32).fill(0x43),
-    packets: [{publicKey: publicKeys[1], data: new Uint8Array(246).fill(0x44)}],
+    data: [new Uint8Array(311).fill(0x44), new Uint8Array(311).fill(0x45)],
   };
   const {applet, commands} = await createSession(response);
   assert.deepEqual(await applet.createBundle({publicKeys}), response);
@@ -173,12 +173,123 @@ test('Bundle creation sends the complete member list and preserves all response 
 test('Bundle join puts the creator key before the enrollment packet across request fragments', async () => {
   const response = {bundle: new Uint8Array(32).fill(0x45)};
   const request = {
-    senderPublicKey: identityPublicKey,
+    publicKey: identityPublicKey,
     data: new Uint8Array(311).fill(0x46),
   };
   const {applet, commands} = await createSession(response);
   assert.deepEqual(await applet.joinBundle(request), response);
   assertRequest(commands, 0x24, request);
+});
+
+test('Bundle extension uses separate initiation and approval commands and forwards approval directly to Join', async () => {
+  const targetPublicKey = new Uint8Array(identityPublicKey).fill(0x49, 1);
+  const extension = {data: new Uint8Array(260).fill(0x47)};
+  const initiator = await createSession(extension);
+  const request = await initiator.applet.extendBundle({
+    publicKey: targetPublicKey,
+  });
+  assert.deepEqual(request, extension);
+  assertRequest(initiator.commands, 0x25, {publicKey: targetPublicKey});
+
+  const enrollment = {
+    publicKey: identityPublicKey,
+    data: new Uint8Array(311).fill(0x48),
+  };
+  const approver = await createSession(enrollment);
+  const approved = await approver.applet.approveBundleExtension(request);
+  assert.deepEqual(approved, enrollment);
+  assertRequest(approver.commands, 0x26, extension);
+
+  const response = {bundle: new Uint8Array(32).fill(0x45)};
+  const recipient = await createSession(response);
+  assert.deepEqual(await recipient.applet.joinBundle(approved), response);
+  assertRequest(recipient.commands, 0x24, enrollment);
+});
+
+test('Applet grant listing retains exact types, fixed keys and scoped seed permissions', async () => {
+  const response = {
+    grants: [
+      {
+        aid: bytes('a0000006472f0001'),
+        tokenHash: new Uint8Array(32).fill(0x50),
+      },
+      {
+        aid: bytes('f06d6f6e6f69640301'),
+        tokenHash: new Uint8Array(32).fill(0x51),
+        types: [
+          [-3839, true],
+          [0x1000, false],
+        ],
+        keys: [{index: indexes.secp256r1, type: 'secp256r1'}],
+        seed: {index, domain: new TextEncoder().encode('Security Key')},
+      },
+    ],
+  };
+  const {applet, commands} = await createSession(response);
+  assert.deepEqual(await applet.listAppletGrants({}), response);
+  assertRequest(commands, 0x50, {});
+});
+
+test('Applet grant replacement orders nested key and seed fields and preserves signed custom types', async () => {
+  const clientAid = bytes('a0000006472f0001');
+  const domain = new TextEncoder().encode('Security Key');
+  const context = new Uint8Array([1, 2, 3]);
+  const keys = [
+    {type: 'secp256r1', index: indexes.secp256r1},
+    {derivation: {path, type: 'bip32'}, type: 'seed', index},
+    {
+      derivation: {
+        path: path.subarray(0, 12),
+        curve: 'ed25519',
+        type: 'slip10',
+      },
+      type: 'seed',
+      index,
+    },
+    {derivation: {context, type: 'monoid-001'}, type: 'seed', index},
+  ];
+  const expectedKeys = [
+    {index: indexes.secp256r1, type: 'secp256r1'},
+    {index, type: 'seed', derivation: {type: 'bip32', path}},
+    {
+      index,
+      type: 'seed',
+      derivation: {
+        type: 'slip10',
+        curve: 'ed25519',
+        path: path.subarray(0, 12),
+      },
+    },
+    {index, type: 'seed', derivation: {type: 'monoid-001', context}},
+  ];
+  const {applet, commands} = await createSession({});
+  assert.deepEqual(
+    await applet.setAppletGrant({
+      seed: {domain, index},
+      keys,
+      types: [[-3839, true]],
+      aid: clientAid,
+    }),
+    {},
+  );
+  assertRequest(commands, 0x51, {
+    aid: clientAid,
+    types: [[-3839, true]],
+    keys: expectedKeys,
+    seed: {index, domain},
+  });
+});
+
+test('Applet grant permissions can all be omitted and removal only sends the client AID', async () => {
+  const request = {aid: bytes('a0000006472f0001')};
+  for (const [method, ins] of [
+    ['setAppletGrant', 0x51],
+    ['removeAppletGrant', 0x52],
+  ]) {
+    const {applet, commands} = await createSession({});
+    assert.deepEqual(await applet[method](request), {});
+    assertRequest(commands, ins, request);
+  }
 });
 
 test('full Reset uses 0xff with empty request and response and does not authenticate first', async () => {

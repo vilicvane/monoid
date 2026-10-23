@@ -23,9 +23,9 @@ import {MonoidCardError} from './card-error.js';
 import {MonoidAppletHello, createMonoidApplet} from './monoid-applet.js';
 
 export type BundledApplet = {
-  stage: 'identity' | 'monoid';
+  stage: 'identity' | 'library' | 'monoid';
   packageAid: string;
-  appletAid: string;
+  appletAid?: string;
   codeURL: URL;
   sha256: string;
 };
@@ -42,6 +42,7 @@ export const hasAppletBundle = appletBundle !== undefined;
 export type AppletReplacementCheckpoint =
   | 'remove-monoid-instance'
   | 'remove-monoid-package'
+  | 'remove-library-package'
   | 'remove-identity-instance'
   | 'remove-identity-package'
   | 'install'
@@ -54,6 +55,7 @@ export type AppletReplacementProgress = {
 
 export type MonoidAppletInstallation = {
   identity: InstalledApplet;
+  library: InstalledApplet;
   monoid: InstalledApplet;
   hello?: MonoidAppletHello;
   helloError?: unknown;
@@ -72,15 +74,26 @@ export type InstalledApplet = {
 };
 
 type LoadedApplet = AppletPackage & {stage: BundledApplet['stage']};
+type LoadedAppletBundle = [
+  LoadedApplet & {appletAid: Uint8Array},
+  LoadedApplet,
+  LoadedApplet & {appletAid: Uint8Array},
+];
 
 export function getMonoidAppletBundleHashes(): string[] {
   return appletBundle?.map(item => item.sha256) ?? [];
 }
 
+export function getMonoidAppletBundleHash(
+  stage: BundledApplet['stage'],
+): string | undefined {
+  return appletBundle?.find(item => item.stage === stage)?.sha256;
+}
+
 export function getBundledMonoidAppletAid(): string {
-  if (!appletBundle?.[1])
-    throw new Error('The applet installation package is incomplete');
-  return appletBundle[1].appletAid;
+  const aid = appletBundle?.find(item => item.stage === 'monoid')?.appletAid;
+  if (!aid) throw new Error('The applet installation package is incomplete');
+  return aid;
 }
 
 export function getCardMaintenanceFingerprint(
@@ -111,6 +124,7 @@ export async function readMonoidAppletInstallation(
 ): Promise<MonoidAppletInstallation> {
   const result: MonoidAppletInstallation = {
     identity: {installed: undefined},
+    library: {installed: undefined},
     monoid: {installed: undefined},
   };
   const transceive = cardTransceive(sessionId, signal);
@@ -140,6 +154,17 @@ export async function readMonoidAppletInstallation(
         packageVersion: loaded?.version,
       };
     }
+    const library = await registry.getEntry(
+      0x10,
+      hexToUint8Array('f06d6f6e6f696404'),
+    );
+    result.library = {
+      installed:
+        !!library && library.lifecycle === 1 && library.modules.length === 0,
+      loaded: !!library,
+      lifecycle: library?.lifecycle,
+      packageVersion: library?.version,
+    };
   } catch (error) {
     signal?.throwIfAborted();
     rethrowConnectionError(error);
@@ -232,7 +257,7 @@ function rethrowConnectionError(error: unknown): void {
 /** Validate load images before opening a management session or deleting anything. */
 async function loadAppletPackages(
   signal?: AbortSignal,
-): Promise<LoadedApplet[]> {
+): Promise<LoadedAppletBundle> {
   signal?.throwIfAborted();
 
   if (!appletBundle) {
@@ -240,9 +265,13 @@ async function loadAppletPackages(
   }
 
   if (
-    appletBundle.length !== 2 ||
+    appletBundle.length !== 3 ||
     appletBundle[0].stage !== 'identity' ||
-    appletBundle[1].stage !== 'monoid'
+    !appletBundle[0].appletAid ||
+    appletBundle[1].stage !== 'library' ||
+    appletBundle[1].appletAid !== undefined ||
+    appletBundle[2].stage !== 'monoid' ||
+    !appletBundle[2].appletAid
   ) {
     throw new Error('The applet installation package is incomplete.');
   }
@@ -268,13 +297,13 @@ async function loadAppletPackages(
       return {
         stage: item.stage,
         packageAid: hexToUint8Array(item.packageAid),
-        appletAid: hexToUint8Array(item.appletAid),
+        appletAid: item.appletAid ? hexToUint8Array(item.appletAid) : undefined,
         code,
       };
     }),
   );
   signal?.throwIfAborted();
-  return packages;
+  return packages as LoadedAppletBundle;
 }
 
 function cardTransceive(
@@ -351,7 +380,7 @@ export async function installMonoidApplets(
   await installPackages(installer, packages, onProgress, signal);
   return verifyInstallation(
     sessionId,
-    packages[1].appletAid,
+    packages[2].appletAid,
     onProgress,
     signal,
   );
@@ -390,7 +419,7 @@ export async function replaceMonoidApplets(
   signal?.throwIfAborted();
   onProgress({stage: 'checking'});
   const packages = await loadAppletPackages(signal);
-  const [identity, monoid] = packages;
+  const [identity, library, monoid] = packages;
   if (!fresh && uint8ArrayToHex(monoid.appletAid) !== expectedAppletAid) {
     throw new Error('The applet identity changed in this installation package');
   }
@@ -401,6 +430,7 @@ export async function replaceMonoidApplets(
   const steps: AppletReplacementCheckpoint[] = [
     'remove-monoid-instance',
     'remove-monoid-package',
+    'remove-library-package',
     ...(fresh
       ? (['remove-identity-instance', 'remove-identity-package'] as const)
       : []),
@@ -444,15 +474,24 @@ export async function replaceMonoidApplets(
     if (!fresh && !(await installer.getEntry(0x40, identity.appletAid))) {
       throw new Error('The original Monoid Identity Applet is missing');
     }
+    // Security Key imports both Monoid and Library. Never remove its credentials
+    // or start deleting its dependencies as part of Monoid maintenance.
+    if (await installer.getEntry(0x10, hexToUint8Array('f06d6f6e6f696403'))) {
+      throw new MonoidCardError(
+        'Monoid Security Key depends on these packages',
+      );
+    }
     for (const step of steps.slice(position)) {
       signal?.throwIfAborted();
       await onCheckpoint(step);
       signal?.throwIfAborted();
       if (step === 'verify') break;
       if (step === 'install') {
-        const installing = fresh ? packages : [monoid];
+        const installing = fresh ? packages : [library, monoid];
         for (const applet of installing) {
-          const instance = await installer.getEntry(0x40, applet.appletAid);
+          const instance = applet.appletAid
+            ? await installer.getEntry(0x40, applet.appletAid)
+            : undefined;
           const loaded = await installer.getEntry(0x10, applet.packageAid);
           // An interrupted LOAD has no instance or item data. Discard only that
           // exact unfinished code package before an explicitly requested retry.
@@ -460,20 +499,27 @@ export async function replaceMonoidApplets(
             !instance &&
             loaded &&
             (loaded.lifecycle !== 1 ||
-              !loaded.modules.some(
-                aid =>
-                  uint8ArrayToHex(aid) === uint8ArrayToHex(applet.appletAid),
-              ))
+              (applet.appletAid
+                ? !loaded.modules.some(
+                    aid =>
+                      uint8ArrayToHex(aid) ===
+                      uint8ArrayToHex(applet.appletAid!),
+                  )
+                : loaded.modules.length !== 0))
           ) {
             await installer.removePackage(applet.packageAid);
           }
           await installPackages(installer, [applet], onProgress, signal);
         }
       } else {
-        const applet = step.includes('identity') ? identity : monoid;
+        const applet = step.includes('identity')
+          ? identity
+          : step.includes('library')
+            ? library
+            : monoid;
         onProgress({stage: 'deleting', applet: applet.stage});
         if (step.endsWith('instance')) {
-          await installer.removeInstance(applet.appletAid);
+          await installer.removeInstance(applet.appletAid!);
         } else {
           await installer.removePackage(applet.packageAid);
         }

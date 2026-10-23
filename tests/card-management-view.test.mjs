@@ -237,8 +237,9 @@ function hello(initialized = true, bundle = false) {
 }
 function installed(hello) {
   return {
-    identity: {installed: true, aid: 'f06d6f6e6f69640001'},
-    monoid: {installed: true, aid: AID, version: hello.version},
+    identity: {installed: true, loaded: true, aid: 'f06d6f6e6f69640001'},
+    library: {installed: true, loaded: true},
+    monoid: {installed: true, loaded: true, aid: AID, version: hello.version},
     hello,
   };
 }
@@ -249,6 +250,7 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     inputs: [],
     scans: [],
     events: [],
+    recordedInstallations: [],
     errors: [],
     toasts: [],
     progress: [],
@@ -259,7 +261,11 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
       cardManagerAid: 'a000000151000000',
       cplc: {icSerialNumber: '1234'},
     },
-    installation: {identity: {installed: false}, monoid: {installed: false}},
+    installation: {
+      identity: {installed: false, loaded: false},
+      library: {installed: false, loaded: false},
+      monoid: {installed: false, loaded: false},
+    },
     uninitialized: hello(false, bundle),
     initialized: hello(true, bundle),
     slot: create => (state.slots[state.index++] ??= create()),
@@ -334,7 +340,9 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     matchOperation: () => state.pending,
     get: () => state.pending,
     isUpdateAvailable: () => false,
-    recordInstallation: async () => {},
+    recordInstallation: async (hello, options) => {
+      state.recordedInstallations.push({hello, options});
+    },
     prepare: async (_applet, options) => {
       state.events.push({
         type: 'prepare',
@@ -427,6 +435,12 @@ test('installation asks for Secret PIN before scanning, completes PIN setup, the
   await state.tap({finish: false});
   assert.equal(state.informationReads, 1);
   assert.equal(state.installationReads, 2, 'refresh installed applets only');
+  assert.deepEqual(state.recordedInstallations, [
+    {
+      hello: state.uninitialized,
+      options: {identity: true, library: true, monoid: true},
+    },
+  ]);
   assert.equal(
     state.targets.length,
     0,
@@ -454,6 +468,7 @@ test('installation asks for Secret PIN before scanning, completes PIN setup, the
 
 test('installation keeps the current page during deferred PIN saving and Copy handoff, then shows Complete directly', async () => {
   const state = mount({returnTo: 'copy'});
+  state.installation.library = {installed: true, loaded: true};
   const savePIN = deferred();
   const handoff = deferred();
   state.pinSession.setPIN = async () => savePIN.promise;
@@ -468,6 +483,12 @@ test('installation keeps the current page during deferred PIN saving and Copy ha
   state.click('Install applets');
   await state.answer();
   await state.tap();
+  assert.deepEqual(state.recordedInstallations, [
+    {
+      hello: state.uninitialized,
+      options: {identity: true, library: false, monoid: true},
+    },
+  ]);
   assert.ok(state.node('CardInformationContent'));
   assert.equal(state.node('CardAppletsContent'), undefined);
   assert.equal(state.node('OperationComplete'), undefined);
@@ -513,6 +534,7 @@ test('setting PINs reuses the current applet inventory and updated Hello', async
   assert.deepEqual(state.errors, []);
   assert.equal(state.informationReads, 1);
   assert.equal(state.installationReads, 1);
+  assert.deepEqual(state.recordedInstallations, []);
   assert.ok(state.node('OperationComplete'));
   state.click('Back to Card Applets');
   assert.equal(state.node('CardAppletsContent').props.id, '01020304');
@@ -816,6 +838,7 @@ test('a known installed applet remains visible when card-manager information is 
   const state = mount({cardInformation: false});
   state.installation = {
     identity: {installed: true},
+    library: {installed: undefined},
     monoid: {installed: true},
     helloError: new Error('Could not read Monoid'),
     registryError: new Error('GP unavailable'),
@@ -844,6 +867,7 @@ test('a known Identity Applet is not classified as an unsupported card when Mono
   const state = mount({cardInformation: false});
   state.installation = {
     identity: {installed: true},
+    library: {installed: undefined},
     monoid: {installed: undefined},
     helloError: new Error('Monoid SELECT failed (6985)'),
     registryError: new Error('GP unavailable'),

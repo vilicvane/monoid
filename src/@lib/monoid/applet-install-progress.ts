@@ -2,6 +2,7 @@ import type {AppletInstallProgress} from './install.js';
 
 export const APPLET_NAMES = {
   identity: 'Monoid Identity Applet',
+  library: 'Monoid Library',
   monoid: 'Monoid Applet',
 };
 

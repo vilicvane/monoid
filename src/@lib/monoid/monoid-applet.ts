@@ -92,6 +92,18 @@ const KeySECP256R1 = x.intersection([
 ]);
 
 const Key = x.union([KeySECP256K1, KeySECP256R1, KeyED25519]);
+const AppletGrantOptions = x.object({
+  aid: XUint8Array,
+  // Custom item types use signed 16-bit integers on the wire.
+  types: x.array(x.tuple([x.number, x.boolean])).optional(),
+  keys: x.array(Key).optional(),
+  seed: x.object({index: SafeIndex, domain: XUint8Array}).optional(),
+});
+const AppletGrant = x.intersection([
+  AppletGrantOptions,
+  x.object({tokenHash: XUint8Array}),
+]);
+
 const Taproot = x.union([
   x.boolean,
   x.object({merkleRoot: XUint8Array.optional()}),
@@ -144,17 +156,33 @@ export const monoidCommandDefinitions = {
 
   createBundle: {
     ins: 0x23,
+    // Only other cards' Identity keys; data preserves their request order.
     request: x.object({publicKeys: x.array(PublicKey)}),
     response: x.object({
       bundle: XUint8Array,
-      packets: x.array(x.object({publicKey: PublicKey, data: XUint8Array})),
+      data: x.array(XUint8Array),
     }),
   },
 
   joinBundle: {
     ins: 0x24,
-    request: x.object({senderPublicKey: PublicKey, data: XUint8Array}),
+    request: x.object({publicKey: PublicKey, data: XUint8Array}),
     response: x.object({bundle: XUint8Array}),
+  },
+
+  // Requires Secret PIN on an existing member; publicKey is the new card.
+  extendBundle: {
+    ins: 0x25,
+    request: x.object({publicKey: PublicKey}),
+    response: x.object({data: XUint8Array}),
+  },
+
+  // Requires Secret PIN on another existing member. Forward the full response
+  // to the new card's joinBundle; publicKey identifies the approving member.
+  approveBundleExtension: {
+    ins: 0x26,
+    request: x.object({data: XUint8Array}),
+    response: x.object({publicKey: PublicKey, data: XUint8Array}),
   },
 
   reset: {
@@ -322,6 +350,26 @@ export const monoidCommandDefinitions = {
     response: x.object({
       signature: XUint8Array,
     }),
+  },
+
+  // Applet grant management requires Secret PIN authentication.
+  listAppletGrants: {
+    ins: 0x50,
+    request: x.object({}),
+    response: x.object({grants: x.array(AppletGrant)}),
+  },
+
+  // Replaces the entire grant; omitted permissions are removed.
+  setAppletGrant: {
+    ins: 0x51,
+    request: AppletGrantOptions,
+    response: x.object({}),
+  },
+
+  removeAppletGrant: {
+    ins: 0x52,
+    request: x.object({aid: XUint8Array}),
+    response: x.object({}),
   },
 } satisfies CBORCommandDefinitions;
 

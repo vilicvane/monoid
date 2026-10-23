@@ -125,12 +125,14 @@ export const Step = ({
   numero,
   activeNumero,
   processing = false,
+  keepExpanded = false,
   summary,
   children,
 }: {
   title: ReactNode;
   numero: number;
   processing?: boolean;
+  keepExpanded?: boolean;
   activeNumero: number;
   summary?: ReactNode;
   children?: ReactNode;
@@ -167,7 +169,9 @@ export const Step = ({
       <Indicator>{indicator}</Indicator>
       <Title>{title}</Title>
       {state === 'done' && summary && <Summary>{summary}</Summary>}
-      {state === 'active' && <Content>{children}</Content>}
+      {(state === 'active' || (state === 'done' && keepExpanded)) && (
+        <Content>{children}</Content>
+      )}
     </Container>
   );
 };

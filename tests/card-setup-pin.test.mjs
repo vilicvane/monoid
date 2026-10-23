@@ -104,6 +104,7 @@ function mount({
   secretPIN = false,
   hello: initialHello,
   pinSession,
+  onInitialized,
 } = {}) {
   const state = {
     inputs: [],
@@ -219,6 +220,7 @@ function mount({
   state.tree = CardSetupPIN({
     hello: state.hello,
     pinSession,
+    onInitialized,
     onFinished: (initialized, latestHello) => {
       state.results.push(initialized);
       state.latestHellos.push(latestHello);
@@ -592,4 +594,45 @@ test('unmounting during credential storage aborts its separate signal and suppre
   assert.deepEqual(state.results, []);
   assert.deepEqual(state.toasts, []);
   assert.deepEqual(state.errors, []);
+});
+
+test('confirmed setup is retained by its owner after navigation during authentication', async () => {
+  const acknowledged = [];
+  const state = mount({onInitialized: hello => acknowledged.push(hello)});
+  const authentication = deferred();
+  state.onAuthenticate = () => authentication.promise;
+  await state.answer(PIN);
+  const tapping = state.tap();
+  const rejected = assert.rejects(tapping, {name: 'AbortError'});
+  await setImmediate();
+  assert.equal(state.commands.at(-1)[0], 'authenticate');
+  assert.deepEqual(acknowledged, []);
+
+  state.unmount();
+  authentication.resolve();
+  await rejected;
+  await setImmediate();
+
+  assert.equal(acknowledged.length, 1);
+  assert.deepEqual(acknowledged[0].pins, {access: 5, secret: 5});
+  assert.deepEqual(state.results, []);
+  assert.deepEqual(state.saved, []);
+});
+
+test('an unverified write never acknowledges setup to its owner', async () => {
+  const acknowledged = [];
+  const state = mount({onInitialized: hello => acknowledged.push(hello)});
+  const write = deferred();
+  state.onWrite = () => write.promise;
+  await state.answer(PIN);
+  const tapping = state.tap();
+  const rejected = assert.rejects(tapping, error => error.code === 'CANCELLED');
+  await setImmediate();
+  state.unmount();
+  write.resolve();
+  await rejected;
+  await setImmediate();
+
+  assert.deepEqual(acknowledged, []);
+  assert.deepEqual(state.results, []);
 });

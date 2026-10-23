@@ -116,6 +116,7 @@ export const CardManagementView = observer(
       returnTo: view.returnTo,
       copyId: view.copyId,
       bundleId: view.bundleId,
+      extensionId: view.extensionId,
     }));
     const [card, setCard] = useState<CardSnapshot>(() => ({
       information: view.cardInformation,
@@ -283,6 +284,9 @@ export const CardManagementView = observer(
       if (context.returnTo === 'bundle' && context.bundleId) {
         await cardBundleStore.acceptInstalledCard(context.bundleId, result);
       }
+      if (context.returnTo === 'bundleExtension' && context.extensionId) {
+        await cardBundleStore.acceptExtensionCard(context.extensionId, result);
+      }
       setCard(snapshot);
       if (isActive()) setComplete(true);
     }
@@ -405,6 +409,7 @@ export const CardManagementView = observer(
               identity:
                 current.identity.installed === false &&
                 current.identity.loaded === false,
+              library: current.library.loaded === false,
               monoid:
                 current.monoid.installed === false &&
                 current.monoid.loaded === false,
@@ -498,7 +503,9 @@ export const CardManagementView = observer(
     const backToBundle =
       context.returnTo === 'bundle'
         ? router.$backTo(router.safe.setupCard.$exact)
-        : undefined;
+        : context.returnTo === 'bundleExtension'
+          ? router.$backTo(router.safe.extendBundle.$exact)
+          : undefined;
     const backToSafe =
       context.returnTo === 'safe'
         ? router.$backTo(router.safe.$exact)

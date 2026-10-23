@@ -50,10 +50,12 @@ function isInitialized(hello: MonoidAppletHello): boolean {
 export function CardSetupPIN({
   hello,
   pinSession,
+  onInitialized,
   onFinished,
 }: {
   hello: MonoidAppletHello;
   pinSession?: MonoidPINSession;
+  onInitialized?: (hello: MonoidAppletHello) => void;
   onFinished: (initialized: boolean, latestHello?: MonoidAppletHello) => void;
 }): ReactNode {
   const {errorService, monoidCredentialsStore} = useEntrances();
@@ -67,6 +69,8 @@ export function CardSetupPIN({
   });
   const finish = useRef(onFinished);
   finish.current = onFinished;
+  const acknowledge = useRef(onInitialized);
+  acknowledge.current = onInitialized;
 
   useEffect(() => {
     const operation = new AbortController();
@@ -238,6 +242,8 @@ export function CardSetupPIN({
         }
       } finally {
         pin = undefined;
+        // Keep confirmed setup in its owning flow even if navigation closed the UI.
+        if (initialized && latestHello) acknowledge.current?.(latestHello);
         if (!disposed) finish.current(initialized, latestHello);
       }
     };

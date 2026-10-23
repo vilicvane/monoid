@@ -15,6 +15,11 @@ const targets = [
     appletAid: 'f06d6f6e6f69640001',
   },
   {
+    name: 'monoidlib',
+    stage: 'library',
+    packageAid: 'f06d6f6e6f696404',
+  },
+  {
     name: 'monoid',
     stage: 'monoid',
     packageAid: 'f06d6f6e6f696402',
@@ -55,19 +60,30 @@ export function readAppletPackage(cap, target) {
   );
   assert.equal(packageAid, target.packageAid, 'Unexpected package AID');
   const applets = entries[`${directory}Applet.cap`];
-  assert(applets, 'CAP has no applet');
-  assert.equal(applets[3], 1, 'Expected exactly one applet');
-  assert.equal(
-    Buffer.from(applets.subarray(5, 5 + applets[4])).toString('hex'),
-    target.appletAid,
-    'Unexpected applet AID',
-  );
+
+  if (target.appletAid) {
+    assert(applets, 'CAP has no applet');
+    assert.equal(applets[3], 1, 'Expected exactly one applet');
+    assert.equal(
+      Buffer.from(applets.subarray(5, 5 + applets[4])).toString('hex'),
+      target.appletAid,
+      'Unexpected applet AID',
+    );
+  } else if (applets) {
+    assert.equal(applets[3], 0, 'Library CAP must not contain applets');
+    assert.equal(applets.length, 4, 'Invalid empty Applet component');
+  }
 
   const code = Buffer.concat(
     components.flatMap(([name, tag]) => {
       const component = entries[`${directory}${name}.cap`];
 
-      if (!component && name === 'Export') return [];
+      if (
+        !component &&
+        (name === 'Export' || (name === 'Applet' && !target.appletAid))
+      ) {
+        return [];
+      }
 
       assert(component, `Missing ${name} component`);
       assert.equal(component[0], tag, `Invalid ${name} tag`);
@@ -136,7 +152,7 @@ export async function prepareApplets(sourceDirectory) {
     );
   }
 
-  // Validate both CAPs before writing any bundle artifacts.
+  // Validate every CAP before writing any bundle artifacts.
   const bundle = await Promise.all(
     targets.map(async (target, index) => {
       const saved = previous.find(item => item.name === target.name);
@@ -194,7 +210,7 @@ export async function prepareApplets(sourceDirectory) {
   const entries = bundle
     .map(
       item =>
-        `  {stage: '${item.stage}', packageAid: '${item.packageAid}', appletAid: '${item.appletAid}', codeURL: new URL('../../@assets/applets/${item.name}.bin', import.meta.url), sha256: '${sha256(item.code)}'}`,
+        `  {stage: '${item.stage}', packageAid: '${item.packageAid}', ${item.appletAid ? `appletAid: '${item.appletAid}', ` : ''}codeURL: new URL('../../@assets/applets/${item.name}.bin', import.meta.url), sha256: '${sha256(item.code)}'}`,
     )
     .join(',\n');
   await writeChangedFile(

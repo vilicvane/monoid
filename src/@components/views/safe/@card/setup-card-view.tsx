@@ -706,7 +706,7 @@ export const SetupCardView = observer(
             {fromCopy
               ? 'Setup card'
               : bundleOnly
-                ? 'Setup card bundle'
+                ? 'Create bundle'
                 : 'Setup cards'}
           </ViewHeaderTitle>
         </ViewHeader>

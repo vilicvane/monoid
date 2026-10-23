@@ -1,0 +1,381 @@
+import {reaction, runInAction} from 'mobx';
+import {observer} from 'mobx-react-lite';
+import {type ReactNode, useCallback, useEffect, useRef, useState} from 'react';
+import type {RouteComponentProps} from 'routra-react';
+
+import {MonoidIdHex, MonoidPIN, PublicKeyHex} from '../../../../@atomics.js';
+import {useEntrances} from '../../../../@entrances.js';
+import type {CardInformation} from '../../../../@lib/global-platform/card-information.js';
+import {MonoidAppletHello} from '../../../../@lib/monoid/index.js';
+import type {Router} from '../../../../@routes.js';
+import {isCredentialRequestCancelled} from '../../../../@services/index.js';
+import {
+  CardGrid,
+  CardPlaceholder,
+  CardPreview,
+  CardPreviewButton,
+} from '../../../@monoid/card-preview.js';
+import {MonoidScanStatePromptContentHighlight} from '../../../@monoid/monoid-scan-prompt.js';
+import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
+import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
+import {Button} from '../../../@ui/button.js';
+import {InfoMessage} from '../../../@ui/message-content.js';
+import {OperationComplete} from '../../../@ui/operation-complete.js';
+import {Step, Steps} from '../../../@ui/step.js';
+import {useInputModal} from '../../../@ui/use-input-modal.js';
+import {
+  View,
+  ViewContent,
+  ViewHeader,
+  ViewHeaderTitle,
+  useViewActive,
+} from '../../../@view/index.js';
+
+import {CardBundleExtensionSession} from './card-bundle-extension-session.js';
+import {useBundleCardAddition} from './use-bundle-card-addition.js';
+
+export const ExtendBundleView = observer(
+  ({view}: RouteComponentProps<Router['safe']['extendBundle']>): ReactNode => {
+    const {router, cardBundleStore, cardStore, monoidApplet, errorService} =
+      useEntrances();
+    const isViewActive = useViewActive(view);
+    const [session] = useState(() =>
+      cardBundleStore.getOrCreateExtension(
+        view.extensionId,
+        () => new CardBundleExtensionSession(view.card),
+      ),
+    );
+    const [working, setWorking] = useState(false);
+    const [pinInput, showPINInput] = useInputModal();
+    const scan = useIsoDepScanPrompt();
+    const operation = useRef<AbortController | undefined>(undefined);
+    const mounted = useRef(true);
+    const isActive = useCallback(
+      () => mounted.current && isViewActive(),
+      [isViewActive],
+    );
+    const validateAddition = useCallback(
+      (hello: MonoidAppletHello) => session.validateAddition(hello),
+      [session],
+    );
+    const onAdded = useCallback(
+      (hello: MonoidAppletHello) => session.addCard(hello),
+      [session],
+    );
+    const onNeedsInstall = useCallback(
+      (cardInformation: CardInformation) => {
+        router
+          .cardApplets({
+            cardInformation,
+            returnTo: 'bundleExtension',
+            extensionId: view.extensionId,
+          })
+          .$push();
+      },
+      [router, view],
+    );
+    const addition = useBundleCardAddition({
+      isActive,
+      validateAddition,
+      onAdded,
+      onNeedsInstall,
+      label: 'Scan new card',
+    });
+    const acceptInstalledCard = useRef(addition.acceptCard);
+    acceptInstalledCard.current = addition.acceptCard;
+    const busy = working || addition.busy || session.busy;
+
+    useEffect(
+      () =>
+        reaction(
+          () =>
+            isViewActive() && !busy
+              ? cardBundleStore.getExtensionCard(view.extensionId)
+              : undefined,
+          hello => {
+            if (!hello) return;
+            errorService.catch(
+              (async () => {
+                let consumed = false;
+                try {
+                  consumed = await acceptInstalledCard.current(hello);
+                } catch (error) {
+                  consumed = true;
+                  throw error;
+                } finally {
+                  if (
+                    consumed &&
+                    cardBundleStore.getExtensionCard(view.extensionId) === hello
+                  ) {
+                    cardBundleStore.consumeExtensionCard(view.extensionId);
+                  }
+                }
+              })(),
+            );
+          },
+          {fireImmediately: true},
+        ),
+      [busy, cardBundleStore, errorService, isViewActive, view],
+    );
+    const complete = session.phase === 'complete' && !busy;
+    const activeNumero = {
+      collecting: 1,
+      requesting: 2,
+      approving: 3,
+      joining: 4,
+      complete: 5,
+    }[session.phase];
+    const backToCard = router.$backTo(router.safe.card.$exact);
+    const back = backToCard ?? router.$backTo(router.safe.$exact);
+
+    useEffect(() => {
+      mounted.current = true;
+      return () => {
+        mounted.current = false;
+        operation.current?.abort();
+      };
+    }, []);
+
+    useEffect(
+      () =>
+        reaction(isViewActive, active => {
+          if (!active) operation.current?.abort();
+        }),
+      [isViewActive],
+    );
+
+    const configure = async (): Promise<void> => {
+      if (operation.current || busy || !isActive()) return;
+      const phase = session.phase;
+      if (phase === 'collecting' || phase === 'complete') return;
+      const expected =
+        phase === 'requesting'
+          ? session.requester
+          : phase === 'joining'
+            ? session.target
+            : undefined;
+      const controller = new AbortController();
+      operation.current = controller;
+      setWorking(true);
+      let pin: MonoidPIN | undefined;
+      try {
+        let description: ReactNode = expected
+          ? `Card ${expected.id}`
+          : phase === 'requesting'
+            ? 'For a card in this bundle'
+            : 'For another card in this bundle';
+        for (;;) {
+          const input = await showPINInput(
+            {
+              type: 'password',
+              ...getPINInputPlaceholder('Secret', 'Enter'),
+              description,
+              center: true,
+              maxLength: 16,
+            },
+            controller.signal,
+          );
+          if (input === undefined || !isActive()) return;
+          controller.signal.throwIfAborted();
+          if (MonoidPIN.is(input)) {
+            pin = input;
+            break;
+          }
+          description = 'Use 6 to 16 ASCII characters';
+        }
+
+        await scan(
+          expected ? (
+            <>
+              Scan card{' '}
+              <MonoidScanStatePromptContentHighlight>
+                {expected.id}
+              </MonoidScanStatePromptContentHighlight>
+            </>
+          ) : phase === 'requesting' ? (
+            'Scan a bundle card'
+          ) : (
+            'Scan another bundle card'
+          ),
+          async (sessionId, setState, scanSignal) => {
+            const signal = AbortSignal.any([controller.signal, scanSignal]);
+            signal.throwIfAborted();
+            const applet = await monoidApplet.openSession(sessionId);
+            signal.throwIfAborted();
+            const hello = MonoidAppletHello.satisfies(await applet.hello({}));
+            signal.throwIfAborted();
+            session.validateCard(hello);
+            setState('Authenticating, hold tight...');
+            try {
+              await session.configureCard(applet, hello, pin!, signal);
+            } finally {
+              // Keep a confirmed join even if navigation follows its response.
+              if (session.phase === 'complete' && session.target) {
+                const cached = cardStore.get({
+                  id: MonoidIdHex.satisfies(session.target.id),
+                  publicKey: PublicKeyHex.satisfies(session.target.publicKey),
+                });
+                if (cached) runInAction(() => (cached.bundle = session.bundle));
+              }
+            }
+          },
+        );
+      } catch (error) {
+        if (!controller.signal.aborted && !isCredentialRequestCancelled(error))
+          throw error;
+      } finally {
+        pin = undefined;
+        if (operation.current === controller) operation.current = undefined;
+        if (mounted.current) setWorking(false);
+      }
+    };
+
+    const scanButton = (
+      <Button
+        loading={busy}
+        onClick={errorService.catch(
+          session.phase === 'collecting' ? addition.resume : configure,
+        )}
+      >
+        {session.phase === 'collecting'
+          ? addition.pendingReset?.replacement
+            ? 'Scan new card'
+            : addition.buttonLabel
+          : session.phase === 'approving'
+            ? 'Scan another bundle card'
+            : session.phase === 'requesting'
+              ? session.requester
+                ? 'Scan this card'
+                : 'Scan a bundle card'
+              : 'Scan new card'}
+      </Button>
+    );
+
+    return (
+      <View>
+        <ViewHeader>
+          <ViewHeaderTitle>Extend bundle</ViewHeaderTitle>
+        </ViewHeader>
+        <ViewContent
+          footer={
+            complete
+              ? back && (
+                  <Button color="neutral" onClick={() => back()}>
+                    {backToCard ? 'Back to Card' : 'Back to Safe'}
+                  </Button>
+                )
+              : scanButton
+          }
+        >
+          <Steps>
+            <Step
+              title="Add new card"
+              numero={1}
+              activeNumero={activeNumero}
+              keepExpanded={activeNumero < 4}
+              processing={busy && activeNumero === 1}
+            >
+              <CardGrid>
+                {session.target ? (
+                  <CardPreview id={session.target.id} description="ready" />
+                ) : (
+                  <CardPreviewButton
+                    aria-label="Scan new card"
+                    disabled={busy}
+                    onClick={errorService.catch(addition.resume)}
+                  >
+                    <CardPlaceholder aria-hidden="true">+</CardPlaceholder>
+                  </CardPreviewButton>
+                )}
+              </CardGrid>
+            </Step>
+            <Step
+              title="Request extension"
+              numero={2}
+              activeNumero={activeNumero}
+              keepExpanded
+              processing={busy && activeNumero === 2}
+            >
+              <CardGrid>
+                {session.requester ? (
+                  <CardPreview
+                    id={session.requester.id}
+                    description={activeNumero === 2 ? 'pending' : 'complete'}
+                    $pending={activeNumero === 2}
+                  />
+                ) : (
+                  <CardPreviewButton
+                    aria-label="Scan a bundle card"
+                    disabled={busy}
+                    onClick={errorService.catch(configure)}
+                  >
+                    <CardPlaceholder aria-hidden="true">+</CardPlaceholder>
+                  </CardPreviewButton>
+                )}
+              </CardGrid>
+              {activeNumero === 2 && (
+                <InfoMessage>
+                  {session.requester
+                    ? 'Scan the same card to retry.'
+                    : 'Scan any card in this bundle.'}
+                </InfoMessage>
+              )}
+            </Step>
+            <Step
+              title="Approve extension"
+              numero={3}
+              activeNumero={activeNumero}
+              keepExpanded
+              processing={busy && activeNumero === 3}
+            >
+              <CardGrid>
+                {session.approver ? (
+                  <CardPreview
+                    id={session.approver.id}
+                    description="complete"
+                  />
+                ) : (
+                  <CardPreviewButton
+                    aria-label="Scan another bundle card"
+                    disabled={busy}
+                    onClick={errorService.catch(configure)}
+                  >
+                    <CardPlaceholder aria-hidden="true">+</CardPlaceholder>
+                  </CardPreviewButton>
+                )}
+              </CardGrid>
+              {activeNumero === 3 && (
+                <InfoMessage>
+                  Scan a different card from the same bundle.
+                </InfoMessage>
+              )}
+            </Step>
+            <Step
+              title="Join bundle"
+              numero={4}
+              activeNumero={activeNumero}
+              keepExpanded
+              processing={busy && activeNumero === 4}
+            >
+              <CardGrid>
+                {session.target && (
+                  <CardPreview
+                    id={session.target.id}
+                    description={activeNumero === 4 ? 'pending' : 'complete'}
+                    $pending={activeNumero === 4}
+                  />
+                )}
+              </CardGrid>
+              {activeNumero === 4 && (
+                <InfoMessage>Scan the new card added in step 1.</InfoMessage>
+              )}
+            </Step>
+          </Steps>
+          {complete && <OperationComplete />}
+        </ViewContent>
+        {addition.content}
+        {isActive() && pinInput}
+      </View>
+    );
+  },
+);

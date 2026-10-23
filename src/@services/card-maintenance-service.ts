@@ -12,9 +12,11 @@ import {
   type AppletReplacementProgress,
   type MonoidApplet,
   type MonoidAppletHello,
+  MonoidCardError,
   createMonoidApplet,
   getBundledMonoidAppletAid,
   getCardMaintenanceFingerprint,
+  getMonoidAppletBundleHash,
   getMonoidAppletBundleHashes,
   monoidCommandDefinitions,
   replaceMonoidApplets,
@@ -74,6 +76,7 @@ type MaintenanceStorage = {
     publicKey: string;
     appletAid: string;
     identityHash?: string;
+    libraryHash?: string;
     monoidHash?: string;
   }[];
 };
@@ -171,12 +174,17 @@ export class CardMaintenanceService {
       }
       const fingerprint = cardFingerprint(options.cardInformation);
       this.assertNoPending(hello, options.cardInformation);
+      if (hello.pins.secret === false) {
+        throw new Error('Set Secret PIN before updating this card');
+      }
+      const {grants} = await monoid.listAppletGrants({});
+      signal?.throwIfAborted();
+      if (grants.length > 0) {
+        throw new MonoidCardError('Applet grants require separate recovery');
+      }
       const operation = newOperation(options.mode, fingerprint, hello, monoid);
 
       if (!hello.bundle) {
-        if (hello.pins.secret === false) {
-          throw new Error('Set Secret PIN before updating this card');
-        }
         const manifest = normalizeItems((await monoid.list({})).items);
         const items: NonNullable<CardMaintenanceOperation['archive']>['items'] =
           [];
@@ -323,6 +331,7 @@ export class CardMaintenanceService {
       await this.save(operation);
       await this.recordInstallation(hello, {
         identity: operation.mode === 'fresh',
+        library: true,
         monoid: true,
         appletAid: operation.card.appletAid,
       });
@@ -382,26 +391,38 @@ export class CardMaintenanceService {
 
   isUpdateAvailable(hello: MonoidAppletHello): boolean | undefined {
     const saved = this.installation(hello);
-    return saved?.monoidHash === undefined
-      ? undefined
-      : saved.monoidHash !== getMonoidAppletBundleHashes()[1];
+    const updates = (['library', 'monoid'] as const).map(stage => {
+      const bundled = getMonoidAppletBundleHash(stage);
+      if (bundled === undefined) return false;
+      const installed = saved?.[`${stage}Hash`];
+      return installed === undefined ? undefined : installed !== bundled;
+    });
+    return updates.includes(true)
+      ? true
+      : updates.includes(undefined)
+        ? undefined
+        : false;
   }
 
   isIdentityUpdateAvailable(hello: MonoidAppletHello): boolean | undefined {
     const saved = this.installation(hello);
     return saved?.identityHash === undefined
       ? undefined
-      : saved.identityHash !== getMonoidAppletBundleHashes()[0];
+      : saved.identityHash !== getMonoidAppletBundleHash('identity');
   }
 
   /** Mark only components known to have loaded the bundled image, not skipped packages. */
   async recordInstallation(
     hello: MonoidAppletHello,
-    options: {identity?: boolean; monoid?: boolean; appletAid?: string},
+    options: {
+      identity?: boolean;
+      library?: boolean;
+      monoid?: boolean;
+      appletAid?: string;
+    },
   ): Promise<void> {
     const publicKey = uint8ArrayToHex(hello.publicKey);
     const appletAid = options.appletAid ?? getBundledMonoidAppletAid();
-    const hashes = getMonoidAppletBundleHashes();
     await this.write(current => {
       const installations = current.installations ?? [];
       const previous = installations.find(
@@ -418,8 +439,15 @@ export class CardMaintenanceService {
             ...previous,
             publicKey,
             appletAid,
-            ...(options.identity ? {identityHash: hashes[0]} : {}),
-            ...(options.monoid ? {monoidHash: hashes[1]} : {}),
+            ...(options.identity
+              ? {identityHash: getMonoidAppletBundleHash('identity')}
+              : {}),
+            ...(options.library
+              ? {libraryHash: getMonoidAppletBundleHash('library')}
+              : {}),
+            ...(options.monoid
+              ? {monoidHash: getMonoidAppletBundleHash('monoid')}
+              : {}),
           },
         ],
       };

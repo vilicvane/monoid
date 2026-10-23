@@ -48,6 +48,7 @@ import {
   ViewHeader,
   ViewHeaderButton,
   ViewHeaderIdentifier,
+  ViewHeaderTags,
   ViewHeaderTitle,
   ViewPlaceholder,
   useViewActive,
@@ -1012,7 +1013,14 @@ const CardContent = observer(
       <>
         <ViewHeader>
           <ViewHeaderTitle>Card</ViewHeaderTitle>
-          <ViewHeaderIdentifier identifier={{type: 'card', id: card.id}} />
+          <ViewHeaderTags>
+            <ViewHeaderIdentifier identifier={{type: 'card', id: card.id}} />
+            {card.bundle !== false && (
+              <ViewHeaderIdentifier
+                identifier={{type: 'bundle', id: card.bundle}}
+              />
+            )}
+          </ViewHeaderTags>
           <ViewHeaderButton
             aria-label="Card actions"
             aria-haspopup="dialog"
@@ -1359,7 +1367,26 @@ const CardContent = observer(
                           .$push();
                       }}
                     >
-                      Setup card bundle
+                      Create bundle
+                    </Button>
+                  )}
+                  {!canDelete && card.bundle !== false && (
+                    <Button
+                      color="neutral"
+                      onClick={() => {
+                        setMenu(undefined);
+                        router.safe
+                          .extendBundle({
+                            card: {
+                              id: card.id,
+                              publicKey: card.publicKey,
+                              bundle: card.bundle,
+                            },
+                          })
+                          .$push();
+                      }}
+                    >
+                      Extend bundle
                     </Button>
                   )}
                   {canDelete ? (

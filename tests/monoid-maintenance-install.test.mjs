@@ -12,6 +12,8 @@ const identityAid = 'f06d6f6e6f69640001';
 const monoidAid = 'f06d6f6e6f69640201';
 const identityPackage = 'f06d6f6e6f696400';
 const monoidPackage = 'f06d6f6e6f696402';
+const libraryPackage = 'f06d6f6e6f696404';
+const securityKeyPackage = 'f06d6f6e6f696403';
 const publicKey = `04${'11'.repeat(64)}`;
 const information = {
   cardManagerAid: 'a000000151000000',
@@ -34,7 +36,10 @@ function getEntry(scope, aid) {
     ? {
         aid,
         lifecycle: scope === 0x40 ? 7 : 1,
-        modules: [bytes(value === identityPackage ? identityAid : monoidAid)],
+        modules:
+          value === libraryPackage
+            ? []
+            : [bytes(value === identityPackage ? identityAid : monoidAid)],
         version: {major: 0, minor: 0},
       }
     : undefined;
@@ -77,7 +82,7 @@ mock.module('../.bld/app/@lib/global-platform/install.js', {
           async install(applet, progress) {
             fixture.events.push(`install ${applet.stage}`);
             fixture.packages.add(hex(applet.packageAid));
-            fixture.instances.add(hex(applet.appletAid));
+            if (applet.appletAid) fixture.instances.add(hex(applet.appletAid));
             progress({phase: 'complete'});
           },
         };
@@ -117,7 +122,7 @@ beforeEach(() => {
     events: [],
     gpQueries: [],
     instances: new Set([identityAid, monoidAid]),
-    packages: new Set([identityPackage, monoidPackage]),
+    packages: new Set([identityPackage, libraryPackage, monoidPackage]),
     information,
     hello: {
       version: 0,
@@ -131,10 +136,12 @@ beforeEach(() => {
   bundle.splice(
     0,
     bundle.length,
-    ...['identity', 'monoid'].map((stage, index) => ({
-      stage,
-      packageAid: index ? monoidPackage : identityPackage,
-      appletAid: index ? monoidAid : identityAid,
+    ...[
+      {stage: 'identity', packageAid: identityPackage, appletAid: identityAid},
+      {stage: 'library', packageAid: libraryPackage},
+      {stage: 'monoid', packageAid: monoidPackage, appletAid: monoidAid},
+    ].map(item => ({
+      ...item,
       codeURL: new URL(
         `data:application/octet-stream;base64,${Buffer.from(code).toString('base64')}`,
       ),
@@ -155,7 +162,7 @@ function options(overrides = {}) {
   };
 }
 
-test('ordinary replacement persists each next step and deletes only Monoid', async () => {
+test('ordinary replacement checkpoints Monoid and Library while preserving Identity', async () => {
   await replaceMonoidApplets('session', options());
   assert.deepEqual(
     fixture.events.filter(value => /saved|delete|install /.test(value)),
@@ -164,7 +171,10 @@ test('ordinary replacement persists each next step and deletes only Monoid', asy
       `delete instance ${monoidAid}`,
       'saved remove-monoid-package',
       `delete package ${monoidPackage}`,
+      'saved remove-library-package',
+      `delete package ${libraryPackage}`,
       'saved install',
+      'install library',
       'install monoid',
       'saved verify',
     ],
@@ -180,12 +190,54 @@ test('Fresh removes dependents before Identity and installs Identity before Mono
     [
       `delete instance ${monoidAid}`,
       `delete package ${monoidPackage}`,
+      `delete package ${libraryPackage}`,
       `delete instance ${identityAid}`,
       `delete package ${identityPackage}`,
       'install identity',
+      'install library',
       'install monoid',
     ],
   );
+});
+
+test('Security Key dependencies stop ordinary and fresh maintenance before deletion', async () => {
+  fixture.packages.add(securityKeyPackage);
+  for (const fresh of [false, true]) {
+    await assert.rejects(
+      replaceMonoidApplets('session', options({fresh})),
+      /Security Key depends on these packages/,
+    );
+  }
+  assert.ok(
+    fixture.events.every(value => !/saved|delete|install /.test(value)),
+  );
+  assert.deepEqual(fixture.instances, new Set([identityAid, monoidAid]));
+  assert.ok(fixture.packages.has(libraryPackage));
+});
+
+test('a library checkpoint resumes after Monoid removal without deleting Identity', async () => {
+  fixture.instances.delete(monoidAid);
+  fixture.packages.delete(monoidPackage);
+  await replaceMonoidApplets(
+    'session',
+    options({checkpoint: 'remove-library-package'}),
+  );
+  assert.deepEqual(
+    fixture.events.filter(value => /delete|install /.test(value)),
+    [`delete package ${libraryPackage}`, 'install library', 'install monoid'],
+  );
+  assert.ok(fixture.instances.has(identityAid));
+});
+
+test('replacing a standalone Monoid also loads its newly required Library', async () => {
+  fixture.packages.delete(libraryPackage);
+  await replaceMonoidApplets('session', options());
+  assert.ok(fixture.packages.has(libraryPackage));
+  assert.ok(
+    fixture.events.indexOf('install library') <
+      fixture.events.indexOf('install monoid'),
+  );
+  assert.ok(fixture.instances.has(identityAid));
 });
 
 test('a failing checkpoint save stops before the corresponding destructive APDU', async () => {
@@ -206,10 +258,10 @@ test('a failing checkpoint save stops before the corresponding destructive APDU'
 test('bundle integrity, caller AID, physical card and Hello must pass before ordinary deletion', async () => {
   const mutations = [
     () => {
-      bundle[1].sha256 = '0'.repeat(64);
+      bundle[2].sha256 = '0'.repeat(64);
     },
     () => {
-      bundle[1].appletAid = `${monoidAid}01`;
+      bundle[2].appletAid = `${monoidAid}01`;
     },
     () => {
       fixture.information = {
@@ -265,7 +317,7 @@ test('a resumed post-delete operation skips earlier deletes and preserves Identi
   );
   assert.deepEqual(
     fixture.events.filter(value => value.startsWith('delete')),
-    [`delete package ${monoidPackage}`],
+    [`delete package ${monoidPackage}`, `delete package ${libraryPackage}`],
   );
 });
 
@@ -299,6 +351,10 @@ test('registry observations keep package version separate from Hello and provide
   assert.equal(result.monoid.version, 0);
   assert.deepEqual(result.identity.packageVersion, {major: 0, minor: 0});
   assert.equal(result.identity.version, undefined);
+  assert.equal(result.library.installed, true);
+  assert.equal(result.library.loaded, true);
+  assert.deepEqual(result.library.packageVersion, {major: 0, minor: 0});
+  assert.equal(result.library.aid, undefined);
 });
 
 test('registry failure preserves successful SELECT and Hello instead of claiming unsupported', async () => {

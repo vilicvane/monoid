@@ -15,9 +15,10 @@ export const ROUTE_SCHEMA = {
       state:
         | {
             cardInformation?: CardInformation;
-            returnTo?: 'safe' | 'copy' | 'bundle';
+            returnTo?: 'safe' | 'copy' | 'bundle' | 'bundleExtension';
             copyId?: string;
             bundleId?: string;
+            extensionId?: string;
           }
         | undefined,
     ) => state ?? {},
@@ -127,6 +128,12 @@ export const ROUTE_SCHEMA = {
         ...state,
         bundleId: state.bundleId ?? createFlowId(),
       }),
+    },
+    extendBundle: {
+      $state: (state: {
+        card: Pick<ScannedCardData, 'id' | 'publicKey' | 'bundle'>;
+        extensionId?: string;
+      }) => ({...state, extensionId: state.extensionId ?? createFlowId()}),
     },
     card: {
       $state: undefined! as {

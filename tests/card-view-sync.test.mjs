@@ -146,6 +146,7 @@ for (const [path, exports] of [
       ViewHeader: 'header',
       ViewHeaderButton: 'header-button',
       ViewHeaderIdentifier: 'identifier',
+      ViewHeaderTags: 'header-tags',
       ViewHeaderTitle: 'h1',
       ViewPlaceholder: 'placeholder',
     },
@@ -496,10 +497,10 @@ function mount({items, keys = []}) {
 
 afterEach(() => owners.splice(0).forEach(owner => owner.unmount()));
 
-test('Setup card bundle passes the current card identity and starts in bundle mode without scanning', () => {
+test('Create bundle passes the current card identity and starts in bundle mode without scanning', () => {
   const state = mount({items: cardItems(INDEX, [wallet(0)])});
   state.menuButton().props.onClick();
-  const setup = state.popupButton('Setup card bundle');
+  const setup = state.popupButton('Create bundle');
   assert.ok(setup);
   setup.props.onClick();
   assert.deepEqual(state.setups, [
@@ -512,7 +513,7 @@ test('Setup card bundle passes the current card identity and starts in bundle mo
   assert.deepEqual(state.scans, []);
   state.select(INDEX);
   state.menuButton().props.onClick();
-  assert.equal(state.popupButton('Setup card bundle'), undefined);
+  assert.equal(state.popupButton('Create bundle'), undefined);
 });
 
 test('Card actions remains available without a selection and cancelling deletion never starts a scan', () => {

@@ -61,14 +61,20 @@ function applet(card, members) {
     },
     async createBundle(request) {
       this.calls.push(['createBundle', structuredClone(request)]);
+      assert.equal(request.publicKeys.length, members.length - 1);
+      assert.equal(
+        request.publicKeys.some(key => hex(key) === hex(card.publicKey)),
+        false,
+      );
       const response = {
         bundle: bundle.slice(),
-        packets: members
-          .filter(member => hex(member.publicKey) !== hex(card.publicKey))
-          .map(member => ({
-            publicKey: member.publicKey.slice(),
-            data: packet(members, member),
-          })),
+        data: request.publicKeys.map(key => {
+          const member = members.find(
+            member => hex(member.publicKey) === hex(key),
+          );
+          assert.ok(member);
+          return packet(members, member);
+        }),
       };
       await this.onCreate?.(response);
       return response;
@@ -156,7 +162,7 @@ test('a prepared Card snapshot seeds collection without a synthetic Hello or PIN
   assert.equal(session.configuredCount, 1);
   assert.deepEqual(creator.calls[1], [
     'createBundle',
-    {publicKeys: [first.publicKey, second.publicKey]},
+    {publicKeys: [second.publicKey]},
   ]);
 });
 
@@ -210,17 +216,17 @@ for (const [label, override, error] of [
   });
 }
 
-test('prepared and scanned cards share the firmware member limit', async () => {
+test('prepared and scanned cards respect the total enrollment packet size limit', async () => {
   const session = new CardBundleSession();
-  for (let identity = 1; identity <= 122; identity++) {
+  for (let identity = 1; identity <= 22; identity++) {
     await session.addPreparedCard(prepared(hello(identity)));
   }
   await assert.rejects(
-    session.addPreparedCard(prepared(hello(123))),
+    session.addPreparedCard(prepared(hello(23))),
     /Too many cards/,
   );
-  await assert.rejects(session.addCard(hello(123)), /Too many cards/);
-  assert.equal(session.cards.length, 122);
+  await assert.rejects(session.addCard(hello(23)), /Too many cards/);
+  assert.equal(session.cards.length, 22);
 });
 
 test('prepared cards still require live matching identity, Bundle and both PIN states in round two', async () => {
@@ -367,7 +373,10 @@ test('any member can create, and recipients complete in any order without a retu
     assert.equal(session.configuredCount, 1);
     assert.deepEqual(applets[1].calls, [
       ['authenticate', {secret: true, pin: PIN}],
-      ['createBundle', {publicKeys: members.map(card => card.publicKey)}],
+      [
+        'createBundle',
+        {publicKeys: [members[0].publicKey, members[2].publicKey]},
+      ],
     ]);
     await session.configureCard(applets[2], members[2], PIN, signal());
     await session.configureCard(applets[0], members[0], PIN, signal());
@@ -377,7 +386,7 @@ test('any member can create, and recipients complete in any order without a retu
         [
           'joinBundle',
           {
-            senderPublicKey: members[1].publicKey,
+            publicKey: members[1].publicKey,
             data: packet(members, members[index]),
           },
         ],
@@ -516,43 +525,31 @@ for (const [label, modify] of [
   [
     'missing packet',
     response => {
-      response.packets.pop();
-    },
-  ],
-  [
-    'wrong recipient',
-    response => {
-      response.packets[0].publicKey = hello(9).publicKey;
-    },
-  ],
-  [
-    'reordered recipients',
-    response => {
-      response.packets.reverse();
+      response.data.pop();
     },
   ],
   [
     'wrong roster',
     response => {
-      response.packets[0].data[4] ^= 1;
+      response.data[0][4] ^= 1;
     },
   ],
   [
     'short packet',
     response => {
-      response.packets[0].data = response.packets[0].data.slice(1);
+      response.data[0] = response.data[0].slice(1);
     },
   ],
   [
     'wrong version',
     response => {
-      response.packets[0].data[0] = 2;
+      response.data[0][0] = 2;
     },
   ],
   [
     'wrong member count',
     response => {
-      response.packets[0].data[2] = 2;
+      response.data[0][2] = 2;
     },
   ],
 ]) {

@@ -7,6 +7,7 @@ import type {Router} from '../../../@routes.js';
 import {
   CardView,
   CopyItemsView,
+  ExtendBundleView,
   SetupCardView,
   SyncCardsView,
 } from './@card/index.js';
@@ -37,6 +38,7 @@ export const SafeMatch = ({
       <Route view={route.copyItems.$view()} component={CopyItemsView} />
       <Route view={route.syncCards.$view()} component={SyncCardsView} />
       <Route view={route.setupCard.$view()} component={SetupCardView} />
+      <Route view={route.extendBundle.$view()} component={ExtendBundleView} />
       <Route view={route.card.$view()} component={CardView} />
     </>
   );

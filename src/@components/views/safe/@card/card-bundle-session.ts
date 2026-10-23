@@ -131,8 +131,9 @@ export class CardBundleSession {
     if (this.cards.some(current => current.publicKey === card.publicKey)) {
       throw new MonoidCardError('Card already added');
     }
-    // Firmware accepts at most floor(8192 / (65 + 2)) members.
-    if (this.cards.length === 122) {
+    // All recipient packets share a signed-short-sized buffer in Identity:
+    // (members - 1) * (116 + 65 * members) must fit within 32767 bytes.
+    if (this.cards.length === 22) {
       throw new MonoidCardError('Too many cards');
     }
   }
@@ -275,15 +276,13 @@ export class CardBundleSession {
     const members = this.cards.map(card => card.publicKey).sort();
     if (
       response.bundle.length !== 32 ||
-      response.packets.length !== recipients.length
+      response.data.length !== recipients.length
     ) {
       throw new MonoidCardError('Incomplete bundle response');
     }
     const packets = new Map<string, string>();
-    for (const [index, packet] of response.packets.entries()) {
-      const data = packet.data;
+    for (const [index, data] of response.data.entries()) {
       if (
-        uint8ArrayToHex(packet.publicKey) !== recipients[index].publicKey ||
         data.length !== 116 + 65 * members.length ||
         data[0] !== 1 ||
         ((data[1] << 8) | data[2]) !== members.length ||
@@ -348,9 +347,11 @@ export class CardBundleSession {
         });
         try {
           const response = await applet.createBundle({
-            publicKeys: this.cards.map(card =>
-              PublicKey.satisfies(hexToUint8Array(card.publicKey)),
-            ),
+            publicKeys: this.cards
+              .filter(member => member.publicKey !== card.publicKey)
+              .map(member =>
+                PublicKey.satisfies(hexToUint8Array(member.publicKey)),
+              ),
           });
           this.acceptCreation(card, response);
         } catch {
@@ -360,7 +361,7 @@ export class CardBundleSession {
         }
       } else {
         const response = await applet.joinBundle({
-          senderPublicKey: PublicKey.satisfies(
+          publicKey: PublicKey.satisfies(
             hexToUint8Array(this.creator!.publicKey),
           ),
           data: hexToUint8Array(this.packets.get(card.publicKey)!),

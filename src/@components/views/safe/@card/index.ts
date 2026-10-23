@@ -1,5 +1,6 @@
 export * from './card-backup-session.js';
 export * from './card-bundle-session.js';
+export * from './card-bundle-extension-session.js';
 export * from './card-information-details.js';
 export * from './card-information-popup.js';
 export * from './card-information-popup.js';
@@ -12,6 +13,7 @@ export * from './card-sync-session.js';
 export * from './card-view.js';
 export * from './copy-items-state.js';
 export * from './copy-items-view.js';
+export * from './extend-bundle-view.js';
 export * from './read-card-for-setup.js';
 export * from './setup-card-view.js';
 export * from './sync-cards-state.js';

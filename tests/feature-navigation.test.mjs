@@ -71,6 +71,36 @@ test('Card sync creates distinct HTTP-safe flows and preserves the card and supp
   assert.deepEqual({...router.$state.card}, card);
 });
 
+test('Bundle extension opens without randomUUID and returns through Card Applets to the same flow', async t => {
+  const webCrypto = globalThis.crypto;
+  t.mock.getter(globalThis, 'crypto', () => ({
+    getRandomValues: webCrypto.getRandomValues.bind(webCrypto),
+  }));
+  const router = await createRouter();
+  const card = {
+    id: '01020304',
+    publicKey: `04${'01'.repeat(64)}`,
+    bundle: 'ab'.repeat(32),
+  };
+  await router.safe.card({card}).$push().$completed;
+  await router.safe.extendBundle({card}).$push().$completed;
+  const extensionId = router.$state.extensionId;
+  assert.ok(extensionId);
+  assert.equal(router.safe.extendBundle.$exact.$active, true);
+  assert.deepEqual({...router.$state.card}, card);
+
+  await router.cardApplets({returnTo: 'bundleExtension', extensionId}).$push()
+    .$completed;
+  const backToExtension = router.$backTo(router.safe.extendBundle.$exact);
+  assert.equal(typeof backToExtension, 'function');
+  await backToExtension().$completed;
+  assert.equal(router.$state.extensionId, extensionId);
+  assert.deepEqual({...router.$state.card}, card);
+  await router.$backTo(router.safe.card.$exact)().$completed;
+  await router.safe.extendBundle({card}).$push().$completed;
+  assert.notEqual(router.$state.extensionId, extensionId);
+});
+
 for (const feature of [
   'sessions',
   'ethereum',

@@ -58,6 +58,8 @@ test('iOS can discover every bundled card application after an applet upgrade', 
   );
   const allowed = await readAllowedAids();
   for (const {name, appletAid} of manifest) {
+    // Monoid Library is loaded as a dependency and has no selectable instance.
+    if (name === 'monoidlib' && appletAid === undefined) continue;
     assert.ok(
       allowed.has(appletAid),
       `Update the iOS NFC allowlist for ${name}: ${appletAid}`,

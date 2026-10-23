@@ -1,6 +1,10 @@
 import classNames from 'classNames';
 import type {LucideIcon} from 'lucide-react';
-import {CreditCard as creditCard, Key as key} from 'lucide-react';
+import {
+  CreditCard as creditCard,
+  Key as key,
+  Layers as layers,
+} from 'lucide-react';
 import {observer} from 'mobx-react-lite';
 import type {HTMLAttributes, ReactNode} from 'react';
 import {useContext} from 'react';
@@ -16,6 +20,14 @@ import {ViewContext} from './@view-context.js';
 
 export const ViewHeaderTitle = styled.h1`
   margin: 0;
+`;
+
+export const ViewHeaderTags = styled.div`
+  grid-column: 2;
+  display: flex;
+  align-items: baseline;
+  gap: var(--view-header-gap);
+  min-width: 0;
 `;
 
 export const ViewHeaderButton = styled(IconButton).attrs({feedback: 'color'})`
@@ -56,6 +68,7 @@ const IdentifierContainer = styled(WhiteTag)`
   grid-column: 2;
   width: max-content;
   max-width: none;
+  padding-right: 5px;
   z-index: 1;
   border-radius: 4px;
 `;
@@ -137,6 +150,10 @@ export const ViewHeaderIdentifier = ({
     | {
         type: 'safe-item';
         index: SafeIndexHex;
+      }
+    | {
+        type: 'bundle';
+        id: string;
       };
 }): ReactNode => {
   let icon: LucideIcon;
@@ -154,6 +171,10 @@ export const ViewHeaderIdentifier = ({
         INDEX_DISPLAY_END,
       );
       break;
+    case 'bundle':
+      icon = layers;
+      children = identifier.id.slice(0, 8);
+      break;
   }
 
   return (
@@ -162,7 +183,11 @@ export const ViewHeaderIdentifier = ({
       as={onClick ? 'button' : 'div'}
       type={onClick ? 'button' : undefined}
       onClick={onClick}
-      aria-label={ariaLabel}
+      aria-label={
+        ariaLabel ??
+        (identifier.type === 'bundle' ? `Bundle ${identifier.id}` : undefined)
+      }
+      title={identifier.type === 'bundle' ? identifier.id : undefined}
     >
       <IdentifierIcon icon={icon} />
       <Identifier>{children}</Identifier>

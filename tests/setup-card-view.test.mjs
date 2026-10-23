@@ -809,7 +809,9 @@ function mount(
       state.createStarted?.resolve();
       await state.createPending?.promise;
       if (state.createFailure) throw state.createFailure;
-      const keys = [...request.publicKeys].sort(Buffer.compare);
+      const keys = [state.bundleHello.publicKey, ...request.publicKeys].sort(
+        Buffer.compare,
+      );
       const data = Uint8Array.from([
         1,
         keys.length >> 8,
@@ -819,9 +821,7 @@ function mount(
       ]);
       return {
         bundle: BUNDLE,
-        packets: request.publicKeys
-          .filter(key => hex(key) !== hex(state.bundleHello.publicKey))
-          .map(publicKey => ({publicKey, data})),
+        data: request.publicKeys.map(() => data),
       };
     },
     async joinBundle(request) {
@@ -1157,7 +1157,7 @@ test('Card bundle entry starts enabled and adds the cached first card once acros
   );
   assert.equal(
     textOf(find(state.tree, node => node.type === 'h1')),
-    'Setup card bundle',
+    'Create bundle',
   );
   state.replayEffects();
   await state.finished;
@@ -1177,7 +1177,7 @@ test('Card bundle entry starts enabled and adds the cached first card once acros
   );
   assert.equal(
     textOf(find(state.tree, node => node.type === 'h1')),
-    'Setup card bundle',
+    'Create bundle',
   );
   assert.equal(state.card(source.id).props.description, 'ready');
   assert.equal(state.card(other.id), undefined);
@@ -1297,7 +1297,7 @@ test('automatic bundle entry with no cached Card keeps bundle mode on and starts
   );
   assert.equal(
     textOf(find(state.tree, node => node.type === 'h1')),
-    'Setup card bundle',
+    'Create bundle',
   );
   assert.equal(state.card(source.id), undefined);
   assert.ok(state.button('Add a card'));
@@ -1733,7 +1733,7 @@ test('the generic round-two button configures three members in any order without
     ['authenticate', 'create', 'authenticate', 'join', 'authenticate', 'join'],
   );
   for (const call of state.bundleCalls.filter(call => call.type === 'join')) {
-    assert.deepEqual(call.request.senderPublicKey, state.members[1].publicKey);
+    assert.deepEqual(call.request.publicKey, state.members[1].publicKey);
   }
   assert.deepEqual(state.routes, []);
 });
@@ -1901,12 +1901,12 @@ test('a full bundle rejects a new card while the scan is still open', async () =
   const session = state.entrances.cardBundleStore.get(
     state.view.bundleId,
   ).session;
-  for (let identity = 1; identity <= 122; identity++) {
+  for (let identity = 1; identity <= 22; identity++) {
     await session.addCard(bundleCard(identity));
   }
-  await state.collect(bundleCard(123), /Too many cards/);
-  assert.equal(session.cards.length, 122);
-  assert.equal(state.card('0000007b'), undefined);
+  await state.collect(bundleCard(23), /Too many cards/);
+  assert.equal(session.cards.length, 22);
+  assert.equal(state.card('00000017'), undefined);
   assert.equal(state.confirmation(), undefined);
 });
 

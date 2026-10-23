@@ -22,12 +22,13 @@ mock.module('../.bld/app/@lib/global-platform/install.js', {
         return {
           install: async (applet, progress) => {
             fixture.events.push(applet.stage);
+            fixture.packages.push(applet);
             if (fixture.failStage === applet.stage)
               throw new Error('Card lost');
             progress({phase: 'checking'});
             progress({phase: 'uploading', progress: 0.4});
             progress({phase: 'uploading', progress: 1});
-            progress({phase: 'configuring'});
+            if (applet.appletAid) progress({phase: 'configuring'});
             progress({phase: 'complete'});
             fixture.onInstalled?.(applet.stage);
           },
@@ -57,6 +58,9 @@ const {installMonoidApplets} = await import(
   '../.bld/app/@lib/monoid/install.js'
 );
 const {createMonoidApplet} = await import('../.bld/app/@lib/monoid/index.js');
+const {describeAppletInstallProgress} = await import(
+  '../.bld/app/@lib/monoid/applet-install-progress.js'
+);
 
 function deferred() {
   let resolve;
@@ -77,6 +81,7 @@ beforeEach(() => {
     events: [],
     commands: [],
     progress: [],
+    packages: [],
     hello: {
       version: 0,
       id: Uint8Array.of(1, 2, 3, 4),
@@ -89,10 +94,16 @@ beforeEach(() => {
   bundle.splice(
     0,
     bundle.length,
-    ...['identity', 'monoid'].map((stage, index) => ({
+    ...[
+      ['identity', '00'],
+      ['library', '04'],
+      ['monoid', '02'],
+    ].map(([stage, suffix]) => ({
       stage,
-      packageAid: `f06d6f6e6f69640${index * 2}`,
-      appletAid: `f06d6f6e6f69640${index * 2}01`,
+      packageAid: `f06d6f6e6f6964${suffix}`,
+      ...(stage !== 'library' && {
+        appletAid: `f06d6f6e6f6964${suffix}01`,
+      }),
       codeURL: new URL(
         `data:application/octet-stream;base64,${Buffer.from(code).toString('base64')}`,
       ),
@@ -101,7 +112,7 @@ beforeEach(() => {
   );
 });
 
-test('installation processes Identity and merged Monoid in order and verifies the full hello in the same session', async () => {
+test('installation processes Identity, Library, and Monoid in order and verifies the full hello in the same session', async () => {
   const hello = await installMonoidApplets('connection', update =>
     fixture.progress.push(update),
   );
@@ -109,6 +120,7 @@ test('installation processes Identity and merged Monoid in order and verifies th
   assert.deepEqual(fixture.events, [
     'open GP',
     'identity',
+    'library',
     'monoid',
     'SELECT Monoid',
     'hello',
@@ -116,21 +128,44 @@ test('installation processes Identity and merged Monoid in order and verifies th
   assert(fixture.commands.every(command => command.sessionId === 'connection'));
   assert.deepEqual(fixture.progress, [
     {stage: 'checking'},
-    ...['identity', 'monoid'].flatMap(stage => [
+    ...['identity', 'library', 'monoid'].flatMap(stage => [
       {stage, phase: 'checking'},
       {stage, phase: 'uploading', progress: 0.4},
       {stage, phase: 'uploading', progress: 1},
-      {stage, phase: 'configuring'},
+      ...(stage === 'library' ? [] : [{stage, phase: 'configuring'}]),
     ]),
     {stage: 'verifying'},
   ]);
   assert.deepEqual(
     fixture.commands[0].data.slice(5),
-    Array.from(Buffer.from(bundle[1].appletAid, 'hex')),
+    Array.from(Buffer.from(bundle[2].appletAid, 'hex')),
   );
   assert.deepEqual(
     decode(Uint8Array.from(fixture.commands[1].data.slice(5))),
     {},
+  );
+  assert.deepEqual(
+    fixture.packages.map(applet => ({
+      stage: applet.stage,
+      appletAid:
+        applet.appletAid && Buffer.from(applet.appletAid).toString('hex'),
+    })),
+    bundle.map(({stage, appletAid}) => ({stage, appletAid})),
+  );
+});
+
+test('library progress names the library and keeps percentages on upload only', () => {
+  assert.deepEqual(
+    describeAppletInstallProgress({stage: 'library', phase: 'checking'}),
+    {status: 'Checking Monoid Library, hold tight...'},
+  );
+  assert.deepEqual(
+    describeAppletInstallProgress({
+      stage: 'library',
+      phase: 'uploading',
+      progress: 0.4,
+    }),
+    {status: 'Uploading Monoid Library...', percentage: 40},
   );
 });
 
@@ -192,13 +227,33 @@ test('a failed Identity installation never loads Monoid', async () => {
   assert.deepEqual(fixture.events, ['open GP', 'identity']);
 });
 
+test('a failed Library installation never loads Monoid or verifies the applet', async () => {
+  fixture.failStage = 'library';
+  await assert.rejects(
+    installMonoidApplets('connection', update => fixture.progress.push(update)),
+    /Card lost/,
+  );
+  assert.deepEqual(fixture.events, ['open GP', 'identity', 'library']);
+  assert.deepEqual(fixture.commands, []);
+  assert.ok(
+    fixture.progress.every(
+      update => update.stage !== 'monoid' && update.stage !== 'verifying',
+    ),
+  );
+});
+
 test('a failed Monoid installation never reports verification or retries', async () => {
   fixture.failStage = 'monoid';
   await assert.rejects(
     installMonoidApplets('connection', () => {}),
     /Card lost/,
   );
-  assert.deepEqual(fixture.events, ['open GP', 'identity', 'monoid']);
+  assert.deepEqual(fixture.events, [
+    'open GP',
+    'identity',
+    'library',
+    'monoid',
+  ]);
   assert.deepEqual(fixture.commands, []);
 });
 
@@ -209,7 +264,7 @@ test('post-install hello must satisfy the app protocol before reporting success'
 });
 
 test('opening an existing session selects on a separate applet object without binding its template', async () => {
-  const template = createMonoidApplet(Buffer.from(bundle[1].appletAid, 'hex'));
+  const template = createMonoidApplet(Buffer.from(bundle[2].appletAid, 'hex'));
   const session = await template.openSession('existing');
   assert.notEqual(session, template);
   assert.deepEqual(await session.hello({}), fixture.hello);
@@ -314,7 +369,12 @@ test('cancellation when verification starts prevents selecting the installed app
     ),
     error => error === reason,
   );
-  assert.deepEqual(fixture.events, ['open GP', 'identity', 'monoid']);
+  assert.deepEqual(fixture.events, [
+    'open GP',
+    'identity',
+    'library',
+    'monoid',
+  ]);
   assert.deepEqual(fixture.commands, []);
 });
 
