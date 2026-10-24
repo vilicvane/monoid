@@ -235,6 +235,7 @@ function mount() {
     scans: [],
     errors: [],
     forgotten: [],
+    backups: [],
     mounted: true,
     slot: create => (state.slots[state.index++] ??= create()),
     render() {
@@ -325,6 +326,13 @@ function mount() {
       createPINSession: mock.fn(() => ({clear: mock.fn()})),
     },
     cardStore: {forget: identity => state.forgotten.push(identity)},
+    securityKeyBackupStore: {
+      save: async snapshot => {
+        state.backups.push(snapshot);
+        await state.backupPending?.promise;
+        if (state.backupFailure) throw state.backupFailure;
+      },
+    },
     router: {cardApplets: () => ({$push() {}})},
     errorService: {
       catch(value) {
@@ -533,3 +541,37 @@ for (const kind of ['access', 'secret']) {
     );
   });
 }
+
+test('each completed read is backed up without delaying the scan or failing the page', async () => {
+  const state = mount();
+  const first = card(1);
+  state.backupPending = deferred();
+  await state.read(first);
+  assert.equal(state.backups.length, 1);
+  assert.equal(state.backups[0].hello, first.hello);
+  assert.ok(
+    find(
+      state.render(),
+      node =>
+        node.type === 'Button' &&
+        node.props.children === 'Enable Security Key on card',
+    ),
+    'the snapshot is shown while the backup is still pending',
+  );
+
+  state.backupPending.resolve();
+  await state.flush();
+  assert.deepEqual(state.errors, []);
+  state.backupFailure = new Error('Backup unavailable');
+  await state.read(first);
+  assert.equal(state.backups.length, 2);
+  assert.deepEqual(state.errors, [state.backupFailure]);
+  assert.ok(
+    find(
+      state.render(),
+      node =>
+        node.type === 'Button' &&
+        node.props.children === 'Enable Security Key on card',
+    ),
+  );
+});

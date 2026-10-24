@@ -10,7 +10,7 @@
   },
   "scripts": {
     "3": "npm install && npm dedupe && npm install",
-    "postinstall": "npm --prefix plugins/isodep-nfc run build && npm --prefix plugins/biometric-vault run build && npm --prefix plugins/qr-scanner run build",
+    "postinstall": "npm --prefix plugins/isodep-nfc run build && npm --prefix plugins/biometric-vault run build && npm --prefix plugins/cloud-kv run build && npm --prefix plugins/qr-scanner run build",
     "prepare:applets": "node scripts/prepare-applets.mjs ../monoid-javacard/build/javacard && prettier --write src/@lib/monoid/@applet-bundle.ts src/@assets/applets/manifest.json",
     "build": "rimraf ./.bld && tsc --build",
     "build:web": "npm run prepare:applets && npm run build && vite build",
@@ -55,6 +55,7 @@
     "@web3icons/common": "0.11.53",
     "@web3icons/core": "4.0.58",
     "capacitor-biometric-vault": "file:plugins/biometric-vault",
+    "capacitor-cloud-kv": "file:plugins/cloud-kv",
     "capacitor-isodep-nfc": "file:plugins/isodep-nfc",
     "capacitor-qr-scanner": "file:plugins/qr-scanner",
     "cbor2": "^2.0.1",

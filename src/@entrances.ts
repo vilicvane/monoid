@@ -1,5 +1,6 @@
 import {WalletKit} from '@reown/walletkit';
 import {Core} from '@walletconnect/core';
+import {CloudKV} from 'capacitor-cloud-kv';
 import type {UpEntrances as UpEntrances_} from 'entrance-decorator';
 import {entrance} from 'entrance-decorator';
 import {createContext, useContext} from 'react';
@@ -29,6 +30,7 @@ import {
   MonoidScanPromptPresenter,
   MonoidStorageService,
   OTPStore,
+  SecurityKeyBackupStore,
   SiteLogoService,
   SolanaIdlService,
   SolanaTokenService,
@@ -298,6 +300,11 @@ export class Entrances {
     return this.storageService.then(storageService =>
       MonoidCredentialsStore.create(storageService),
     );
+  }
+
+  @entrance
+  get securityKeyBackupStore() {
+    return new SecurityKeyBackupStore(CloudKV);
   }
 
   @entrance

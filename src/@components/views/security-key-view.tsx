@@ -145,8 +145,13 @@ function CredentialDetails({
 
 export const SecurityKeyView = observer(
   ({view}: RouteComponentProps<Router['securityKey']>): ReactNode => {
-    const {router, monoidCredentialsStore, cardStore, errorService} =
-      useEntrances();
+    const {
+      router,
+      monoidCredentialsStore,
+      cardStore,
+      securityKeyBackupStore,
+      errorService,
+    } = useEntrances();
     const active = useViewActive(view);
     const [snapshot, setSnapshot] = useState<SecurityKeySnapshot>();
     const [missingMonoid, setMissingMonoid] = useState(false);
@@ -241,6 +246,11 @@ export const SecurityKeyView = observer(
             signal.throwIfAborted();
             setState('Reading credentials, hold tight...');
             const next = await readSecurityKeySnapshot(applet, hello, signal);
+            // Back up even if the page has closed; the card session need not wait.
+            errorService.catch(
+              securityKeyBackupStore.save(next),
+              'Could not back up Security Key accounts',
+            );
             if (mounted.current && active()) {
               setSnapshot(next);
               setMissingMonoid(false);

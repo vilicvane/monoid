@@ -10,6 +10,7 @@ const projects = [
   '.',
   'src',
   'plugins/biometric-vault',
+  'plugins/cloud-kv',
   'plugins/isodep-nfc',
   'plugins/qr-scanner',
   'workers/gas-history',

@@ -121,9 +121,16 @@ export type SecurityKeyGrant = Awaited<
   ReturnType<MonoidApplet['listAppletGrants']>
 >['grants'][number];
 export type SecurityKeySeed = {index: SafeIndexHex; alias?: string};
+/** Exact card bytes of a validated record, needed to restore it unchanged. */
+export type SecurityKeyCredentialRecord = {
+  metadata: Uint8Array;
+  data: Uint8Array;
+  alias?: string;
+};
 export type SecurityKeyCredentialItem = {
   index: SafeIndexHex;
   credential?: SecurityKeyCredential;
+  record?: SecurityKeyCredentialRecord;
 };
 export type SecurityKeySnapshot = {
   hello: MonoidAppletHello;
@@ -227,6 +234,11 @@ export async function readSecurityKeySnapshot(
           item.index,
           item.metadata,
         );
+        record.record = {
+          metadata: item.metadata.slice(),
+          data: data.slice(),
+          ...(item.alias !== undefined && {alias: item.alias}),
+        };
       } catch (error) {
         if (!(error instanceof InvalidCardItemError)) throw error;
       }

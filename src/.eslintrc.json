@@ -9,6 +9,7 @@
           "node_modules",
           "plugins/keyboard",
           "plugins/biometric-vault",
+          "plugins/cloud-kv",
           "plugins/isodep-nfc",
           "plugins/qr-scanner"
         ]

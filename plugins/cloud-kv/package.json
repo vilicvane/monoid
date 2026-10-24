@@ -1,0 +1,44 @@
+{
+  "name": "capacitor-cloud-kv",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Small string values kept in iCloud key-value storage on iOS and Android Auto Backup on Android.",
+  "type": "module",
+  "main": "dist/esm/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.js"
+    }
+  },
+  "files": [
+    "android/src/main/",
+    "android/build.gradle",
+    "dist/esm/",
+    "ios/Sources/",
+    "ios/Tests/",
+    "CapacitorCloudKv.podspec",
+    "Package.swift"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint --report-unused-disable-directives \"src/**/*.ts\""
+  },
+  "peerDependencies": {
+    "@capacitor/core": "^8.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  },
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
+    "android": {
+      "src": "android"
+    }
+  }
+}

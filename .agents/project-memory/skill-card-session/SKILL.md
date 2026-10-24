@@ -5,7 +5,7 @@ description: Monoid NFC card sessions, Access/Safe PIN ownership, biometric vaul
 
 # Monoid card sessions
 
-Source: `../records.md`, especially records 29–32, 34, 38–41 and 47–50, and `../29.md`, `../48.md` and `../50.md`. Treat records
+Source: `../records.md`, especially records 29–32, 34, 38–41, 47–50 and 60, and `../29.md`, `../48.md`, `../50.md` and `../60.md`. Treat records
 as authoritative and keep them up to date. Records 19–24 describe an older WIP;
 do not reintroduce their plain-storage design or assume those TODOs still exist.
 
@@ -99,3 +99,12 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   Access PIN authentication in the same NFC session. Optional Identity Authority
   installation parameters require URL and public key together; ordinary Monoid
   replacement preserves them. See record 56.
+- Security Key account recovery was verified in the simulator, but the APP
+  restoration feature is not implemented. Preserve complete public F101 records
+  and their exact derivation domain; match the original Seed by derived scope,
+  independently of Card ID and local Seed index. Records alone cannot recover a
+  Seed, and Seed alone cannot recreate random credential IDs. Public record writes
+  and fresh applet grants use Access PIN. Reuse Copy/Sync validation and conflict
+  rules, never overwrite a conflicting index or silently replace another active
+  Seed/domain. Plugin internals are outside this task. Read `../60.md` for the
+  proposed flow, missing domain associations and physical acceptance boundary.

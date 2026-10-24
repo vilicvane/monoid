@@ -19,6 +19,7 @@ let package = Package(
         .package(name: "CapacitorKeyboard", path: "../../../plugins/keyboard"),
         .package(name: "CapacitorStatusBar", path: "../../../node_modules/@capacitor/status-bar"),
         .package(name: "CapacitorBiometricVault", path: "../../../node_modules/capacitor-biometric-vault"),
+        .package(name: "CapacitorCloudKv", path: "../../../node_modules/capacitor-cloud-kv"),
         .package(name: "CapacitorIsodepNfc", path: "../../../node_modules/capacitor-isodep-nfc"),
         .package(name: "CapacitorQrScanner", path: "../../../node_modules/capacitor-qr-scanner")
     ],
@@ -35,6 +36,7 @@ let package = Package(
                 .product(name: "CapacitorKeyboard", package: "CapacitorKeyboard"),
                 .product(name: "CapacitorStatusBar", package: "CapacitorStatusBar"),
                 .product(name: "CapacitorBiometricVault", package: "CapacitorBiometricVault"),
+                .product(name: "CapacitorCloudKv", package: "CapacitorCloudKv"),
                 .product(name: "CapacitorIsodepNfc", package: "CapacitorIsodepNfc"),
                 .product(name: "CapacitorQrScanner", package: "CapacitorQrScanner")
             ]

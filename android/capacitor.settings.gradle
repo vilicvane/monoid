@@ -23,6 +23,9 @@ project(':capacitor-status-bar').projectDir = new File('../node_modules/@capacit
 include ':capacitor-biometric-vault'
 project(':capacitor-biometric-vault').projectDir = new File('../node_modules/capacitor-biometric-vault/android')
 
+include ':capacitor-cloud-kv'
+project(':capacitor-cloud-kv').projectDir = new File('../node_modules/capacitor-cloud-kv/android')
+
 include ':capacitor-isodep-nfc'
 project(':capacitor-isodep-nfc').projectDir = new File('../node_modules/capacitor-isodep-nfc/android')
 
