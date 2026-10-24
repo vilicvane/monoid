@@ -11,6 +11,7 @@ import {
   type AppletReplacementCheckpoint,
   type AppletReplacementProgress,
   type AppletStage,
+  type IdentityInstallationOptions,
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidCardError,
@@ -40,6 +41,7 @@ export type CardMaintenancePhase =
 
 export type CardMaintenanceItem = {
   index: string;
+  /** Stable archive field for item metadata; wire requests use `metadata`. */
   key?: string;
   alias?: string;
   secret: boolean;
@@ -71,6 +73,8 @@ export type CardMaintenanceOperation = {
   bundleHashes: string[];
   selectedOptionalStages?: AppletStage[];
   replaceStages?: AppletStage[];
+  /** Public Identity trust selected before fresh installation, retained for resume. */
+  authority?: {url: string; publicKey: string};
   /** Public authorization scopes only; installation tokens are never copied. */
   grants?: string[];
   grantsChecksum?: string;
@@ -258,7 +262,7 @@ export class CardMaintenanceService {
           signal?.throwIfAborted();
           const archived = {
             ...item,
-            key: exported.key && uint8ArrayToHex(exported.key),
+            key: exported.metadata && uint8ArrayToHex(exported.metadata),
             alias: exported.alias,
             data: uint8ArrayToHex(exported.data),
           };
@@ -357,6 +361,7 @@ export class CardMaintenanceService {
     hello?: MonoidAppletHello,
     signal?: AbortSignal,
     selectedOptionalStages: readonly AppletStage[] = [],
+    identityOptions: IdentityInstallationOptions = {},
   ): Promise<CardMaintenanceOperation> {
     return this.exclusive(async () => {
       signal?.throwIfAborted();
@@ -371,7 +376,29 @@ export class CardMaintenanceService {
         cardFingerprint(cardInformation),
         hello,
       );
+      // A previous interrupted replacement can know the ID while Monoid is absent.
+      operation.card.id ??= this.operations.find(
+        previous =>
+          previous.card.fingerprint === operation.card.fingerprint &&
+          previous.card.id,
+      )?.card.id;
       operation.selectedOptionalStages = [...selectedOptionalStages];
+      if (
+        identityOptions.authorityUrl !== undefined ||
+        identityOptions.authorityPublicKey !== undefined
+      ) {
+        if (
+          !identityOptions.authorityUrl ||
+          !identityOptions.authorityPublicKey
+        )
+          throw new MonoidCardError(
+            'Authority URL and public key are required together',
+          );
+        operation.authority = {
+          url: identityOptions.authorityUrl,
+          publicKey: uint8ArrayToHex(identityOptions.authorityPublicKey),
+        };
+      }
       return this.savePrepared(operation, signal);
     });
   }
@@ -417,11 +444,20 @@ export class CardMaintenanceService {
         }
 
         const hello = await replaceMonoidApplets(sessionId, {
+          ...(operation.mode === 'fresh' && operation.authority
+            ? {
+                authorityUrl: operation.authority.url,
+                authorityPublicKey: hexToUint8Array(
+                  operation.authority.publicKey,
+                ),
+              }
+            : {}),
           fresh: operation.mode === 'fresh',
           selectedOptionalStages: operation.selectedOptionalStages,
           replaceStages: operation.replaceStages,
           checkpoint: operation.checkpoint,
           expectedPublicKey: operation.card.publicKey,
+          expectedCardId: operation.card.id,
           expectedAppletAid: operation.card.appletAid,
           expectedBundle: operation.card.bundle,
           expectedFingerprint: operation.card.fingerprint,
@@ -909,6 +945,14 @@ function assertGrantSources(
     if (sources.some(index => !indexes.has(uint8ArrayToHex(index)))) {
       throw new MonoidCardError('Restore applet keys first');
     }
+    for (const key of grant.keys ?? []) {
+      if (
+        key.type === 'hmac' &&
+        (key.index.length !== 10 || key.index[0] !== 5 || key.index[1] === 0)
+      ) {
+        throw new MonoidCardError('Invalid HMAC key');
+      }
+    }
   }
 }
 
@@ -941,7 +985,7 @@ function normalizeItems(
 ): CardMaintenanceItem[] {
   const normalized = items.map(item => ({
     index: uint8ArrayToHex(item.index),
-    key: item.key && uint8ArrayToHex(item.key),
+    key: item.metadata && uint8ArrayToHex(item.metadata),
     alias: item.alias,
     secret: item.secret,
   }));
@@ -1069,7 +1113,7 @@ function recoveryImportRequest(
 ): Parameters<MonoidApplet['importItem']>[0] {
   return {
     index: SafeIndex.satisfies(hexToUint8Array(item.index)),
-    key: item.key === undefined ? undefined : hexToUint8Array(item.key),
+    metadata: item.key === undefined ? undefined : hexToUint8Array(item.key),
     alias: item.alias,
     data: hexToUint8Array(item.data),
   };

@@ -48,7 +48,7 @@ function metadata(index, wallets) {
     item: {
       index: bytes(getCardDerivationItemIndex(index)),
       type: CARD_DERIVATIONS_TYPE,
-      key: bytes(index),
+      metadata: bytes(index),
       secret: false,
     },
     data: encodeCardDerivationRecord({index, wallets}),
@@ -248,13 +248,13 @@ test('Safe address reuse requires both the source index and key type to match', 
   assert.equal(items[0].ref.path, ADDRESS_TYPES.evm.path(0));
 });
 
-test('scan preserves orphan metadata and unrelated resources without applying orphan paths', async () => {
+test('scan skips orphan metadata and preserves unrelated resources without applying orphan paths', async () => {
   const orphan = metadata(ORPHAN, [wallet('evm', "m/44'/60'/0'/0/8")]);
   const generic = {
     index: bytes('10200000000000000004'),
     type: 0x1020,
     alias: 'Notes',
-    key: bytes('aabb'),
+    metadata: bytes('aabb'),
     secret: false,
   };
   const {applet, calls} = createApplet(
@@ -268,31 +268,33 @@ test('scan preserves orphan metadata and unrelated resources without applying or
   assert.equal(calls.viewKey.length, 1);
   assert.equal(items[0].ref.path, ADDRESS_TYPES.evm.path(0));
   assert.deepEqual(items[0].derivations, []);
-  assert.equal(items[1].derivationRecord.index, ORPHAN);
-  assert.deepEqual(items[2], {
+  assert.equal(items.length, 2);
+  assert.deepEqual(items[1], {
     index: hex(generic.index),
     type: generic.type,
     alias: 'Notes',
-    key: 'aabb',
+    metadata: 'aabb',
     secret: false,
   });
 });
 
-test('malformed record source identifiers still fail before scanning supported keys', async () => {
-  for (const key of [undefined, new Uint8Array(), bytes('0240')]) {
+test('malformed record source identifiers are skipped while supported keys remain available', async () => {
+  for (const metadata of [undefined, new Uint8Array(), bytes('0240')]) {
     const record = {
       index: bytes('0f010000000000000003'),
       type: CARD_DERIVATIONS_TYPE,
-      key,
+      metadata,
       secret: false,
     };
     const {applet, calls} = createApplet([resource(ROOT, 'seed'), record]);
 
-    await assert.rejects(
-      scanCardItems(applet, () => {}),
-      /Invalid derivation/,
+    const items = await scanCardItems(applet, () => {});
+    assert.deepEqual(
+      items.map(item => item.index),
+      [ROOT],
     );
-    assert.deepEqual(calls, {get: [], viewKey: []});
+    assert.equal(calls.get.length, 0);
+    assert.equal(calls.viewKey.length, 1);
   }
 });
 
@@ -312,7 +314,7 @@ test('an empty record preserves an explicit empty list without reading a default
   assert.deepEqual(items[1].derivationRecord, {index: ROOT, wallets: []});
 });
 
-test('invalid recognized metadata fails the scan before deriving keys', async () => {
+test('invalid recognized metadata is skipped before deriving the remaining keys', async () => {
   const record = metadata(ROOT, []);
   record.data = Uint8Array.of(0xff);
   const {applet, calls} = createApplet(
@@ -320,8 +322,45 @@ test('invalid recognized metadata fails the scan before deriving keys', async ()
     [record],
   );
 
-  await assert.rejects(scanCardItems(applet, () => {}));
-  assert.equal(calls.viewKey.length, 0);
+  const items = await scanCardItems(applet, () => {});
+  assert.deepEqual(
+    items.map(item => item.index),
+    [ROOT],
+  );
+  assert.equal(calls.viewKey.length, 1);
+});
+
+test('unsupported records do not hide valid records and do not swallow read failures', async () => {
+  const invalid = metadata(ROOT, []);
+  invalid.data = Uint8Array.of(0xff);
+  const valid = metadata(OTHER_SEED, []);
+  const {applet} = createApplet(
+    [
+      resource(ROOT, 'seed'),
+      invalid.item,
+      valid.item,
+      resource(OTHER_SEED, 'seed'),
+    ],
+    [invalid, valid],
+  );
+  const items = await scanCardItems(applet, () => {});
+  assert.deepEqual(
+    items.map(item => item.index),
+    [ROOT, hex(valid.item.index), OTHER_SEED],
+  );
+  assert.deepEqual(items[1].derivationRecord, {index: OTHER_SEED, wallets: []});
+  for (const failure of [
+    new Error('Tag lost'),
+    new CBORAppletError({code: 'UNAUTHENTICATED'}),
+  ]) {
+    applet.get = async () => {
+      throw failure;
+    };
+    await assert.rejects(
+      scanCardItems(applet, () => {}),
+      error => error === failure,
+    );
+  }
 });
 
 test('an unavailable default preview keeps the recorded addresses intact for later import', async () => {
@@ -469,7 +508,7 @@ function confirmedItems(index, wallets) {
     {
       index: getCardDerivationItemIndex(index),
       type: CARD_DERIVATIONS_TYPE,
-      key: index,
+      metadata: index,
       secret: false,
       derivationRecord: {index, wallets},
     },

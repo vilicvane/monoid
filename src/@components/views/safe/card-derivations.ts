@@ -10,6 +10,7 @@ import {
   SafeUnknownType,
 } from '../../../@atomics.js';
 import {parseDerivationPath} from '../../../@lib/bip39.js';
+import {InvalidCardItemError} from '../../../@lib/card-item-error.js';
 import {
   type MonoidApplet,
   monoidCommandDefinitions,
@@ -35,7 +36,7 @@ import {
 import type {ScannedCardItemData} from './common.js';
 
 // App-owned, non-secret metadata. The stable resource index hashes the complete
-// source index, while both its immutable lookup key and payload retain that index.
+// source index, while both its immutable metadata and payload retain that index.
 // Groups describe address requests only; public keys come from the card and
 // default-wallet preferences remain local to each phone.
 export const CARD_DERIVATIONS_TYPE = 0x0f01;
@@ -106,6 +107,21 @@ export function isCardDerivationItem(
   );
 }
 
+export function filterCardDerivationAssociations<
+  T extends Pick<ScannedCardItemData, 'index' | 'type' | 'derivationRecord'>,
+>(items: readonly T[]): T[] {
+  return items.filter(
+    item =>
+      !isCardDerivationItem(item) ||
+      (item.derivationRecord &&
+        items.some(
+          source =>
+            source.index === item.derivationRecord!.index &&
+            ['seed', 'secp256k1', 'ed25519'].includes(String(source.type)),
+        )),
+  );
+}
+
 export function mergeCardDerivationWallets(
   ...groups: readonly (readonly WalletKeyWalletParameters[])[]
 ): WalletKeyWalletParameters[] {
@@ -125,6 +141,17 @@ export function mergeCardDerivationWallets(
 export function decodeCardDerivationRecord(
   data: Uint8Array,
 ): CardDerivationRecord {
+  try {
+    return decodeCardDerivationPayload(data);
+  } catch (cause) {
+    throw new InvalidCardItemError(
+      cause instanceof Error ? cause.message : 'Invalid derivation record',
+      {cause},
+    );
+  }
+}
+
+function decodeCardDerivationPayload(data: Uint8Array): CardDerivationRecord {
   const [, sourceIndex, groups] = CardDerivationPayload.decode(xCBOR, data);
   const index = SafeIndexHex.satisfies(uint8ArrayToHex(sourceIndex));
   const rootType = getCardDerivationSourceType(index);
@@ -251,13 +278,18 @@ export async function readCardDerivationRecord(
   applet: MonoidApplet,
   item: ScannedCardItemData,
 ): Promise<CardDerivationRecord> {
-  if (
-    !isCardDerivationItem(item) ||
-    item.secret ||
-    !item.key ||
-    item.index !== getCardDerivationItemIndex(SafeIndexHex.satisfies(item.key))
-  ) {
-    throw new Error('Invalid derivation record');
+  try {
+    if (
+      !isCardDerivationItem(item) ||
+      item.secret ||
+      !item.metadata ||
+      item.index !==
+        getCardDerivationItemIndex(SafeIndexHex.satisfies(item.metadata))
+    ) {
+      throw new InvalidCardItemError('Invalid derivation record');
+    }
+  } catch (cause) {
+    throw new InvalidCardItemError('Invalid derivation record', {cause});
   }
 
   const {data} = await applet.get({index: hexToUint8Array(item.index)});
@@ -266,11 +298,11 @@ export async function readCardDerivationRecord(
   try {
     record = decodeCardDerivationRecord(data);
   } catch (error) {
-    throw new Error('Invalid derivation record', {cause: error});
+    throw new InvalidCardItemError('Invalid derivation record', {cause: error});
   }
 
-  if (record.index !== item.key) {
-    throw new Error('Derivation source does not match');
+  if (record.index !== item.metadata) {
+    throw new InvalidCardItemError('Derivation source does not match');
   }
 
   return record;
@@ -399,7 +431,7 @@ async function updateCardDerivationRecord(
   // Re-read on each attempt: a failed response can follow a committed create/set.
   const {items} = await applet.list({
     type: SafeUnknownType.satisfies(CARD_DERIVATIONS_TYPE),
-    keyPrefix: sourceIndex,
+    metadataPrefix: sourceIndex,
   });
   throwIfCancelled(signal);
 
@@ -411,10 +443,13 @@ async function updateCardDerivationRecord(
   const existing: ScannedCardItemData | undefined = source && {
     ...source,
     index: uint8ArrayToHex(source.index),
-    key: source.key !== undefined ? uint8ArrayToHex(source.key) : undefined,
+    metadata:
+      source.metadata !== undefined
+        ? uint8ArrayToHex(source.metadata)
+        : undefined,
   };
 
-  if (existing && existing.key !== root.index) {
+  if (existing && existing.metadata !== root.index) {
     throw new Error('Derivation source does not match');
   }
 
@@ -449,7 +484,7 @@ async function updateCardDerivationRecord(
     ...existing,
     index,
     type: CARD_DERIVATIONS_TYPE,
-    key: root.index,
+    metadata: root.index,
     secret: false,
     derivationRecord,
   };
@@ -461,7 +496,7 @@ async function updateCardDerivationRecord(
   }
 
   const request = {index: hexToUint8Array(index), data};
-  const createRequest = {...request, key: sourceIndex, secret: false};
+  const createRequest = {...request, metadata: sourceIndex, secret: false};
   const encodedRequest = existing
     ? monoidCommandDefinitions.set.request.encode(xCBOR, request)
     : monoidCommandDefinitions.create.request.encode(xCBOR, createRequest);
@@ -471,7 +506,7 @@ async function updateCardDerivationRecord(
     {
       index: SafeIndex.satisfies(request.index),
       senderPublicKey: PublicKey.satisfies(new Uint8Array(65)),
-      key: sourceIndex,
+      metadata: sourceIndex,
       ...(item.alias !== undefined && {alias: item.alias}),
       data: new Uint8Array(data.length + 144),
     },

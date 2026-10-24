@@ -12,14 +12,11 @@ import {
 import {isCredentialRequestCancelled} from '../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {MonoidScanStatePromptContentHighlight} from '../../../@monoid/monoid-scan-prompt.js';
-import {
-  PINKind,
-  getPINInputPlaceholder,
-} from '../../../@monoid/pin-input-placeholder.js';
 import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
 import {ConfirmPopup} from '../../../@ui/confirm-popup.js';
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
+import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
 
 import {readBackupCardIdentity} from './card-backup-session.js';
 import {
@@ -211,31 +208,6 @@ export function useBundleCardAddition({
     }
   };
 
-  const requestSecretPIN = async (
-    signal: AbortSignal,
-  ): Promise<MonoidPIN | undefined> => {
-    let description: ReactNode = (
-      <>
-        Will be used as initial <PINKind kind="Access" /> PIN
-      </>
-    );
-    for (;;) {
-      const input = await showPINInput(
-        {
-          type: 'password',
-          ...getPINInputPlaceholder('Secret', 'Set'),
-          description,
-          center: true,
-          maxLength: 16,
-        },
-        signal,
-      );
-      if (input === undefined || signal.aborted || !isActive()) return;
-      if (MonoidPIN.is(input)) return input;
-      description = 'Use 6 to 16 ASCII characters';
-    }
-  };
-
   const resetAndAdd = async (reset: CardResetSession): Promise<void> => {
     if (cardOperation.current || !isActive()) return;
     const operation = new AbortController();
@@ -244,6 +216,7 @@ export function useBundleCardAddition({
     setPendingReset(reset);
     setBusy(true);
     let pin: MonoidPIN | undefined;
+    let accessPIN: MonoidPIN | undefined;
     let initialized: MonoidAppletHello | undefined;
     let completed: MonoidAppletHello | undefined;
     let accessPINId: MonoidIdHex | undefined;
@@ -252,8 +225,14 @@ export function useBundleCardAddition({
         await pinSession.authenticate(operation.signal);
         operation.signal.throwIfAborted();
         if (!isActive()) return;
-        pin = await requestSecretPIN(operation.signal);
-        if (pin === undefined) return;
+        const requested = await requestCardPINs(
+          showPINInput,
+          {secretSet: false, accessSet: false},
+          operation.signal,
+        );
+        if (!requested) return;
+        pin = requested.secret;
+        accessPIN = requested.access;
         operation.signal.throwIfAborted();
         if (!isActive()) return;
       }
@@ -308,12 +287,18 @@ export function useBundleCardAddition({
               pin,
             );
             setState('Setting Secret PIN, hold tight...');
-            hello = await initializeMonoidCard(applet, hello, pin, signal);
+            hello = await initializeMonoidCard(
+              applet,
+              hello,
+              pin,
+              signal,
+              accessPIN,
+            );
             rememberPIN();
             cacheSetup(hello);
             completed = hello;
             setState('Authenticating, hold tight...');
-            await applet.authenticate({pin});
+            await applet.authenticate({pin: accessPIN!});
             signal.throwIfAborted();
             accessPINId = uint8ArrayToHex(hello.id);
           }
@@ -323,7 +308,7 @@ export function useBundleCardAddition({
       );
       if (accessPINId && pin && isActive() && !operation.signal.aborted) {
         try {
-          await pinSession.setPIN(accessPINId, pin, operation.signal);
+          await pinSession.setPIN(accessPINId, accessPIN!, operation.signal);
         } catch {
           toast({
             message: 'Access PIN was not saved on this device',
@@ -339,6 +324,7 @@ export function useBundleCardAddition({
         throw error;
     } finally {
       pin = undefined;
+      accessPIN = undefined;
       pinSession.clear();
       try {
         if (completed) await completeSetup(completed);

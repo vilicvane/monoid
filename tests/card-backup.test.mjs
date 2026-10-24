@@ -29,6 +29,7 @@ function hello(identity, {accessPIN = 5, secretPIN = 5, ...overrides} = {}) {
     id: bytes(`1000000${identity}`),
     publicKey: Uint8Array.from([4, ...new Array(64).fill(identity)]),
     bundle: false,
+    authority: false,
     pins: {access: accessPIN, secret: secretPIN},
     ...overrides,
   };
@@ -93,11 +94,19 @@ function fixture() {
     [hex(index(1)), {data: new Uint8Array(160).fill(1)}],
     [
       hex(index(2)),
-      {key: new Uint8Array(), alias: '', data: new Uint8Array(144).fill(2)},
+      {
+        metadata: new Uint8Array(),
+        alias: '',
+        data: new Uint8Array(144).fill(2),
+      },
     ],
     [
       hex(index(3)),
-      {key: bytes('abcd'), alias: 'e\u0301', data: new Uint8Array(180).fill(3)},
+      {
+        metadata: bytes('abcd'),
+        alias: 'e\u0301',
+        data: new Uint8Array(180).fill(3),
+      },
     ],
   ]);
   const artifact = (itemIndex, recipientPublicKey) => {
@@ -256,7 +265,7 @@ function cardSnapshot(source, items) {
       index: hex(item.index),
       ...(item.type !== undefined && {type: item.type}),
       ...(item.alias !== undefined && {alias: item.alias}),
-      ...(item.key !== undefined && {key: hex(item.key)}),
+      ...(item.metadata !== undefined && {metadata: hex(item.metadata)}),
       ...(item.derivationRecord !== undefined && {
         derivationRecord: structuredClone(item.derivationRecord),
       }),
@@ -291,13 +300,13 @@ test('a scanned Card snapshot starts at destination selection and exports withou
 test('copy selection and the scanned Card snapshot do not share mutable item state', async () => {
   const {source, items} = fixture();
   const snapshot = cardSnapshot(source, items);
-  snapshot.items[0].key = 'abcd';
+  snapshot.items[0].metadata = 'abcd';
   snapshot.items[0].ref = {publicKey: 'public-only', address: 'saved-address'};
   const original = structuredClone(snapshot);
   const session = new CardBackupSession(snapshot, [hex(index(1))]);
   await session.reset(snapshot, [hex(index(2))]);
   assert.deepEqual(snapshot, original);
-  assert.equal(session.backup.items[0].key, 'abcd');
+  assert.equal(session.backup.items[0].metadata, 'abcd');
   assert.equal(Object.hasOwn(session.backup.items[0], 'ref'), false);
   const copy = structuredClone(session.backup);
   snapshot.id = 'ffffffff';
@@ -323,7 +332,7 @@ function groupedFixture({type = 'seed', wallets} = {}) {
   const record = index => ({index, wallets: wallets ?? [{...wallet}]});
   const attachment = sourceIndex => ({
     index: bytes(getCardDerivationItemIndex(sourceIndex)),
-    key: bytes(sourceIndex),
+    metadata: bytes(sourceIndex),
     secret: false,
     derivationRecord: record(sourceIndex),
   });
@@ -353,7 +362,10 @@ function groupedFixture({type = 'seed', wallets} = {}) {
     const data = new Uint8Array(160);
     data[0] = request.recipientPublicKey[1];
     data.set(item.index, 1);
-    return {...(item.key !== undefined && {key: item.key}), data};
+    return {
+      ...(item.metadata !== undefined && {metadata: item.metadata}),
+      data,
+    };
   };
   return {...state, root, companion, orphan, records};
 }
@@ -422,7 +434,10 @@ test('direct Copy validates linked records with Get and transfers both physical 
     [...target.records.keys()],
     [hex(root.index), hex(companion.index)],
   );
-  assert.deepEqual(target.records.get(hex(companion.index)).key, root.index);
+  assert.deepEqual(
+    target.records.get(hex(companion.index)).metadata,
+    root.index,
+  );
   assert.equal(session.backup.complete, true);
 });
 
@@ -536,7 +551,7 @@ for (const [type, addressType] of [
         [hex(root.index), hex(companion.index)],
       );
       assert.deepEqual(
-        target.records.get(hex(companion.index)).key,
+        target.records.get(hex(companion.index)).metadata,
         root.index,
       );
       assert.deepEqual(records.get(hex(companion.index)), payload);
@@ -558,7 +573,7 @@ for (const [type, addressType] of [
     const existing = {
       index: companion.index,
       senderPublicKey: source.hello.publicKey,
-      key: root.index,
+      metadata: root.index,
       data: Uint8Array.from([
         target.hello.publicKey[1],
         ...encodeCardDerivationRecord({
@@ -617,22 +632,22 @@ test('an orphan derivation record can be selected and copied on its own', async 
   assert.equal(session.backup.complete, true);
 });
 
-test('invalid companion linkage rejects the entire Copy scan before a transfer is created', async () => {
-  const {source, companion, orphan, records} = groupedFixture();
+test('invalid companion linkage skips that record while retaining other Copy items', async () => {
+  const {source, root, companion, orphan, records} = groupedFixture();
   records.set(
     hex(companion.index),
     encodeCardDerivationRecord(orphan.derivationRecord),
   );
   const session = new CardBackupSession();
-  await assert.rejects(
-    session.readSource(source, source.hello, signal()),
-    /source does not match/i,
+  await session.readSource(source, source.hello, signal());
+  assert.deepEqual(
+    session.backup.items.map(item => item.index),
+    [hex(root.index), hex(orphan.index)],
   );
-  assert.equal(session.backup, undefined);
   assert.equal(session.busy, false);
   assert.deepEqual(
     source.calls.map(([method]) => method),
-    ['list', 'get'],
+    ['list', 'get', 'get'],
   );
 });
 
@@ -756,11 +771,11 @@ test('backup preserves all item types and exact Export metadata within the page 
     false,
   );
   assert.equal(
-    Object.hasOwn(session.backup.targets[0].items[0].exported, 'key'),
+    Object.hasOwn(session.backup.targets[0].items[0].exported, 'metadata'),
     false,
   );
   assert.equal(session.backup.targets[0].items[1].exported.alias, '');
-  assert.equal(session.backup.targets[0].items[1].exported.key, '');
+  assert.equal(session.backup.targets[0].items[1].exported.metadata, '');
   assert.equal(session.backup.targets[0].items[2].exported.alias, 'e\u0301');
   assert.equal(JSON.stringify(session.backup).includes(PIN), false);
   assert.deepEqual(
@@ -952,6 +967,8 @@ test('a new destination sets only the Secret PIN and verifies initialized Access
     state.first,
     PIN,
     signal(),
+    undefined,
+    PIN,
   );
 
   assert.deepEqual(state.calls, [
@@ -975,6 +992,8 @@ test('initializing a missing Access PIN authenticates with the existing Secret P
     state.first,
     PIN,
     signal(),
+    undefined,
+    PIN,
   );
 
   assert.deepEqual(state.calls, [
@@ -986,11 +1005,60 @@ test('initializing a missing Access PIN authenticates with the existing Secret P
   assert.equal(result.pins.secret, 5);
 });
 
+test('new setup writes a distinct Access PIN only after Secret PIN authentication', async () => {
+  const state = uninitializedTarget();
+  await initializeMonoidCard(
+    state.applet,
+    state.fresh,
+    PIN,
+    signal(),
+    'Access-42',
+  );
+  assert.deepEqual(state.calls, [
+    ['setPIN', {secret: true, pin: PIN}],
+    ['authenticate', {secret: true, pin: PIN}],
+    ['setPIN', {pin: 'Access-42'}],
+    ['hello', {}],
+  ]);
+});
+
+test('restoration writes the selected Access PIN without changing existing Secret PIN', async () => {
+  const state = uninitializedTarget({hasSecretPIN: true});
+  await initializeMonoidCard(
+    state.applet,
+    state.fresh,
+    PIN,
+    signal(),
+    'Saved-42',
+  );
+  assert.deepEqual(state.calls, [
+    ['authenticate', {secret: true, pin: PIN}],
+    ['setPIN', {pin: 'Saved-42'}],
+    ['hello', {}],
+  ]);
+});
+
+test('missing Access PIN choice stops initialization before mutation', async () => {
+  const state = uninitializedTarget();
+  await assert.rejects(
+    initializeMonoidCard(state.applet, state.fresh, PIN, signal()),
+    /Access PIN/,
+  );
+  assert.deepEqual(state.calls, []);
+});
+
 test('initialization rejects a different full public key before authentication or mutation even with the same display ID', async () => {
   const state = uninitializedTarget({hasSecretPIN: true});
   const wrong = hello(3, {id: state.first.id});
   await assert.rejects(
-    initializeBackupTarget(state.applet, wrong, state.first, PIN, signal()),
+    initializeBackupTarget(
+      state.applet,
+      wrong,
+      state.first,
+      PIN,
+      signal(),
+      PIN,
+    ),
     /Wrong card/i,
   );
   assert.deepEqual(state.calls, []);
@@ -1006,6 +1074,8 @@ test('a Secret PIN configured after the first scan is never overwritten by the i
       state.first,
       PIN,
       signal(),
+      undefined,
+      PIN,
     ),
     /changed|already|again/i,
   );
@@ -1020,6 +1090,8 @@ test('an already restored destination returns its fresh ready state without chan
     state.first,
     PIN,
     signal(),
+    undefined,
+    PIN,
   );
   assert.deepEqual(result, state.result);
   assert.deepEqual(state.calls, []);
@@ -1042,6 +1114,8 @@ for (const stopAfter of ['before-start', 'authenticate', 'setPIN', 'hello']) {
         state.first,
         PIN,
         controller.signal,
+        undefined,
+        PIN,
       ),
       {code: 'CANCELLED'},
     );
@@ -1070,6 +1144,8 @@ test('incorrect existing Secret PIN is attempted once and never followed by a wr
       state.first,
       PIN,
       signal(),
+      undefined,
+      PIN,
     ),
     /4 tries left/i,
   );
@@ -1104,6 +1180,8 @@ for (const invalidResult of [
         state.first,
         PIN,
         signal(),
+        undefined,
+        PIN,
       ),
       /incomplete|blocked|Wrong card/i,
     );
@@ -1122,7 +1200,7 @@ test('shared initialization preserves an invalid Secret PIN error for interactiv
   };
 
   await assert.rejects(
-    initializeMonoidCard(state.applet, state.fresh, PIN, signal()),
+    initializeMonoidCard(state.applet, state.fresh, PIN, signal(), PIN),
     error => error === invalidPIN,
   );
   assert.deepEqual(state.calls, [['authenticate', {secret: true, pin: PIN}]]);
@@ -1139,7 +1217,7 @@ for (const invalidState of ['access-blocked', 'safe-blocked', 'safe-unset']) {
     }
 
     await assert.rejects(
-      initializeMonoidCard(state.applet, state.fresh, PIN, signal()),
+      initializeMonoidCard(state.applet, state.fresh, PIN, signal(), PIN),
       /blocked|needs attention/,
     );
     assert.deepEqual(state.calls, []);
@@ -1163,6 +1241,7 @@ test('shared initialization returns a card with both PINs set without any comman
     state.fresh,
     PIN,
     signal(),
+    PIN,
   );
 
   assert.deepEqual(state.calls, []);

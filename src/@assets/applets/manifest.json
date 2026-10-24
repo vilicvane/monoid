@@ -10,20 +10,20 @@
       "a0000000620102",
       "a0000000620201"
     ],
-    "sourceModifiedAt": "2026-10-23T09:38:19.697Z",
-    "capSha256": "0d7baf0efb90408249e208ce0b98a90ff2e927728d89b2d0b949a00e46d6c5e7",
-    "loadSha256": "ff28eec49b8b608f7268d02ec9478812f33b2653194ca068eb45a0fd4d6e5e44",
-    "loadBytes": 11793
+    "sourceModifiedAt": "2026-10-24T13:42:59.068Z",
+    "capSha256": "63edbe80c82fe4b0eef99de12ad5808f9eeed07ba8cbf1ba2c872c877c99061a",
+    "loadSha256": "ddc763d2879a573991a8c5009081ed7f4947f0f5f97c98d494eb0dc2ff80908a",
+    "loadBytes": 12772
   },
   {
     "name": "monoidlib",
     "stage": "library",
     "packageAid": "f06d6f6e6f696404",
     "imports": ["a0000000620001", "a0000000620101"],
-    "sourceModifiedAt": "2026-10-23T09:38:20.688Z",
-    "capSha256": "a1dba0f5c6d7b9564e3b549d9661cfa17088c431832ae66ec78388d75e3945ae",
-    "loadSha256": "1597f1694b2a94a7b2ceb880f310da9f7b5be14a618f94fc8f4183cba880d784",
-    "loadBytes": 7843
+    "sourceModifiedAt": "2026-10-24T13:43:00.152Z",
+    "capSha256": "9ddfe4eebf6670008c310e8016596d75930f03804bb697ca734fbc310d1f52a9",
+    "loadSha256": "341229b2cc81774f26fed55625c3666ae61468cd2cffeb4a11df909c67ba1c78",
+    "loadBytes": 8625
   },
   {
     "name": "monoid",
@@ -34,15 +34,15 @@
     "imports": [
       "a0000000620001",
       "a0000000620101",
-      "f06d6f6e6f696404",
       "a0000000620102",
+      "f06d6f6e6f696404",
       "f06d6f6e6f696400",
       "a0000000620201"
     ],
-    "sourceModifiedAt": "2026-10-23T09:38:22.286Z",
-    "capSha256": "c056fd0d198c6d33431621604ee580b4eed1093505ab346898f216d684eab50e",
-    "loadSha256": "bcc4eac0cbd3a8190a56d71a65a483400bf47e419aa72736a8eeeb70f005015d",
-    "loadBytes": 38748
+    "sourceModifiedAt": "2026-10-24T13:43:01.911Z",
+    "capSha256": "2e869cc2c48512a8194bc69b150787548e34d2525fcfad2abc45ee49908472dc",
+    "loadSha256": "140498bdb717ea36126937298f9f2dc7b93cc8a1b75656e3c37bfd213324dc3b",
+    "loadBytes": 39670
   },
   {
     "name": "monoidsecuritykey",
@@ -61,9 +61,29 @@
       "a0000000620201",
       "a0000000620209"
     ],
-    "sourceModifiedAt": "2026-10-23T09:38:23.741Z",
-    "capSha256": "b67743528ccf053123f26308c06387879b155ceddda02400beb15581dd4feb7b",
-    "loadSha256": "f579041e1f0263fa95d9619681c71131393aa761f5f89abf5ac80757fb662dee",
+    "sourceModifiedAt": "2026-10-24T13:43:03.655Z",
+    "capSha256": "7e5c24cd70b40f300a87131f3badb973d4849ed35a544634519148121f83cbe3",
+    "loadSha256": "618dbb4123a066d093d2a3e1511663c2c46ba13b2004c5c12e61dff1d3e1faef",
     "loadBytes": 15839
+  },
+  {
+    "name": "monoidotp",
+    "stage": "otp",
+    "packageAid": "f06d6f6e6f696405",
+    "appletAid": "f06d6f6e6f69640501",
+    "optional": true,
+    "dependencies": ["identity", "library", "monoid"],
+    "imports": [
+      "f06d6f6e6f696404",
+      "a0000000620001",
+      "a0000000620101",
+      "f06d6f6e6f696402",
+      "a0000000620102",
+      "f06d6f6e6f696400"
+    ],
+    "sourceModifiedAt": "2026-10-24T13:43:04.837Z",
+    "capSha256": "0ea3ef1c41aed0b79c45e9d7918d3e345b3a62ec7908d9940ab1c97cc7959fa4",
+    "loadSha256": "7ae88369d81e91dda5785599903fb1bf0572f80524b62022ff655d0b50919f89",
+    "loadBytes": 2984
   }
 ]

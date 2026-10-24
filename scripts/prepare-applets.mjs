@@ -35,6 +35,14 @@ const targets = [
     optional: true,
     dependencies: ['library', 'monoid'],
   },
+  {
+    name: 'monoidotp',
+    stage: 'otp',
+    packageAid: 'f06d6f6e6f696405',
+    appletAid: 'f06d6f6e6f69640501',
+    optional: true,
+    dependencies: ['identity', 'library', 'monoid'],
+  },
 ];
 
 // Java Card load order, excluding off-card Descriptor and Debug components.

@@ -1,5 +1,6 @@
 import {SafeKnownType} from '../../../@atomics.js';
 import {CBORAppletError} from '../../../@lib/cbor-applet.js';
+import {InvalidCardItemError} from '../../../@lib/card-item-error.js';
 import type {MonoidApplet} from '../../../@lib/monoid/index.js';
 import {ADDRESS_TYPES} from '../../../@lib/wallet-address.js';
 // eslint-disable-next-line @mufan/import -- Keep card scanning independent of UI services.
@@ -17,9 +18,19 @@ import {
 } from './card-address.js';
 import {
   type CardDerivationRecord,
+  filterCardDerivationAssociations,
   isCardDerivationItem,
   readCardDerivationRecord,
 } from './card-derivations.js';
+import {
+  isCardCredentialItem,
+  validateCardCredentialItem,
+} from './card-item-merge.js';
+import {
+  filterCardOTPAssociations,
+  isCardOTPItem,
+  readCardOTPKeyIndex,
+} from './card-otp.js';
 import type {ScannedCardItemData} from './common.js';
 
 export async function scanCardItems(
@@ -44,31 +55,55 @@ export async function scanCardItems(
   const {items} = await applet.list({});
   assertActive();
   const scannedItems: ScannedCardItemData[] = items.map(
-    ({index, type, alias, key, secret}) => ({
+    ({index, type, alias, metadata, secret}) => ({
       index: uint8ArrayToHex(index),
       ...(type !== undefined && {type}),
       ...(alias !== undefined && {alias}),
-      ...(key !== undefined && {key: uint8ArrayToHex(key)}),
+      ...(metadata !== undefined && {metadata: uint8ArrayToHex(metadata)}),
       secret,
     }),
   );
-  const derivationItems = scannedItems.filter(isCardDerivationItem);
+  const derivationItems = scannedItems.filter(
+    item =>
+      isCardDerivationItem(item) ||
+      isCardOTPItem(item) ||
+      isCardCredentialItem(item),
+  );
 
   if (derivationItems.length > 0) {
     onProgress(0, derivationItems.length, 'records');
   }
 
+  const incompatible = new Set<ScannedCardItemData>();
   for (const [index, item] of derivationItems.entries()) {
     assertActive();
-    const record = await readCardDerivationRecord(applet, item);
+    try {
+      if (isCardOTPItem(item)) {
+        item.otpKeyIndex = await readCardOTPKeyIndex(applet, item);
+      } else if (isCardCredentialItem(item)) {
+        if (item.secret)
+          throw new InvalidCardItemError('Invalid Security Key credential');
+        const {data} = await applet.get({index: hexToUint8Array(item.index)});
+        validateCardCredentialItem({...item, data: uint8ArrayToHex(data)});
+      } else {
+        item.derivationRecord = await readCardDerivationRecord(applet, item);
+      }
+    } catch (error) {
+      if (!(error instanceof InvalidCardItemError)) throw error;
+      incompatible.add(item);
+    }
     assertActive();
-    item.derivationRecord = record;
     onProgress(index + 1, derivationItems.length, 'records');
   }
+  const compatibleItems = filterCardOTPAssociations(
+    filterCardDerivationAssociations(
+      scannedItems.filter(item => !incompatible.has(item)),
+    ),
+  );
 
   return readCardAddressPreviews(
     applet,
-    scannedItems,
+    compatibleItems,
     (current, total) => onProgress(current, total, 'keys'),
     signal,
     [],

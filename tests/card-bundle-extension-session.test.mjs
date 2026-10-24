@@ -20,6 +20,7 @@ function hello(identity, overrides = {}) {
     id: Uint8Array.of(0, 0, 0, identity),
     publicKey: Uint8Array.from([4, ...new Array(64).fill(identity)]),
     bundle: bundle.slice(),
+    authority: false,
     pins: {access: 5, secret: 5},
     ...overrides,
   };

@@ -408,6 +408,11 @@ function mount(overrides = {}) {
     },
   };
   state.applet = {
+    async useSession(source) {
+      assert.equal(source, state.applet);
+      state.cardCommands.push({command: 'select-monoid'});
+      return state.applet;
+    },
     async hello(request) {
       state.helloRequests.push(request);
       state.cardCommands.push({command: 'hello', request});
@@ -418,6 +423,7 @@ function mount(overrides = {}) {
         id: new Uint8Array(Buffer.from(state.cardId, 'hex')),
         publicKey: state.identityPublicKey.slice(),
         bundle: false,
+        authority: false,
         pins: {access: state.accessPIN ?? 5, secret: state.secretPIN ?? 5},
       };
     },
@@ -461,8 +467,9 @@ function mount(overrides = {}) {
     state.operation = state.owner.output[1](
       'Scan card',
       state.business,
-      undefined,
+      state.validateCard,
       state.operationSignal,
+      state.authentication,
     );
     state.operation.then(
       () => {
@@ -545,7 +552,20 @@ function mount(overrides = {}) {
   };
   state.enterPIN = async (value = PIN) => {
     assert.ok(state.inputs.length > 0, 'PIN input must already be shown');
-    state.inputs.at(-1).resolve(value);
+    let input = state.inputs.at(-1);
+    input.resolve(value);
+    for (let step = 0; step < 3; step++) {
+      await setImmediate();
+      const next = state.inputs.at(-1);
+      if (
+        next === input ||
+        value === undefined ||
+        !/^(Confirm|Set Access)/.test(next.options.placeholder)
+      )
+        break;
+      input = next;
+      input.resolve(value);
+    }
     await state.flush();
   };
   state.enterManualPIN = async () => {
@@ -861,7 +881,7 @@ for (const secret of [false, true]) {
     await state.finishExit();
     assert.equal(state.errors[0].message, errorMessage);
     assert.equal(state.authenticated.length, 1);
-    assert.equal(state.inputs.length, secret ? 1 : 0);
+    assert.equal(state.inputs.length, secret ? 3 : 0);
     assert.equal(state.scans.length, secret ? 2 : 1);
     assert.equal(state.businessCalls, 0);
     assert.deepEqual(state.writes, []);
@@ -1458,8 +1478,8 @@ for (const order of ['stop-first', 'animation-first']) {
     assert.equal(state.inputs.length, 1);
     assert.equal(state.inputs[0].options.placeholder, 'Set Secret PIN');
     assert.equal(
-      inputText(state.inputs[0].options.description),
-      'Will be used as initial Access PIN',
+      state.inputs[0].options.checkbox.label,
+      'Set a different Access PIN',
     );
     assert.deepEqual(state.navigations, []);
     assert.deepEqual(state.errors, []);
@@ -1536,7 +1556,7 @@ test('prompt: initializing with auth disabled still verifies and saves the newly
   await state.enterPIN(SECRET_PIN);
   await state.tap();
 
-  assert.equal(state.gets, 0);
+  assert.equal(state.gets, 1);
   assert.deepEqual(state.authenticationRequests, [{pin: SECRET_PIN}]);
   assert.deepEqual(state.writes, []);
   await state.finishExit();
@@ -1557,9 +1577,9 @@ test('prompt: a Safe initialized between taps prompts for its existing PIN befor
   assert.deepEqual(state.cardPINWrites, []);
   assert.equal(state.businessCalls, 0);
   await state.finishExit();
-  assert.equal(state.inputs.length, 2);
+  assert.equal(state.inputs.length, 5);
   assert.equal(
-    state.inputs[1].options.placeholder,
+    state.inputs[4].options.placeholder,
     'Enter existing Secret PIN',
   );
   await state.enterPIN(OLD_PIN);
@@ -1606,7 +1626,7 @@ test('prompt: both PINs initialized between taps discard the pending setup PIN',
   await state.tap();
   await state.finishExit();
 
-  assert.equal(state.inputs.length, 1);
+  assert.equal(state.inputs.length, 4);
   assert.deepEqual(state.cardPINWrites, []);
   assert.deepEqual(state.authenticationRequests, [{pin: PIN}]);
   assert.deepEqual(state.writes, []);
@@ -1635,7 +1655,7 @@ test('prompt: a lost response after setting Secret PIN cannot replay the pending
   assert.deepEqual(state.authenticationRequests, []);
   assert.deepEqual(state.writes, []);
   assert.equal(state.scans.length, 2);
-  assert.equal(state.inputs.length, 1);
+  assert.equal(state.inputs.length, 4);
   assert.equal(state.businessCalls, 0);
   assert.equal(state.outcome, 'rejected');
   assert.equal(state.errors[0].code, 'CANCELLED');
@@ -1660,7 +1680,7 @@ for (const differentIdentity of ['Identity ID', 'Identity public key']) {
     assert.ok(state.presentedErrors[0] instanceof MonoidWrongCardError);
     await state.finishExit();
     assert.equal(state.scans.length, 3);
-    assert.equal(state.inputs.length, 1);
+    assert.equal(state.inputs.length, 4);
     assert.deepEqual(state.retryErrors, state.presentedErrors);
     assert.deepEqual(state.notifications, []);
 
@@ -1687,15 +1707,15 @@ test('prompt: incorrect Secret PIN reopens input after cleanup without mutating 
   await state.enterPIN(OLD_PIN);
   const scan = await state.tap();
   assert.equal(scan.waitingForRemoval, false);
-  assert.equal(state.inputs.length, 1);
+  assert.equal(state.inputs.length, 3);
   assert.deepEqual(state.cardPINWrites, []);
   await state.finishStop();
-  assert.equal(state.inputs.length, 1);
+  assert.equal(state.inputs.length, 3);
   await state.finishAnimation();
 
-  assert.equal(state.inputs.length, 2);
+  assert.equal(state.inputs.length, 4);
   assert.equal(
-    state.inputs[1].options.placeholder,
+    state.inputs[3].options.placeholder,
     'Enter existing Secret PIN',
   );
   assert.match(state.notifications[0].message, /tries remaining: 4/);
@@ -1725,7 +1745,7 @@ test('prompt: Secret PIN exhaustion ends setup without another attempt', async (
   await state.finishExit();
 
   assert.equal(state.scans.length, 2);
-  assert.equal(state.inputs.length, 1);
+  assert.equal(state.inputs.length, 3);
   assert.equal(state.businessCalls, 0);
   assert.deepEqual(state.cardPINWrites, []);
   assert.deepEqual(state.writes, []);
@@ -2648,4 +2668,163 @@ test('prompt: a completed scan cannot overwrite progress in the next scan', asyn
   await state.flush();
   assert.equal(state.presenter.current.token, current.token);
   assert.equal(state.presenter.current.content, before);
+});
+
+test('prompt: client preparation precedes fresh Monoid authorization on the same scan', async () => {
+  const aid = new Uint8Array([0xf0, 0x6d, 0x6f, 0x6e, 0x6f, 0x69, 0x64, 5, 1]);
+  let state;
+  state = mount({
+    savedPINs: {[CARD_ID]: PIN},
+    authentication: {
+      aid,
+      async prepare(applet, setContent, hello, signal) {
+        assert.equal(applet, state.applet);
+        assert.equal(Buffer.from(hello.id).toString('hex'), CARD_ID);
+        assert.equal(signal.aborted, false);
+        assert.equal(state.authenticated.length, 0);
+        setContent('Preparing codes...');
+        state.cardCommands.push({command: 'prepare-client'});
+      },
+    },
+    onBusiness() {
+      state.cardCommands.push({command: 'calculate-client'});
+    },
+  });
+  await state.tap();
+  await state.finishExit();
+  assert.equal(state.outcome, 'resolved');
+  assert.equal(state.scans.length, 1);
+  assert.deepEqual(state.authenticationRequests, [{pin: PIN, aid}]);
+  assert.deepEqual(
+    state.cardCommands.map(item => item.command),
+    [
+      'hello',
+      'prepare-client',
+      'select-monoid',
+      'authenticate',
+      'calculate-client',
+    ],
+  );
+});
+
+test('prompt: preparation without a client AID reselects Monoid and uses ordinary PIN authentication', async () => {
+  let state;
+  state = mount({
+    savedPINs: {[CARD_ID]: PIN},
+    authentication: {
+      async prepare(applet) {
+        assert.equal(applet, state.applet);
+        state.cardCommands.push({command: 'check-client'});
+      },
+    },
+    onBusiness() {
+      state.cardCommands.push({command: 'add-account'});
+    },
+  });
+  await state.tap();
+  await state.finishExit();
+  assert.equal(state.outcome, 'resolved');
+  assert.equal(state.scans.length, 1);
+  assert.deepEqual(state.authenticationRequests, [{pin: PIN}]);
+  assert.deepEqual(
+    state.cardCommands.map(item => item.command),
+    ['hello', 'check-client', 'select-monoid', 'authenticate', 'add-account'],
+  );
+});
+
+test('prompt: absent PIN is collected before any client preparation, then saved by the shared flow', async () => {
+  const prepared = [];
+  const aid = new Uint8Array([1, 2, 3, 4, 5]);
+  const state = mount({
+    authentication: {
+      aid,
+      async prepare() {
+        prepared.push(true);
+      },
+    },
+  });
+  await state.enterManualPIN();
+  assert.equal(prepared.length, 0);
+  await state.tap();
+  await state.finishExit();
+  assert.equal(prepared.length, 1);
+  assert.equal(state.outcome, 'resolved');
+  assert.deepEqual(state.authenticationRequests, [{pin: PIN, aid}]);
+  assert.equal(state.savedPINs[CARD_ID], PIN);
+});
+
+test('prompt: an incorrect client PIN requires a new preparation on the explicit retry', async () => {
+  const prepared = [];
+  const aid = new Uint8Array([1, 2, 3, 4, 5]);
+  const state = mount({
+    savedPINs: {[CARD_ID]: OLD_PIN},
+    authentication: {
+      aid,
+      async prepare() {
+        prepared.push(true);
+      },
+    },
+    onAuthenticate() {
+      throw wrongPIN();
+    },
+  });
+  await state.tap();
+  await state.finishExit();
+  assert.equal(prepared.length, 1);
+  assert.equal(state.businessCalls, 0);
+  await state.enterPIN();
+  state.onAuthenticate = undefined;
+  await state.tap();
+  await state.finishExit();
+  assert.equal(prepared.length, 2);
+  assert.equal(state.businessCalls, 1);
+  assert.deepEqual(state.authenticationRequests, [
+    {pin: OLD_PIN, aid},
+    {pin: PIN, aid},
+  ]);
+  assert.equal(state.outcome, 'resolved');
+});
+
+test('prompt: client preparation failure never sends PIN or reaches business work', async () => {
+  const failure = new MonoidCardError('Could not verify time');
+  const state = mount({
+    retryOnError: false,
+    savedPINs: {[CARD_ID]: PIN},
+    authentication: {
+      aid: new Uint8Array([1, 2, 3, 4, 5]),
+      async prepare() {
+        throw failure;
+      },
+    },
+  });
+  await state.tap();
+  await state.finishExit();
+  assert.equal(state.authenticated.length, 0);
+  assert.equal(state.businessCalls, 0);
+  assert.equal(state.scans.length, 1);
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.errors[0], failure);
+});
+
+test('prompt: wrong-card validation runs before client preparation and authentication', async () => {
+  let prepared = 0;
+  const state = mount({
+    retryOnError: false,
+    savedPINs: {[CARD_ID]: PIN},
+    validateCard() {
+      throw new MonoidWrongCardError(OTHER_CARD_ID);
+    },
+    authentication: {
+      aid: new Uint8Array([1, 2, 3, 4, 5]),
+      async prepare() {
+        prepared++;
+      },
+    },
+  });
+  await state.tap();
+  await state.finishExit();
+  assert.equal(prepared, 0);
+  assert.equal(state.authenticated.length, 0);
+  assert.equal(state.businessCalls, 0);
+  assert.equal(state.outcome, 'rejected');
 });

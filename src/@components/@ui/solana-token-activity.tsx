@@ -44,7 +44,7 @@ import {
   SolanaTokenDetailsContent,
   SolanaTokenTag,
 } from './solana-token.js';
-import {BlackTag} from './tag.js';
+import {DarkTag} from './tag.js';
 import {
   TokenActivity,
   TokenActivityAddress,
@@ -260,7 +260,7 @@ export const SolanaTokenActivity = observer(function SolanaTokenActivity({
     <>
       <InfoTableSection>
         <InfoSectionHeader>
-          <BlackTag>Token changes</BlackTag>
+          <DarkTag>Token changes</DarkTag>
           {balances === undefined ? (
             <InfoSectionLoadingSpinner aria-label="Loading balance changes" />
           ) : changes.length > 0 ? (

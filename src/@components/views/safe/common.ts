@@ -36,13 +36,15 @@ export type ScannedCardItemData = {
   index: SafeIndexHex;
   type?: string | number;
   alias?: string;
-  key?: string;
+  metadata?: string;
   secret: boolean;
   publicKey?: PublicKeyHex;
   ref?: ScannedCardKeyData['ref'];
   /** Cached public keys only; the companion derivationRecord holds the full saved list. */
   derivations?: WalletKeyPublicKeyData[];
   derivationRecord?: CardDerivationRecord;
+  /** OTP account metadata references this HMAC secret and shares its sync scope. */
+  otpKeyIndex?: SafeIndexHex;
 };
 
 export function isCardKeyItem(

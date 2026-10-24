@@ -22,6 +22,7 @@ function cardSnapshot(number) {
         id: Uint8Array.of(0, 0, 0, number),
         publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(number)),
         bundle: new Uint8Array(32).fill(1),
+        authority: false,
         pins: {access: 5, secret: 5},
       },
     },

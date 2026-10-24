@@ -43,6 +43,7 @@ beforeEach(() => {
       id: Uint8Array.of(1, 2, 3, 4),
       publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(7)),
       bundle: false,
+      authority: false,
       pins: {access: false, secret: false},
     },
     applet: {

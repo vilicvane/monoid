@@ -7,6 +7,7 @@ import {styled} from 'styled-components';
 import {useEntrances} from '../../@entrances.js';
 import {showInputKeyboard} from '../../@lib/input-keyboard.js';
 import {fadeInAnimationCSS, fadeOutAnimationCSS} from '../@animations.js';
+import {KeyCheckbox} from '../@key/key-checkbox.js';
 
 import {PopupBackdrop} from './popup-backdrop.js';
 import {popupContentPaddingCSS} from './popup-layout.js';
@@ -105,6 +106,37 @@ const Description = styled.div`
   }
 `;
 
+const InputCheckbox = styled.label`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  line-height: 20px;
+  pointer-events: auto;
+
+  && > div {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    background: transparent;
+    border-color: currentColor;
+    color: inherit;
+
+    &.checked {
+      background: white;
+      border-color: white;
+      color: transparent;
+      mask:
+        url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"%3E%3Cpath d="m20 6-11 11-5-5" fill="none" stroke="black" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/%3E%3C/svg%3E')
+          center / 13px 13px no-repeat,
+        linear-gradient(black 0 0);
+      mask-composite: exclude;
+    }
+  }
+`;
+
 export type InputModalOptions = {
   type?: 'text' | 'password';
   center?: boolean;
@@ -113,6 +145,11 @@ export type InputModalOptions = {
   description?: ReactNode;
   defaultValue?: string;
   maxLength?: number;
+  checkbox?: {
+    label: string;
+    defaultChecked: boolean;
+    onChange: (checked: boolean) => void;
+  };
 };
 
 type InputModalInstance = {
@@ -135,6 +172,7 @@ export function useInputModal(): [
   } = useEntrances();
 
   const [value, setValue] = useState('');
+  const [checked, setChecked] = useState(false);
   const descriptionId = useId();
   const nextInstanceId = useRef(0);
   const activeInstance = useRef<InputModalInstance | undefined>(undefined);
@@ -209,6 +247,7 @@ export function useInputModal(): [
         };
         activeInstance.current = current;
         setValue(options.defaultValue ?? '');
+        setChecked(options.checkbox?.defaultChecked ?? false);
         setCompletion(undefined);
         setInstance(current);
         signal?.addEventListener('abort', cancel, {once: true});
@@ -228,6 +267,7 @@ export function useInputModal(): [
         description,
         center = false,
         maxLength,
+        checkbox,
       },
     } = instance;
 
@@ -276,7 +316,15 @@ export function useInputModal(): [
 
                   complete(value);
                 }}
-                onBlur={() => complete(undefined)}
+                onBlur={event => {
+                  if (
+                    !event.relatedTarget ||
+                    !event.currentTarget.parentElement?.parentElement?.contains(
+                      event.relatedTarget,
+                    )
+                  )
+                    complete(undefined);
+                }}
               />
               {placeholderContent != null && !value && (
                 <Placeholder aria-hidden="true">
@@ -288,6 +336,30 @@ export function useInputModal(): [
               <Description id={descriptionId} className={classNames({center})}>
                 {description}
               </Description>
+            )}
+            {checkbox && (
+              <InputCheckbox
+                onPointerDown={event => event.preventDefault()}
+                onClick={event => {
+                  // Label activation normally focuses its checkbox and hides the
+                  // phone keyboard. Toggle without taking focus from the PIN.
+                  if ((event.target as HTMLElement).tagName === 'INPUT') return;
+                  event.preventDefault();
+                  event.currentTarget.querySelector('input')?.click();
+                }}
+              >
+                <KeyCheckbox
+                  checked={checked}
+                  disabled={!!completion}
+                  onChange={event => {
+                    if (activeInstance.current !== instance || completion)
+                      return;
+                    setChecked(event.target.checked);
+                    checkbox.onChange(event.target.checked);
+                  }}
+                />
+                {checkbox.label}
+              </InputCheckbox>
             )}
           </InputContainer>,
           popup,

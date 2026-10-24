@@ -1,6 +1,6 @@
 # Applet installation bundle
 
-The Monoid Identity, Monoid Library, Monoid and optional Monoid Security Key CAPs
+The Monoid Identity, Monoid Library, Monoid and optional Monoid Security Key and OTP CAPs
 are committed here with their load images and bundle descriptor, so the app can
 be built without a JavaCard checkout. At the start of `npm run build:web`, the app checks for newer CAPs in
 `../monoid-javacard/build/javacard`. Ionic builds and `npm run ios:sync` use this
@@ -9,7 +9,7 @@ times are recorded in `manifest.json`. The manifest and descriptor also record
 optional status, package dependencies and any distinct instance AID. This catalog
 drives installation plans; Card Applets installs the selected bundled applets.
 
-Build the JavaCard project first when you want to update the app's firmware. All four
+Build the JavaCard project first when you want to update the app's firmware. All five
 source CAPs must exist, and each changed CAP must be newer than its recorded source
 time, before the entire bundle is refreshed. Missing or older sources retain the
 committed bundle; equal timestamps with different content also retain it. Identical
@@ -36,16 +36,16 @@ npx prettier --write src/@lib/monoid/@applet-bundle.ts src/@assets/applets/manif
 ```
 
 To refresh the bundle, the source directory must contain `monoididentity.cap`,
-`monoidlib.cap`, `monoid.cap` and `monoidsecuritykey.cap`.
+`monoidlib.cap`, `monoid.cap`, `monoidsecuritykey.cap` and `monoidotp.cap`.
 The preparation script validates the standard package/applet AIDs,
-copies all four CAPs, extracts the components in Java Card load order, records SHA-256 hashes,
+copies all five CAPs, extracts the components in Java Card load order, records SHA-256 hashes,
 and generates the bundle descriptor. It never builds or modifies the firmware
 project. Review and commit the CAP bundle, load images, manifest, and descriptor
 together. The app verifies the load images against the descriptor before sending
 management commands.
 
 Installation proceeds in dependency order: Monoid Identity (`00`), Monoid Library
-(`04`), then Monoid (`02`), followed by the optional Monoid Security Key (`03`).
+(`04`), then Monoid (`02`), followed by optional Monoid Security Key (`03`) and OTP (`05`).
 The library is a code package without an applet instance;
 it is loaded without an INSTALL for install command. Monoid owns Safe storage and
 Access PIN, while Identity owns Secret PIN. Initial installation preserves an
@@ -78,8 +78,19 @@ Fresh install removes all managed applets,
 including previously installed optional applets, then reinstalls only the required
 applets and the current optional selection.
 
+OTP uses the instance AID `F06D6F6E6F69640501` and depends on Identity, Library and
+Monoid. Its account records and referenced HMAC keys live in Monoid; replacing
+OTP alone retains those items but requires renewing its applet grant. OTP uses
+phone time when `Hello.authority` is false, or signed time from its URL otherwise.
+Installing OTP does not replace or reconfigure an existing Identity.
+The installation caller may supply `authorityPublicKey` and `authorityUrl`
+together. The installer validates the uncompressed P-256 point, URL and command
+length before card management and sends `02 || publicKey || UTF8(URL)` in GP tag
+`C9`. Omitting both leaves Authority unset. Fresh install uses the supplied pair;
+ordinary updates preserve the existing Identity and its Authority configuration.
+
 The current Security Key credential format requires CBOR field `10` (32-byte scope)
-and the 64-byte lookup key `scope || SHA256(rpId)`. Scope derives from the Seed
+and the 64-byte metadata `scope || SHA256(rpId)`. Scope derives from the Seed
 contents and grant domain, independently of local Seed index, card identity or
 installation token. Old records without scope are not migrated or accepted by
 Copy/Sync. Distinct credential indices coexist; equal indices with different

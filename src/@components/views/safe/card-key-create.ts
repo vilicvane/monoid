@@ -66,7 +66,9 @@ export async function createCardKey(
   Object.assign(item, {
     secret: metadata.secret,
     ...(metadata.alias !== undefined && {alias: metadata.alias}),
-    ...(metadata.key !== undefined && {key: uint8ArrayToHex(metadata.key)}),
+    ...(metadata.metadata !== undefined && {
+      metadata: uint8ArrayToHex(metadata.metadata),
+    }),
   });
   onUpdated(item);
   throwIfCancelled(signal);

@@ -29,6 +29,7 @@ import {useToast} from '../@ui/toast.js';
 import {useInputModal} from '../@ui/use-input-modal.js';
 
 import {getPINInputPlaceholder} from './pin-input-placeholder.js';
+import {requestCardPINs, type CardSetupPINs} from './request-card-pins.js';
 
 export const MonoidScanStatePromptContentHighlight = styled.span`
   color: white;
@@ -84,6 +85,11 @@ type MonoidScanPromptCallback = (
 
 type MonoidScanPromptValidateCard = (hello: MonoidAppletHello) => void;
 
+export type MonoidScanAuthentication = {
+  aid?: Uint8Array;
+  prepare: MonoidScanPromptCallback;
+};
+
 type PINRequest =
   | {type: 'access'; id: MonoidIdHex}
   | {type: 'setup'; hello: MonoidAppletHello};
@@ -112,6 +118,7 @@ export function useMonoidScanPrompt({
     appletCallback: MonoidScanPromptCallback,
     validateCard?: MonoidScanPromptValidateCard,
     signal?: AbortSignal,
+    authentication?: MonoidScanAuthentication,
   ) => Promise<void>,
 ] {
   const {
@@ -135,6 +142,7 @@ export function useMonoidScanPrompt({
         MonoidScanPromptValidateCard | undefined,
         MonoidPINSession,
         AbortSignal | undefined,
+        MonoidScanAuthentication | undefined,
       ]
     >();
 
@@ -186,11 +194,12 @@ export function useMonoidScanPrompt({
       validateCard,
       scanPINSession,
       operationSignal,
+      authentication,
     ] = appletCallbackAndPromise;
 
     let retryStateContent = initialStateContent;
     let enteredPIN: {id: MonoidIdHex; pin: MonoidPIN} | undefined;
-    let setupPIN: {hello: MonoidAppletHello; pin: MonoidPIN} | undefined;
+    let setupPIN: {hello: MonoidAppletHello; pins: CardSetupPINs} | undefined;
     let update:
       | {type: 'set' | 'remove'; id: MonoidIdHex; pin: MonoidPIN}
       | undefined;
@@ -240,47 +249,51 @@ export function useMonoidScanPrompt({
         });
       }
 
-      void showPINInput(
-        {
-          type: 'password',
-          ...(request.type === 'setup'
-            ? getPINInputPlaceholder(
-                'Secret',
-                request.hello.pins.secret === false ? 'Set' : 'Enter existing',
-              )
-            : getPINInputPlaceholder('Access')),
-          description:
-            request.type === 'setup'
-              ? request.hello.pins.access === false
-                ? 'Will be used as initial Access PIN'
-                : 'Access PIN stays the same'
-              : undefined,
-          center: true,
-          maxLength: 16,
-        },
-        credentialsRequest.signal,
-      ).then(value => {
-        if (disposed) {
-          return;
-        }
-
-        if (MonoidPIN.is(value)) {
-          if (request.type === 'setup') {
-            setupPIN = {hello: request.hello, pin: value};
-          } else {
-            enteredPIN = {id: request.id, pin: value};
-          }
-          setStateContent(retryStateContent);
-          startScan();
-        } else if (value !== undefined) {
-          promptPIN(
-            request,
-            'Incorrect PIN format, expected 6 to 16 characters.',
+      void (async () => {
+        if (request.type === 'setup') {
+          const saved = await scanPINSession.getPINs(credentialsRequest.signal);
+          const setup = await requestCardPINs(
+            showPINInput,
+            {
+              secretSet: request.hello.pins.secret !== false,
+              accessSet: request.hello.pins.access !== false,
+              savedAccessPIN: saved[uint8ArrayToHex(request.hello.id)],
+            },
+            credentialsRequest.signal,
           );
+          if (disposed) return;
+          if (!setup) {
+            fail(cancelled());
+            return;
+          }
+          setupPIN = {hello: request.hello, pins: setup};
         } else {
-          fail(cancelled());
+          const value = await showPINInput(
+            {
+              type: 'password',
+              ...getPINInputPlaceholder('Access'),
+              center: true,
+              maxLength: 16,
+            },
+            credentialsRequest.signal,
+          );
+          if (disposed) return;
+          if (value === undefined) {
+            fail(cancelled());
+            return;
+          }
+          if (!MonoidPIN.is(value)) {
+            promptPIN(
+              request,
+              'Incorrect PIN format, expected 6 to 16 characters.',
+            );
+            return;
+          }
+          enteredPIN = {id: request.id, pin: value};
         }
-      });
+        setStateContent(retryStateContent);
+        startScan();
+      })().catch(fail);
     };
 
     const finish = async (): Promise<void> => {
@@ -475,8 +488,9 @@ export function useMonoidScanPrompt({
               hello = await initializeMonoidCard(
                 applet,
                 setupHello,
-                setup.pin,
+                setup.pins.secret,
                 credentialsRequest.signal,
+                setup.pins.access,
               );
             } catch (error) {
               if (disposed) return;
@@ -515,9 +529,9 @@ export function useMonoidScanPrompt({
 
             if (disposed) return;
 
-            // Only an unset Access PIN inherits the Secret PIN during setup.
+            // Authenticate and save the Access PIN selected for this setup.
             if (needsAccessPIN) {
-              enteredPIN = {id, pin: setup.pin};
+              enteredPIN = {id, pin: setup.pins.access!};
               initializedAccessPIN = true;
             }
           }
@@ -539,10 +553,28 @@ export function useMonoidScanPrompt({
               return;
             }
 
+            // Prepare on this connection before authenticating. Clients may
+            // also request an applet-specific single-use permission.
+            if (authentication) {
+              await authentication.prepare(
+                applet,
+                content => {
+                  if (!disposed) setStateContent(content);
+                },
+                hello,
+                credentialsRequest.signal,
+              );
+              credentialsRequest.signal.throwIfAborted();
+              await applet.useSession(applet);
+            }
+
             setStateContent('Authenticating, hold tight...');
 
             try {
-              await applet.authenticate({pin});
+              await applet.authenticate({
+                pin,
+                ...(authentication?.aid && {aid: authentication.aid}),
+              });
             } catch (error) {
               if (disposed) {
                 return;
@@ -869,7 +901,13 @@ export function useMonoidScanPrompt({
   return [
     pinInput,
     useCallback(
-      async (initialStateContent, appletCallback, validateCard, signal) => {
+      async (
+        initialStateContent,
+        appletCallback,
+        validateCard,
+        signal,
+        authentication,
+      ) => {
         let completed = false;
         try {
           // A borrowed page session survives scan cleanup; a temporary one spans the
@@ -890,6 +928,7 @@ export function useMonoidScanPrompt({
               validateCard,
               scanPINSession,
               signal,
+              authentication,
             ]);
           });
           completed = true;

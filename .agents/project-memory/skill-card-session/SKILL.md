@@ -5,7 +5,7 @@ description: Monoid NFC card sessions, Access/Safe PIN ownership, biometric vaul
 
 # Monoid card sessions
 
-Source: `../records.md`, especially records 29–32, 34, 38–41 and 47–48, and `../29.md` and `../48.md`. Treat records
+Source: `../records.md`, especially records 29–32, 34, 38–41 and 47–50, and `../29.md`, `../48.md` and `../50.md`. Treat records
 as authoritative and keep them up to date. Records 19–24 describe an older WIP;
 do not reintroduce their plain-storage design or assume those TODOs still exist.
 
@@ -38,9 +38,14 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   PINs to the card's `hello.id`, verify the intended card before credentials, and
   authenticate again on every tap. Do not await a web modal inside a live card
   callback. Save a successfully verified Access PIN after native cleanup.
-- Safe PINs are entered explicitly and never persisted. Initialization only copies
-  the Safe PIN to Access PIN when Access PIN is unset. Changed card/Safe identity
-  invalidates a pending setup PIN. Wrong-PIN retries respect firmware tries.
+- Secret PINs are entered explicitly and never persisted. New Secret and Access
+  PINs require confirmation; initialization/Reset defaults to a separate Access
+  PIN, with an unchecked option to reuse the confirmed Secret PIN. Restore an
+  unset Access PIN from the unlocked local vault when available; otherwise ask
+  for it twice. Existing Secret PIN authentication needs one entry. Firmware
+  initially copies a new Secret PIN to Access PIN; authenticate Secret before
+  writing a distinct Access PIN on that connection. Changed card identity
+  invalidates pending input. Wrong-PIN retries respect firmware tries. See record 59.
 - iOS Core NFC covers the WebView and has a system session limit. Errors close
   the sheet and return to the caller; no automatic iOS retry hides the error or
   replays an uncertain mutation. Cancellation and iOS timeout before any card
@@ -79,3 +84,18 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   `Applet` transport sends 255-byte multipart frames (CLA 00/90/B0/A0), supports
   1–8192-byte encoded requests, and reads `61xx` with GET RESPONSE. Schemas are in
   `src/@lib/monoid/monoid-applet.ts`; inspect current firmware for changes.
+- Skip incompatible application records individually when reading lists or
+  preparing Copy/Sync; keep compatible records usable. Only local format errors
+  qualify, not NFC, PIN, cancellation or uncertain mutations. Do not delete the
+  skipped on-card items or overwrite them as if absent. Destructive maintenance
+  still requires complete recovery data. The temporary old `key`/`keyPrefix`
+  protocol adapter was removed at the user's request; use only the current
+  metadata fields. See `../50.md` for the separate Identity Bundle packet
+  incompatibility, which APP cannot repair by changing packet headers.
+- OTP time mode comes from the current card's required `Hello.authority`: false
+  accepts phone time without Challenge/network; a URL requires its signed time
+  proof, with the installed Identity key as the final verifier. Never fall back
+  after a service, signature or card rejection. Prepare precedes client-bound
+  Access PIN authentication in the same NFC session. Optional Identity Authority
+  installation parameters require URL and public key together; ordinary Monoid
+  replacement preserves them. See record 56.

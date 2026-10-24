@@ -187,6 +187,7 @@ function hello({bundle = false, pins = {access: 5, secret: 5}} = {}) {
     publicKey: Uint8Array.from([4, ...new Array(64).fill(12)]),
     version: 0,
     bundle,
+    authority: false,
     pins,
   };
 }
@@ -397,7 +398,13 @@ test('resetting an extension target remembers its new Secret PIN only for the re
   state.render();
   const adding = find(state.hook.content, 'confirm-popup').props.onConfirm();
   for (let index = 0; index < 10; index++) await Promise.resolve();
-  assert.deepEqual(state.events, ['vault-authenticate', 'pin-input']);
+  assert.deepEqual(state.events, [
+    'vault-authenticate',
+    'pin-input',
+    'pin-input',
+    'pin-input',
+    'pin-input',
+  ]);
   await state.tap();
   state.scans.at(-1).resolve();
   await adding;

@@ -2,8 +2,9 @@ import {MonoidCardError} from '../../../../@lib/monoid/index.js';
 import {isCardDerivationItem} from '../card-derivations.js';
 import {
   mergeCardItemData,
-  validateCardCredentialItem,
+  validateCardImmutableItem,
 } from '../card-item-merge.js';
+import {isCardOTPItem, validateCardOTPItem} from '../card-otp.js';
 import type {ScannedCardItemData} from '../common.js';
 
 export type CardSyncIdentity = {
@@ -12,7 +13,7 @@ export type CardSyncIdentity = {
   bundle: string | false;
 };
 
-export type CardSyncExport = {key?: string; alias?: string; data: string};
+export type CardSyncExport = {metadata?: string; alias?: string; data: string};
 
 export type CardSyncItem = ScannedCardItemData & {
   /** Plaintext is retained only for items which Get permits reading. */
@@ -22,7 +23,11 @@ export type CardSyncItem = ScannedCardItemData & {
   exported?: CardSyncExport;
 };
 
-export type CardSyncSnapshot = CardSyncIdentity & {items: CardSyncItem[]};
+export type CardSyncSnapshot = CardSyncIdentity & {
+  items: CardSyncItem[];
+  /** Existing incompatible records must not be mistaken for missing items. */
+  skippedIndexes?: string[];
+};
 
 export type CardSyncOperation = {
   kind: 'create' | 'import' | 'verify' | 'data' | 'alias';
@@ -42,19 +47,24 @@ function fail(index: string, reason: string): never {
 }
 
 function association(item: CardSyncItem): string | undefined {
-  return item.derivationRecord?.index;
+  return isCardOTPItem(item)
+    ? validateCardOTPItem(item)
+    : item.derivationRecord?.index;
 }
 
 function scope(card: CardSyncSnapshot, item: CardSyncItem): string {
   let root = item;
 
-  if (isCardDerivationItem(item)) {
-    if (!item.derivationRecord) fail(item.index, 'invalid address records');
+  if (isCardDerivationItem(item) || isCardOTPItem(item)) {
+    const sourceIndex = association(item);
+    if (!sourceIndex) fail(item.index, 'invalid address records');
     const source = card.items.find(
-      candidate => candidate.index === item.derivationRecord!.index,
+      candidate => candidate.index === sourceIndex,
     );
 
     if (!source) fail(item.index, 'associated key is missing');
+    if (isCardOTPItem(item) && !source.secret)
+      fail(item.index, 'invalid OTP key');
     root = source;
   }
 
@@ -67,7 +77,7 @@ function scope(card: CardSyncSnapshot, item: CardSyncItem): string {
 
 function sameStructure(left: CardSyncItem, right: CardSyncItem): boolean {
   return (
-    left.key === right.key &&
+    left.metadata === right.metadata &&
     left.secret === right.secret &&
     association(left) === association(right)
   );
@@ -108,7 +118,7 @@ export function createCardSyncPlans(
     const indexes = new Set<string>();
 
     for (const item of card.items) {
-      validateCardCredentialItem(item);
+      validateCardImmutableItem(item);
       if (indexes.has(item.index)) fail(item.index, 'duplicate item');
       indexes.add(item.index);
       const itemScope = scope(card, item);
@@ -160,14 +170,15 @@ export function createCardSyncPlans(
     const relevant = [...merged.values()]
       .filter(
         entry =>
-          entry.scope === 'public' ||
-          entry.scope === `card:${card.publicKey}` ||
-          (card.bundle !== false && entry.scope === `bundle:${card.bundle}`),
+          !card.skippedIndexes?.includes(entry.item.index) &&
+          !card.skippedIndexes?.includes(association(entry.item) ?? '') &&
+          (entry.scope === 'public' ||
+            entry.scope === `card:${card.publicKey}` ||
+            (card.bundle !== false && entry.scope === `bundle:${card.bundle}`)),
       )
       .sort(
         (left, right) =>
-          Number(!!left.item.derivationRecord) -
-          Number(!!right.item.derivationRecord),
+          Number(!!association(left.item)) - Number(!!association(right.item)),
       );
     const operations: CardSyncOperation[] = [];
     const targetIndexes = new Set<string>();
@@ -197,8 +208,8 @@ export function createCardSyncPlans(
         if (desired.secret) {
           if (!desired.exported)
             fail(desired.index, 'Secret data was not exported');
-          const {alias, key} = desired.exported;
-          const imported = {...desired, alias, key};
+          const {alias, metadata} = desired.exported;
+          const imported = {...desired, alias, metadata};
           operations.push({
             kind: 'import',
             after: imported,

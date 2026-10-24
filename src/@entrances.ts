@@ -28,6 +28,7 @@ import {
   MonoidCredentialsStore,
   MonoidScanPromptPresenter,
   MonoidStorageService,
+  OTPStore,
   SiteLogoService,
   SolanaIdlService,
   SolanaTokenService,
@@ -123,6 +124,11 @@ export class Entrances {
   @entrance
   get cardStore() {
     return new CardStore();
+  }
+
+  @entrance
+  get otpStore() {
+    return this.storageService.then(storage => OTPStore.create(storage));
   }
 
   @entrance

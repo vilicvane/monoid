@@ -86,6 +86,7 @@ beforeEach(() => {
       id: Uint8Array.of(1, 2, 3, 4),
       publicKey: Uint8Array.from([4, ...new Uint8Array(64)]),
       bundle: false,
+      authority: false,
       pins: {access: false, secret: false},
     },
   };
@@ -298,6 +299,96 @@ test('unknown optional selections fail before any card command', async () => {
     installMonoidApplets('connection', () => {}, undefined, ['unknown']),
     /Unknown optional applet/,
   );
+  assert.deepEqual(fixture.events, []);
+});
+
+test('OTP installs after its three dependencies only when selected', async () => {
+  bundle.unshift({
+    ...bundle[2],
+    stage: 'otp',
+    packageAid: 'f06d6f6e6f696405',
+    appletAid: 'f06d6f6e6f69640501',
+    optional: true,
+    dependencies: ['identity', 'library', 'monoid'],
+  });
+  assert.deepEqual(
+    getAppletInstallationPlan().map(item => item.stage),
+    ['identity', 'library', 'monoid'],
+  );
+  assert.deepEqual(
+    getAppletDependents(['library']).map(item => item.stage),
+    ['otp', 'monoid'],
+  );
+  await installMonoidApplets('connection', () => {}, undefined, ['otp']);
+  assert.deepEqual(fixture.events.slice(0, 5), [
+    'open GP',
+    'identity',
+    'library',
+    'monoid',
+    'otp',
+  ]);
+  assert.deepEqual(
+    describeAppletInstallProgress({stage: 'otp', phase: 'configuring'}),
+    {status: 'Configuring Monoid OTP Applet, hold tight...'},
+  );
+});
+
+test('Authority installation parameters are validated before card access and attached only to Identity', async () => {
+  const authorityUrl = 'https://authority.example/api';
+  const authorityPublicKey = new Uint8Array(
+    Buffer.from(
+      '046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5',
+      'hex',
+    ),
+  );
+  await installMonoidApplets('connection', () => {}, undefined, [], {
+    authorityPublicKey,
+    authorityUrl,
+  });
+  assert.deepEqual(
+    fixture.packages[0].applicationData,
+    new Uint8Array([
+      2,
+      ...authorityPublicKey,
+      ...new TextEncoder().encode(authorityUrl),
+    ]),
+  );
+  assert(fixture.packages.slice(1).every(item => !item.applicationData));
+
+  fixture.events.length = 0;
+  for (const invalid of [
+    new Uint8Array(65),
+    new Uint8Array([4, ...new Uint8Array(64)]),
+    authorityPublicKey.subarray(0, 33),
+  ]) {
+    await assert.rejects(
+      installMonoidApplets('connection', () => {}, undefined, [], {
+        authorityPublicKey: invalid,
+        authorityUrl,
+      }),
+      /Invalid Authority public key/,
+    );
+  }
+  for (const options of [
+    {authorityPublicKey},
+    {authorityUrl},
+    {authorityPublicKey, authorityUrl: ''},
+    {authorityPublicKey, authorityUrl: 'invalid'},
+    {authorityPublicKey, authorityUrl: 'ftp://authority.example'},
+    {
+      authorityPublicKey,
+      authorityUrl: 'https://user:password@authority.example',
+    },
+    {
+      authorityPublicKey,
+      authorityUrl: `https://authority.example/${'界'.repeat(50)}`,
+    },
+  ]) {
+    await assert.rejects(
+      installMonoidApplets('connection', () => {}, undefined, [], options),
+      /Authority/,
+    );
+  }
   assert.deepEqual(fixture.events, []);
 });
 

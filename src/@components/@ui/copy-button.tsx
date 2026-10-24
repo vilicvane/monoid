@@ -39,11 +39,13 @@ export function CopyButton({
   label,
   children,
   className,
+  showIcon = true,
 }: {
-  value: string;
+  value: string | (() => string | undefined);
   label: string;
   children?: ReactNode;
   className?: string;
+  showIcon?: boolean;
 }): ReactNode {
   const {errorService} = useEntrances();
   const [copied, setCopied] = useTemporaryState(false, COPIED_STATE_DURATION);
@@ -54,13 +56,22 @@ export function CopyButton({
       className={className}
       aria-label={label}
       title={copied ? 'Copied' : label}
+      data-copied={copied || undefined}
       onClick={errorService.catch(async () => {
-        await Clipboard.write({string: value});
+        const currentValue = typeof value === 'function' ? value() : value;
+        if (currentValue === undefined) return;
+        await Clipboard.write({string: currentValue});
         setCopied(true);
       })}
     >
       {children}
-      <Icon icon={copied ? check : copy} $copied={copied} aria-hidden="true" />
+      {showIcon && (
+        <Icon
+          icon={copied ? check : copy}
+          $copied={copied}
+          aria-hidden="true"
+        />
+      )}
     </Container>
   );
 }

@@ -32,6 +32,7 @@ const hello = {
   id: bytes('11223344'),
   publicKey,
   bundle: false,
+  authority: false,
   pins: {access: 5, secret: 5},
 };
 
@@ -52,7 +53,7 @@ function credentialFields() {
 function credentialRecord(fields = credentialFields()) {
   return {
     index: Uint8Array.from([0xf1, 1, ...fields.get(2).subarray(0, 8)]),
-    key: Uint8Array.from([...fields.get(10), ...fields.get(3)]),
+    metadata: Uint8Array.from([...fields.get(10), ...fields.get(3)]),
     secret: false,
     data: encode(fields),
   };
@@ -128,12 +129,12 @@ test('decodes actual numeric-map credential fields and metadata association', ()
   const decoded = decodeSecurityKeyCredential(
     record.data,
     record.index,
-    record.key,
+    record.metadata,
   );
   assert.equal(SECURITY_KEY_ITEM_TYPE, 0xf101);
   assert.deepEqual(decoded, {
     credentialId: id,
-    rpHash: record.key.subarray(32),
+    rpHash: record.metadata.subarray(32),
     rpId: 'example.com',
     userId: bytes('01234567'),
     userName: 'alice',
@@ -200,7 +201,7 @@ for (const [name, mutate] of [
   });
 }
 
-test('rejects duplicate fields, trailing data and mismatched index/key', () => {
+test('rejects duplicate fields, trailing data and mismatched index/metadata', () => {
   const record = credentialRecord();
   const encoded = encode(credentialFields());
   assert.equal(encoded[0], 0xaa);
@@ -225,10 +226,13 @@ test('rejects duplicate fields, trailing data and mismatched index/key', () => {
     /Invalid/,
   );
   for (const key of [
-    record.key.subarray(32),
-    Uint8Array.from([...new Uint8Array(32), ...record.key.subarray(32)]),
-    Uint8Array.from([...record.key.subarray(0, 32), ...new Uint8Array(32)]),
-    Uint8Array.from([...record.key, 0]),
+    record.metadata.subarray(32),
+    Uint8Array.from([...new Uint8Array(32), ...record.metadata.subarray(32)]),
+    Uint8Array.from([
+      ...record.metadata.subarray(0, 32),
+      ...new Uint8Array(32),
+    ]),
+    Uint8Array.from([...record.metadata, 0]),
   ]) {
     assert.throws(
       () => decodeSecurityKeyCredential(encoded, record.index, key),
@@ -307,10 +311,10 @@ test('snapshot lists only 64-byte secret Seeds and never reads their contents', 
   assert.deepEqual(result.seeds, [{index: hex(seedIndex), alias: 'Primary'}]);
   assert.equal(result.installed, true);
   assert.deepEqual(result.scope, scope);
-  assert.equal(result.credentials.length, 3);
+  assert.equal(result.credentials.length, 1);
+  assert.equal(result.skippedCredentials, 2);
+  assert.equal(securityKeySeedChangeNeedsConfirmation(result, 'create'), true);
   assert.equal(result.credentials[0].credential.rpId, 'example.com');
-  assert.equal(result.credentials[1].credential, undefined);
-  assert.equal(result.credentials[2].credential, undefined);
   assert.deepEqual(
     commands
       .filter(([name]) => name === 'get')
@@ -572,45 +576,97 @@ test('acknowledgement survives cancellation before cleanup; no second grant is s
   assert.equal(commands.filter(([name]) => name === 'grant').length, 1);
 });
 
-test('changing Seed with credentials requires confirmation, including a missing old grant', () => {
-  const credentials = [{index: 'f1010000000000000000'}];
+test('changing an already configured Seed with credentials requires confirmation', () => {
+  for (const records of [
+    {credentials: [{index: 'f1010000000000000000'}]},
+    {skippedCredentials: 1},
+  ]) {
+    const current = snapshot({...records, grant: grant()});
+    assert.equal(
+      securityKeySeedChangeNeedsConfirmation(current, hex(seedIndex)),
+      false,
+    );
+    assert.equal(
+      securityKeySeedChangeNeedsConfirmation(current, hex(otherSeedIndex)),
+      true,
+    );
+    assert.equal(
+      securityKeySeedChangeNeedsConfirmation(current, 'create'),
+      true,
+    );
+  }
   assert.equal(
     securityKeySeedChangeNeedsConfirmation(
-      snapshot({credentials, grant: grant()}),
-      hex(seedIndex),
-    ),
-    false,
-  );
-  assert.equal(
-    securityKeySeedChangeNeedsConfirmation(
-      snapshot({credentials, grant: grant()}),
-      hex(otherSeedIndex),
-    ),
-    true,
-  );
-  assert.equal(
-    securityKeySeedChangeNeedsConfirmation(
-      snapshot({credentials, grant: grant()}),
+      snapshot({grant: grant()}),
       'create',
     ),
-    true,
-  );
-  assert.equal(
-    securityKeySeedChangeNeedsConfirmation(
-      snapshot({credentials}),
-      hex(seedIndex),
-    ),
-    true,
-  );
-  assert.equal(
-    securityKeySeedChangeNeedsConfirmation(snapshot(), 'create'),
     false,
   );
 });
 
+for (const [name, currentGrant] of [
+  ['no grant', undefined],
+  ['a grant without a Seed', {...grant(), seed: undefined}],
+]) {
+  test(`first enable with ${name} does not warn or block on existing or skipped credentials`, async () => {
+    const record = credentialRecord();
+    for (const records of [
+      {credentials: [{index: hex(record.index)}]},
+      {skippedCredentials: 1},
+    ]) {
+      for (const selection of [hex(seedIndex), 'create']) {
+        const current = snapshot({...records, grant: currentGrant});
+        assert.equal(
+          securityKeySeedChangeNeedsConfirmation(current, selection),
+          false,
+        );
+        const {applet, commands} = card({
+          grants: currentGrant ? [currentGrant] : [],
+          items: [{index: seedIndex, secret: true}, record],
+        });
+        const configuration = new SecurityKeyConfiguration(current, selection);
+        await configuration.apply(applet, hello, signal(), () => {});
+        assert.equal(configuration.complete, true);
+        assert.deepEqual(commands.at(-1), [
+          'grant',
+          {
+            aid: SECURITY_KEY_AID,
+            types: [[-3839, true]],
+            seed: {
+              index: selection === 'create' ? otherSeedIndex : seedIndex,
+              domain: SECURITY_KEY_DOMAIN,
+            },
+          },
+        ]);
+      }
+    }
+  });
+
+  test(`first enable with ${name} rejects a Seed configured after the initial read`, async () => {
+    const {applet, commands} = card({grants: [grant(otherSeedIndex)]});
+    const configuration = new SecurityKeyConfiguration(
+      snapshot({grant: currentGrant}),
+      'create',
+    );
+    await assert.rejects(
+      configuration.apply(applet, hello, signal(), () => {}),
+      /configuration changed/,
+    );
+    assert.deepEqual(
+      commands.map(([name]) => name),
+      ['grants'],
+    );
+  });
+}
+
 test('credentials added after reading the card cannot bypass Seed-change confirmation', async () => {
-  const {applet, commands} = card({items: [credentialRecord()]});
-  const configuration = new SecurityKeyConfiguration(snapshot(), 'create');
+  const previous = grant();
+  const current = snapshot({grant: previous});
+  const {applet, commands} = card({
+    grants: [previous],
+    items: [credentialRecord()],
+  });
+  const configuration = new SecurityKeyConfiguration(current, 'create');
   await assert.rejects(
     configuration.apply(applet, hello, signal(), () => {}),
     /Credentials changed/,
@@ -619,7 +675,7 @@ test('credentials added after reading the card cannot bypass Seed-change confirm
     commands.some(([name]) => name === 'create' || name === 'grant'),
     false,
   );
-  await new SecurityKeyConfiguration(snapshot(), 'create', true).apply(
+  await new SecurityKeyConfiguration(current, 'create', true).apply(
     applet,
     hello,
     signal(),

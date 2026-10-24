@@ -17,6 +17,8 @@ export type AppletPackage = {
   /** CAP executable module, which can differ from the installed instance. */
   appletAid?: Uint8Array;
   instanceAid?: Uint8Array;
+  /** Applet-specific application data within GP installation tag C9. */
+  applicationData?: Uint8Array;
   code: Uint8Array;
 };
 
@@ -152,12 +154,18 @@ export class GlobalPlatformInstaller {
 
     onProgress({phase: 'configuring'});
 
-    // No privileges, no installation parameters, no delegated-management token.
+    // No privileges or delegated-management token; C9 carries application data.
+    const parameters = concat(
+      new Uint8Array([0xc9]),
+      lengthValue(applet.applicationData ?? new Uint8Array()),
+    );
     const data = concat(
       lengthValue(applet.packageAid),
       lengthValue(appletAid),
       lengthValue(instanceAid!),
-      new Uint8Array([1, 0, 2, 0xc9, 0, 0]),
+      new Uint8Array([1, 0]),
+      lengthValue(parameters),
+      new Uint8Array([0]),
     );
     successful(
       await this.transceive(shortCommand(0xe6, 0x0c, 0, data)),

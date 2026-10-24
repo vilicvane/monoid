@@ -9,12 +9,21 @@ backup/restore progress, and operation errors use the shared NFC presentation.
 
 - A card with missing Monoid components shows Card versions and Checklist.
   Installation skips existing components.
+- Installing Identity or choosing Fresh install offers an optional Authority and
+  an editable Authority URL using the shared toggle and popup input. The URL is
+  the site root; API paths are added by APP. Resolve its public key before PIN or
+  NFC prompts, and retain that exact pair if Fresh install needs to resume.
+  Installing optional applets, updating and ordinary reinstall preserve Identity's
+  existing Authority configuration and do not show these settings.
 - Known applets remain visible when their basic information cannot be read. A
   failed read is not evidence that an applet or a capability is absent.
 - An unrecognized card manager or explicitly incompatible management protocols
   can show Card not supported. An interrupted communication remains retryable.
-- Secret PIN input precedes the installation scan. First initialization also sets
-  the initial Access PIN; reinstalling Monoid retains the Identity's Secret PIN.
+- PIN input precedes the installation scan. New Secret and Access PINs each
+  require confirmation. The Secret PIN prompt defaults to a checked "Set a
+  different Access PIN" checkbox; unchecking uses the confirmed Secret PIN as
+  Access PIN without another input. Reinstalling Monoid retains Identity's
+  Secret PIN and restores the saved Access PIN when this device has it.
 - Completion is shown only after PIN setup. Copy and bundle setup pass their flow
   ID into the Card Applets route. The verified card is added to that flow before returning,
   without another discovery scan.
@@ -38,7 +47,13 @@ exports separately for each recipient public key.
 
 Update and Reinstall replace **Monoid only**. Identity, its Secret PIN, and bundle
 membership remain. Fresh install is a separate, explicitly confirmed action that
-replaces Identity as well and therefore changes the card identity.
+replaces Identity as well and generates new cryptographic keys. It preserves the
+original four-byte Card ID when available from Hello or a retained maintenance
+record for that physical card. The ID is persisted before deletion, supplied to
+Identity installation alongside optional Authority settings, and checked after
+installation, including verify-only resumes. If no original ID can be read or
+recovered, Identity generates an ID. Preserving the display ID does not retain
+PINs, items, keys or Bundle membership.
 
 Initial inspection uses the public GP registry. If the card requires authentication
 (`6982`) but Monoid still answers Hello, Update and Reinstall open the GP secure
@@ -48,10 +63,14 @@ Monoid is selected and its Secret PIN authenticated again after this query.
 
 For an unbundled card, ordinary replacement first exports every resource from
 `list({})`, including data and address records hidden from the normal resource
-view. The archive contains card-encrypted envelopes and the original index, key,
+view. The archive contains card-encrypted envelopes and the original index, metadata,
 alias, and secret flag. It is bound to the complete Identity public key and
 complete caller Applet AID. The persisted archive is read back and checked before
 deletion begins.
+
+The persisted recovery format keeps its existing `key` field for item metadata
+so saved archives and their checksums remain intact. The card protocol uses
+`metadata`; the maintenance service maps it at the storage boundary.
 
 Restoration imports the complete archive, then verifies identity and the complete
 inventory. Only that successful verification removes the matching archive.
@@ -109,3 +128,32 @@ identity checks, uncertain outcomes, PIN sequencing, route handoff, and bundle
 collection. They do not establish compatibility or NFC reliability on physical
 cards. Installation and Hello success also do not constitute a cryptographic
 self-test of every Monoid operation.
+
+## PIN setup and recovery
+
+The shared PIN input flow is used by Safe scanning, Card Applets installation,
+Fresh install, Copy destination initialization and Create/Extend bundle card
+initialization or Reset. Unlock the Access PIN vault before manual input. Collect
+all new credentials before starting the write scan. Each confirmation is local
+input matching, not another on-card authentication attempt.
+
+- Both PINs unset or an explicit Reset/Fresh install: confirm the new Secret PIN
+  twice and, by default, the new Access PIN twice. Old stored Access PINs are not
+  reused. Fresh replacement removes the obsolete local PIN after installation.
+- Existing Secret PIN with missing Access PIN: enter the Secret PIN once. Restore
+  the saved Access PIN without input; if none exists, enter the new Access PIN
+  twice. Never silently replace Access PIN with Secret PIN.
+- Both PINs already set: do not set either again. Ask existing Secret PIN only
+  for operations requiring that authorization; ordinary Access authentication
+  uses the saved PIN or one manual entry. Verified Secret PINs are reused only
+  within their owning visible flow and are never persistently stored.
+- Update Secret PIN: enter the current Secret PIN once, then the new Secret PIN
+  twice. Access PIN is unchanged and the separate-PIN checkbox is absent.
+- Update Access PIN: enter the current Secret PIN once, then the new Access PIN
+  twice. Secret PIN is unchanged.
+
+An interrupted flow reads current PIN state rather than replaying writes. A
+new Secret PIN initially sets the same Access PIN in firmware; selecting a
+different Access PIN then authenticates with Secret PIN and writes the selected
+Access PIN on the same NFC connection. Only the successfully verified Access PIN
+is saved. A lost response is not permission to retry a PIN mutation automatically.

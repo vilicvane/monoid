@@ -223,7 +223,7 @@ function metadata(index, wallets) {
   return {
     index: `0f01${index.slice(4)}`,
     type: 0x0f01,
-    key: index,
+    metadata: index,
     secret: false,
     derivationRecord: {index, wallets: wallets.map(getWalletReference)},
   };
@@ -415,6 +415,7 @@ function mount({items, keys = []}) {
     id: bytes(state.view.card.id),
     publicKey: bytes(state.view.card.publicKey),
     bundle: false,
+    authority: false,
     pins: {access: 5, secret: 5},
   };
   state.applet = {

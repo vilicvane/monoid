@@ -36,6 +36,7 @@ import type {ScannedCardItemData} from '../common.js';
 
 const RESOURCE_TYPE_LABELS: Readonly<Record<number, string>> = {
   0x0fff: 'generic',
+  0xf201: 'otp',
   [SECURITY_KEY_ITEM_TYPE]: 'security key',
 };
 
@@ -88,11 +89,16 @@ export const CardResourceItem = observer(
   }: {
     data: Pick<
       ScannedCardItemData,
-      'index' | 'type' | 'alias' | 'publicKey' | 'derivationRecord'
+      | 'index'
+      | 'type'
+      | 'alias'
+      | 'publicKey'
+      | 'derivationRecord'
+      | 'otpKeyIndex'
     >;
     resources?: readonly Pick<
       ScannedCardItemData,
-      'index' | 'type' | 'alias' | 'derivationRecord'
+      'index' | 'type' | 'alias' | 'derivationRecord' | 'otpKeyIndex'
     >[];
     selected?: boolean;
     disabled?: boolean;
@@ -115,11 +121,13 @@ export const CardResourceItem = observer(
         ? item.type
         : (RESOURCE_TYPE_LABELS[typeCode] ??
           `0x${typeCode.toString(16).padStart(4, '0')}`);
-    const sourceIndex = (
-      item.derivationRecord ??
-      resources?.find(resource => resource.index === item.index)
-        ?.derivationRecord
-    )?.index;
+    const sourceIndex =
+      item.otpKeyIndex ??
+      (
+        item.derivationRecord ??
+        resources?.find(resource => resource.index === item.index)
+          ?.derivationRecord
+      )?.index;
     const source = sourceIndex
       ? (resources?.find(resource => resource.index === sourceIndex) ??
         walletStorageService.indexToKeyMap.get(sourceIndex))

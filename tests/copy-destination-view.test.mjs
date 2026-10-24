@@ -198,7 +198,7 @@ for (const [path, names] of [
       'ListItemName',
     ],
   ],
-  ['@ui/step', ['Step', 'Steps']],
+  ['@ui/step', ['Step', 'OperationSteps']],
   ['@ui/operation-complete', ['OperationComplete']],
   [
     '@view/index',
@@ -254,6 +254,7 @@ function hello(number, initialized = true, bundle = false) {
     id: Uint8Array.of(0, 0, 0, number),
     publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(number)),
     bundle,
+    authority: false,
     pins: {access: initialized ? 5 : false, secret: initialized ? 5 : false},
   };
 }
@@ -371,7 +372,11 @@ function mount({
     monoidApplet: {},
     monoidCredentialsStore: {
       createPINSession() {
-        const session = {clear: mock.fn()};
+        const session = {
+          clear: mock.fn(),
+          getPINs: async () => ({}),
+          setPIN: async () => {},
+        };
         state.pinSessions.push(session);
         return session;
       },
@@ -626,6 +631,20 @@ test('remounting while scan cleanup is pending ignores the old redirect and rese
   assert.deepEqual(state.errors, []);
 });
 
+async function enterSetupPINs(state) {
+  for (let i = 0; i < 4; i++) {
+    const input = state.inputs.at(-1);
+    input.finished.resolve(PIN);
+    await state.flush();
+    const next = state.inputs.at(-1);
+    if (
+      next === input ||
+      !/^(Confirm|Set Access)/.test(next.options.placeholder)
+    )
+      break;
+  }
+}
+
 test('an installed destination continues its PIN initialization on the same Copy page', async () => {
   const state = mount({initialized: false});
   state.click('Scan destination card');
@@ -636,13 +655,17 @@ test('an installed destination continues its PIN initialization on the same Copy
 
   assert.equal(state.inputs.length, 1);
   assert.equal(state.sessions[0].backup.targets.length, 0);
-  state.inputs[0].finished.resolve(PIN);
-  await state.flush();
+  await enterSetupPINs(state);
 
   const scan = state.monoidScans[0];
   assert.equal(scan.options.ensureSetup, false);
   scan.validate(state.hello);
-  await scan.callback({}, () => {}, state.hello, new AbortController().signal);
+  await scan.callback(
+    {authenticate: async () => {}},
+    () => {},
+    state.hello,
+    new AbortController().signal,
+  );
   scan.finished.resolve();
   await state.flush();
 
@@ -669,7 +692,7 @@ test('an installed destination continues its PIN initialization on the same Copy
   await state.flush();
   assert.equal(
     state.inputs.length,
-    1,
+    4,
     'the initialized Secret PIN is reused for import',
   );
   const importing = state.monoidScans.at(-1);
@@ -708,8 +731,7 @@ for (const phase of ['PIN input', 'initialization']) {
     let scan;
     if (phase === 'initialization') {
       state.initializationPending = deferred();
-      input.finished.resolve(PIN);
-      await state.flush();
+      await enterSetupPINs(state);
       scan = state.monoidScans[0];
       initializing = scan
         .callback({}, () => {}, state.hello, new AbortController().signal)
@@ -749,7 +771,11 @@ for (const phase of ['PIN input', 'initialization']) {
     );
     state.click('Scan a destination card');
     await state.flush();
-    assert.equal(state.inputs.length, 2, 'returning requires a fresh PIN');
+    assert.equal(
+      state.inputs.length,
+      phase === 'initialization' ? 5 : 2,
+      'returning requires a fresh PIN',
+    );
     state.inputs.at(-1).finished.resolve(undefined);
     await state.flush();
     assert.deepEqual(state.errors, []);
@@ -868,7 +894,7 @@ test('multi-card export advances for every transferred item and keeps the source
       {
         index: getCardDerivationItemIndex(index),
         type: 0x0f01,
-        key: index,
+        metadata: index,
         derivationRecord: {index, wallets: []},
         secret: false,
       },
@@ -1059,7 +1085,10 @@ for (const {canBackToCard, canBackToSafe, backLabel, backRoute} of [
       new AbortController().signal,
     );
     assert.equal(session.backup.complete, true);
-    const pendingSteps = find(state.render(), node => node.type === 'Steps');
+    const pendingSteps = find(
+      state.render(),
+      node => node.type === 'OperationSteps',
+    );
     assert.ok(pendingSteps);
     assert.equal(pendingSteps.props.$exiting, false);
     assert.equal(
@@ -1075,7 +1104,10 @@ for (const {canBackToCard, canBackToSafe, backLabel, backRoute} of [
     scan.finished.resolve();
     await state.flush();
 
-    const exitingSteps = find(state.tree, node => node.type === 'Steps');
+    const exitingSteps = find(
+      state.tree,
+      node => node.type === 'OperationSteps',
+    );
     assert.ok(exitingSteps);
     assert.equal(exitingSteps.props.$exiting, true);
     assert.equal(
@@ -1084,7 +1116,7 @@ for (const {canBackToCard, canBackToSafe, backLabel, backRoute} of [
     );
     // A child spinner finishing must not end the steps' own exit animation.
     exitingSteps.props.onAnimationEnd({target: {}, currentTarget: {}});
-    assert.ok(find(state.render(), node => node.type === 'Steps'));
+    assert.ok(find(state.render(), node => node.type === 'OperationSteps'));
     const element = {};
     exitingSteps.props.onAnimationEnd({
       target: element,
@@ -1092,7 +1124,7 @@ for (const {canBackToCard, canBackToSafe, backLabel, backRoute} of [
     });
     state.render();
     assert.equal(
-      find(state.tree, node => node.type === 'Steps'),
+      find(state.tree, node => node.type === 'OperationSteps'),
       undefined,
     );
     assert.ok(find(state.tree, node => node.type === 'OperationComplete'));
@@ -1142,7 +1174,7 @@ for (const hasRecord of [true, false]) {
               ? [
                   {
                     index: bytes(getCardDerivationItemIndex(index)),
-                    key: bytes(index),
+                    metadata: bytes(index),
                     type: 0x0f01,
                     secret: false,
                   },

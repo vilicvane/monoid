@@ -10,6 +10,14 @@ import {createFlowId} from './@utils/index.js';
 
 export const ROUTE_SCHEMA = {
   features: true,
+  otp: {
+    account: {$state: (state: {index: SafeIndexHex}) => state},
+    $state: (
+      state:
+        | {card?: Pick<ScannedCardData, 'id' | 'publicKey'>; importId?: string}
+        | undefined,
+    ) => state ?? {},
+  },
   securityKey: {
     $state: (
       state: {card?: Pick<ScannedCardData, 'id' | 'publicKey'>} | undefined,
@@ -25,7 +33,8 @@ export const ROUTE_SCHEMA = {
               | 'copy'
               | 'bundle'
               | 'bundleExtension'
-              | 'securityKey';
+              | 'securityKey'
+              | 'otp';
             copyId?: string;
             bundleId?: string;
             extensionId?: string;

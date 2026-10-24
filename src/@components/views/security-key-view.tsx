@@ -39,6 +39,7 @@ import {
 } from '../@ui/details-popup.js';
 import {
   InfoSection,
+  InfoSectionDivider,
   InfoSectionHeader,
   InfoSectionItem,
   InfoSectionItemContent,
@@ -52,7 +53,6 @@ import {
   ListItemName,
   ListSectionTitle,
 } from '../@ui/list.js';
-import {ListSectionCount} from '../@ui/list-section.js';
 import {InfoMessage, WarningMessage} from '../@ui/message-content.js';
 import {
   View,
@@ -88,6 +88,19 @@ const CredentialIcon = styled(AppIcon)`
 
 const Credentials = styled(IconList)`
   flex: none;
+`;
+
+const SeedAlternative = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--color-text-label);
+  font-size: 14px;
+
+  ${InfoSectionDivider} {
+    flex: 1;
+    align-self: center;
+  }
 `;
 
 function CredentialDetails({
@@ -308,6 +321,9 @@ export const SecurityKeyView = observer(
       router.cardApplets({returnTo: 'securityKey'}).$push();
     };
     const needsInstall = missingMonoid || snapshot?.installed === false;
+    const configureLabel = configured
+      ? 'Configure Seed'
+      : 'Enable Security Key on card';
     return (
       <View>
         <ViewHeader>
@@ -329,7 +345,7 @@ export const SecurityKeyView = observer(
                 <Button onClick={applets}>Open Card Applets</Button>
               ) : snapshot?.installed && !configured && !configuration ? (
                 <Button disabled={busy} onClick={() => setPopup('configure')}>
-                  Configure Security Key
+                  {configureLabel}
                 </Button>
               ) : null}
               {configuration &&
@@ -363,10 +379,10 @@ export const SecurityKeyView = observer(
                   id={uint8ArrayToHex(snapshot.hello.id)}
                   description={
                     configuration?.complete
-                      ? 'configured'
+                      ? 'enabled'
                       : configured
                         ? (boundSeed.alias ?? 'Security Key')
-                        : 'not configured'
+                        : 'not enabled'
                   }
                 />
               </Hero>
@@ -381,9 +397,6 @@ export const SecurityKeyView = observer(
               <InfoSection>
                 <InfoSectionHeader>
                   <ListSectionTitle>Credentials</ListSectionTitle>
-                  <ListSectionCount>
-                    {snapshot.credentials.length}
-                  </ListSectionCount>
                 </InfoSectionHeader>
                 {snapshot.credentials.length === 0 ? (
                   <InfoMessage>No credentials</InfoMessage>
@@ -439,7 +452,7 @@ export const SecurityKeyView = observer(
                 disabled={!!configuration}
                 onClick={() => setPopup('configure')}
               >
-                Configure Seed
+                {configureLabel}
               </Button>
             )}
             <Button
@@ -456,22 +469,29 @@ export const SecurityKeyView = observer(
         {popup === 'configure' && snapshot && (
           <DetailsPopup
             onDismiss={() => setPopup(undefined)}
-            aria-label="Configure Security Key"
+            aria-label={configureLabel}
           >
-            <DetailsPopupTitle>Configure Security Key</DetailsPopupTitle>
+            <DetailsPopupTitle>{configureLabel}</DetailsPopupTitle>
             <DetailsPopupDivider />
             {snapshot.seeds.length > 0 && (
-              <CardResourceList $contained data-popup-animation-group>
-                {snapshot.seeds.map(seed => (
-                  <CardResourceItem
-                    key={seed.index}
-                    data={{...seed, type: 'seed'}}
-                    onOpen={() => configure(seed.index)}
-                  />
-                ))}
-              </CardResourceList>
+              <>
+                <CardResourceList $contained data-popup-animation-group>
+                  {snapshot.seeds.map(seed => (
+                    <CardResourceItem
+                      key={seed.index}
+                      data={{...seed, type: 'seed'}}
+                      onOpen={() => configure(seed.index)}
+                    />
+                  ))}
+                </CardResourceList>
+                <SeedAlternative>
+                  <InfoSectionDivider aria-hidden="true" />
+                  or
+                  <InfoSectionDivider aria-hidden="true" />
+                </SeedAlternative>
+              </>
             )}
-            <Button onClick={() => configure('create')}>
+            <Button color="neutral" onClick={() => configure('create')}>
               Create dedicated Seed
             </Button>
           </DetailsPopup>

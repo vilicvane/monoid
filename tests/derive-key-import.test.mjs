@@ -236,7 +236,7 @@ function mount() {
     return {
       index: '0f010000000000000001',
       type: 0x0f01,
-      key: INDEX,
+      metadata: INDEX,
       secret: false,
       derivationRecord: {index: INDEX, wallets},
     };

@@ -63,6 +63,7 @@ function fixture(context) {
       features: route(),
       cardApplets: route(),
       securityKey: route(),
+      otp: route(),
       bitcoin: Object.assign(route(), {
         wallet: Object.assign(route(), {send: route()}),
       }),
@@ -104,6 +105,7 @@ for (const feature of [
   'features',
   'cardApplets',
   'securityKey',
+  'otp',
   'ethereum',
   'solana',
   'bitcoin',
@@ -129,6 +131,7 @@ for (const feature of [
 for (const feature of [
   'cardApplets',
   'securityKey',
+  'otp',
   'ethereum',
   'solana',
   'bitcoin',

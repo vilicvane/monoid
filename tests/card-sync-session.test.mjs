@@ -32,6 +32,7 @@ function mockCard(id, bundle = false, entries = []) {
       id: bytes(`0000000${id}`),
       publicKey: Uint8Array.from([4, ...new Array(64).fill(id)]),
       bundle: bundle === false ? false : new Uint8Array(32).fill(bundle),
+      authority: false,
       pins: {access: 5, secret: 5},
     },
     async authenticate({secret, pin}) {
@@ -43,11 +44,11 @@ function mockCard(id, bundle = false, entries = []) {
       calls.push(['list']);
       return {
         items: [...records.values()].map(
-          ({index, type, alias, key, secret}) => ({
+          ({index, type, alias, metadata, secret}) => ({
             index: bytes(index),
             type,
             alias,
-            key: key === undefined ? undefined : bytes(key),
+            metadata: metadata === undefined ? undefined : bytes(metadata),
             secret,
           }),
         ),
@@ -59,7 +60,8 @@ function mockCard(id, bundle = false, entries = []) {
       const item = records.get(value);
       if (!item) throw new CBORAppletError({code: 'NOT_FOUND'});
       return {
-        key: item.key === undefined ? undefined : bytes(item.key),
+        metadata:
+          item.metadata === undefined ? undefined : bytes(item.metadata),
         alias: item.alias,
         secret: item.secret,
       };
@@ -88,7 +90,8 @@ function mockCard(id, bundle = false, entries = []) {
       const item = records.get(hex(index));
       calls.push(['export', item.index]);
       return {
-        key: item.key === undefined ? undefined : bytes(item.key),
+        metadata:
+          item.metadata === undefined ? undefined : bytes(item.metadata),
         alias: item.alias,
         data: new TextEncoder().encode(
           JSON.stringify({sender: hex(card.hello.publicKey), item}),
@@ -112,8 +115,8 @@ function mockCard(id, bundle = false, entries = []) {
         'Import must preserve authenticated alias',
       );
       assert.equal(
-        request.key === undefined ? undefined : hex(request.key),
-        incoming.key,
+        request.metadata === undefined ? undefined : hex(request.metadata),
+        incoming.metadata,
       );
       const existing = records.get(incoming.index);
       if (existing) {
@@ -143,7 +146,8 @@ function mockCard(id, bundle = false, entries = []) {
       );
       const item = {
         index,
-        key: request.key === undefined ? undefined : hex(request.key),
+        metadata:
+          request.metadata === undefined ? undefined : hex(request.metadata),
         alias: request.alias,
         secret: false,
         data: hex(request.data),
@@ -187,6 +191,69 @@ const write = (session, card, pin = PIN) =>
 const mutationCalls = card =>
   card.calls.filter(([kind]) => ['create', 'set', 'import'].includes(kind));
 
+test('OTP sync keeps account metadata inside the bundle and resumes its interrupted create after the secret', async () => {
+  const hmac = {
+    index: '05140000000000000001',
+    type: 'hmac',
+    secret: true,
+    data: '1234',
+  };
+  const account = {
+    index: 'f2010000000000000001',
+    type: 0xf201,
+    secret: false,
+    metadata: '010106001e',
+    data: hmac.index,
+    alias: 'Example',
+  };
+  const source = mockCard(1, 1, [account, hmac]);
+  const target = mockCard(2, 1);
+  const unrelated = mockCard(3, 2);
+  const session = new CardSyncSession();
+  await add(session, source);
+  await add(session, target);
+  await add(session, unrelated);
+  assert.equal(
+    source.calls.some(([kind]) => kind === 'viewKey'),
+    false,
+  );
+  session.prepare();
+  let interrupted = false;
+  target.afterMutation = async kind => {
+    if (kind === 'create' && !interrupted) {
+      interrupted = true;
+      throw new Error('Lost response');
+    }
+  };
+  await assert.rejects(write(session, target), /Lost response/);
+  assert.deepEqual(
+    mutationCalls(target).map(([kind, index]) => [kind, index]),
+    [
+      ['import', hmac.index],
+      ['create', account.index],
+    ],
+  );
+  await write(session, target);
+  assert.equal(
+    mutationCalls(target).length,
+    2,
+    'do not replay acknowledged account creation',
+  );
+  assert.equal(target.records.get(account.index).data, hmac.index);
+  assert.equal(
+    session.cards
+      .find(card => card.publicKey === hex(target.hello.publicKey))
+      .items.find(item => item.index === account.index).otpKeyIndex,
+    hmac.index,
+  );
+  assert.equal(
+    session.cards.find(
+      card => card.publicKey === hex(unrelated.hello.publicKey),
+    ).items.length,
+    0,
+  );
+});
+
 test('public credential scopes coexist across Bundles without grant or Seed migration', async () => {
   const firstCredential = credential(1);
   const secondCredential = credential(2, {scope: 2});
@@ -201,7 +268,7 @@ test('public credential scopes coexist across Bundles without grant or Seed migr
   for (const card of [first, second, third]) {
     for (const item of [firstCredential, secondCredential]) {
       assert.equal(card.records.get(item.index).data, item.data);
-      assert.equal(card.records.get(item.index).key, item.key);
+      assert.equal(card.records.get(item.index).metadata, item.metadata);
     }
     assert.ok(
       mutationCalls(card).every(
@@ -214,18 +281,25 @@ test('public credential scopes coexist across Bundles without grant or Seed migr
   assert.equal(third.records.has(keyIndex), false);
 });
 
-test('Sync rejects old and malformed credential collection without publishing a partial card', async () => {
+test('Sync skips incompatible credentials and retains independent items', async () => {
   for (const item of [
     credential(1, {fields: [[10, undefined]]}),
     credential(1, {fields: [[10, new Uint8Array(31)]]}),
-    credential(1, {key: '00'.repeat(64)}),
+    credential(1, {metadata: '00'.repeat(64)}),
     credential(1, {secret: true}),
   ]) {
     const session = new CardSyncSession();
     const card = mockCard(1, 1, [plain(), item]);
-    await assert.rejects(add(session, card), /invalid Security Key credential/);
-    assert.equal(session.cards.length, 0);
-    assert.equal(session.confirmedSnapshot, undefined);
+    await add(session, card);
+    assert.deepEqual(
+      session.cards[0].items.map(item => item.index),
+      [publicIndex],
+    );
+    assert.deepEqual(session.cards[0].skippedIndexes, [item.index]);
+    assert.deepEqual(
+      session.confirmedSnapshot.items.map(item => item.index),
+      [publicIndex],
+    );
     assert.deepEqual(mutationCalls(card), []);
     if (item.secret)
       assert.equal(
@@ -239,6 +313,34 @@ test('Sync rejects old and malformed credential collection without publishing a 
       false,
     );
   }
+});
+
+test('Sync leaves an incompatible destination record intact while completing other items', async () => {
+  const valid = credential(1);
+  const incompatible = credential(1, {fields: [[1, 2]]});
+  const source = mockCard(1, 1, [valid, plain()]);
+  const target = mockCard(2, 1, [incompatible]);
+  const session = new CardSyncSession();
+  await add(session, source);
+  await add(session, target);
+  session.prepare();
+  await write(session, target);
+  assert.equal(session.phase, 'complete');
+  assert.deepEqual(target.records.get(valid.index), incompatible);
+  assert.equal(target.records.get(publicIndex).data, 'aa');
+  assert.deepEqual(mutationCalls(target), [['create', publicIndex]]);
+});
+
+test('incompatible record filtering does not swallow transport failures', async () => {
+  const record = credential(1);
+  const card = mockCard(1, 1, [record, plain()]);
+  const failure = new Error('Card disconnected');
+  card.get = async () => {
+    throw failure;
+  };
+  const session = new CardSyncSession();
+  await assert.rejects(add(session, card), error => error === failure);
+  assert.equal(session.cards.length, 0);
 });
 
 test('missing Secret PIN stops before reading or exporting card contents', async () => {
@@ -388,7 +490,7 @@ test('mixed cards sync public data globally, write roots before records, and pre
   const companion = {
     index: getCardDerivationItemIndex(keyIndex),
     type: 0x0f01,
-    key: keyIndex,
+    metadata: keyIndex,
     secret: false,
     data: hex(encodeCardDerivationRecord(record)),
   };
@@ -736,7 +838,7 @@ test('recovery freshly exports merged peer contents, including the target-only S
   const companion = addressType => ({
     index: getCardDerivationItemIndex(commonIndex),
     type: 0x0f01,
-    key: commonIndex,
+    metadata: commonIndex,
     secret: false,
     data: hex(
       encodeCardDerivationRecord({
@@ -803,7 +905,7 @@ test('recovery freshly exports merged peer contents, including the target-only S
   for (const item of recovery.items) {
     await restored.importItem({
       index: bytes(item.index),
-      key: item.key === undefined ? undefined : bytes(item.key),
+      metadata: item.key === undefined ? undefined : bytes(item.key),
       alias: item.alias,
       data: bytes(item.data),
     });
@@ -840,7 +942,7 @@ test('three-card recovery merges every Secret and derivation before exporting th
   const record = entries => ({
     index: recordIndex,
     type: 0x0f01,
-    key: seedIndex,
+    metadata: seedIndex,
     secret: false,
     data: hex(encodeCardDerivationRecord({index: seedIndex, wallets: entries})),
   });
@@ -881,10 +983,10 @@ test('three-card recovery merges every Secret and derivation before exporting th
   ];
   const contents = entries =>
     [...entries]
-      .map(({index, secret, key, alias, data}) => ({
+      .map(({index, secret, metadata, alias, data}) => ({
         index,
         secret,
-        key,
+        metadata,
         alias,
         data,
       }))
@@ -922,7 +1024,7 @@ test('three-card recovery merges every Secret and derivation before exporting th
   for (const item of recovery.items) {
     await restored.importItem({
       index: bytes(item.index),
-      key: item.key === undefined ? undefined : bytes(item.key),
+      metadata: item.key === undefined ? undefined : bytes(item.key),
       alias: item.alias,
       data: bytes(item.data),
     });
@@ -935,7 +1037,7 @@ test('three-card recovery merges every Secret and derivation before exporting th
 test('the last of multiple peers can export recovery after completion releases every cached payload', async () => {
   const session = new CardSyncSession();
   const entries = [
-    root({key: '', alias: ''}),
+    root({metadata: '', alias: ''}),
     root({index: '03010000000000000002', data: '34'}),
     plain(),
   ];
@@ -978,7 +1080,7 @@ test('the last of multiple peers can export recovery after completion releases e
   for (const item of recovery.items) {
     await restored.importItem({
       index: bytes(item.index),
-      key: item.key === undefined ? undefined : bytes(item.key),
+      metadata: item.key === undefined ? undefined : bytes(item.key),
       alias: item.alias,
       data: bytes(item.data),
     });
@@ -989,7 +1091,7 @@ test('the last of multiple peers can export recovery after completion releases e
 
 test('an unchanged peer still exports a complete recovery after sync payloads are released', async () => {
   const session = new CardSyncSession();
-  const entries = [root({key: '', alias: ''}), plain()];
+  const entries = [root({metadata: '', alias: ''}), plain()];
   const first = recoveryCard(1, 1, entries);
   const peer = recoveryCard(2, 1, entries);
   await add(session, first);
@@ -1028,6 +1130,25 @@ test('recovery refuses an unfinished peer before issuing any export', async () =
   await assert.rejects(
     session.exportRecovery(peer, peer.hello, identity(first), signal()),
     /Sync the card first/,
+  );
+  assert.deepEqual(peer.calls, []);
+});
+
+test('recovery refuses a partial snapshot even though ordinary sync skipped unsupported records', async () => {
+  const session = new CardSyncSession();
+  const first = recoveryCard(1, 1, [
+    plain(),
+    credential(1, {fields: [[1, 2]]}),
+  ]);
+  const peer = recoveryCard(2, 1, [plain()]);
+  await add(session, first);
+  await add(session, peer);
+  session.prepare();
+  assert.equal(session.phase, 'complete');
+  peer.calls.length = 0;
+  await assert.rejects(
+    session.exportRecovery(peer, peer.hello, identity(first), signal()),
+    /Cannot back up unsupported items/,
   );
   assert.deepEqual(peer.calls, []);
 });
@@ -1083,7 +1204,7 @@ for (const peerBundle of [false, 2]) {
   });
 }
 
-for (const field of ['alias', 'key']) {
+for (const field of ['alias', 'metadata']) {
   test(`recovery rejects changed ${field} without accepting the exported item`, async () => {
     const session = new CardSyncSession();
     const first = recoveryCard(1, 1, [plain()]);

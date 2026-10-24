@@ -155,7 +155,7 @@ for (const [path, names] of [
     '@ui/details-popup',
     ['DetailsPopup', 'DetailsPopupDivider', 'DetailsPopupTitle'],
   ],
-  ['@ui/step', ['Step', 'Steps']],
+  ['@ui/step', ['Step', 'OperationSteps']],
   ['@ui/message-content', ['InfoMessage']],
   ['@ui/operation-complete', ['OperationComplete']],
   [
@@ -215,6 +215,7 @@ function hello(number, bundle = false) {
     id: Uint8Array.of(0, 0, 0, number),
     publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(number)),
     bundle,
+    authority: false,
     pins: {access: 5, secret: 5},
   };
 }
@@ -531,7 +532,7 @@ test('a wrong-card scan uses the shared error handler without adding page conten
     find(state.tree, node => node.props?.role === 'status'),
     undefined,
   );
-  const steps = find(state.tree, node => node.type === 'Steps');
+  const steps = find(state.tree, node => node.type === 'OperationSteps');
   assert.equal(steps.props.children.length, 2);
   assert.ok(steps.props.children.every(node => node.type === 'Step'));
 });
@@ -776,7 +777,7 @@ test('the second round accepts pending cards in either order and completes only 
   assert.equal(back.props.color, 'neutral');
   assert.deepEqual(state.backs, []);
 
-  const steps = find(state.tree, node => node.type === 'Steps');
+  const steps = find(state.tree, node => node.type === 'OperationSteps');
   assert.equal(steps.props.$exiting, true);
   steps.props.onAnimationEnd({target: {}, currentTarget: {}});
   assert.equal(state.flow.stepsExited, false);
@@ -987,7 +988,7 @@ for (const contents of ['empty', 'identical public']) {
       undefined,
     );
     assert.equal(
-      find(state.tree, node => node.type === 'Steps').props.$exiting,
+      find(state.tree, node => node.type === 'OperationSteps').props.$exiting,
       false,
     );
     back.props.onClick();

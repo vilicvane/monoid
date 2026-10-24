@@ -84,19 +84,20 @@ const hello = {
   id: bytes('01020304'),
   publicKey: identity,
   bundle: false,
+  authority: false,
   pins: {access: 5, secret: 5},
 };
 const sourceItems = [
   {index: bytes('02400000000000000001'), secret: true},
   {
     index: bytes('0f010000000000000002'),
-    key: bytes(''),
+    metadata: bytes(''),
     alias: '',
     secret: false,
   },
   {
     index: bytes('ffff0000000000000003'),
-    key: bytes('aa'),
+    metadata: bytes('aa'),
     alias: 'Note',
     secret: false,
   },
@@ -176,7 +177,7 @@ function cardFixture() {
       const data = new Uint8Array(this.exportedBytes);
       data[0] = 1;
       data[1] = this.exports.length;
-      return {key: item.key, alias: item.alias, data};
+      return {metadata: item.metadata, alias: item.alias, data};
     },
     async importItem(request) {
       this.imports.push(request);
@@ -200,7 +201,7 @@ function bundleRecovery(card) {
     source,
     items: card.items.map(item => ({
       index: hex(item.index),
-      key: item.key === undefined ? undefined : hex(item.key),
+      key: item.metadata === undefined ? undefined : hex(item.metadata),
       alias: item.alias,
       secret: item.secret,
       data: hex(data),
@@ -1171,8 +1172,10 @@ test('an uncertain Import keeps the archive and explicit retry reimports the com
       ...sourceItems.map(item => hex(item.index)),
     ],
   );
-  assert.equal(card.imports[2].key, undefined);
-  assert.deepEqual(card.imports[3].key, bytes(''));
+  assert.equal(card.imports[2].metadata, undefined);
+  assert.deepEqual(card.imports[3].metadata, bytes(''));
+  assert.deepEqual(card.imports[4].metadata, bytes('aa'));
+  assert.ok(card.imports.every(item => !('key' in item)));
   assert.equal(card.imports[3].alias, '');
   assert.equal(service.get(operation.id), undefined);
   assert.deepEqual((await storage.get()).operations, []);
@@ -1344,6 +1347,15 @@ test('an active Fresh operation takes precedence over a Bundle recovery reminder
   replacement = async () => structuredClone(card.state);
   service = await saveLegacyManual(storage, ordinary);
   const fresh = await service.prepareFresh(information);
+  assert.equal(fresh.card.id, hex(card.state.id));
+  replacement = async (_session, options) => {
+    assert.equal(options.expectedCardId, hex(card.state.id));
+    await options.onCheckpoint('remove-monoid-instance');
+    throw new Error('Tag lost');
+  };
+  await assert.rejects(service.replace('session', fresh.id), /Tag lost/);
+  const resumed = await CardMaintenanceService.create(storage);
+  assert.equal(resumed.get(fresh.id).card.id, hex(card.state.id));
   assert.equal(
     service.matchOperation({hello: card.state, cardInformation: information})
       .id,
@@ -1373,6 +1385,50 @@ test('fresh reinstall works without Hello and clears only its own completed oper
   assert.equal(service.get(first.id), undefined);
   assert.equal(service.operations.length, 1);
   assert.equal(service.operations[0].id, second.id);
+});
+
+test('Fresh retains the original Card ID and chosen Authority across interrupted replacement', async () => {
+  const storage = storageFixture();
+  const service = await CardMaintenanceService.create(storage);
+  const options = {
+    authorityUrl: 'https://chosen-authority.example/api',
+    authorityPublicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(7)),
+  };
+  const operation = await service.prepareFresh(
+    information,
+    hello,
+    undefined,
+    [],
+    options,
+  );
+  replacement = async (_session, actual) => {
+    assert.equal(actual.expectedCardId, hex(hello.id));
+    assert.equal(actual.authorityUrl, options.authorityUrl);
+    assert.deepEqual(actual.authorityPublicKey, options.authorityPublicKey);
+    await actual.onCheckpoint('remove-monoid-instance');
+    throw new Error('Tag lost');
+  };
+  await assert.rejects(service.replace('session', operation.id), /Tag lost/);
+  const resumed = await CardMaintenanceService.create(storage);
+  replacement = async (_session, actual) => {
+    assert.equal(actual.expectedCardId, hex(hello.id));
+    assert.equal(actual.authorityUrl, options.authorityUrl);
+    assert.deepEqual(actual.authorityPublicKey, options.authorityPublicKey);
+    assert.equal(actual.checkpoint, 'remove-monoid-instance');
+    return structuredClone(hello);
+  };
+  await resumed.replace('session', operation.id);
+});
+
+test('Fresh rejects incomplete Authority settings instead of silently omitting them', async () => {
+  const service = await CardMaintenanceService.create(storageFixture());
+  await assert.rejects(
+    service.prepareFresh(information, undefined, undefined, [], {
+      authorityUrl: 'https://authority.example',
+    }),
+    /required together/,
+  );
+  assert.equal(service.operations.length, 0);
 });
 
 for (const failure of ['installation record', 'operation removal']) {
@@ -1902,6 +1958,82 @@ test('all restored items and their manifest are verified before any applet grant
   ]);
   assert.deepEqual(events, ['item', 'item', 'item', 'list', 'grant']);
 });
+
+for (const secret of [true, false]) {
+  test(`HMAC authorization restores the exact ${secret ? 'protected' : 'readable'} key without requesting its public key`, async () => {
+    const service = await CardMaintenanceService.create(storageFixture());
+    const card = cardFixture();
+    const index = bytes('05140000000000000001');
+    const otpAid = bytes('f06d6f6e6f69640501');
+    card.items.push({index, secret});
+    card.grants = [
+      {aid: otpAid, types: [[-3583, false]], keys: [{index, type: 'hmac'}]},
+    ];
+    const operation = await service.prepare(card, {
+      mode: 'update',
+      cardInformation: information,
+      appletAid: hex(aid),
+    });
+    await service.replace('session', operation.id);
+    card.grants = [];
+    card.viewKey = () => assert.fail('HMAC has no public key');
+    await service.restore(card, operation.id, undefined, undefined, [
+      hex(otpAid),
+    ]);
+    assert.deepEqual(card.grants[0].keys, [{index, type: 'hmac'}]);
+    assert.equal(card.items.at(-1).secret, secret);
+    assert.equal(service.get(operation.id), undefined);
+  });
+}
+
+test('a restored HMAC key with a changed secret flag prevents authorization and retains recovery', async () => {
+  const service = await CardMaintenanceService.create(storageFixture());
+  const card = cardFixture();
+  const index = bytes('05140000000000000001');
+  card.items.push({index, secret: true});
+  card.grants = [
+    {aid: bytes('f06d6f6e6f69640501'), keys: [{index, type: 'hmac'}]},
+  ];
+  const operation = await service.prepare(card, {
+    mode: 'update',
+    cardInformation: information,
+    appletAid: hex(aid),
+  });
+  await service.replace('session', operation.id);
+  card.items.at(-1).secret = false;
+  card.setAppletGrant = () =>
+    assert.fail('Restore must verify protection first');
+  await assert.rejects(service.restore(card, operation.id), /does not match/);
+  assert(service.get(operation.id).archive);
+});
+
+for (const index of ['02400000000000000001', '05000000000000000001']) {
+  test(`an invalid HMAC grant source ${index.slice(0, 4)} stops before any authorization is restored`, async () => {
+    const service = await CardMaintenanceService.create(storageFixture());
+    const card = cardFixture();
+    const otpAid = bytes('f06d6f6e6f69640501');
+    if (!card.items.some(item => hex(item.index) === index))
+      card.items.push({index: bytes(index), secret: true});
+    card.grants = [
+      {aid: bytes('a0000006472f0001'), types: [[-3839, true]]},
+      {aid: otpAid, keys: [{index: bytes(index), type: 'hmac'}]},
+    ];
+    const operation = await service.prepare(card, {
+      mode: 'update',
+      cardInformation: information,
+      appletAid: hex(aid),
+    });
+    await service.replace('session', operation.id);
+    card.grants = [];
+    card.setAppletGrant = () =>
+      assert.fail('Invalid grants must be preflighted');
+    await assert.rejects(
+      service.restore(card, operation.id),
+      /Invalid HMAC key/,
+    );
+    assert(service.get(operation.id).archive);
+  });
+}
 
 for (const missing of ['seed', 'key', 'applet']) {
   test(`preflighting every grant prevents all authorization writes when a later ${missing} is missing`, async () => {

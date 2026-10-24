@@ -1,0 +1,170 @@
+:root {
+  font-family:
+    Inter,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+  color: #172b29;
+  background: #f1f5f2;
+  font-synthesis: none;
+  line-height: 1.6;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+main {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 52px 24px 32px;
+}
+header {
+  margin-bottom: 32px;
+}
+.eyebrow {
+  letter-spacing: 0.16em;
+  font-size: 12px;
+  color: #367065;
+  font-weight: 700;
+}
+h1 {
+  font-size: 44px;
+  letter-spacing: -0.04em;
+  margin: 0;
+  line-height: 1.2;
+}
+h2 {
+  font-size: 19px;
+  margin: 0;
+}
+p {
+  color: #59706b;
+  margin: 12px 0;
+}
+section {
+  background: white;
+  border: 1px solid #dce5df;
+  border-radius: 18px;
+  padding: 24px;
+  margin: 16px 0;
+  box-shadow: 0 3px 10px #1b372606;
+}
+.section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.badge {
+  font-size: 12px;
+  border-radius: 30px;
+  padding: 4px 12px;
+  background: #edf3ef;
+  color: #376459;
+}
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+button,
+input {
+  font: inherit;
+  border-radius: 9px;
+  padding: 10px 16px;
+}
+button {
+  border: 1px solid #225e4f;
+  background: #225e4f;
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+.secondary {
+  background: white;
+  color: #225e4f;
+  border-color: #d1ded7;
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+button:focus-visible,
+input:focus-visible {
+  outline: 3px solid #95cbb5;
+  outline-offset: 2px;
+}
+input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid #d1ded7;
+  background: #fafcfb;
+  font-size: 15px;
+}
+.namespace {
+  padding: 18px 0;
+  border-top: 1px solid #e6ece8;
+}
+.namespace:first-child {
+  margin-top: 20px;
+}
+.namespace form {
+  display: flex;
+  gap: 10px;
+}
+.namespace code {
+  display: block;
+  font-size: 12px;
+  word-break: break-all;
+  color: #677d76;
+  margin: 8px 0;
+}
+.source {
+  font-size: 12px;
+  font-weight: 600;
+  color: #367065;
+  margin-bottom: 8px;
+}
+.empty {
+  padding: 12px 0;
+  color: #8a9c95;
+}
+#status,
+#time-status {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+  min-height: 22px;
+}
+footer {
+  font-size: 12px;
+  color: #84968e;
+  margin: 24px 0;
+}
+header p:last-child {
+  font-size: 16px;
+}
+@media (max-width: 520px) {
+  main {
+    padding: 28px 16px;
+  }
+  section {
+    padding: 20px;
+  }
+  h1 {
+    font-size: 36px;
+  }
+  .namespace form {
+    flex-wrap: wrap;
+  }
+  .namespace input {
+    width: 100%;
+  }
+  .section-title {
+    flex-wrap: wrap;
+  }
+}

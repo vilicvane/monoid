@@ -105,6 +105,7 @@ function mount(kind = 'Access', {unlock, pinSession} = {}) {
     id: bytes(state.card.id),
     publicKey: bytes(state.card.publicKey),
     bundle: false,
+    authority: false,
     pins: {access: 5, secret: 5},
   };
   state.applet = {

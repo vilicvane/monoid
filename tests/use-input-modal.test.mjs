@@ -64,7 +64,7 @@ mock.module('react-dom', {
 });
 mock.module('styled-components', {
   namedExports: {
-    styled: {div: () => 'div', input: () => 'input'},
+    styled: {div: () => 'div', input: () => 'input', label: () => 'label'},
   },
 });
 mock.module('../.bld/app/@entrances.js', {
@@ -91,9 +91,44 @@ mock.module('../.bld/app/@components/@ui/popup-layout.js', {
   namedExports: {popupContentPaddingCSS: ''},
 });
 
+mock.module('../.bld/app/@components/@key/key-checkbox.js', {
+  namedExports: {KeyCheckbox: 'checkbox'},
+});
+
 const {useInputModal} = await import(
   '../.bld/app/@components/@ui/use-input-modal.js'
 );
+
+test('checkbox changes keep the input instance and keyboard; stale controls cannot change the next prompt', async () => {
+  const state = mount();
+  const changes = [];
+  const first = state.show({
+    checkbox: {
+      label: 'Set a different Access PIN',
+      defaultChecked: true,
+      onChange: value => changes.push(value),
+    },
+  });
+  state.render();
+  const key = state.container().key;
+  const checkbox = find(state.content, node => node.type === 'checkbox');
+  assert.equal(checkbox.props.checked, true);
+  checkbox.props.onChange({target: {checked: false}});
+  state.render();
+  assert.equal(
+    find(state.content, node => node.type === 'checkbox').props.checked,
+    false,
+  );
+  assert.equal(state.container().key, key);
+  assert.equal(keyboardRequests[0].cancelled, false);
+  const second = state.show({placeholder: 'Confirm Secret PIN'});
+  state.render();
+  assert.equal(await first, undefined);
+  checkbox.props.onChange({target: {checked: true}});
+  assert.deepEqual(changes, [false]);
+  state.unmount();
+  assert.equal(await second, undefined);
+});
 
 function find(node, predicate) {
   if (!node) return undefined;
@@ -273,7 +308,7 @@ test('abort during exit discards the submitted value and stale events cannot clo
   state.render();
   const key = state.container().key;
   assert.notEqual(key, oldContainer.key);
-  oldInput.props.onBlur();
+  oldInput.props.onBlur({relatedTarget: null});
   const target = {};
   oldContainer.props.onAnimationEnd({target, currentTarget: target});
   state.render();
@@ -352,9 +387,9 @@ test('abort, replacement, blur and unmount cancel keyboard work with the owning 
   assert.equal(keyboardRequests[1].cancelled, true);
   assert.equal(await second, undefined);
   state.render();
-  oldInput.props.onBlur();
+  oldInput.props.onBlur({relatedTarget: null});
   assert.equal(keyboardRequests[2].cancelled, false);
-  state.input().props.onBlur();
+  state.input().props.onBlur({relatedTarget: null});
   assert.equal(keyboardRequests[2].cancelled, true);
   state.render();
   state.finishAnimation();

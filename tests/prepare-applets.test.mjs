@@ -84,6 +84,14 @@ const applets = [
     optional: true,
     dependencies: ['library', 'monoid'],
   },
+  {
+    name: 'monoidotp',
+    stage: 'otp',
+    packageAid: 'f06d6f6e6f696405',
+    appletAid: 'f06d6f6e6f69640501',
+    optional: true,
+    dependencies: ['identity', 'library', 'monoid'],
+  },
 ];
 const component = (tag, body) =>
   Buffer.from([tag, body.length >> 8, body.length & 255, ...body]);
@@ -283,7 +291,7 @@ test('CAP without optional Export remains loadable', () => {
   assert(readAppletPackage(zip(), target).code.length > 0);
 });
 
-test('preparation bundles the required packages and optional Security Key in dependency order', async () => {
+test('preparation bundles required packages and optional Security Key and OTP in dependency order', async () => {
   const names = applets.map(applet => applet.name);
 
   for (const applet of applets) {
@@ -319,7 +327,7 @@ test('preparation bundles the required packages and optional Security Key in dep
     [
       ...writtenFiles.get('@applet-bundle.ts').matchAll(/stage: '([^']+)'/g),
     ].map(match => match[1]),
-    ['identity', 'library', 'monoid', 'security-key'],
+    ['identity', 'library', 'monoid', 'security-key', 'otp'],
   );
   assert(names.every(name => writtenFiles.has(`${name}.bin`)));
   for (const entry of manifest) {
@@ -353,7 +361,11 @@ test('preparation bundles the required packages and optional Security Key in dep
     descriptor,
     /stage: 'monoid'.*dependencies: \['identity', 'library'\]/,
   );
-  assert.equal([...descriptor.matchAll(/optional: true/g)].length, 1);
+  assert.match(
+    descriptor,
+    /stage: 'otp'.*appletAid: 'f06d6f6e6f69640501'.*optional: true.*dependencies: \['identity', 'library', 'monoid'\]/,
+  );
+  assert.equal([...descriptor.matchAll(/optional: true/g)].length, 2);
   assert(
     !writtenFiles.get('@applet-bundle.ts').includes("appletAid: 'undefined'"),
   );

@@ -10,13 +10,13 @@ export const appletBundle: readonly BundledApplet[] | undefined = [
       '../../@assets/applets/monoididentity.bin',
       import.meta.url,
     ),
-    sha256: 'ff28eec49b8b608f7268d02ec9478812f33b2653194ca068eb45a0fd4d6e5e44',
+    sha256: 'ddc763d2879a573991a8c5009081ed7f4947f0f5f97c98d494eb0dc2ff80908a',
   },
   {
     stage: 'library',
     packageAid: 'f06d6f6e6f696404',
     codeURL: new URL('../../@assets/applets/monoidlib.bin', import.meta.url),
-    sha256: '1597f1694b2a94a7b2ceb880f310da9f7b5be14a618f94fc8f4183cba880d784',
+    sha256: '341229b2cc81774f26fed55625c3666ae61468cd2cffeb4a11df909c67ba1c78',
   },
   {
     stage: 'monoid',
@@ -24,7 +24,7 @@ export const appletBundle: readonly BundledApplet[] | undefined = [
     appletAid: 'f06d6f6e6f69640201',
     dependencies: ['identity', 'library'],
     codeURL: new URL('../../@assets/applets/monoid.bin', import.meta.url),
-    sha256: 'bcc4eac0cbd3a8190a56d71a65a483400bf47e419aa72736a8eeeb70f005015d',
+    sha256: '140498bdb717ea36126937298f9f2dc7b93cc8a1b75656e3c37bfd213324dc3b',
   },
   {
     stage: 'security-key',
@@ -37,6 +37,15 @@ export const appletBundle: readonly BundledApplet[] | undefined = [
       '../../@assets/applets/monoidsecuritykey.bin',
       import.meta.url,
     ),
-    sha256: 'f579041e1f0263fa95d9619681c71131393aa761f5f89abf5ac80757fb662dee',
+    sha256: '618dbb4123a066d093d2a3e1511663c2c46ba13b2004c5c12e61dff1d3e1faef',
+  },
+  {
+    stage: 'otp',
+    packageAid: 'f06d6f6e6f696405',
+    appletAid: 'f06d6f6e6f69640501',
+    optional: true,
+    dependencies: ['identity', 'library', 'monoid'],
+    codeURL: new URL('../../@assets/applets/monoidotp.bin', import.meta.url),
+    sha256: '7ae88369d81e91dda5785599903fb1bf0572f80524b62022ff655d0b50919f89',
   },
 ];

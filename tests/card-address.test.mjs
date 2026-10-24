@@ -217,25 +217,30 @@ test('card scans retain metadata, wallet addresses and native P-256 public keys 
     {
       type: 'entropy',
       index: new Uint8Array([5]),
-      key: new Uint8Array(),
+      metadata: new Uint8Array(),
       alias: '',
       secret: true,
     },
     {
       type: 'secp256r1',
       index: new Uint8Array([6]),
-      key: bytes('abcd'),
+      metadata: bytes('abcd'),
       secret: false,
     },
     {
       type: 'note',
       index: new Uint8Array([7]),
-      key: new Uint8Array(),
+      metadata: new Uint8Array(),
       alias: '',
       secret: false,
     },
     {type: 'unknown', index: new Uint8Array([8]), secret: true},
-    {type: 123, index: new Uint8Array([9]), key: bytes('00'), secret: false},
+    {
+      type: 123,
+      index: new Uint8Array([9]),
+      metadata: bytes('00'),
+      secret: false,
+    },
     {index: new Uint8Array([10]), secret: true},
   );
   const requests = [];
@@ -280,8 +285,8 @@ test('card scans retain metadata, wallet addresses and native P-256 public keys 
       index: Buffer.from(item.index).toString('hex'),
       ...(item.type !== undefined && {type: item.type}),
       ...(item.alias !== undefined && {alias: item.alias}),
-      ...(item.key !== undefined && {
-        key: Buffer.from(item.key).toString('hex'),
+      ...(item.metadata !== undefined && {
+        metadata: Buffer.from(item.metadata).toString('hex'),
       }),
       secret: item.secret,
     });
@@ -317,7 +322,7 @@ test('initial scans retain unsupported wallet keys without an address but propag
   const items = ['seed', 'ed25519'].map((type, index) => ({
     type,
     index: new Uint8Array([index + 1]),
-    key: new Uint8Array(),
+    metadata: new Uint8Array(),
     alias: '',
     secret: true,
   }));
@@ -344,7 +349,7 @@ test('initial scans retain unsupported wallet keys without an address but propag
   assert.deepEqual(scanned[0], {
     type: 'seed',
     index: '01',
-    key: '',
+    metadata: '',
     alias: '',
     secret: true,
     derivations: [],
@@ -388,7 +393,7 @@ for (const [type, index] of [
         list: async () => ({
           items: [
             {type, index: bytes(index), secret: true},
-            {index: bytes(recordIndex), key: bytes(index), secret: false},
+            {index: bytes(recordIndex), metadata: bytes(index), secret: false},
           ],
         }),
         get: async request => {
@@ -426,7 +431,7 @@ for (const [type, index, addressType, publicKey] of [
       {
         list: async () => ({
           items: [
-            {index: bytes(recordIndex), key: bytes(index), secret: false},
+            {index: bytes(recordIndex), metadata: bytes(index), secret: false},
             {type, index: bytes(index), secret: true},
           ],
         }),

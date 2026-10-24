@@ -20,7 +20,7 @@
 
 派生记录的关联以完整源 index 及经过校验的记录内容为准。找不到主资源的附属记录不能作为普通全局数据传播。不同范围中碰巧相同的 index 或公钥不能连接两个范围；某目标卡已有相同 index、但属于不同范围时，也不能借覆盖或改 `secret` 标记完成同步。
 
-当前 App 定义并识别的附属类型为 `0x0f01`。新增附属类型时必须同时定义其主资源关联与同步范围；普通资源的 lookup key 不能未经类型规则就被解释成这种关联。
+当前 App 定义并识别的附属类型包括地址记录 `0x0f01` 和 OTP 账户记录 `0xf201`。OTP 账户通过正文中的 HMAC index 关联主资源，metadata 保存算法、位数和周期配置；两者遵循同一 Secret 同步范围。新增附属类型时必须同时定义其主资源关联与同步范围；普通资源的 metadata 不能未经类型规则就被解释成这种关联。
 
 `0xf101` 是公共凭证记录，不是 Seed 的附属资源。它携带的凭证 scope 不改变上面的 Secret 同步范围，也不能用于反推或自动携带某个本地 Seed。
 
@@ -52,11 +52,11 @@ Alias 取该范围内、该资源按添加顺序遇到的第一个非空值。�
 
 ### Security Key 凭证
 
-`0xf101` 使用 `secret = false`。当前 CBOR 记录包含必填整数字段 `10`，值为 32 字节 scope；lookup key 为 `scope || SHA256(rpId)`，共 64 字节。资源 index 仍为 `f101 || credentialId[0:8]`，完整 Credential ID 为 32 字节。Copy 和 Sync 都校验当前格式、index 和 lookup key；旧版缺少 scope 的记录及畸形记录不能参与，不自动迁移。
+`0xf101` 使用 `secret = false`。当前 CBOR 记录包含必填整数字段 `10`，值为 32 字节 scope；metadata 为 `scope || SHA256(rpId)`，共 64 字节。资源 index 仍为 `f101 || credentialId[0:8]`，完整 Credential ID 为 32 字节。Copy 和 Sync 都校验当前格式、index 和 metadata；旧版缺少 scope 的记录及畸形记录逐条跳过，其余记录继续处理，不自动迁移。
 
 凭证 scope 是 Seed 内容和授权 domain 对应的稳定派生身份，与本地 Seed index、卡片 ID 和安装 token 无关。相同配置在不同卡上得到相同 scope；更换 Seed 内容或 domain 后，其他 scope 的记录仍保留，但不会被当前 Security Key 查找或注册替换。切回原配置后可再次使用。它与本文用于限制 Secret 传输的同步范围是两个概念。
 
-不同 index 的凭证分别保留并补齐，不按 RP、user ID、账户名称或 scope 去重，不推断哪条较新或失效。同一 index 只有 lookup key、Secret 属性和完整正文一致时才可视为同一份；不一致即冲突，不能按添加顺序覆盖。Alias 不参与凭证正文比较：Sync 取第一个非空值，Copy 跳过相同凭证并保留目标已有 Alias；Copy 其他类型的元数据冲突处理不变。没有删除标记，不传播删除。
+不同 index 的凭证分别保留并补齐，不按 RP、user ID、账户名称或 scope 去重，不推断哪条较新或失效。同一 index 只有 metadata、Secret 属性和完整正文一致时才可视为同一份；不一致即冲突，不能按添加顺序覆盖。Alias 不参与凭证正文比较：Sync 取第一个非空值，Copy 跳过相同凭证并保留目标已有 Alias；Copy 其他类型的元数据冲突处理不变。没有删除标记，不传播删除。
 
 Copy 和 Sync 不迁移 Applet grant，不自动授权、切换 Seed 或修改 domain。公共凭证可以跨卡共存，不意味着目标卡已经能使用它们；目标卡仍需对应 Seed 内容、domain 和本卡授权。Secret Seed 的传输保持原边界：Sync 仅在同 Bundle 内传递，Copy 仅使用原协议允许的加密导出、导入范围。
 
@@ -64,7 +64,7 @@ Copy 和 Sync 不迁移 Applet grant，不自动授权、切换 Seed 或修改 d
 
 仅对已定义合并规则的类型进行内容合并。其他非 Secret 数据在同一范围、同一 index 下，以第一张具有该资源的卡的完整内容为准；不会尝试拼接或解释未知格式。内容和 Alias 独立选择，所以结果可以使用第一张卡的内容和后续卡的第一个非空 Alias。
 
-类型、lookup key、Secret 属性或所属关系不一致属于结构冲突，不能用第一张卡的值直接覆盖。不同范围的同 index 同样不能覆盖。遇到这些冲突时，保留原数据并报告冲突，不能先删除再重建来绕过。
+类型、metadata、Secret 属性或所属关系不一致属于结构冲突，不能用第一张卡的值直接覆盖。不同范围的同 index 同样不能覆盖。遇到这些冲突时，保留原数据并报告冲突，不能先删除再重建来绕过。
 
 Secret 不能明文读取，也不采用第一张卡直接覆盖其他副本。支持读取公钥的 Key 使用实际公钥及相关派生材料校验副本一致性；seed 的链码也必须一致。
 
@@ -121,7 +121,15 @@ Card Applets 在更新或重装 Monoid 时复用上述合并算法，并把本�
 10. 同步结束后，手机已导入地址不增加、不删除；手机尚未上传的变更也不影响本次结果。
 11. 两张同 Bundle 卡有同 index、元数据一致的未知 Secret：两张卡都通过另一张卡的包核验正文；不一致时报告冲突且不覆盖。Alias 不同时在生成计划阶段报告无法比较，不临时改名。
 12. 同一 RP、同一 user 的不同 Credential ID，以及不同凭证 scope 的记录，都按独立 index 保留；同 index 的正文或结构差异报告冲突。
-13. 缺少 scope、scope 长度错误、lookup key 或 index 不匹配的凭证拒绝 Copy 和 Sync，不做旧格式迁移；公共凭证传递不扩大 Secret 范围，也不迁移 grant。
+13. 缺少 scope、scope 长度错误、metadata 或 index 不匹配的凭证逐条跳过，其他记录继续 Copy 和 Sync，不做旧格式迁移；公共凭证传递不扩大 Secret 范围，也不迁移 grant。
+
+## 不兼容记录
+
+Safe、OTP、Copy 和 Sync 的集合读取只跳过本地格式不兼容的单条记录，包含无法解析的派生记录、OTP 账户、Security Key 凭证及无效关联。原卡数据不删除，未知但可原样传递的自定义类型仍保留。目标卡跳过的 index 仍视为已占用，不能当作缺失项而被覆盖。
+
+断卡、PIN／权限失败、取消及结果不确定的写入继续中止；合法记录之间的冲突仍按原有规则处理。完整重装前的恢复存档不能使用有遗漏的列表冒充完整备份。
+
+卡片协议只使用 `metadata`／`metadataPrefix`，临时旧字段转换已移除。已有维护存档的落盘字段映射独立保留，不改变归档正文、加密包或校验值。
 
 ## 验证边界
 

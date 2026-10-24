@@ -25,6 +25,7 @@ function card(id, entries) {
       id: bytes(`0000000${id}`),
       publicKey: Uint8Array.from([4, ...new Array(64).fill(id)]),
       bundle: new Uint8Array(32).fill(1),
+      authority: false,
       pins: {access: 5, secret: 5},
     },
     async authenticate(request) {
@@ -33,19 +34,25 @@ function card(id, entries) {
     },
     async list() {
       return {
-        items: [...records.values()].map(({index, key, alias, secret}) => ({
-          index: bytes(index),
-          key: bytes(key),
-          alias,
-          secret,
-        })),
+        items: [...records.values()].map(
+          ({index, metadata, alias, secret}) => ({
+            index: bytes(index),
+            metadata: bytes(metadata),
+            alias,
+            secret,
+          }),
+        ),
       };
     },
     async view({index}) {
       calls.push(['view', hex(index)]);
       const item = records.get(hex(index));
       if (!item) throw new CBORAppletError({code: 'NOT_FOUND'});
-      return {key: bytes(item.key), alias: item.alias, secret: item.secret};
+      return {
+        metadata: bytes(item.metadata),
+        alias: item.alias,
+        secret: item.secret,
+      };
     },
     async get({index}) {
       calls.push(['get', hex(index)]);
@@ -58,7 +65,7 @@ function card(id, entries) {
       calls.push(['export', hex(index)]);
       const item = records.get(hex(index));
       return {
-        key: bytes(item.key),
+        metadata: bytes(item.metadata),
         alias: item.alias,
         data: new TextEncoder().encode(JSON.stringify(item)),
       };
@@ -68,7 +75,7 @@ function card(id, entries) {
       calls.push(['import', index]);
       const incoming = JSON.parse(new TextDecoder().decode(request.data));
       assert.equal(incoming.index, index);
-      assert.equal(incoming.key, hex(request.key));
+      assert.equal(incoming.metadata, hex(request.metadata));
       assert.equal(incoming.alias, request.alias);
       const current = records.get(index);
       if (current) {
@@ -147,10 +154,9 @@ test('Copy skips identical key and payload without overwriting the destination a
 test('Copy refuses a Secret credential index without reading its body', async () => {
   const first = credential(1);
   const {session, target} = await ready([first], [{...first, secret: true}]);
-  await assert.rejects(
-    session.importItems(target, target.hello, PIN, signal(), progress),
-    /invalid Security Key credential/,
-  );
+  await session.importItems(target, target.hello, PIN, signal(), progress);
+  assert.deepEqual(session.backup.targets[0].items, []);
+  assert.equal(session.backup.complete, true);
   assert.equal(session.backup.importStarted, false);
   assert.deepEqual(
     target.calls.map(([name]) => name),
@@ -218,23 +224,18 @@ test('Copy keeps same-RP same-user registrations from different scopes as indepe
   );
 });
 
-test('Copy rejects old and malformed source records before exporting them', async () => {
+test('Copy skips old and malformed source records before exporting them', async () => {
   for (const item of [
     credential(1, {fields: [[10, undefined]]}),
     credential(1, {fields: [[10, new Uint8Array(31)]]}),
-    credential(1, {key: '11'.repeat(32)}),
+    credential(1, {metadata: '11'.repeat(32)}),
     credential(1, {secret: true}),
   ]) {
     const source = card(1, [item]);
     const target = card(2, []);
     const session = new CardBackupSession();
     await session.readSource(source, source.hello, signal());
-    await session.addTarget(target.hello);
-    await session.confirmTargets();
-    await assert.rejects(
-      session.exportItems(source, source.hello, PIN, signal(), progress),
-      /invalid Security Key credential/,
-    );
+    assert.deepEqual(session.backup.items, []);
     assert.equal(
       source.calls.some(([name]) => name === 'export'),
       false,
@@ -244,30 +245,45 @@ test('Copy rejects old and malformed source records before exporting them', asyn
         source.calls.some(([name]) => name === 'get'),
         false,
       );
-    assert.equal(session.backup.targets[0].items[0].exported, undefined);
     assert.equal(session.backup.complete, false);
     assert.equal(session.backup.importStarted, false);
   }
 });
 
-test('Copy rejects malformed destination data without replacing or marking it imported', async () => {
+test('Copy skips malformed destination data without replacing or marking it imported', async () => {
   const first = credential(1);
   const existing = credential(1, {fields: [[10, undefined]]});
   const {session, target} = await ready([first], [existing]);
-  await assert.rejects(
-    session.importItems(target, target.hello, PIN, signal(), progress),
-    /invalid Security Key credential/,
-  );
+  await session.importItems(target, target.hello, PIN, signal(), progress);
+  assert.deepEqual(session.backup.targets[0].items, []);
+  assert.equal(session.backup.complete, true);
   assert.deepEqual(target.records.get(first.index), existing);
   assert.equal(
     target.calls.some(([name]) => name === 'import'),
     false,
   );
-  assert.equal(session.backup.targets[0].items[0].imported, false);
   assert.equal(session.backup.importStarted, false);
 });
 
-test('a later invalid source preserves earlier acknowledged exports for the next attempt', async () => {
+test('Copy finishes independent items after skipping an incompatible destination record', async () => {
+  const first = credential(1);
+  const second = credential(2);
+  const existing = credential(1, {fields: [[1, 2]]});
+  const {session, target} = await ready([first, second], [existing]);
+  const updates = [];
+  await session.importItems(target, target.hello, PIN, signal(), (...values) =>
+    updates.push(values),
+  );
+  assert.deepEqual([...target.records.values()], [existing, second]);
+  assert.equal(session.backup.complete, true);
+  assert.deepEqual(
+    session.backup.targets[0].items.map(item => [item.index, item.imported]),
+    [[second.index, true]],
+  );
+  assert.deepEqual(updates.at(-1), [1, 1]);
+});
+
+test('an incompatible source record does not block exporting a valid credential', async () => {
   const first = credential(1);
   const second = credential(2, {fields: [[10, undefined]]});
   const source = card(1, [first, second]);
@@ -276,19 +292,17 @@ test('a later invalid source preserves earlier acknowledged exports for the next
   await session.readSource(source, source.hello, signal());
   await session.addTarget(target.hello);
   await session.confirmTargets();
-  await assert.rejects(
-    session.exportItems(source, source.hello, PIN, signal(), progress),
-    /invalid Security Key credential/,
-  );
-  assert.ok(session.backup.targets[0].items[0].exported);
-  assert.equal(session.backup.targets[0].items[1].exported, undefined);
-  source.records.set(second.index, credential(2));
   await session.exportItems(source, source.hello, PIN, signal(), progress);
+  assert.ok(session.backup.targets[0].items[0].exported);
+  assert.equal(session.backup.targets[0].items.length, 1);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
+  assert.equal(session.backup.complete, true);
+  assert.deepEqual([...target.records.values()], [first]);
   assert.deepEqual(
     source.calls
       .filter(([name]) => name === 'export')
       .map(([, index]) => index),
-    [first.index, second.index],
+    [first.index],
   );
 });
 
@@ -302,7 +316,10 @@ test('Copy validates export metadata as well as the plaintext observation', asyn
   await session.confirmTargets();
   const exportItem = source.exportItem;
   source.exportItem = async function (request) {
-    return {...(await exportItem.call(this, request)), key: new Uint8Array(64)};
+    return {
+      ...(await exportItem.call(this, request)),
+      metadata: new Uint8Array(64),
+    };
   };
   await assert.rejects(
     session.exportItems(source, source.hello, PIN, signal(), progress),

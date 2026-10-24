@@ -225,6 +225,47 @@ test('a selectable distinct instance is preserved without querying the CAP modul
   card.done();
 });
 
+test('application data is encoded inside C9 without altering privileges or the install token', async () => {
+  const applicationData = Uint8Array.from([2, 4, ...new Uint8Array(64)]);
+  const card = cardScript([
+    {command: select()},
+    absent(0x40, safe.appletAid),
+    {command: status(0x10, safe.packageAid), response: response(loadedSafe)},
+    {
+      command: command(
+        0xe6,
+        0x0c,
+        0,
+        join(
+          lv(safe.packageAid),
+          lv(safe.appletAid),
+          lv(safe.appletAid),
+          bytes('0100'),
+          lv(join(bytes('c9'), lv(applicationData))),
+          bytes('00'),
+        ),
+      ),
+    },
+    {command: status(0x40, safe.appletAid), response: response(installedSafe)},
+  ]);
+  const installer = await GlobalPlatformInstaller.open(card.transceive);
+  await installer.install({...safe, applicationData}, () => {});
+  card.done();
+});
+
+test('new installation parameters never alter an already installed applet', async () => {
+  const card = cardScript([
+    {command: select()},
+    {command: status(0x40, safe.appletAid), response: response(installedSafe)},
+  ]);
+  const installer = await GlobalPlatformInstaller.open(card.transceive);
+  await installer.install(
+    {...safe, applicationData: Uint8Array.of(2, 4)},
+    () => {},
+  );
+  card.done();
+});
+
 test('an already loaded library is preserved using only its package registry entry', async () => {
   const card = cardScript([
     {command: select()},

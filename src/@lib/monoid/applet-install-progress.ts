@@ -8,6 +8,7 @@ export const APPLET_NAMES = {
   library: 'Monoid Library',
   monoid: 'Monoid Applet',
   'security-key': 'Monoid Security Key Applet',
+  otp: 'Monoid OTP Applet',
 };
 
 export function describeAppletInstallProgress(

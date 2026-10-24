@@ -39,7 +39,12 @@ const keyFamilies = [
 
 const fixtures = {
   hello: [{}],
-  authenticate: [{pin: '123456'}, {secret: true, pin: '123456'}],
+  authenticate: [
+    {pin: '123456'},
+    {secret: true, pin: '123456'},
+    {aid, pin: '123456'},
+    {aid, secret: true, pin: '123456'},
+  ],
   setPIN: [{pin: '123456'}, {pin: '123456', secret: true}],
   createBundle: [{publicKeys: [identityPublicKey, identityPublicKey]}],
   joinBundle: [{publicKey: identityPublicKey, data: context}],
@@ -47,7 +52,7 @@ const fixtures = {
   approveBundleExtension: [{data: context}],
   reset: [{}],
   systemInformation: [{}],
-  list: [{}, {type: 'seed', keyPrefix: context}, {type: 0x1001}],
+  list: [{}, {type: 'seed', metadataPrefix: context}, {type: 0x1001}],
   view: [{index}],
   get: [{index}],
   set: [
@@ -59,8 +64,20 @@ const fixtures = {
   create: [
     {data: context, type: 'seed'},
     {data: context, type: 0x1001},
-    {data: context, key: context, alias: 'Main', secret: true, type: 'seed'},
-    {data: context, key: new Uint8Array(), alias: '', secret: false, index},
+    {
+      data: context,
+      metadata: context,
+      alias: 'Main',
+      secret: true,
+      type: 'seed',
+    },
+    {
+      data: context,
+      metadata: new Uint8Array(),
+      alias: '',
+      secret: false,
+      index,
+    },
   ],
   remove: [{index}],
   exportItem: [{index}, {index, recipientPublicKey: identityPublicKey}],
@@ -70,7 +87,7 @@ const fixtures = {
     {
       index,
       senderPublicKey: identityPublicKey,
-      key: context,
+      metadata: context,
       alias: 'Main',
       data: context,
     },

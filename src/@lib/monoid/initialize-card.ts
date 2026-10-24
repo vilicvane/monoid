@@ -27,6 +27,7 @@ export async function initializeMonoidCard(
   hello: MonoidAppletHello,
   pin: MonoidPIN,
   signal: AbortSignal,
+  accessPIN?: MonoidPIN,
 ): Promise<MonoidAppletHello> {
   throwIfCancelled(signal);
   assertPINsNotBlocked(hello);
@@ -42,14 +43,23 @@ export async function initializeMonoidCard(
   if (hello.pins.access !== false && hello.pins.secret !== false) {
     return hello;
   }
+  if (hello.pins.access === false && !MonoidPIN.is(accessPIN)) {
+    throw new MonoidCardError('Access PIN must contain 6 to 16 characters');
+  }
 
   if (hello.pins.secret !== false) {
     await applet.authenticate({secret: true, pin});
     throwIfCancelled(signal);
-    await applet.setPIN({pin});
+    await applet.setPIN({pin: accessPIN!});
   } else {
     // A new Secret PIN also initializes an unset Access PIN in firmware.
     await applet.setPIN({secret: true, pin});
+    if (accessPIN !== pin) {
+      throwIfCancelled(signal);
+      await applet.authenticate({secret: true, pin});
+      throwIfCancelled(signal);
+      await applet.setPIN({pin: accessPIN!});
+    }
   }
   throwIfCancelled(signal);
 

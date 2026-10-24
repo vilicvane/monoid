@@ -17,10 +17,7 @@ import {
   MonoidScanStatePromptContentHighlight,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
-import {
-  PINKind,
-  getPINInputPlaceholder,
-} from '../../../@monoid/pin-input-placeholder.js';
+import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 
@@ -84,47 +81,13 @@ export function CardSetupPIN({
       : operation.signal;
     let disposed = false;
     let pin: MonoidPIN | undefined;
+    let accessPIN: MonoidPIN | undefined;
     let writing: Promise<void> | undefined;
     let initialized = false;
     let latestHello: MonoidAppletHello | undefined;
     let accessPINId: MonoidIdHex | undefined;
     let accessPINAuthenticated = false;
     let scanCompleted = false;
-
-    const readPIN = async (): Promise<MonoidPIN | undefined> => {
-      let description: ReactNode =
-        hello.pins.access === false ? (
-          <>
-            Will be used as initial <PINKind kind="Access" /> PIN
-          </>
-        ) : (
-          <>
-            <PINKind kind="Access" /> PIN stays the same
-          </>
-        );
-
-      for (;;) {
-        signal.throwIfAborted();
-        const value = await waitForOperation(
-          showInput(
-            {
-              type: 'password',
-              ...getPINInputPlaceholder(
-                'Secret',
-                hello.pins.secret === false ? 'Set' : 'Enter existing',
-              ),
-              description,
-              center: true,
-              maxLength: 16,
-            },
-            signal,
-          ),
-          signal,
-        );
-        if (value === undefined || MonoidPIN.is(value)) return value;
-        description = 'Use 6 to 16 ASCII characters';
-      }
-    };
 
     const run = async (): Promise<void> => {
       try {
@@ -142,9 +105,12 @@ export function CardSetupPIN({
           ? undefined
           : monoidCredentialsStore.createPINSession();
         const setupPINSession = pinSession ?? temporarySession!;
+        let savedAccessPIN: MonoidPIN | undefined;
         if (hello.pins.access === false) {
           try {
-            await waitForOperation(setupPINSession.getPINs(signal), signal);
+            savedAccessPIN = (
+              await waitForOperation(setupPINSession.getPINs(signal), signal)
+            )[uint8ArrayToHex(hello.id)];
           } catch (error) {
             setupPINSession.clear();
             throw error;
@@ -152,8 +118,18 @@ export function CardSetupPIN({
           signal.throwIfAborted();
         }
 
-        pin = await readPIN();
-        if (pin === undefined) return;
+        const requested = await requestCardPINs(
+          showInput,
+          {
+            secretSet: hello.pins.secret !== false,
+            accessSet: hello.pins.access !== false,
+            savedAccessPIN,
+          },
+          signal,
+        );
+        if (!requested) return;
+        pin = requested.secret;
+        accessPIN = requested.access;
         signal.throwIfAborted();
 
         try {
@@ -203,6 +179,7 @@ export function CardSetupPIN({
                       current,
                       pin!,
                       signal,
+                      accessPIN,
                     );
                     latestHello = result;
                     initialized = true;
@@ -212,7 +189,7 @@ export function CardSetupPIN({
                     if (current.pins.access === false) {
                       accessPINId = uint8ArrayToHex(result.id);
                       setState('Authenticating, hold tight...');
-                      await applet.authenticate({pin: pin!});
+                      await applet.authenticate({pin: accessPIN!});
                       signal.throwIfAborted();
                       accessPINAuthenticated = true;
                     }
@@ -244,7 +221,7 @@ export function CardSetupPIN({
             let saved = false;
             if (scanCompleted && accessPINAuthenticated && !signal.aborted) {
               try {
-                await setupPINSession.setPIN(accessPINId, pin, signal);
+                await setupPINSession.setPIN(accessPINId, accessPIN!, signal);
                 saved = true;
               } catch {
                 // The card setup remains valid if local credential storage fails.
@@ -268,6 +245,7 @@ export function CardSetupPIN({
         }
       } finally {
         pin = undefined;
+        accessPIN = undefined;
         // Keep confirmed setup in its owning flow even if navigation closed the UI.
         if (initialized && latestHello) acknowledge.current?.(latestHello);
         if (!disposed) finish.current(initialized, latestHello);

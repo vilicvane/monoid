@@ -1,3 +1,4 @@
+import {p256} from '@noble/curves/nist';
 import {IsoDepNfc} from 'capacitor-isodep-nfc';
 import {sha256, toUtf8Bytes} from 'ethers';
 
@@ -23,7 +24,7 @@ import {MonoidCardError} from './card-error.js';
 import {MonoidAppletHello, createMonoidApplet} from './monoid-applet.js';
 
 export type BundledApplet = {
-  stage: 'identity' | 'library' | 'monoid' | 'security-key';
+  stage: 'identity' | 'library' | 'monoid' | 'security-key' | 'otp';
   packageAid: string;
   appletAid?: string;
   instanceAid?: string;
@@ -79,6 +80,59 @@ export type InstalledApplet = {
 };
 
 type LoadedApplet = AppletPackage & {stage: BundledApplet['stage']};
+
+export type IdentityInstallationOptions = {
+  cardId?: Uint8Array;
+  authorityPublicKey?: Uint8Array;
+  authorityUrl?: string;
+};
+
+function identityApplicationData({
+  cardId,
+  authorityPublicKey,
+  authorityUrl,
+}: IdentityInstallationOptions): Uint8Array | undefined {
+  if (cardId !== undefined && cardId.length !== 4)
+    throw new MonoidCardError('Invalid Card ID');
+  if (authorityPublicKey === undefined && authorityUrl === undefined)
+    return cardId ? new Uint8Array([0x01, ...cardId]) : undefined;
+  if (!authorityPublicKey || !authorityUrl)
+    throw new MonoidCardError(
+      'Authority URL and public key are required together',
+    );
+  if (authorityPublicKey.length !== 65 || authorityPublicKey[0] !== 4)
+    throw new MonoidCardError('Invalid Authority public key');
+  try {
+    p256.Point.fromHex(authorityPublicKey).assertValidity();
+  } catch {
+    throw new MonoidCardError('Invalid Authority public key');
+  }
+  let url: URL;
+  try {
+    url = new URL(authorityUrl);
+  } catch {
+    throw new MonoidCardError('Invalid Authority URL');
+  }
+  if (
+    !['http:', 'https:'].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  )
+    throw new MonoidCardError('Invalid Authority URL');
+  const encodedUrl = new TextEncoder().encode(authorityUrl);
+  // 247-byte secure INSTALL data minus 35 bytes of GP/AID fields and 66 bytes
+  // of flags + key leaves 146 bytes for the URL, or 142 with a retained Card ID.
+  if (encodedUrl.length > 146 - (cardId?.length ?? 0))
+    throw new MonoidCardError('Authority URL is too long');
+  return new Uint8Array([
+    cardId ? 0x03 : 0x02,
+    ...(cardId ?? []),
+    ...authorityPublicKey,
+    ...encodedUrl,
+  ]);
+}
 
 export function getAppletCatalog(): readonly BundledApplet[] {
   return appletBundle ?? [];
@@ -376,8 +430,10 @@ function rethrowConnectionError(error: unknown): void {
 async function loadAppletPackages(
   selectedOptionalStages: readonly AppletStage[],
   signal?: AbortSignal,
+  identityOptions: IdentityInstallationOptions = {},
 ): Promise<LoadedApplet[]> {
   signal?.throwIfAborted();
+  const applicationData = identityApplicationData(identityOptions);
 
   if (!appletBundle) {
     throw new Error('The applet installation package is not available yet.');
@@ -408,6 +464,9 @@ async function loadAppletPackages(
         instanceAid: item.instanceAid
           ? hexToUint8Array(item.instanceAid)
           : undefined,
+        ...(item.stage === 'identity' && applicationData
+          ? {applicationData}
+          : {}),
         code,
       };
     }),
@@ -481,10 +540,15 @@ export async function installMonoidApplets(
   onProgress: (update: AppletInstallProgress) => void,
   signal?: AbortSignal,
   selectedOptionalStages: readonly AppletStage[] = [],
+  identityOptions: IdentityInstallationOptions = {},
 ): Promise<MonoidAppletHello> {
   signal?.throwIfAborted();
   onProgress({stage: 'checking'});
-  const packages = await loadAppletPackages(selectedOptionalStages, signal);
+  const packages = await loadAppletPackages(
+    selectedOptionalStages,
+    signal,
+    identityOptions,
+  );
   const installer = await GlobalPlatformInstaller.open(
     cardTransceive(sessionId, signal),
   );
@@ -507,9 +571,12 @@ export async function replaceMonoidApplets(
     fresh,
     checkpoint,
     expectedPublicKey,
+    expectedCardId,
     expectedAppletAid,
     expectedBundle,
     expectedFingerprint,
+    authorityPublicKey,
+    authorityUrl,
     selectedOptionalStages = [],
     replaceStages,
     onCheckpoint,
@@ -519,9 +586,12 @@ export async function replaceMonoidApplets(
     fresh: boolean;
     checkpoint?: AppletReplacementCheckpoint;
     expectedPublicKey?: string;
+    expectedCardId?: string;
     expectedAppletAid?: string;
     expectedBundle?: string | false;
     expectedFingerprint: string;
+    authorityPublicKey?: Uint8Array;
+    authorityUrl?: string;
     selectedOptionalStages?: readonly AppletStage[];
     replaceStages?: readonly AppletStage[];
     onCheckpoint: (checkpoint: AppletReplacementCheckpoint) => Promise<void>;
@@ -533,7 +603,14 @@ export async function replaceMonoidApplets(
 ): Promise<MonoidAppletHello> {
   signal?.throwIfAborted();
   onProgress({stage: 'checking'});
-  const packages = await loadAppletPackages(selectedOptionalStages, signal);
+  const packages = await loadAppletPackages(selectedOptionalStages, signal, {
+    cardId:
+      fresh && expectedCardId !== undefined
+        ? hexToUint8Array(expectedCardId)
+        : undefined,
+    authorityPublicKey: fresh ? authorityPublicKey : undefined,
+    authorityUrl: fresh ? authorityUrl : undefined,
+  });
   const identity = packages.find(item => item.stage === 'identity')!;
   const monoid = packages.find(item => item.stage === 'monoid')!;
   const allPackages = getAppletInstallationPlan(
@@ -764,6 +841,12 @@ export async function replaceMonoidApplets(
   );
   if (!fresh && uint8ArrayToHex(hello.publicKey) !== expectedPublicKey) {
     throw new Error('Card identity changed during maintenance');
+  }
+  if (
+    expectedCardId !== undefined &&
+    uint8ArrayToHex(hello.id) !== expectedCardId
+  ) {
+    throw new Error('Card ID changed during maintenance');
   }
   if (
     !fresh &&

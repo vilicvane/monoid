@@ -122,6 +122,7 @@ for (const [path, names] of [
     '@ui/info-section',
     [
       'InfoSection',
+      'InfoSectionDivider',
       'InfoSectionHeader',
       'InfoSectionItem',
       'InfoSectionItemContent',
@@ -139,7 +140,6 @@ for (const [path, names] of [
       'ListSectionTitle',
     ],
   ],
-  ['@ui/list-section', ['ListSectionCount']],
   ['@ui/message-content', ['InfoMessage', 'WarningMessage']],
   [
     '@view/index',
@@ -191,6 +191,7 @@ function card(number) {
       id: Uint8Array.of(0, 0, 0, number),
       publicKey: p256.getPublicKey(BigInt(number), false),
       bundle: false,
+      authority: false,
       pins: {access: 5, secret: 5},
     },
     authentications: [],
@@ -258,7 +259,7 @@ function mount() {
       button.props.onClick();
     },
     configure(create = false) {
-      state.click('Configure Security Key');
+      state.click('Enable Security Key on card');
       if (create) state.click('Create dedicated Seed');
       else
         find(

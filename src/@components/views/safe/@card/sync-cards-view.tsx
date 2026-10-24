@@ -13,7 +13,6 @@ import {
 } from '../../../../@lib/monoid/index.js';
 import type {Router} from '../../../../@routes.js';
 import {isCredentialRequestCancelled} from '../../../../@services/index.js';
-import {popOutAnimationCSS} from '../../../@animations.js';
 import {
   CardGrid,
   CardPlaceholder,
@@ -36,7 +35,7 @@ import {
 } from '../../../@ui/details-popup.js';
 import {InfoMessage} from '../../../@ui/message-content.js';
 import {OperationComplete} from '../../../@ui/operation-complete.js';
-import {Step, Steps} from '../../../@ui/step.js';
+import {OperationSteps, Step} from '../../../@ui/step.js';
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 import {
@@ -70,14 +69,6 @@ const Description = styled.p`
   font-size: 14px;
   line-height: 21px;
   color: var(--color-text-secondary);
-`;
-
-const SyncSteps = styled(Steps)<{$exiting: boolean}>`
-  ${props => props.$exiting && popOutAnimationCSS}
-
-  @media (prefers-reduced-motion: reduce) {
-    animation-duration: 1ms;
-  }
 `;
 
 function assertSyncCard(
@@ -645,7 +636,7 @@ export const SyncCardsView = observer(
             {flow.stepsExited ? (
               <OperationComplete />
             ) : (
-              <SyncSteps
+              <OperationSteps
                 $exiting={complete && !maintenance}
                 onAnimationEnd={event => {
                   if (
@@ -685,7 +676,7 @@ export const SyncCardsView = observer(
                 >
                   {cards}
                 </Step>
-              </SyncSteps>
+              </OperationSteps>
             )}
           </ViewContent>
         </View>

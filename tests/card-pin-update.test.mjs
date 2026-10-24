@@ -13,6 +13,7 @@ const hello = {
   id: bytes(card.id),
   publicKey: bytes(card.publicKey),
   bundle: false,
+  authority: false,
   pins: {access: 5, secret: 5},
 };
 const oldPIN = 'old-pin',

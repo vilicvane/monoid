@@ -7,6 +7,7 @@ import {hexToUint8Array, uint8ArrayToHex} from '../@utils/index.js';
 
 import {AppletISOError} from './applet.js';
 import {CBORAppletError} from './cbor-applet.js';
+import {InvalidCardItemError} from './card-item-error.js';
 import {equalBytes} from './global-platform/commands.js';
 import {MonoidCardError, MonoidWrongCardError} from './monoid/card-error.js';
 import type {MonoidApplet, MonoidAppletHello} from './monoid/monoid-applet.js';
@@ -31,10 +32,10 @@ export type SecurityKeyCredential = {
 export function decodeSecurityKeyCredential(
   data: Uint8Array,
   index?: Uint8Array,
-  key?: Uint8Array,
+  metadata?: Uint8Array,
 ): SecurityKeyCredential {
   const invalid = (): never => {
-    throw new MonoidCardError('Invalid Security Key credential');
+    throw new InvalidCardItemError('Invalid Security Key credential');
   };
   let fields: unknown;
   try {
@@ -96,10 +97,10 @@ export function decodeSecurityKeyCredential(
   )
     return invalid();
   if (
-    key &&
-    (key.length !== 64 ||
-      !equalBytes(key.subarray(0, 32), scope) ||
-      !equalBytes(key.subarray(32), rpHash))
+    metadata &&
+    (metadata.length !== 64 ||
+      !equalBytes(metadata.subarray(0, 32), scope) ||
+      !equalBytes(metadata.subarray(32), rpHash))
   )
     return invalid();
 
@@ -131,6 +132,8 @@ export type SecurityKeySnapshot = {
   scope?: Uint8Array;
   seeds: SecurityKeySeed[];
   credentials: SecurityKeyCredentialItem[];
+  /** Hidden records still need to be considered before changing their Seed. */
+  skippedCredentials?: number;
 };
 
 export function findSecurityKeyGrant(
@@ -201,6 +204,7 @@ export async function readSecurityKeySnapshot(
   const {items} = await applet.list({});
   const seeds: SecurityKeySeed[] = [];
   const credentials: SecurityKeyCredentialItem[] = [];
+  let skippedCredentials = 0;
   for (const item of items) {
     signal.throwIfAborted();
     if (
@@ -214,20 +218,21 @@ export async function readSecurityKeySnapshot(
     const record: SecurityKeyCredentialItem = {
       index: uint8ArrayToHex(item.index),
     };
-    // Malformed records stay visible. Never attempt a plaintext read of a secret item.
-    if (!item.secret && item.key) {
+    // Ignore incompatible records without reading protected data.
+    if (!item.secret && item.metadata) {
       const {data} = await applet.get({index: item.index});
       try {
         record.credential = decodeSecurityKeyCredential(
           data,
           item.index,
-          item.key,
+          item.metadata,
         );
       } catch (error) {
-        if (!(error instanceof MonoidCardError)) throw error;
+        if (!(error instanceof InvalidCardItemError)) throw error;
       }
     }
-    credentials.push(record);
+    if (record.credential) credentials.push(record);
+    else skippedCredentials++;
   }
   const grant = findSecurityKeyGrant(grants);
   const scope =
@@ -262,6 +267,7 @@ export async function readSecurityKeySnapshot(
     scope,
     seeds,
     credentials,
+    ...(skippedCredentials > 0 && {skippedCredentials}),
   };
 }
 
@@ -270,9 +276,9 @@ export function securityKeySeedChangeNeedsConfirmation(
   seed: SafeIndexHex | 'create',
 ): boolean {
   return (
-    snapshot.credentials.length > 0 &&
-    (!snapshot.grant?.seed ||
-      seed !== uint8ArrayToHex(snapshot.grant.seed.index))
+    !!snapshot.grant?.seed &&
+    snapshot.credentials.length + (snapshot.skippedCredentials ?? 0) > 0 &&
+    seed !== uint8ArrayToHex(snapshot.grant.seed.index)
   );
 }
 
@@ -330,8 +336,8 @@ export class SecurityKeyConfiguration {
       const {items} = await applet.list({});
       if (
         !this.confirmedSeedChange &&
-        (!current?.seed ||
-          this.selection !== uint8ArrayToHex(current.seed.index)) &&
+        current?.seed &&
+        this.selection !== uint8ArrayToHex(current.seed.index) &&
         items.some(item => item.index[0] === 0xf1 && item.index[1] === 1)
       )
         throw new MonoidCardError('Credentials changed, scan card again');

@@ -22,10 +22,7 @@ import {
   CardPreviewButton,
 } from '../../../@monoid/card-preview.js';
 import {MonoidScanStatePromptContentHighlight} from '../../../@monoid/monoid-scan-prompt.js';
-import {
-  PINKind,
-  getPINInputPlaceholder,
-} from '../../../@monoid/pin-input-placeholder.js';
+import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
 import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
 import {Button, Buttons} from '../../../@ui/button.js';
 import {ConfirmPopup} from '../../../@ui/confirm-popup.js';
@@ -40,6 +37,7 @@ import {Step, Steps} from '../../../@ui/step.js';
 import {useToast} from '../../../@ui/toast.js';
 import {Toggle} from '../../../@ui/toggle.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
+import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
 import {
   View,
   ViewContent,
@@ -419,6 +417,7 @@ export const SetupCardView = observer(
       });
       setBusy(true);
       let pin: MonoidPIN | undefined;
+      let accessPIN: MonoidPIN | undefined;
       let initialized: MonoidAppletHello | undefined;
       let completed: MonoidAppletHello | undefined;
       let accessPINId: MonoidIdHex | undefined;
@@ -428,14 +427,14 @@ export const SetupCardView = observer(
           await pinSession.authenticate(operation.signal);
           operation.signal.throwIfAborted();
           if (!isActive()) return;
-          pin = await requestSecretPIN(
-            'Set',
-            <>
-              Will be used as initial <PINKind kind="Access" /> PIN
-            </>,
+          const requested = await requestCardPINs(
+            showPINInput,
+            {secretSet: false, accessSet: false},
             operation.signal,
           );
-          if (pin === undefined) return;
+          if (!requested) return;
+          pin = requested.secret;
+          accessPIN = requested.access;
           operation.signal.throwIfAborted();
           if (!isActive()) return;
         }
@@ -489,12 +488,18 @@ export const SetupCardView = observer(
                 pin,
               );
               setState('Setting Secret PIN, hold tight...');
-              hello = await initializeMonoidCard(applet, hello, pin, signal);
+              hello = await initializeMonoidCard(
+                applet,
+                hello,
+                pin,
+                signal,
+                accessPIN,
+              );
               rememberPIN();
               cacheSetup(hello);
               completed = hello;
               setState('Authenticating, hold tight...');
-              await applet.authenticate({pin});
+              await applet.authenticate({pin: accessPIN!});
               signal.throwIfAborted();
               accessPINId = uint8ArrayToHex(hello.id);
             }
@@ -504,7 +509,7 @@ export const SetupCardView = observer(
         );
         if (accessPINId && pin && isActive() && !operation.signal.aborted) {
           try {
-            await pinSession.setPIN(accessPINId, pin, operation.signal);
+            await pinSession.setPIN(accessPINId, accessPIN!, operation.signal);
           } catch {
             toast({
               message: 'Access PIN was not saved on this device',
@@ -522,6 +527,7 @@ export const SetupCardView = observer(
           throw error;
       } finally {
         pin = undefined;
+        accessPIN = undefined;
         pinSession.clear();
         try {
           if (completed) {

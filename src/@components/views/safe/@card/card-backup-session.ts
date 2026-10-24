@@ -3,6 +3,7 @@ import {observable, runInAction} from 'mobx';
 import {MonoidPIN, PublicKey, SafeIndex} from '../../../../@atomics.js';
 import {AppletISOError} from '../../../../@lib/applet.js';
 import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
+import {InvalidCardItemError} from '../../../../@lib/card-item-error.js';
 import {
   type MonoidApplet,
   type MonoidAppletHello,
@@ -18,10 +19,16 @@ import {
 } from '../card-derivations.js';
 import {
   CardItemMergeConflict,
-  isCardCredentialItem,
+  isCardImmutableItem,
   mergeCardItemData,
-  validateCardCredentialItem,
+  validateCardImmutableItem,
 } from '../card-item-merge.js';
+import {
+  isCardOTPItem,
+  filterCardOTPAssociations,
+  readCardOTPKeyIndex,
+  validateCardOTPItem,
+} from '../card-otp.js';
 import {getCardResourceGroups} from '../card-resource-groups.js';
 import type {ScannedCardData, ScannedCardItemData} from '../common.js';
 
@@ -33,7 +40,13 @@ export type CardBackupIdentity = {
 
 export type CardBackupItem = Pick<
   ScannedCardItemData,
-  'index' | 'type' | 'alias' | 'secret' | 'key' | 'derivationRecord'
+  | 'index'
+  | 'type'
+  | 'alias'
+  | 'secret'
+  | 'metadata'
+  | 'derivationRecord'
+  | 'otpKeyIndex'
 > & {
   selected: boolean;
 };
@@ -41,10 +54,10 @@ export type CardBackupItem = Pick<
 export type CardBackupTransfer = {
   index: string;
   exported?: {
-    key?: string;
+    metadata?: string;
     alias?: string;
     data: string;
-    /** Only public credential payloads are retained for destination comparison. */
+    /** Public immutable records are retained for destination comparison. */
     plaintext?: string;
   };
   imported: boolean;
@@ -81,7 +94,7 @@ function createBackup(
   const selectedIndexes =
     sourceIndexes === undefined ? undefined : new Set(sourceIndexes);
   const backupItems = items.map(
-    ({index, type, alias, secret, key, derivationRecord}) => {
+    ({index, type, alias, secret, metadata, derivationRecord, otpKeyIndex}) => {
       if (!/^[0-9a-f]{20}$/i.test(index)) {
         throw new MonoidCardError('The card returned an invalid item index.');
       }
@@ -90,7 +103,8 @@ function createBackup(
         index,
         ...(type !== undefined && {type}),
         ...(alias !== undefined && {alias}),
-        ...(key !== undefined && {key}),
+        ...(metadata !== undefined && {metadata}),
+        ...(otpKeyIndex !== undefined && {otpKeyIndex}),
         ...(derivationRecord !== undefined && {
           derivationRecord: {
             index: derivationRecord.index,
@@ -242,7 +256,7 @@ async function authenticateSecretPIN(
   onAuthenticated?.();
 }
 
-async function hasMatchingCredential(
+async function hasMatchingImmutableItem(
   applet: MonoidApplet,
   item: CardBackupTransfer,
   signal: AbortSignal,
@@ -252,10 +266,10 @@ async function hasMatchingCredential(
   const source = {
     index: item.index,
     secret: false,
-    key: exported.key,
+    metadata: exported.metadata,
     data: exported.plaintext,
   };
-  validateCardCredentialItem(source);
+  validateCardImmutableItem(source);
   let metadata: Awaited<ReturnType<MonoidApplet['view']>>;
   try {
     metadata = await applet.view({index});
@@ -268,7 +282,7 @@ async function hasMatchingCredential(
   }
   throwIfCancelled(signal);
   if (metadata.secret) {
-    validateCardCredentialItem({index: item.index, secret: true});
+    validateCardImmutableItem({index: item.index, secret: true});
   }
 
   const {data} = await applet.get({index});
@@ -277,13 +291,13 @@ async function hasMatchingCredential(
     {
       index: item.index,
       secret: metadata.secret,
-      key: metadata.key && uint8ArrayToHex(metadata.key),
+      metadata: metadata.metadata && uint8ArrayToHex(metadata.metadata),
       data: uint8ArrayToHex(data),
     },
     source,
   );
 
-  // Alias is display metadata; identical credentials keep the destination name.
+  // Alias is display metadata; identical records keep the destination name.
   return true;
 }
 
@@ -294,6 +308,7 @@ export async function initializeBackupTarget(
   pin: string,
   signal: AbortSignal,
   onAuthenticated?: () => void,
+  accessPIN?: MonoidPIN,
 ): Promise<MonoidAppletHello> {
   const identity = readBackupCardIdentity(hello);
   const expectedIdentity = readBackupCardIdentity(expected);
@@ -320,7 +335,13 @@ export async function initializeBackupTarget(
   }
 
   try {
-    const initialized = await initializeMonoidCard(applet, hello, pin, signal);
+    const initialized = await initializeMonoidCard(
+      applet,
+      hello,
+      pin,
+      signal,
+      accessPIN,
+    );
     assertBackupCard(initialized, expectedIdentity);
     onAuthenticated?.();
     return initialized;
@@ -468,15 +489,18 @@ export class CardBackupSession {
       const {items} = await applet.list({});
       throwIfCancelled(signal);
       const scannedItems: ScannedCardItemData[] = items.map(
-        ({index, type, alias, secret, key}) => ({
+        ({index, type, alias, secret, metadata}) => ({
           index: uint8ArrayToHex(index),
           ...(type !== undefined && {type}),
           ...(alias !== undefined && {alias}),
-          ...(key !== undefined && {key: uint8ArrayToHex(key)}),
+          ...(metadata !== undefined && {metadata: uint8ArrayToHex(metadata)}),
           secret,
         }),
       );
-      const records = scannedItems.filter(isCardDerivationItem);
+      const records = scannedItems.filter(
+        item => isCardDerivationItem(item) || isCardImmutableItem(item),
+      );
+      const skippedIndexes = new Set<string>();
 
       if (records.length > 0) {
         onProgress?.(0, records.length);
@@ -484,13 +508,44 @@ export class CardBackupSession {
 
       for (const [index, item] of records.entries()) {
         throwIfCancelled(signal);
-        item.derivationRecord = await readCardDerivationRecord(applet, item);
+        try {
+          if (isCardOTPItem(item)) {
+            item.otpKeyIndex = await readCardOTPKeyIndex(applet, item);
+          } else if (isCardDerivationItem(item)) {
+            item.derivationRecord = await readCardDerivationRecord(
+              applet,
+              item,
+            );
+          } else {
+            if (item.secret) validateCardImmutableItem(item);
+            const {data} = await applet.get({
+              index: hexToUint8Array(item.index),
+            });
+            throwIfCancelled(signal);
+            validateCardImmutableItem({...item, data: uint8ArrayToHex(data)});
+          }
+        } catch (error) {
+          if (!(error instanceof InvalidCardItemError)) throw error;
+          skippedIndexes.add(item.index);
+        }
         throwIfCancelled(signal);
         onProgress?.(index + 1, records.length);
       }
 
       throwIfCancelled(signal);
-      this.setBackup(createBackup(source, scannedItems, indexes));
+      const compatible = filterCardOTPAssociations(
+        scannedItems.filter(item => !skippedIndexes.has(item.index)),
+      );
+      for (const item of scannedItems) {
+        if (!compatible.includes(item)) skippedIndexes.add(item.index);
+      }
+      this.setBackup(
+        createBackup(
+          source,
+          compatible,
+          indexes?.filter(index => !skippedIndexes.has(index)),
+        ),
+      );
     });
   }
 
@@ -615,24 +670,40 @@ export class CardBackupSession {
           let exported = bundleExports?.get(item.index);
           if (!exported) {
             let plaintext: string | undefined;
-            if (isCardCredentialItem(item)) {
+            if (isCardImmutableItem(item)) {
               const index = SafeIndex.satisfies(hexToUint8Array(item.index));
               const metadata = await applet.view({index});
               throwIfCancelled(signal);
               if (metadata.secret) {
-                validateCardCredentialItem({index: item.index, secret: true});
+                validateCardImmutableItem({index: item.index, secret: true});
               }
               const {data} = await applet.get({
                 index,
               });
               throwIfCancelled(signal);
               plaintext = uint8ArrayToHex(data);
-              validateCardCredentialItem({
+              validateCardImmutableItem({
                 index: item.index,
                 secret: metadata.secret,
-                key: metadata.key && uint8ArrayToHex(metadata.key),
+                metadata:
+                  metadata.metadata && uint8ArrayToHex(metadata.metadata),
                 data: plaintext,
               });
+              if (
+                isCardOTPItem(item) &&
+                validateCardOTPItem({
+                  index: item.index,
+                  secret: metadata.secret,
+                  metadata:
+                    metadata.metadata && uint8ArrayToHex(metadata.metadata),
+                  data: plaintext,
+                }) !==
+                  backup.items.find(source => source.index === item.index)
+                    ?.otpKeyIndex
+              )
+                throw new MonoidCardError(
+                  'OTP account changed, start copy again',
+                );
             }
             const result = await applet.exportItem({
               index: SafeIndex.satisfies(hexToUint8Array(item.index)),
@@ -642,17 +713,17 @@ export class CardBackupSession {
             // Bundle envelopes are shared by every other member; asymmetric
             // envelopes remain specific to their recipient. Preserve metadata.
             exported = {
-              ...(result.key !== undefined && {
-                key: uint8ArrayToHex(result.key),
+              ...(result.metadata !== undefined && {
+                metadata: uint8ArrayToHex(result.metadata),
               }),
               ...(result.alias !== undefined && {alias: result.alias}),
               data: uint8ArrayToHex(result.data),
               ...(plaintext !== undefined && {plaintext}),
             };
-            validateCardCredentialItem({
+            validateCardImmutableItem({
               index: item.index,
               secret: false,
-              key: exported.key,
+              metadata: exported.metadata,
               data: plaintext,
             });
             bundleExports?.set(item.index, exported);
@@ -711,11 +782,25 @@ export class CardBackupSession {
         hexToUint8Array(backup.source.publicKey),
       );
       let completed = selected.filter(item => item.imported).length;
+      let total = selected.length;
       throwIfCancelled(signal);
-      onProgress(completed, selected.length);
+      onProgress(completed, total);
 
       for (const item of selected) {
         if (item.imported) {
+          continue;
+        }
+
+        const sourceIndex = backup.items.find(
+          source => source.index === item.index,
+        )?.otpKeyIndex;
+        if (
+          sourceIndex &&
+          !this.requireBackup()
+            .targets.find(current => current.publicKey === target.publicKey)!
+            .items.find(source => source.index === sourceIndex)?.imported
+        ) {
+          this.updateTransfer(target.publicKey, {...item, conflict: true});
           continue;
         }
 
@@ -724,8 +809,8 @@ export class CardBackupSession {
         const request = {
           index: SafeIndex.satisfies(hexToUint8Array(item.index)),
           ...(backup.source.bundle === false && {senderPublicKey}),
-          ...(exported.key !== undefined && {
-            key: hexToUint8Array(exported.key),
+          ...(exported.metadata !== undefined && {
+            metadata: hexToUint8Array(exported.metadata),
           }),
           ...(exported.alias !== undefined && {alias: exported.alias}),
           data: hexToUint8Array(exported.data),
@@ -733,8 +818,8 @@ export class CardBackupSession {
 
         try {
           if (
-            !isCardCredentialItem(item) ||
-            !(await hasMatchingCredential(applet, item, signal))
+            !isCardImmutableItem(item) ||
+            !(await hasMatchingImmutableItem(applet, item, signal))
           ) {
             const current = this.requireBackup();
             if (!current.importStarted) {
@@ -744,13 +829,30 @@ export class CardBackupSession {
             await applet.importItem(request);
           }
         } catch (error) {
+          if (error instanceof InvalidCardItemError) {
+            const current = this.requireBackup().targets.find(
+              current => current.publicKey === target.publicKey,
+            )!;
+            const items = current.items.filter(
+              current => current.index !== item.index,
+            );
+            this.updateTarget({
+              ...current,
+              items,
+              complete: items.every(current => current.imported),
+            });
+            total--;
+            throwIfCancelled(signal);
+            onProgress(completed, total);
+            continue;
+          }
           if (
             error instanceof CardItemMergeConflict ||
             (error instanceof AppletISOError && error.sw === 0x6985)
           ) {
             this.updateTransfer(target.publicKey, {...item, conflict: true});
             throwIfCancelled(signal);
-            onProgress(completed, selected.length);
+            onProgress(completed, total);
             continue;
           }
 
@@ -765,7 +867,7 @@ export class CardBackupSession {
           conflict: false,
         });
         throwIfCancelled(signal);
-        onProgress(++completed, selected.length);
+        onProgress(++completed, total);
       }
     });
   }

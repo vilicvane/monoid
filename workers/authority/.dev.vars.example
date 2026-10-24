@@ -1,0 +1,13 @@
+# Test-only values. Never put production key material in local development.
+# Use Worker encrypted secrets with these names in production.
+AUTHORITY_PRIVATE_JWK='{"kty":"EC","crv":"P-256","x":"...","y":"...","d":"..."}'
+BUNDLE_MASTER_KEY="base64url-encoded-32-random-bytes"
+GITHUB_CLIENT_SECRET="test-only"
+GITHUB_CLIENT_ID="your-development-oauth-app-client-id"
+AUTHORITY_URL="http://localhost:8787/api/authority"
+# Native return + actual APP browser build + optional diagnostic demo.
+APP_REDIRECT_URIS='["app.monoid://authority/callback","http://localhost:8100/authority","http://localhost:5173/authority/callback"]'
+APP_ORIGINS='["http://localhost:8100","capacitor://localhost","https://localhost","http://localhost","http://localhost:5173"]'
+REOWN_PROJECT_ID="your-development-reown-project-id"
+# SIWX originates from the hosted page; 5173 is only for the optional demo.
+REOWN_AUTH_ORIGINS='["http://localhost:8787","http://localhost:5173"]'

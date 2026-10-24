@@ -1,5 +1,6 @@
 import {
   Bitcoin as BitcoinIcon,
+  SquareAsterisk as OTPIcon,
   KeyRound as SecurityKeyIcon,
 } from 'lucide-react';
 
@@ -16,7 +17,7 @@ import {
   WalletConnectIcon,
 } from './@ui/feature-icons.js';
 
-const FEATURE_VISUALS: Record<
+export const FEATURE_VISUALS: Record<
   FeatureRoute,
   {icon: AppIconSource; color: string}
 > = {
@@ -26,6 +27,7 @@ const FEATURE_VISUALS: Record<
   solana: {icon: SolanaIcon, color: '#9945ff'},
   cardApplets: {icon: CardAppletsIcon, color: 'var(--ion-color-primary)'},
   securityKey: {icon: SecurityKeyIcon, color: 'var(--ion-color-safe)'},
+  otp: {icon: OTPIcon, color: 'var(--ion-color-warning)'},
 };
 
 export const FEATURES = FEATURE_DEFINITIONS.map(feature => ({

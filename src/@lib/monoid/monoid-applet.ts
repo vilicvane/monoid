@@ -38,6 +38,7 @@ export const MonoidAppletHello = x.object({
   version: x.number,
   id: MonoidId,
   publicKey: PublicKey,
+  authority: x.union([x.string, x.literal(false)]),
   bundle: x.union([XUint8Array, x.literal(false)]),
   pins: x.object({
     access: x.union([x.number, x.literal(false)]),
@@ -92,11 +93,17 @@ const KeySECP256R1 = x.intersection([
 ]);
 
 const Key = x.union([KeySECP256K1, KeySECP256R1, KeyED25519]);
+const AppletGrantKey = x.union([
+  KeySECP256K1,
+  KeySECP256R1,
+  KeyED25519,
+  x.intersection([KeyIndex, x.object({type: x.literal('hmac')})]),
+]);
 const AppletGrantOptions = x.object({
   aid: XUint8Array,
   // Custom item types use signed 16-bit integers on the wire.
   types: x.array(x.tuple([x.number, x.boolean])).optional(),
-  keys: x.array(Key).optional(),
+  keys: x.array(AppletGrantKey).optional(),
   seed: x.object({index: SafeIndex, domain: XUint8Array}).optional(),
 });
 const AppletGrant = x.intersection([
@@ -139,6 +146,7 @@ export const monoidCommandDefinitions = {
   authenticate: {
     ins: 0x21,
     request: x.object({
+      aid: XUint8Array.optional(),
       secret: x.literal(true).optional(),
       pin: x.string,
     }),
@@ -211,14 +219,14 @@ export const monoidCommandDefinitions = {
     ins: 0x30,
     request: x.object({
       type: SafeItemType.optional(),
-      keyPrefix: XUint8Array.optional(),
+      metadataPrefix: XUint8Array.optional(),
     }),
     response: x.object({
       items: x.array(
         x.object({
           index: SafeIndex,
           type: SafeItemType.optional(),
-          key: XUint8Array.optional(),
+          metadata: XUint8Array.optional(),
           alias: x.string.optional(),
           secret: x.boolean,
         }),
@@ -230,7 +238,7 @@ export const monoidCommandDefinitions = {
     ins: 0x31,
     request: x.object({index: SafeIndex}),
     response: x.object({
-      key: XUint8Array.optional(),
+      metadata: XUint8Array.optional(),
       alias: x.string.optional(),
       secret: x.boolean,
     }),
@@ -259,7 +267,7 @@ export const monoidCommandDefinitions = {
     request: x.intersection([
       x.object({
         data: XUint8Array,
-        key: XUint8Array.optional(),
+        metadata: XUint8Array.optional(),
         alias: x.string.optional(),
         secret: x.boolean.optional(),
       }),
@@ -283,7 +291,7 @@ export const monoidCommandDefinitions = {
       recipientPublicKey: PublicKey.optional(),
     }),
     response: x.object({
-      key: XUint8Array.optional(),
+      metadata: XUint8Array.optional(),
       alias: x.string.optional(),
       data: XUint8Array,
     }),
@@ -296,7 +304,7 @@ export const monoidCommandDefinitions = {
     request: x.object({
       index: SafeIndex,
       senderPublicKey: PublicKey.optional(),
-      key: XUint8Array.optional(),
+      metadata: XUint8Array.optional(),
       alias: x.string.optional(),
       data: XUint8Array,
     }),

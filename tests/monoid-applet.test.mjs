@@ -124,20 +124,25 @@ function assertRequest(commands, ins, expected) {
   return decoded;
 }
 
-test('Hello always includes the stable Identity, Bundle and both PIN states', async () => {
-  for (const bundle of [false, new Uint8Array(32).fill(0x42)]) {
-    const response = {
-      version: 1,
-      id: bytes('01020304'),
-      publicKey: identityPublicKey,
-      bundle,
-      pins: {access: false, secret: 0},
-    };
-    const {applet, commands} = await createSession(response);
+test('Hello includes the installed Authority mode, stable Identity, Bundle and both PIN states', async () => {
+  for (const authority of [false, 'https://authority.example']) {
+    for (const bundle of [false, new Uint8Array(32).fill(0x42)]) {
+      const response = {
+        version: 1,
+        id: bytes('01020304'),
+        publicKey: identityPublicKey,
+        bundle,
+        authority,
+        pins: {access: false, secret: 0},
+      };
+      const {applet, commands} = await createSession(response);
 
-    assert.deepEqual(await applet.hello({}), response);
-    assertRequest(commands, 0x20, {});
-    assert.deepEqual(MonoidAppletHello.satisfies(response), response);
+      assert.deepEqual(await applet.hello({}), response);
+      assertRequest(commands, 0x20, {});
+      assert.deepEqual(MonoidAppletHello.satisfies(response), response);
+      const {authority: _authority, ...missingAuthority} = response;
+      assert.throws(() => MonoidAppletHello.satisfies(missingAuthority));
+    }
   }
 });
 
@@ -528,13 +533,13 @@ test('master key creation, viewing and signing fail before NFC transmission', as
 });
 
 test('List encodes its filters and accepts custom items without a type name', async () => {
-  const keyPrefix = bytes('010203');
+  const metadataPrefix = bytes('010203');
   const response = {
     items: [
       {index, type: 'seed', alias: 'Main', secret: true},
       {
         index: bytes('10010000000000000002'),
-        key: keyPrefix,
+        metadata: metadataPrefix,
         alias: 'Data',
         secret: false,
       },
@@ -542,8 +547,11 @@ test('List encodes its filters and accepts custom items without a type name', as
   };
   const {applet, commands} = await createSession(response);
 
-  assert.deepEqual(await applet.list({keyPrefix, type: 'seed'}), response);
-  assertRequest(commands, 0x30, {type: 'seed', keyPrefix});
+  assert.deepEqual(await applet.list({metadataPrefix, type: 'seed'}), response);
+  assertRequest(commands, 0x30, {
+    type: 'seed',
+    metadataPrefix,
+  });
 });
 
 test('empty List request is a one-byte CBOR map', async () => {
@@ -582,7 +590,7 @@ test('Set distinguishes omitted and explicit secret flags after replacement data
 
 test('View exposes item metadata and Get returns plaintext bytes', async () => {
   for (const [method, ins, response] of [
-    ['view', 0x31, {key: new Uint8Array(), alias: '', secret: true}],
+    ['view', 0x31, {metadata: new Uint8Array(), alias: '', secret: true}],
     ['view', 0x31, {secret: false}],
     ['get', 0x32, {data: bytes('000102ff')}],
   ]) {
@@ -595,7 +603,7 @@ test('View exposes item metadata and Get returns plaintext bytes', async () => {
 
 test('Create supports generated and explicit indexes with data before metadata', async () => {
   const data = bytes('000102ff');
-  const key = new TextEncoder().encode('lookup');
+  const metadata = new TextEncoder().encode('lookup');
 
   for (const selector of [{type: 'seed'}, {type: 0x1001}, {index}]) {
     const {applet, commands} = await createSession({index});
@@ -605,14 +613,14 @@ test('Create supports generated and explicit indexes with data before metadata',
         ...selector,
         secret: true,
         alias: '主账户',
-        key,
+        metadata,
         data,
       }),
       {index},
     );
     assertRequest(commands, 0x34, {
       data,
-      key,
+      metadata,
       alias: '主账户',
       secret: true,
       ...selector,
@@ -637,7 +645,7 @@ test('Export and Import preserve opaque data and absent versus empty metadata', 
   // The card owns envelope encryption; this fixture only checks byte preservation.
   const data = Uint8Array.from({length: 144}, (_, index) => index % 256);
 
-  for (const metadata of [{}, {key: new Uint8Array(), alias: ''}]) {
+  for (const metadata of [{}, {metadata: new Uint8Array(), alias: ''}]) {
     const response = {...metadata, data};
     const source = await createSession(response);
     const exported = await source.applet.exportItem({
@@ -684,7 +692,7 @@ test('Bundle transfer omits asymmetric keys and preserves the encrypted envelope
 
 test('Import chains a large encrypted envelope without changing its metadata or bytes', async () => {
   const data = Uint8Array.from({length: 700}, (_, index) => index % 256);
-  const key = bytes('00ff');
+  const metadata = bytes('00ff');
   const alias = '同步 👋';
   const {applet, commands} = await createSession({});
 
@@ -692,7 +700,7 @@ test('Import chains a large encrypted envelope without changing its metadata or 
     await applet.importItem({
       data,
       alias,
-      key,
+      metadata,
       senderPublicKey: identityPublicKey,
       index,
     }),
@@ -701,7 +709,7 @@ test('Import chains a large encrypted envelope without changing its metadata or 
   assertRequest(commands, 0x37, {
     index,
     senderPublicKey: identityPublicKey,
-    key,
+    metadata,
     alias,
     data,
   });

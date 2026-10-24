@@ -417,6 +417,7 @@ function bundleCard(identity, overrides = {}) {
     id: Uint8Array.of(0, 0, 0, identity),
     publicKey: Uint8Array.from([4, ...new Array(64).fill(identity)]),
     bundle: false,
+    authority: false,
     pins: {access: 5, secret: 5},
     ...overrides,
   };
@@ -512,6 +513,7 @@ function mount(
       id: new Uint8Array([1, 2, 3, 4]),
       publicKey: new Uint8Array([4, ...new Uint8Array(64).fill(5)]),
       bundle: false,
+      authority: false,
       pins: {access: 5, secret: 5},
     },
     view: {
@@ -648,8 +650,18 @@ function mount(
     async answerBundlePIN(...values) {
       const pin = values.length ? values[0] : 'Safe-42';
       for (let index = 0; index < 10; index++) await Promise.resolve();
-      state.bundleInputs.at(-1).resolve(pin);
-      for (let index = 0; index < 10; index++) await Promise.resolve();
+      for (let step = 0; step < 4; step++) {
+        const input = state.bundleInputs.at(-1);
+        input.resolve(pin);
+        for (let index = 0; index < 10; index++) await Promise.resolve();
+        const next = state.bundleInputs.at(-1);
+        if (
+          next === input ||
+          pin === undefined ||
+          !/^(Confirm|Set Access)/.test(next.options.placeholder)
+        )
+          break;
+      }
     },
     async tapBundle(hello) {
       const scan = state.bundleScans.at(-1);
@@ -1142,7 +1154,7 @@ test('a lost initialization response resumes by reading the known new identity w
     state.bundleCalls.filter(call => call.type === 'set-pin').length,
     1,
   );
-  assert.equal(state.bundleInputs.length, 1);
+  assert.equal(state.bundleInputs.length, 4);
   assert.equal(
     state.credentialCalls.filter(call => call.type === 'authenticate').length,
     1,

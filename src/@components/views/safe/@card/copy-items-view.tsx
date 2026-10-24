@@ -12,6 +12,7 @@ import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
 import {MonoidPIN} from '../../../../@atomics.js';
+import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {useEntrances} from '../../../../@entrances.js';
 import type {CardInformation} from '../../../../@lib/global-platform/card-information.js';
 import {
@@ -21,7 +22,6 @@ import {
 } from '../../../../@lib/monoid/index.js';
 import type {Router} from '../../../../@routes.js';
 import {isCredentialRequestCancelled} from '../../../../@services/index.js';
-import {popOutAnimationCSS} from '../../../@animations.js';
 import {
   CardGrid,
   CardPlaceholder,
@@ -32,10 +32,7 @@ import {
   MonoidScanStatePromptContentHighlight,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
-import {
-  PINKind,
-  getPINInputPlaceholder,
-} from '../../../@monoid/pin-input-placeholder.js';
+import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
 import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
 import {AppIcon} from '../../../@ui/app-icon.js';
 import {Button, Buttons} from '../../../@ui/button.js';
@@ -54,9 +51,10 @@ import {
 } from '../../../@ui/list.js';
 import {WarningMessage} from '../../../@ui/message-content.js';
 import {OperationComplete} from '../../../@ui/operation-complete.js';
-import {Step, Steps} from '../../../@ui/step.js';
+import {OperationSteps, Step} from '../../../@ui/step.js';
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
+import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
 import {
   View,
   ViewContent,
@@ -105,14 +103,6 @@ const Items = styled(List)`
 
   ${ListItemName} {
     overflow-wrap: anywhere;
-  }
-`;
-
-const CopySteps = styled(Steps)<{$exiting: boolean}>`
-  ${props => props.$exiting && popOutAnimationCSS}
-
-  @media (prefers-reduced-motion: reduce) {
-    animation-duration: 1ms;
   }
 `;
 
@@ -403,25 +393,19 @@ export const CopyItemsView = observer(
       const identity = readBackupCardIdentity(expected);
       const isNew = expected.pins.secret === false;
       const pinSignal = secretPINs.signal;
-      let pin = await showSecretPINInput(
+      const saved = await pinSession.getPINs(pinSignal);
+      if (!mounted.current || !isViewActive() || pinSignal.aborted) return;
+      let requested = await requestCardPINs(
+        showSecretPINInput,
         {
-          type: 'password',
-          ...getPINInputPlaceholder('Secret', isNew ? 'Set' : 'Enter existing'),
-          description:
-            expected.pins.access === false ? (
-              <>
-                Will be used as initial <PINKind kind="Access" /> PIN
-              </>
-            ) : (
-              <>
-                <PINKind kind="Access" /> PIN stays the same
-              </>
-            ),
-          center: true,
-          maxLength: 16,
+          secretSet: !isNew,
+          accessSet: expected.pins.access !== false,
+          savedAccessPIN: saved[uint8ArrayToHex(expected.id)],
         },
         pinSignal,
       );
+      let pin = requested?.secret;
+      let initializedAccessPIN = false;
 
       try {
         if (
@@ -474,7 +458,12 @@ export const CopyItemsView = observer(
                 pin!,
                 operation.signal,
                 onAuthenticated,
+                requested?.access,
               );
+              if (expected.pins.access === false) {
+                await applet.authenticate({pin: requested!.access!});
+                initializedAccessPIN = true;
+              }
               await session.addTarget(initialized);
             } finally {
               stopWatching();
@@ -490,7 +479,27 @@ export const CopyItemsView = observer(
           },
         );
       } finally {
+        if (
+          initializedAccessPIN &&
+          requested?.access &&
+          !pinSignal.aborted &&
+          isViewActive()
+        ) {
+          try {
+            await pinSession.setPIN(
+              uint8ArrayToHex(expected.id),
+              requested.access,
+              pinSignal,
+            );
+          } catch {
+            toast({
+              message: 'Access PIN was not saved on this device',
+              color: 'warning',
+            });
+          }
+        }
         pin = undefined;
+        requested = undefined;
       }
     };
 
@@ -799,7 +808,7 @@ export const CopyItemsView = observer(
             {stepsExited ? (
               <OperationComplete />
             ) : (
-              <CopySteps
+              <OperationSteps
                 $exiting={!!complete}
                 onAnimationEnd={event => {
                   if (complete && event.target === event.currentTarget) {
@@ -847,7 +856,7 @@ export const CopyItemsView = observer(
                     </WarningMessage>
                   )}
                 </Step>
-              </CopySteps>
+              </OperationSteps>
             )}
           </ViewContent>
         </View>

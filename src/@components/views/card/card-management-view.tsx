@@ -16,6 +16,7 @@ import {getCardInstallationChecks} from '../../../@lib/global-platform/installat
 import {
   APPLET_NAMES,
   type AppletStage,
+  type IdentityInstallationOptions,
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidCardError,
@@ -44,9 +45,9 @@ import {
 import {AppletInstallProgressContent} from '../../@monoid/applet-install-progress.js';
 import {MonoidScanStatePromptProgress} from '../../@monoid/monoid-scan-prompt.js';
 import {
-  PINKind,
-  getPINInputPlaceholder,
-} from '../../@monoid/pin-input-placeholder.js';
+  requestCardPINs,
+  type CardSetupPINs,
+} from '../../@monoid/request-card-pins.js';
 import {useIsoDepScanPrompt} from '../../@monoid/use-isodep-scan-prompt.js';
 import {AppIcon} from '../../@ui/app-icon.js';
 import {Button} from '../../@ui/button.js';
@@ -162,6 +163,7 @@ export const CardManagementView = observer(
       mode: CardMaintenanceMode;
       replaceStages?: AppletStage[];
       operationId?: string;
+      identityOptions?: IdentityInstallationOptions;
     }>();
     const [pinContent, showPIN] = useInputModal();
     const [pinSession] = useState(() =>
@@ -311,45 +313,6 @@ export const CardManagementView = observer(
       }
     }
 
-    async function requestPIN(
-      action: Action,
-      signal: AbortSignal,
-    ): Promise<MonoidPIN | undefined> {
-      const fresh =
-        action === 'fresh' ||
-        (action === 'resume' && pending?.mode === 'fresh');
-      let description: ReactNode =
-        action === 'install' || fresh || action === 'setup' ? (
-          <>
-            Will be used as initial <PINKind kind="Access" /> PIN
-          </>
-        ) : undefined;
-
-      for (;;) {
-        const value = await showPIN(
-          {
-            type: 'password',
-            ...getPINInputPlaceholder(
-              'Secret',
-              fresh ||
-                hello?.pins.secret === false ||
-                (action === 'install' &&
-                  installation?.identity.installed === false)
-                ? 'Set'
-                : 'Enter',
-            ),
-            description,
-            maxLength: 16,
-            center: true,
-          },
-          signal,
-        );
-        if (value === undefined || signal.aborted || !isActive()) return;
-        if (MonoidPIN.is(value)) return value;
-        description = 'Use 6 to 16 ASCII characters';
-      }
-    }
-
     async function finishSetup(
       result: MonoidAppletHello,
       snapshot: CardAppletSnapshot,
@@ -381,6 +344,7 @@ export const CardManagementView = observer(
         selectedOptionalStages?: readonly AppletStage[];
         replaceStages?: readonly AppletStage[];
         operationId?: string;
+        identityOptions?: IdentityInstallationOptions;
       } = {},
     ): Promise<void> {
       if (!isActive() || controller.current || !hasAppletBundle) return;
@@ -390,6 +354,7 @@ export const CardManagementView = observer(
       setPopup(undefined);
       setConfirm(undefined);
       let pin: MonoidPIN | undefined;
+      let requestedPINs: CardSetupPINs | undefined;
       let accessPINId: MonoidIdHex | undefined;
       let appletsChanged = false;
       let syncId: string | undefined;
@@ -398,11 +363,51 @@ export const CardManagementView = observer(
         | undefined;
 
       try {
-        await pinSession.authenticate(operation.signal);
+        const savedPINs = await pinSession.getPINs(operation.signal);
         operation.signal.throwIfAborted();
         if (!isActive()) return;
-        pin = await requestPIN(action, operation.signal);
-        if (!pin) return;
+        const fresh =
+          action === 'fresh' ||
+          (action === 'resume' && pending?.mode === 'fresh');
+        const freshAlreadyInstalled =
+          fresh &&
+          action === 'resume' &&
+          ['install', 'verify'].includes(pending?.checkpoint ?? '') &&
+          !!hello &&
+          uint8ArrayToHex(hello.publicKey) !== pending?.card.publicKey;
+        const secretSet = fresh
+          ? freshAlreadyInstalled && hello!.pins.secret !== false
+          : hello
+            ? hello.pins.secret !== false
+            : installation?.identity.installed === true ||
+              !!pending?.card.publicKey;
+        const stages = options.replaceStages ??
+          pending?.replaceStages ?? ['library', 'monoid'];
+        const collectingBundle =
+          !!hello?.bundle &&
+          !pending?.archive &&
+          ['update', 'reinstall'].includes(action);
+        const replacingMonoid =
+          !collectingBundle &&
+          !['install', 'verify'].includes(pending?.checkpoint ?? '') &&
+          ['update', 'reinstall', 'resume'].includes(action) &&
+          (stages.includes('monoid') || stages.includes('library'));
+        const accessSet = fresh
+          ? freshAlreadyInstalled && hello!.pins.access !== false
+          : !replacingMonoid && hello?.pins.access !== false && !!hello;
+        const id = hello ? uint8ArrayToHex(hello.id) : pending?.card.id;
+        requestedPINs = await requestCardPINs(
+          showPIN,
+          {
+            secretSet,
+            accessSet,
+            savedAccessPIN:
+              !fresh && id ? savedPINs[MonoidIdHex.satisfies(id)] : undefined,
+          },
+          operation.signal,
+        );
+        if (!requestedPINs || !isActive()) return;
+        pin = requestedPINs.secret;
         operation.signal.throwIfAborted();
 
         await scan('Scan the card', async (sessionId, setState, scanSignal) => {
@@ -426,9 +431,10 @@ export const CardManagementView = observer(
               next,
               pin!,
               signal,
+              requestedPINs?.access,
             );
             if (accessUnset) {
-              await applet.authenticate({pin: pin!});
+              await applet.authenticate({pin: requestedPINs!.access!});
               signal.throwIfAborted();
               accessPINId = uint8ArrayToHex(initialized.id);
             }
@@ -500,6 +506,7 @@ export const CardManagementView = observer(
               current.hello,
               signal,
               options.selectedOptionalStages,
+              options.identityOptions,
             );
           } else if (
             (action === 'update' || action === 'reinstall') &&
@@ -581,12 +588,20 @@ export const CardManagementView = observer(
               signal,
             );
             appletsChanged = replacing;
+            if (saved.mode === 'fresh' && saved.card.id) {
+              await pinSession.removePIN(
+                MonoidIdHex.satisfies(saved.card.id),
+                undefined,
+                signal,
+              );
+            }
           } else if (action === 'install') {
             next = await installMonoidApplets(
               sessionId,
               progress,
               signal,
               options.selectedOptionalStages,
+              options.identityOptions,
             );
             appletsChanged = true;
             await maintenance.recordInstallation(next, {
@@ -677,7 +692,11 @@ export const CardManagementView = observer(
 
         if (accessPINId) {
           try {
-            await pinSession.setPIN(accessPINId, pin, operation.signal);
+            await pinSession.setPIN(
+              accessPINId,
+              requestedPINs!.access!,
+              operation.signal,
+            );
           } catch {
             toast({
               message: 'Access PIN was not saved on this device',
@@ -691,6 +710,7 @@ export const CardManagementView = observer(
         }
       } finally {
         pin = undefined;
+        requestedPINs = undefined;
         pinSession.clear();
         // The scan overlay can close before another route takes focus. A card
         // already verified as complete must still reach its originating flow.
@@ -787,14 +807,25 @@ export const CardManagementView = observer(
       context.returnTo === 'securityKey'
         ? router.$backTo(router.securityKey.$exact)
         : undefined;
-    const back = backToCopy ?? backToBundle ?? backToSecurityKey ?? backToSafe;
+    const backToOTP =
+      context.returnTo === 'otp'
+        ? router.$backTo(router.otp.$exact)
+        : undefined;
+    const back =
+      backToCopy ??
+      backToBundle ??
+      backToSecurityKey ??
+      backToOTP ??
+      backToSafe;
     const backLabel = backToCopy
       ? 'Back to Copy'
       : backToBundle
         ? 'Back to Bundle'
         : backToSecurityKey
           ? 'Back to Security Key'
-          : 'Back to Safe';
+          : backToOTP
+            ? 'Back to OTP'
+            : 'Back to Safe';
     const canStartMaintenance = !busy && !pending;
     const canMaintain =
       canStartMaintenance && !!installation?.identity.installed;
@@ -830,6 +861,8 @@ export const CardManagementView = observer(
       (installedOptional.includes('security-key') ||
         (!!confirm?.operationId && selectedOptional.includes('security-key')));
     const replacesStorage = affectedStages.includes('monoid');
+    const affectsOTP =
+      affectedStages.includes('otp') && installedOptional.includes('otp');
 
     return (
       <>
@@ -1053,10 +1086,10 @@ export const CardManagementView = observer(
             fresh={popup === 'fresh'}
             onChange={setSelectedOptional}
             onDismiss={() => setPopup(undefined)}
-            onInstall={() => {
+            onInstall={(identityOptions = {}) => {
               if (popup === 'fresh') {
                 setPopup(undefined);
-                setConfirm({mode: 'fresh'});
+                setConfirm({mode: 'fresh', identityOptions});
               } else if (baseUpdateAvailable) {
                 setPopup(undefined);
                 setConfirm({
@@ -1066,6 +1099,7 @@ export const CardManagementView = observer(
               } else
                 void perform('install', {
                   selectedOptionalStages: selectedOptional,
+                  identityOptions,
                 });
             }}
           />
@@ -1094,6 +1128,23 @@ export const CardManagementView = observer(
                 }}
               >
                 Open Security Key
+              </Button>
+            )}
+            {popup === 'otp' && hello && (
+              <Button
+                onClick={() => {
+                  setPopup(undefined);
+                  router
+                    .otp({
+                      card: {
+                        id: uint8ArrayToHex(hello.id),
+                        publicKey: uint8ArrayToHex(hello.publicKey),
+                      },
+                    })
+                    .$push();
+                }}
+              >
+                Open OTP
               </Button>
             )}
             <Button
@@ -1131,13 +1182,15 @@ export const CardManagementView = observer(
                 selectedOptionalStages: selectedOptional,
                 replaceStages: confirm.replaceStages,
                 operationId: confirm.operationId,
+                identityOptions: confirm.identityOptions,
               })
             }
           >
             {confirm.mode === 'fresh' ? (
               <>
                 <p>All items, PINs and bundle membership will be erased.</p>
-                <p>The card will receive a new identity.</p>
+                <p>Card keys will be regenerated.</p>
+                {(hello || pending?.card.id) && <p>Card ID will be kept.</p>}
               </>
             ) : replacesStorage && (hello?.bundle || pending?.card.bundle) ? (
               <>
@@ -1163,6 +1216,13 @@ export const CardManagementView = observer(
                 !selectedOptional.includes('security-key')
                   ? 'Monoid Security Key Applet and its FIDO PIN will be removed.'
                   : 'Monoid Security Key Applet will be reinstalled. Its FIDO PIN will be reset.'}
+              </p>
+            )}
+            {affectsOTP && (
+              <p>
+                {confirm.mode === 'fresh'
+                  ? 'OTP accounts and access will be removed.'
+                  : 'Monoid OTP Applet and its access will be restored.'}
               </p>
             )}
           </ConfirmPopup>

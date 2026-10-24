@@ -41,11 +41,70 @@ function records(wallets) {
     index: getCardDerivationItemIndex(keyIndex),
     type: 0x0f01,
     secret: false,
-    key: keyIndex,
+    metadata: keyIndex,
     data: hex(encodeCardDerivationRecord(derivationRecord)),
     derivationRecord,
   };
 }
+
+test('OTP metadata follows its HMAC secret scope and imports after that secret', () => {
+  const hmac = {
+    index: '05140000000000000001',
+    type: 'hmac',
+    secret: true,
+    exported: {data: 'aa'},
+  };
+  const account = {
+    index: 'f2010000000000000001',
+    secret: false,
+    metadata: '010106001e',
+    data: hmac.index,
+    otpKeyIndex: hmac.index,
+  };
+  const plans = createCardSyncPlans([
+    card(1, 'A', [account, hmac]),
+    card(2, 'A', []),
+    card(3, 'B', []),
+    card(4, false, []),
+  ]);
+  assert.deepEqual(
+    plans[1].operations.map(operation => [
+      operation.kind,
+      operation.after.index,
+    ]),
+    [
+      ['import', hmac.index],
+      ['create', account.index],
+    ],
+  );
+  assert.deepEqual(plans[2].items, []);
+  assert.deepEqual(plans[3].items, []);
+
+  const isolated = createCardSyncPlans([
+    card(1, false, [account, {...hmac, exported: undefined}]),
+    card(2, false, []),
+  ]);
+  assert.deepEqual(isolated[1].items, []);
+  assert.throws(
+    () => createCardSyncPlans([card(1, 'A', [account]), card(2, 'A', [])]),
+    /associated key is missing/,
+  );
+  assert.throws(
+    () =>
+      createCardSyncPlans([
+        card(1, 'A', [account, {...hmac, secret: false, data: 'aa'}]),
+      ]),
+    /invalid OTP key/,
+  );
+  assert.throws(
+    () =>
+      createCardSyncPlans([
+        card(1, 'A', [account, hmac]),
+        card(2, 'A', [{...account, metadata: '010108001e'}, hmac]),
+      ]),
+    /conflicting item metadata/,
+  );
+});
 
 test('public data crosses groups while Secret and address unions stay inside each bundle', () => {
   const cards = [
@@ -56,11 +115,11 @@ test('public data crosses groups while Secret and address unions stay inside eac
     ]),
     card(2, 'A', [secret({alias: 'Ethereum'}), records(['bitcoin-taproot'])]),
     card(3, 'B', [
-      secret({fingerprint: 'key:2', key: '01', alias: 'Separate'}),
+      secret({fingerprint: 'key:2', metadata: '01', alias: 'Separate'}),
       records(['bitcoin-segwit']),
     ]),
     card(4, false, [
-      secret({fingerprint: 'key:3', key: '02'}),
+      secret({fingerprint: 'key:3', metadata: '02'}),
       records(['evm']),
     ]),
     card(5, false, []),
@@ -169,7 +228,7 @@ test('opaque Secret verification uses another member, while differing aliases or
     /conflicting Secret/,
   );
   assert.throws(
-    () => createCardSyncPlans(pair(secret(), secret({key: ''}))),
+    () => createCardSyncPlans(pair(secret(), secret({metadata: ''}))),
     /conflicting item metadata/,
   );
 });
@@ -193,10 +252,10 @@ test('orphan records and a public/private index collision are not silently globa
 test('non-bundle Secrets with the same index remain separate and are never exported to peers', () => {
   const plans = createCardSyncPlans([
     card(1, false, [
-      secret({fingerprint: undefined, exported: undefined, key: '01'}),
+      secret({fingerprint: undefined, exported: undefined, metadata: '01'}),
     ]),
     card(2, false, [
-      secret({fingerprint: undefined, exported: undefined, key: '02'}),
+      secret({fingerprint: undefined, exported: undefined, metadata: '02'}),
     ]),
   ]);
   assert.deepEqual(
@@ -287,7 +346,7 @@ test('a lone old or malformed credential is rejected before creating a transfer 
   for (const item of [
     credential(1, {fields: [[10, undefined]]}),
     credential(1, {fields: [[10, new Uint8Array(31)]]}),
-    credential(1, {key: '00'.repeat(64)}),
+    credential(1, {metadata: '00'.repeat(64)}),
     credential(1, {secret: true}),
   ]) {
     assert.throws(

@@ -25,6 +25,11 @@ export const FEATURES = [
     description: 'Manage credentials on your card.',
   },
   {
+    route: 'otp',
+    name: 'One-time Password',
+    description: 'Get verification codes from your card.',
+  },
+  {
     route: 'cardApplets',
     name: 'Card Applets',
     description: 'Manage card applets.',

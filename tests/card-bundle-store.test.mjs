@@ -13,6 +13,7 @@ function hello(id, overrides = {}) {
     id: Uint8Array.of(0, 0, 0, id),
     publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(id)),
     bundle: false,
+    authority: false,
     pins: {access: 5, secret: 5},
     ...overrides,
   };

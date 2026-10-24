@@ -19,6 +19,15 @@ export abstract class Applet<TCommandDefinitions> {
 
   constructor(readonly aid: Uint8Array) {}
 
+  /** Select another applet without closing the caller's NFC connection. */
+  async useSession(source: Applet<unknown>): Promise<this> {
+    if (source.sessionId === undefined) {
+      throw new Error('Applet commands require an open NFC session.');
+    }
+
+    return this.openSession(source.sessionId);
+  }
+
   standby(
     callback: (applet: this) => Promise<void>,
     onError: (error: unknown) => void = console.error,

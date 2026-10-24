@@ -3,6 +3,8 @@ import {Check as check} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
+import {popOutAnimationCSS} from '../@animations.js';
+
 import {AppIcon} from './app-icon.js';
 import {LoadingSpinner} from './loading-spinner.js';
 
@@ -12,6 +14,14 @@ export const Steps = styled.div`
   display: flex;
   flex-direction: column;
   gap: var(--gap);
+`;
+
+export const OperationSteps = styled(Steps)<{$exiting: boolean}>`
+  ${props => props.$exiting && popOutAnimationCSS}
+
+  @media (prefers-reduced-motion: reduce) {
+    animation-duration: 1ms;
+  }
 `;
 
 const Container = styled.div`

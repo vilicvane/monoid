@@ -31,7 +31,7 @@ export function credential(number, options = {}) {
   return {
     index: `f101${hex(credentialId.subarray(0, 8))}`,
     secret: false,
-    key: hex(Uint8Array.from([...scopeBytes, ...rpHash])),
+    metadata: hex(Uint8Array.from([...scopeBytes, ...rpHash])),
     data: hex(encode(fields)),
     ...overrides,
   };

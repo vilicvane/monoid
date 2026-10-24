@@ -145,6 +145,7 @@ function mount({
       id: bytes('11223344'),
       publicKey: bytes(`04${'12'.repeat(64)}`),
       bundle: false,
+      authority: false,
       pins: {access: accessPIN, secret: secretPIN},
     },
   };
@@ -222,10 +223,22 @@ function mount({
       catch: promise => promise.catch(error => state.errors.push(error)),
     },
   };
-  state.answer = async value => {
+  state.answer = async (value, access = value) => {
     await setImmediate();
-    state.inputs.at(-1).resolve(value);
-    await setImmediate();
+    for (let step = 0; step < 4; step++) {
+      const input = state.inputs.at(-1);
+      input.resolve(
+        input.options.placeholder.includes('Access') ? access : value,
+      );
+      await setImmediate();
+      const next = state.inputs.at(-1);
+      if (
+        next === input ||
+        value === undefined ||
+        !/^(Confirm|Set Access)/.test(next.options.placeholder)
+      )
+        break;
+    }
   };
   state.tap = async (hello = state.current) => {
     const scan = state.scans.at(-1);
@@ -350,10 +363,8 @@ test('a new card unlocks storage before Secret PIN input and saves through that 
   assert.equal(options.type, 'password');
   assert.equal(options.maxLength, 16);
   assert.equal(options.defaultValue, undefined);
-  assert.equal(
-    textOf(options.description),
-    'Will be used as initial Access PIN',
-  );
+  assert.equal(options.checkbox.defaultChecked, true);
+  assert.equal(options.checkbox.label, 'Set a different Access PIN');
   assert.equal(textOf(state.tree), 'pin-inputscan-input');
 
   await state.answer(PIN);
@@ -386,6 +397,53 @@ test('a new card unlocks storage before Secret PIN input and saves through that 
   assert.deepEqual(state.toasts, []);
   assert.equal(state.unlocks.length, 1);
   assert.deepEqual(state.releases, state.sessions);
+});
+
+test('separate setup authenticates and saves only the chosen Access PIN', async () => {
+  const state = mount();
+  await state.answer(PIN, 'Access-42');
+  assert.deepEqual(
+    state.inputs.map(i => i.options.placeholder),
+    [
+      'Set Secret PIN',
+      'Confirm Secret PIN',
+      'Set Access PIN',
+      'Confirm Access PIN',
+    ],
+  );
+  await state.tap();
+  await state.finishScan();
+  assert.deepEqual(state.commands, [
+    ['setPIN', {secret: true, pin: PIN}],
+    ['authenticate', {secret: true, pin: PIN}],
+    ['setPIN', {pin: 'Access-42'}],
+    ['hello', {}],
+    ['authenticate', {pin: 'Access-42'}],
+  ]);
+  assert.equal(state.saved[0].pin, 'Access-42');
+});
+
+test('restoring saved Access PIN asks only for the existing Secret PIN', async () => {
+  const saved = [];
+  const pinSession = {
+    getPINs: async () => ({11223344: 'Saved-42'}),
+    setPIN: async (id, pin) => saved.push({id, pin}),
+  };
+  const state = mount({secretPIN: 5, pinSession});
+  await state.answer(PIN);
+  assert.deepEqual(
+    state.inputs.map(i => i.options.placeholder),
+    ['Enter existing Secret PIN'],
+  );
+  await state.tap();
+  await state.finishScan();
+  assert.deepEqual(saved, [{id: '11223344', pin: 'Saved-42'}]);
+  assert.deepEqual(state.commands, [
+    ['authenticate', {secret: true, pin: PIN}],
+    ['setPIN', {pin: 'Saved-42'}],
+    ['hello', {}],
+    ['authenticate', {pin: 'Saved-42'}],
+  ]);
 });
 
 test('a provided page PIN session owns the scan and saves the verified Access PIN after scan exit', async () => {
@@ -508,10 +566,7 @@ test('an existing Secret PIN initializes only the missing Access PIN', async () 
     state.inputs[0].options.placeholder,
     'Enter existing Secret PIN',
   );
-  assert.equal(
-    textOf(state.inputs[0].options.description),
-    'Will be used as initial Access PIN',
-  );
+  assert.equal(state.inputs[0].options.checkbox, undefined);
   await state.answer(PIN);
   await state.tap();
   await state.finishScan();

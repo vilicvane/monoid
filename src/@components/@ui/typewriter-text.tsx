@@ -39,7 +39,7 @@ export function TypewriterText({
   interval = 3000,
 }: {
   texts: readonly [string, string, ...string[]];
-  children: (text: string) => ReactNode;
+  children: (text: string, index: number) => ReactNode;
   fallback: ReactNode;
   active?: boolean;
   interval?: number;
@@ -107,7 +107,9 @@ export function TypewriterText({
   return (
     <Container>
       <Fallback>{fallback}</Fallback>
-      <span aria-hidden>{children(characters.slice(0, length).join(''))}</span>
+      <span aria-hidden>
+        {children(characters.slice(0, length).join(''), index)}
+      </span>
     </Container>
   );
 }

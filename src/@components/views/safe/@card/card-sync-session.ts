@@ -9,6 +9,7 @@ import {
 } from '../../../../@atomics.js';
 import {AppletISOError} from '../../../../@lib/applet.js';
 import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
+import {InvalidCardItemError} from '../../../../@lib/card-item-error.js';
 import {
   type MonoidApplet,
   type MonoidAppletHello,
@@ -24,10 +25,16 @@ import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 import {xCBOR} from '../../../../@x-value/index.js';
 import {
   decodeCardDerivationRecord,
+  filterCardDerivationAssociations,
   getCardDerivationItemIndex,
   isCardDerivationItem,
 } from '../card-derivations.js';
-import {validateCardCredentialItem} from '../card-item-merge.js';
+import {validateCardImmutableItem} from '../card-item-merge.js';
+import {
+  filterCardOTPAssociations,
+  isCardOTPItem,
+  validateCardOTPItem,
+} from '../card-otp.js';
 import type {ScannedCardData} from '../common.js';
 
 import {readBackupCardIdentity} from './card-backup-session.js';
@@ -181,7 +188,7 @@ async function readFingerprint(
 
 function operationRequest(operation: CardSyncOperation): {
   index: Uint8Array;
-  key?: Uint8Array;
+  metadata?: Uint8Array;
   alias?: string;
   data?: Uint8Array;
   secret?: false;
@@ -195,7 +202,9 @@ function operationRequest(operation: CardSyncOperation): {
       const exported = operation.exported!;
       return {
         index,
-        ...(exported.key !== undefined && {key: hexToUint8Array(exported.key)}),
+        ...(exported.metadata !== undefined && {
+          metadata: hexToUint8Array(exported.metadata),
+        }),
         ...(exported.alias !== undefined && {alias: exported.alias}),
         data: hexToUint8Array(exported.data),
       };
@@ -203,7 +212,9 @@ function operationRequest(operation: CardSyncOperation): {
     case 'create':
       return {
         index,
-        ...(after.key !== undefined && {key: hexToUint8Array(after.key)}),
+        ...(after.metadata !== undefined && {
+          metadata: hexToUint8Array(after.metadata),
+        }),
         ...(after.alias !== undefined && {alias: after.alias}),
         data: hexToUint8Array(after.data!),
         secret: false,
@@ -340,52 +351,73 @@ export class CardSyncSession {
     cancelled(signal);
     const {items: entries} = listed ?? (await applet.list({}));
     const items: CardSyncItem[] = [];
+    const skippedIndexes: string[] = [];
     this.report({stage, current: 0, total: entries.length}, callback);
 
-    for (const entry of entries) {
+    for (const [position, entry] of entries.entries()) {
       cancelled(signal);
       const item: CardSyncItem = {
         index: SafeIndexHex.satisfies(uint8ArrayToHex(entry.index)),
         type: entry.type,
         alias: entry.alias,
-        key: entry.key === undefined ? undefined : uint8ArrayToHex(entry.key),
+        metadata:
+          entry.metadata === undefined
+            ? undefined
+            : uint8ArrayToHex(entry.metadata),
         secret: entry.secret,
       };
 
-      if (item.secret) {
-        // F101 must be public; never try to read an invalid Secret record.
-        validateCardCredentialItem(item);
-        item.fingerprint = await readFingerprint(applet, item);
-      } else {
-        const {data} = await applet.get({index: entry.index});
-        item.data = uint8ArrayToHex(data);
-        validateCardCredentialItem(item);
+      try {
+        if (item.secret) {
+          // App metadata must be public; never read a mislabeled Secret record.
+          validateCardImmutableItem(item);
+          item.fingerprint = await readFingerprint(applet, item);
+        } else {
+          const {data} = await applet.get({index: entry.index});
+          item.data = uint8ArrayToHex(data);
+          validateCardImmutableItem(item);
+          if (isCardOTPItem(item)) item.otpKeyIndex = validateCardOTPItem(item);
 
-        if (isCardDerivationItem(item)) {
-          const record = decodeCardDerivationRecord(data);
-          if (
-            item.key !== record.index ||
-            item.index !== getCardDerivationItemIndex(record.index)
-          ) {
-            throw new MonoidCardError('Invalid address records');
+          if (isCardDerivationItem(item)) {
+            const record = decodeCardDerivationRecord(data);
+            if (
+              item.metadata !== record.index ||
+              item.index !== getCardDerivationItemIndex(record.index)
+            ) {
+              throw new InvalidCardItemError('Invalid address records');
+            }
+            item.derivationRecord = record;
           }
-          item.derivationRecord = record;
         }
-      }
 
-      if (isCardDerivationItem(item) && !item.derivationRecord) {
-        throw new MonoidCardError('Invalid address records');
-      }
+        if (isCardDerivationItem(item) && !item.derivationRecord) {
+          throw new InvalidCardItemError('Invalid address records');
+        }
 
-      items.push(item);
+        items.push(item);
+      } catch (error) {
+        if (!(error instanceof InvalidCardItemError)) throw error;
+        skippedIndexes.push(item.index);
+      }
       this.report(
-        {stage, current: items.length, total: entries.length},
+        {stage, current: position + 1, total: entries.length},
         callback,
       );
     }
 
     cancelled(signal);
-    return {...identity, items};
+    const compatible =
+      stage === 'reading'
+        ? filterCardDerivationAssociations(filterCardOTPAssociations(items))
+        : items;
+    for (const item of items) {
+      if (!compatible.includes(item)) skippedIndexes.push(item.index);
+    }
+    return {
+      ...identity,
+      items: compatible,
+      ...(skippedIndexes.length > 0 && {skippedIndexes}),
+    };
   }
 
   async add(
@@ -408,11 +440,6 @@ export class CardSyncSession {
         onAuthenticated,
       );
       const listed = await applet.list({});
-      const secrets =
-        identity.bundle === false
-          ? []
-          : listed.items.filter(item => item.secret);
-
       const read = await this.read(
         applet,
         identity,
@@ -421,6 +448,8 @@ export class CardSyncSession {
         onProgress,
         listed,
       );
+      const secrets =
+        identity.bundle === false ? [] : read.items.filter(item => item.secret);
       let exported = 0;
 
       for (const item of read.items) {
@@ -434,12 +463,17 @@ export class CardSyncSession {
           index: hexToUint8Array(item.index),
         });
         const artifact = {
-          key:
-            result.key === undefined ? undefined : uint8ArrayToHex(result.key),
+          metadata:
+            result.metadata === undefined
+              ? undefined
+              : uint8ArrayToHex(result.metadata),
           alias: result.alias,
           data: uint8ArrayToHex(result.data),
         };
-        if (artifact.key !== item.key || artifact.alias !== item.alias)
+        if (
+          artifact.metadata !== item.metadata ||
+          artifact.alias !== item.alias
+        )
           changed();
         item.exported = artifact;
         this.report(
@@ -704,6 +738,8 @@ export class CardSyncSession {
       )
         changed();
       if (!source.complete) throw new MonoidCardError('Sync the card first');
+      if (source.skippedIndexes?.length || destination.skippedIndexes?.length)
+        throw new MonoidCardError('Cannot back up unsupported items');
       if (
         identity.bundle === false ||
         identity.bundle !== target.bundle ||
@@ -731,13 +767,13 @@ export class CardSyncSession {
           index: item.index,
           secret: item.secret,
           key:
-            exported.key === undefined
+            exported.metadata === undefined
               ? undefined
-              : uint8ArrayToHex(exported.key),
+              : uint8ArrayToHex(exported.metadata),
           alias: exported.alias,
           data: uint8ArrayToHex(exported.data),
         };
-        if (archived.key !== item.key || archived.alias !== item.alias)
+        if (archived.key !== item.metadata || archived.alias !== item.alias)
           changed();
         assertCardMaintenanceBundleRecovery(target, {
           source: recovery.source,

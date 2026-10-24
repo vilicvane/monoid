@@ -9,6 +9,7 @@ let scanner;
 let moduleVersion = 0;
 let platform = 'android';
 let foregrounds = [];
+let clipboard;
 const qrScanLifecycle = {closing: Promise.resolve()};
 
 const WALLET_CONNECT_URI = `wc:${'a'.repeat(64)}@2?relay-protocol=irn&symKey=${'b'.repeat(64)}`;
@@ -24,9 +25,15 @@ mock.module('@capacitor/core', {
 mock.module('@capacitor/clipboard', {
   namedExports: {
     Clipboard: {
-      read: async () => assert.fail('Unexpected clipboard read.'),
+      read: async () => clipboard ?? assert.fail('Unexpected clipboard read.'),
     },
   },
+});
+mock.module('capacitor-isodep-nfc', {
+  namedExports: {IsoDepNfc: {}},
+});
+mock.module('@capacitor/app', {
+  namedExports: {App: {}},
 });
 mock.module('capacitor-qr-scanner', {
   namedExports: {
@@ -282,6 +289,7 @@ function deferred() {
 function resetScanner(overrides = {}) {
   globalThis.__scanViewHot = {data: {}};
   foregrounds = [];
+  clipboard = undefined;
   qrScanLifecycle.closing = Promise.resolve();
   scanner = {
     starts: [],
@@ -338,15 +346,39 @@ function mount(ScanView) {
     toasts: [],
     connections: [],
     routes: [],
+    otpRoutes: [],
+    imports: new Map(),
     rejected: [],
     view: {$leaving: false, $match: {$exact: {$active: true}}},
   };
   state.toast = options => state.toasts.push(options);
   state.entrances = {
     router: {
+      otp: value => ({
+        $push: () => {
+          state.otpRoutes.push(value);
+          state.importedURI = state.entrances.otpStore.takeImport(
+            value.importId,
+          );
+          return {$completed: Promise.resolve()};
+        },
+      }),
       scan: {
         connection: value => ({$push: () => state.routes.push(value)}),
       },
+    },
+    otpStore: {
+      prepareImport(uri) {
+        const id = 'test-import';
+        state.imports.set(id, uri);
+        return id;
+      },
+      takeImport(id) {
+        const value = state.imports.get(id);
+        state.imports.delete(id);
+        return value;
+      },
+      discardImport: id => state.imports.delete(id),
     },
     walletKitService: {
       connect: (uri, signal) => {
@@ -1153,6 +1185,122 @@ async function finishPreview(state) {
   await setImmediate();
   state.rerender();
 }
+
+test('OTP scanning waits for camera cleanup and opens confirmation without a WalletConnect pairing', async () => {
+  const closing = deferred();
+  const native = resetScanner({
+    stopScan: ({scanId}) => {
+      native.stops.push(scanId);
+      return closing.promise;
+    },
+  });
+  const state = mount(await loadView());
+  const uri =
+    'otpauth://totp/Example%20Login:alice?secret=MZXW6YTBOJ&issuer=Example';
+  try {
+    await setImmediate();
+    const codes = native.listeners.find(
+      listener => listener.name === 'codesScanned',
+    );
+    codes.callback({scanId: native.starts[0].scanId, values: [uri]});
+    codes.callback({scanId: native.starts[0].scanId, values: [uri]});
+    state.rerender();
+    assert.equal(state.status, 'completing');
+    assert.deepEqual(state.connections, []);
+    assert.deepEqual(state.otpRoutes, []);
+    state.cover();
+    await setImmediate();
+    state.rerender();
+    assert.deepEqual(state.otpRoutes, []);
+    closing.resolve();
+    await finishPreview(state);
+    assert.deepEqual(state.otpRoutes, [{importId: 'test-import'}]);
+    assert.equal(state.importedURI, uri);
+    assert.equal(state.imports.size, 0);
+    assert.equal(JSON.stringify(state.otpRoutes).includes('secret'), false);
+    state.rerender({active: false});
+    state.rerender({active: true});
+    await setImmediate();
+    state.rerender();
+    assert.equal(state.status, 'scanning');
+    assert.equal(state.otpRoutes.length, 1);
+    assert.deepEqual(state.errors, []);
+  } finally {
+    closing.resolve();
+    state.cleanup();
+  }
+  await setImmediate();
+});
+
+test('invalid OTP QR parameters show one validation message and keep scanning', async () => {
+  const native = resetScanner();
+  const state = mount(await loadView());
+  try {
+    await setImmediate();
+    const codes = native.listeners.find(
+      listener => listener.name === 'codesScanned',
+    );
+    for (let i = 0; i < 3; i++) {
+      codes.callback({
+        scanId: native.starts[0].scanId,
+        values: ['otpauth://totp/Example?secret=MY&digits=7'],
+      });
+    }
+    state.rerender();
+    assert.equal(state.status, 'scanning');
+    assert.deepEqual(state.toasts, [
+      {message: 'OTP codes must contain 6 or 8 digits'},
+    ]);
+    assert.deepEqual(state.otpRoutes, []);
+    assert.deepEqual(native.stops, []);
+  } finally {
+    state.cleanup();
+  }
+  await setImmediate();
+});
+
+test('pasting an OTP link uses the same confirmation handoff', async () => {
+  resetScanner();
+  const state = mount(await loadView());
+  const uri = 'otpauth://totp/Example?secret=MY';
+  try {
+    await setImmediate();
+    clipboard = {value: uri, type: 'text/plain'};
+    state.rerender();
+    state.find('button').props.onClick();
+    await setImmediate();
+    state.rerender();
+    await finishPreview(state);
+    assert.equal(state.importedURI, uri);
+    assert.equal(state.otpRoutes.length, 1);
+    assert.deepEqual(state.connections, []);
+  } finally {
+    state.cleanup();
+  }
+  await setImmediate();
+});
+
+test('leaving during OTP scan contraction never starts an import', async () => {
+  const native = resetScanner();
+  const state = mount(await loadView());
+  try {
+    await setImmediate();
+    native.listeners
+      .find(listener => listener.name === 'codesScanned')
+      .callback({
+        scanId: native.starts[0].scanId,
+        values: ['otpauth://totp/Example?secret=MY'],
+      });
+    state.rerender();
+    state.rerender({active: false, leaving: true});
+    await finishPreview(state);
+    assert.equal(state.imports.size, 0);
+    assert.deepEqual(state.otpRoutes, []);
+  } finally {
+    state.cleanup();
+  }
+  await setImmediate();
+});
 
 test('pairing starts during camera contraction and a slow proposal routes after the preview finishes without waiting text', async () => {
   const native = resetScanner();

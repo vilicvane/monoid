@@ -185,7 +185,7 @@ test('a completed scan stores every resource and routes to Card with only its id
   });
   state.scannedItems = [
     {type: 'seed', index: '00010000000000000001', alias: 'Seed', secret: true},
-    {index: 'ffff0000000000000002', alias: '', key: '', secret: false},
+    {index: 'ffff0000000000000002', alias: '', metadata: '', secret: false},
   ];
   const applet = {};
   const publicKey = Uint8Array.from([

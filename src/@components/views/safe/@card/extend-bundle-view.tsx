@@ -21,7 +21,7 @@ import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
 import {Button} from '../../../@ui/button.js';
 import {InfoMessage} from '../../../@ui/message-content.js';
 import {OperationComplete} from '../../../@ui/operation-complete.js';
-import {Step, Steps} from '../../../@ui/step.js';
+import {OperationSteps, Step} from '../../../@ui/step.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 import {
   View,
@@ -48,6 +48,9 @@ export const ExtendBundleView = observer(
       ),
     );
     const [working, setWorking] = useState(false);
+    const [stepsExited, setStepsExited] = useState(
+      () => session.phase === 'complete',
+    );
     const [secretPINSession] = useState(() => new CardSecretPINSession());
     const [pinInput, showPINInput] = useInputModal();
     const scan = useIsoDepScanPrompt();
@@ -125,9 +128,9 @@ export const ExtendBundleView = observer(
     const activeNumero = {
       collecting: 1,
       requesting: 2,
-      approving: 3,
-      joining: 4,
-      complete: 5,
+      approving: 2,
+      joining: 3,
+      complete: 4,
     }[session.phase];
     const backToCard = router.$backTo(router.safe.card.$exact);
     const back = backToCard ?? router.$backTo(router.safe.$exact);
@@ -302,111 +305,108 @@ export const ExtendBundleView = observer(
               : scanButton
           }
         >
-          <Steps>
-            <Step
-              title="Add new card"
-              numero={1}
-              activeNumero={activeNumero}
-              keepExpanded={activeNumero < 4}
-              processing={busy && activeNumero === 1}
+          {stepsExited ? (
+            <OperationComplete />
+          ) : (
+            <OperationSteps
+              $exiting={complete}
+              onAnimationEnd={event => {
+                if (complete && event.target === event.currentTarget) {
+                  setStepsExited(true);
+                }
+              }}
             >
-              <CardGrid>
-                {session.target ? (
-                  <CardPreview id={session.target.id} description="ready" />
-                ) : (
-                  <CardPreviewButton
-                    aria-label="Scan new card"
-                    disabled={busy}
-                    onClick={errorService.catch(addition.resume)}
-                  >
-                    <CardPlaceholder aria-hidden="true">+</CardPlaceholder>
-                  </CardPreviewButton>
+              <Step
+                title="Add new card"
+                numero={1}
+                activeNumero={activeNumero}
+                keepExpanded={activeNumero < 3}
+                processing={busy && activeNumero === 1}
+              >
+                <CardGrid>
+                  {session.target ? (
+                    <CardPreview id={session.target.id} description="ready" />
+                  ) : (
+                    <CardPreviewButton
+                      aria-label="Scan new card"
+                      disabled={busy}
+                      onClick={errorService.catch(addition.resume)}
+                    >
+                      <CardPlaceholder aria-hidden="true">+</CardPlaceholder>
+                    </CardPreviewButton>
+                  )}
+                </CardGrid>
+              </Step>
+              <Step
+                title="Extend bundle"
+                numero={2}
+                activeNumero={activeNumero}
+                keepExpanded
+                processing={busy && activeNumero === 2}
+              >
+                <CardGrid>
+                  {session.requester ? (
+                    <CardPreview
+                      id={session.requester.id}
+                      description={
+                        session.phase === 'requesting' ? 'pending' : 'complete'
+                      }
+                      $pending={session.phase === 'requesting'}
+                    />
+                  ) : (
+                    <CardPreviewButton
+                      aria-label="Scan a bundle card"
+                      disabled={busy || session.phase !== 'requesting'}
+                      onClick={errorService.catch(configure)}
+                    >
+                      <CardPlaceholder aria-hidden="true">+</CardPlaceholder>
+                    </CardPreviewButton>
+                  )}
+                  {session.approver ? (
+                    <CardPreview
+                      id={session.approver.id}
+                      description="complete"
+                    />
+                  ) : (
+                    <CardPreviewButton
+                      aria-label="Scan another bundle card"
+                      disabled={busy || session.phase !== 'approving'}
+                      onClick={errorService.catch(configure)}
+                    >
+                      <CardPlaceholder aria-hidden="true">+</CardPlaceholder>
+                    </CardPreviewButton>
+                  )}
+                </CardGrid>
+                {activeNumero === 2 && (
+                  <InfoMessage>
+                    {session.phase === 'requesting' && session.requester
+                      ? 'Scan the same card to retry.'
+                      : 'Scan two cards from this bundle.'}
+                  </InfoMessage>
                 )}
-              </CardGrid>
-            </Step>
-            <Step
-              title="Request extension"
-              numero={2}
-              activeNumero={activeNumero}
-              keepExpanded
-              processing={busy && activeNumero === 2}
-            >
-              <CardGrid>
-                {session.requester ? (
-                  <CardPreview
-                    id={session.requester.id}
-                    description={activeNumero === 2 ? 'pending' : 'complete'}
-                    $pending={activeNumero === 2}
-                  />
-                ) : (
-                  <CardPreviewButton
-                    aria-label="Scan a bundle card"
-                    disabled={busy}
-                    onClick={errorService.catch(configure)}
-                  >
-                    <CardPlaceholder aria-hidden="true">+</CardPlaceholder>
-                  </CardPreviewButton>
+              </Step>
+              <Step
+                title="Join bundle"
+                numero={3}
+                activeNumero={activeNumero}
+                keepExpanded
+                processing={busy && activeNumero === 3}
+              >
+                <CardGrid>
+                  {session.target && (
+                    <CardPreview
+                      id={session.target.id}
+                      description={activeNumero === 3 ? 'pending' : 'complete'}
+                      $pending={activeNumero === 3}
+                    />
+                  )}
+                </CardGrid>
+                {activeNumero === 3 && (
+                  <InfoMessage>Scan the new card added in step 1.</InfoMessage>
                 )}
-              </CardGrid>
-              {activeNumero === 2 && (
-                <InfoMessage>
-                  {session.requester
-                    ? 'Scan the same card to retry.'
-                    : 'Scan any card in this bundle.'}
-                </InfoMessage>
-              )}
-            </Step>
-            <Step
-              title="Approve extension"
-              numero={3}
-              activeNumero={activeNumero}
-              keepExpanded
-              processing={busy && activeNumero === 3}
-            >
-              <CardGrid>
-                {session.approver ? (
-                  <CardPreview
-                    id={session.approver.id}
-                    description="complete"
-                  />
-                ) : (
-                  <CardPreviewButton
-                    aria-label="Scan another bundle card"
-                    disabled={busy}
-                    onClick={errorService.catch(configure)}
-                  >
-                    <CardPlaceholder aria-hidden="true">+</CardPlaceholder>
-                  </CardPreviewButton>
-                )}
-              </CardGrid>
-              {activeNumero === 3 && (
-                <InfoMessage>
-                  Scan a different card from the same bundle.
-                </InfoMessage>
-              )}
-            </Step>
-            <Step
-              title="Join bundle"
-              numero={4}
-              activeNumero={activeNumero}
-              keepExpanded
-              processing={busy && activeNumero === 4}
-            >
-              <CardGrid>
-                {session.target && (
-                  <CardPreview
-                    id={session.target.id}
-                    description={activeNumero === 4 ? 'pending' : 'complete'}
-                    $pending={activeNumero === 4}
-                  />
-                )}
-              </CardGrid>
-              {activeNumero === 4 && (
-                <InfoMessage>Scan the new card added in step 1.</InfoMessage>
-              )}
-            </Step>
-          </Steps>
-          {complete && <OperationComplete />}
+              </Step>
+            </OperationSteps>
+          )}
         </ViewContent>
         {addition.content}
         {isActive() && pinInput}

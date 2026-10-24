@@ -56,6 +56,45 @@ beforeEach(() => {
   scan = undefined;
 });
 
+test('useSession selects each applet on the same connection without binding either template', async () => {
+  const monoid = new TestApplet(Uint8Array.of(1, 2, 3));
+  const otp = new TestApplet(Uint8Array.of(4, 5, 6));
+  const connected = await monoid.openSession('shared-connection');
+  const client = await otp.useSession(connected);
+  const returned = await connected.useSession(client);
+  await returned.sendCommand(0x21, Uint8Array.of(0xa0));
+
+  assert.notEqual(client, otp);
+  assert.notEqual(returned, connected);
+  assert.deepEqual(
+    exchanges.map(item => item.sessionId),
+    Array(4).fill('shared-connection'),
+  );
+  assert.deepEqual(
+    exchanges.slice(0, 3).map(item => item.data.slice(5)),
+    [
+      [1, 2, 3],
+      [4, 5, 6],
+      [1, 2, 3],
+    ],
+  );
+  await assert.rejects(
+    monoid.sendCommand(0x21, Uint8Array.of(0xa0)),
+    /open NFC session/,
+  );
+  await assert.rejects(
+    otp.sendCommand(0x21, Uint8Array.of(0xa0)),
+    /open NFC session/,
+  );
+});
+
+test('useSession rejects an unbound source before sending any SELECT', async () => {
+  const monoid = new TestApplet(Uint8Array.of(1));
+  const otp = new TestApplet(Uint8Array.of(2));
+  await assert.rejects(otp.useSession(monoid), /open NFC session/);
+  assert.deepEqual(exchanges, []);
+});
+
 function standby({callback = async () => {}, onNotFound} = {}) {
   const events = [];
   const failures = [];

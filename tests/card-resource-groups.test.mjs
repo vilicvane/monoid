@@ -62,12 +62,12 @@ test('a record with no source on this card stays independently selectable', () =
   ]);
 });
 
-test('an arbitrary lookup key or unparsed app type does not imply an attachment', () => {
-  const ordinary = {index: '12340000000000000003', key: SEED_INDEX};
+test('an arbitrary metadata or unparsed app type does not imply an attachment', () => {
+  const ordinary = {index: '12340000000000000003', metadata: SEED_INDEX};
   const unparsed = {
     index: '0f010000000000000001',
     type: 0x0f01,
-    key: SEED_INDEX,
+    metadata: SEED_INDEX,
   };
 
   assert.deepEqual(getCardResourceGroups([seed, ordinary, unparsed]), [

@@ -25,8 +25,8 @@ test('old and malformed credentials are explicitly rejected even without a peer'
   for (const item of [
     credential(1, {fields: [[10, undefined]]}),
     credential(1, {fields: [[10, new Uint8Array(31)]]}),
-    credential(1, {key: '11'.repeat(32)}),
-    credential(1, {key: '22'.repeat(64)}),
+    credential(1, {metadata: '11'.repeat(32)}),
+    credential(1, {metadata: '22'.repeat(64)}),
     credential(1, {index: 'f1010000000000000002'}),
     credential(1, {data: undefined}),
     credential(1, {secret: true}),

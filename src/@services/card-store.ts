@@ -20,10 +20,11 @@ export class CardItem implements ScannedCardItemData {
   readonly index: SafeIndexHex;
   type: ScannedCardItemData['type'];
   alias: string | undefined;
-  key: string | undefined;
+  metadata: string | undefined;
   secret: boolean;
   publicKey: PublicKeyHex | undefined;
   derivationRecord: ScannedCardItemData['derivationRecord'];
+  otpKeyIndex: ScannedCardItemData['otpKeyIndex'];
   derivations: ScannedCardItemData['derivations'];
   addressType: AddressType | undefined;
   refs: Partial<Record<AddressType, ScannedCardKeyData['ref']>> = {};
@@ -52,10 +53,11 @@ export class CardItem implements ScannedCardItemData {
   update(item: ScannedCardItemData): void {
     this.type = item.type;
     this.alias = item.alias;
-    this.key = item.key;
+    this.metadata = item.metadata;
     this.secret = item.secret;
     this.publicKey = item.publicKey;
     this.derivationRecord = item.derivationRecord;
+    this.otpKeyIndex = item.otpKeyIndex;
     this.derivations = item.derivations;
 
     for (const wallet of item.derivations ?? []) {
@@ -141,7 +143,7 @@ export class CardState implements ScannedCardData {
         index: item.index,
         ...(item.type !== undefined && {type: item.type}),
         ...(item.alias !== undefined && {alias: item.alias}),
-        ...(item.key !== undefined && {key: item.key}),
+        ...(item.metadata !== undefined && {metadata: item.metadata}),
         secret: item.secret,
         ...(item.publicKey !== undefined && {publicKey: item.publicKey}),
         ...(item.ref !== undefined && {ref: toJS(item.ref)}),
@@ -151,6 +153,7 @@ export class CardState implements ScannedCardData {
         ...(item.derivationRecord !== undefined && {
           derivationRecord: toJS(item.derivationRecord),
         }),
+        ...(item.otpKeyIndex !== undefined && {otpKeyIndex: item.otpKeyIndex}),
       })),
     };
   }

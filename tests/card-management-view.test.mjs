@@ -137,8 +137,13 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
       _progress,
       _signal,
       selectedOptionalStages,
+      identityOptions,
     ) => {
-      fixture.events.push({type: 'install', selectedOptionalStages});
+      fixture.events.push({
+        type: 'install',
+        selectedOptionalStages,
+        identityOptions,
+      });
       if (fixture.installError) throw fixture.installError;
       fixture.installation = installed(
         fixture.uninitialized,
@@ -146,7 +151,8 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
       );
       return fixture.uninitialized;
     },
-    initializeMonoidCard: async (_applet, hello, pin) => {
+    initializeMonoidCard: async (_applet, hello, pin, _signal, access) => {
+      fixture.initializedAccessPIN = access;
       fixture.events.push({type: 'initialize', pin});
       assert.equal(hello.id, fixture.uninitialized.id);
       if (fixture.initializeError) throw fixture.initializeError;
@@ -269,6 +275,7 @@ function hello(initialized = true, bundle = false) {
     publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(9)),
     version: 1,
     bundle,
+    authority: false,
     pins: {access: initialized ? 5 : false, secret: initialized ? 5 : false},
   };
 }
@@ -341,8 +348,18 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     },
     async answer(value = PIN) {
       await state.flush();
-      state.inputs.at(-1).finished.resolve(value);
-      await state.flush();
+      for (let step = 0; step < 4; step++) {
+        const input = state.inputs.at(-1);
+        input.finished.resolve(value);
+        await state.flush();
+        const next = state.inputs.at(-1);
+        if (
+          next === input ||
+          value === undefined ||
+          !/^(Confirm|Set Access)/.test(next.options.placeholder)
+        )
+          break;
+      }
     },
     async tap({finish = true} = {}) {
       const scan = state.scans.at(-1);
@@ -381,6 +398,11 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
   };
   state.pinSession = {
     authenticate: async () => state.events.push({type: 'vault'}),
+    removePIN: async () => {},
+    getPINs: async signal => {
+      await state.pinSession.authenticate(signal);
+      return state.savedPINs ?? {};
+    },
     setPIN: async (id, pin) =>
       state.events.push({type: 'save-access', id, pin}),
     clear: () => state.events.push({type: 'clear'}),
@@ -437,8 +459,13 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
       _hello,
       _signal,
       selectedOptionalStages,
+      identityOptions,
     ) => {
-      state.events.push({type: 'prepare-fresh', selectedOptionalStages});
+      state.events.push({
+        type: 'prepare-fresh',
+        selectedOptionalStages,
+        identityOptions,
+      });
       state.pending = {
         id: 'fresh',
         mode: 'fresh',
@@ -514,17 +541,25 @@ test('installation chooses applets before Secret PIN, completes PIN setup, then 
   assert.ok(state.node('AppletSelectionPopup'));
   assert.equal(state.inputs.length, 0);
   assert.equal(state.scans.length, 0);
-  state.node('AppletSelectionPopup').props.onInstall();
+  const identityOptions = {
+    authorityUrl: 'https://authority.example',
+    authorityPublicKey: new Uint8Array(65).fill(4),
+  };
+  state.node('AppletSelectionPopup').props.onInstall(identityOptions);
   await state.flush();
   assert.equal(state.inputs.length, 1);
   assert.match(state.inputs[0].options.placeholder, /Secret PIN/);
   assert.equal(state.scans.length, 0);
   await state.answer();
   assert.deepEqual(
-    state.events.slice(0, 3).map(event => event.type),
-    ['vault', 'input', 'scan'],
+    state.events.slice(0, 6).map(event => event.type),
+    ['vault', 'input', 'input', 'input', 'input', 'scan'],
   );
   await state.tap({finish: false});
+  assert.deepEqual(
+    state.events.find(event => event.type === 'install').identityOptions,
+    identityOptions,
+  );
   assert.equal(state.informationReads, 1);
   assert.equal(state.installationReads, 2, 'refresh installed applets only');
   assert.deepEqual(state.recordedInstallations, [
@@ -659,7 +694,7 @@ test('failed installation reports the error and stays on Card information withou
   state.click('Install applets');
   state.node('AppletSelectionPopup').props.onInstall();
   await state.flush();
-  assert.equal(state.inputs.length, 2);
+  assert.equal(state.inputs.length, 5);
 });
 
 test('a verified destination is added to the retained Copy flow even when navigation changes while the scanner closes', async () => {
@@ -1108,11 +1143,15 @@ test('fresh installation uses danger confirmation with two explicit actions befo
   assert.equal(state.node('ConfirmPopup'), undefined);
   assert.equal(state.inputs.length, 0);
   state.node('AppletSelectionPopup').props.onChange(['security-key']);
-  state.node('AppletSelectionPopup').props.onInstall();
+  const identityOptions = {
+    authorityUrl: 'https://authority.example',
+    authorityPublicKey: new Uint8Array(65).fill(4),
+  };
+  state.node('AppletSelectionPopup').props.onInstall(identityOptions);
   const confirm = state.node('ConfirmPopup');
   assert.equal(confirm.props.confirmColor, 'danger');
   assert.deepEqual(confirm.props.confirmText, ['Continue', 'Confirm']);
-  assert.match(text(confirm), /new identity/);
+  assert.match(text(confirm), /Card keys will be regenerated/);
   assert.equal(state.inputs.length, 0);
   assert.equal(
     state.events.some(event => event.type === 'prepare-fresh'),
@@ -1130,6 +1169,10 @@ test('fresh installation uses danger confirmation with two explicit actions befo
     ['security-key'],
   );
   assert.ok(types.indexOf('replace') < types.indexOf('initialize'));
+  assert.deepEqual(
+    state.events.find(event => event.type === 'prepare-fresh').identityOptions,
+    identityOptions,
+  );
   assert.equal(state.pending, undefined);
   assert.ok(state.node('OperationComplete'));
 });
@@ -1439,7 +1482,7 @@ for (const [mode, label] of [
     await state.flush();
     assert.equal(
       state.inputs[0].options.placeholder,
-      mode === 'fresh' ? 'Set Secret PIN' : 'Enter Secret PIN',
+      mode === 'fresh' ? 'Set Secret PIN' : 'Enter existing Secret PIN',
     );
     await state.answer();
     await state.tap();
@@ -1574,6 +1617,43 @@ for (const [phase, label, mode, archive, grants] of [
   });
 }
 
+for (const cached of [false, true]) {
+  test(`restoration ${cached ? 'reuses saved' : 'confirms new'} Access PIN while authenticating existing Secret PIN once`, async () => {
+    const state = mount({cardInformation: false});
+    state.uninitialized.pins = {secret: 5, access: false};
+    state.installation = installed(state.uninitialized);
+    if (cached)
+      state.savedPINs = {
+        [Buffer.from(state.uninitialized.id).toString('hex')]: 'Saved-42',
+      };
+    state.click('Scan a card');
+    await state.tap();
+    state.pending = {
+      id: 'restore-pins',
+      mode: 'reinstall',
+      phase: 'restore',
+      archive: {items: []},
+      grants: [],
+      card: {appletAid: AID, bundle: false},
+    };
+    state.click('Restore items');
+    await state.answer();
+    assert.deepEqual(
+      state.inputs.map(i => i.options.placeholder),
+      cached
+        ? ['Enter existing Secret PIN']
+        : ['Enter existing Secret PIN', 'Set Access PIN', 'Confirm Access PIN'],
+    );
+    await state.tap();
+    assert.deepEqual(state.errors, []);
+    assert.equal(state.initializedAccessPIN, cached ? 'Saved-42' : PIN);
+    assert.equal(
+      state.events.find(e => e.type === 'save-access').pin,
+      cached ? 'Saved-42' : PIN,
+    );
+  });
+}
+
 for (const grants of [[], ['grant']]) {
   test(`Bundle manual recovery syncs items before ${grants.length ? 'restoring grants' : 'finishing recovery'}`, async () => {
     const state = mount({
@@ -1696,7 +1776,7 @@ test('manual Bundle recovery sets missing PINs before collecting its target in t
   await state.answer();
   await state.tap({finish: false});
   assert.deepEqual(state.errors, []);
-  assert.equal(state.inputs.length, 1);
+  assert.equal(state.inputs.length, 4);
   assert.equal(
     state.scans.length,
     2,
