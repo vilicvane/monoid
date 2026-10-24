@@ -5,12 +5,12 @@ import {getBytes, sha256, toUtf8Bytes} from 'ethers';
 import {SafeIndex, SafeIndexHex} from '../@atomics.js';
 import {uint8ArrayToHex} from '../@utils/index.js';
 
-import {equalBytes} from './global-platform/commands.js';
 import {authorityApiUrl} from './authority-url.js';
-import {MonoidCardError} from './monoid/card-error.js';
 import {InvalidCardItemError} from './card-item-error.js';
-import type {MonoidApplet} from './monoid/monoid-applet.js';
-import {createOTPApplet, type OTPApplet} from './otp-applet.js';
+import {equalBytes} from './global-platform/commands.js';
+import type {MonoidApplet} from './monoid/index.js';
+import {MonoidCardError} from './monoid/index.js';
+import {type OTPApplet, createOTPApplet} from './otp-applet.js';
 
 export {OTP_AID} from './otp-applet.js';
 
@@ -18,6 +18,8 @@ export const OTP_ITEM_TYPE = 0xf201;
 export const OTP_MAX_ACCOUNTS = 16;
 export const OTP_BATCH_SIZE = 3;
 
+// eslint-disable-next-line no-control-regex -- Account names reject ASCII control characters.
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
 const algorithms = ['SHA1', 'SHA256', 'SHA512'] as const;
 export type OTPAlgorithm = (typeof algorithms)[number];
 export type OTPAccountConfiguration = {
@@ -84,7 +86,7 @@ export function parseOTPURI(input: string): OTPImportAccount {
   } catch {
     throw new MonoidCardError('Invalid OTP account name');
   }
-  if (!label || /[\u0000-\u001f\u007f]/u.test(label))
+  if (!label || CONTROL_CHARACTER.test(label))
     throw new MonoidCardError('Invalid OTP account name');
   const issuer = uri.searchParams.get('issuer')?.trim();
   const separator = label.indexOf(':');
@@ -93,7 +95,7 @@ export function parseOTPURI(input: string): OTPImportAccount {
     // the issuer parameter uses a different spelling or service name.
     if (separator < 0) label = `${issuer}: ${label}`;
   }
-  if (/[\u0000-\u001f\u007f]/u.test(label))
+  if (CONTROL_CHARACTER.test(label))
     throw new MonoidCardError('Invalid OTP account name');
   if (separator >= 0 && !label.slice(separator + 1).trim())
     throw new MonoidCardError('Invalid OTP account name');

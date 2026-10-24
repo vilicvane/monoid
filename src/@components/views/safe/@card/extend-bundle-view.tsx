@@ -31,8 +31,8 @@ import {
   useViewActive,
 } from '../../../@view/index.js';
 
-import {CardBundleExtensionSession} from './card-bundle-extension-session.js';
 import {readBackupCardIdentity} from './card-backup-session.js';
+import {CardBundleExtensionSession} from './card-bundle-extension-session.js';
 import {CardSecretPINSession} from './card-secret-pin-session.js';
 import {useBundleCardAddition} from './use-bundle-card-addition.js';
 

@@ -14,8 +14,8 @@ import {
 } from '../../../@lib/otp-authority.js';
 import {assertOTPAccounts} from '../../../@lib/otp-card.js';
 import {
-  OTP_AID,
   type OTPBatch,
+  OTP_AID,
   type PreparedOTP,
   calculatePreparedOTP,
   currentOTPCode,
@@ -255,6 +255,8 @@ export const OTPAccountView = observer(
         disposed = true;
         dispose();
       };
+      // `run` is recreated each render; `started` keeps this to one start per mount.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [active, account]);
 
     useEffect(() => {
@@ -382,7 +384,7 @@ export const OTPAccountView = observer(
               <UnmountAnimationClone onUnmountClone={prepareExit}>
                 <CodeArea>
                   <Code
-                    label={'Copy code for ' + account.label}
+                    label={`Copy code for ${account.label}`}
                     showIcon={false}
                     value={() =>
                       active() && !document.hidden && batch && item
@@ -395,9 +397,7 @@ export const OTPAccountView = observer(
                   </Code>
                   <Windows
                     role="group"
-                    aria-label={
-                      state.prefetched + 1 + ' code windows remaining'
-                    }
+                    aria-label={`${state.prefetched + 1} code windows remaining`}
                   >
                     {Array.from({length: state.prefetched + 1}, (_, offset) => {
                       const pending = offset > 0;
@@ -419,8 +419,8 @@ export const OTPAccountView = observer(
                               role={pending ? undefined : 'timer'}
                               aria-label={
                                 pending
-                                  ? 'Next code, ' + remaining + ' seconds'
-                                  : remaining + ' seconds remaining'
+                                  ? `Next code, ${remaining} seconds`
+                                  : `${remaining} seconds remaining`
                               }
                             >
                               <svg viewBox="0 0 84 84" aria-hidden="true">
@@ -430,7 +430,7 @@ export const OTPAccountView = observer(
                                   cy="42"
                                   r="38"
                                   pathLength="1"
-                                  strokeDasharray={fraction + ' 1'}
+                                  strokeDasharray={`${fraction} 1`}
                                   strokeDashoffset={fraction - 1}
                                   strokeLinecap="round"
                                 />

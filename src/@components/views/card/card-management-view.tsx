@@ -5,7 +5,8 @@ import {type ReactNode, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
-import {MonoidIdHex, MonoidPIN, PublicKeyHex} from '../../../@atomics.js';
+import type {MonoidPIN} from '../../../@atomics.js';
+import {MonoidIdHex, PublicKeyHex} from '../../../@atomics.js';
 import {useEntrances} from '../../../@entrances.js';
 import {
   type CardInformation,
@@ -45,8 +46,8 @@ import {
 import {AppletInstallProgressContent} from '../../@monoid/applet-install-progress.js';
 import {MonoidScanStatePromptProgress} from '../../@monoid/monoid-scan-prompt.js';
 import {
-  requestCardPINs,
   type CardSetupPINs,
+  requestCardPINs,
 } from '../../@monoid/request-card-pins.js';
 import {useIsoDepScanPrompt} from '../../@monoid/use-isodep-scan-prompt.js';
 import {AppIcon} from '../../@ui/app-icon.js';
@@ -69,16 +70,15 @@ import {
   ViewHeaderTitle,
   useViewActive,
 } from '../../@view/index.js';
-import {CardInformationPopup} from '../safe/index.js';
-import {SyncCardsState} from '../safe/@card/sync-cards-state.js';
+import {CardInformationPopup, SyncCardsState} from '../safe/index.js';
 
+import {AppletSelectionPopup} from './applet-selection-popup.js';
+import type {CardAppletSnapshot} from './card-applet-snapshot.js';
 import {
   CardAppletsContent,
   CardInformationContent,
   CardScanPlaceholder,
 } from './card-management-content.js';
-import {AppletSelectionPopup} from './applet-selection-popup.js';
-import type {CardAppletSnapshot} from './card-applet-snapshot.js';
 type Action =
   | CardMaintenanceMode
   | 'install'

@@ -3,8 +3,8 @@ import {base64urlnopad} from '@scure/base';
 
 import {hexToUint8Array} from '../@utils/index.js';
 
-import type {IdentityInstallationOptions} from './monoid/install.js';
 import {authorityApiUrl, normalizeAuthorityUrl} from './authority-url.js';
+import type {IdentityInstallationOptions} from './monoid/index.js';
 
 /** Defaults are editable before installing Identity; existing cards keep their trust. */
 export function getDefaultOTPAuthorityUrl(): string {

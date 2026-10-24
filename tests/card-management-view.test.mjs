@@ -5,11 +5,11 @@ import {setImmediate} from 'node:timers/promises';
 import {observable, runInAction} from 'mobx';
 
 import {SyncCardsState} from '../.bld/app/@components/views/safe/@card/sync-cards-state.js';
-import * as monoid from '../.bld/app/@lib/monoid/index.js';
 import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
+import * as monoid from '../.bld/app/@lib/monoid/index.js';
 import {SyncCardsStore} from '../.bld/app/@services/sync-cards-store.js';
 
 let fixture;
@@ -237,6 +237,7 @@ for (const [path, names] of [
     namedExports: {
       ...Object.fromEntries(names.map(name => [name, name])),
       ...(path === '@view/index' && {useViewActive}),
+      ...(path === 'views/safe/index' && {SyncCardsState}),
     },
   });
 }

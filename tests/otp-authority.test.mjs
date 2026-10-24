@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
+
 import {p256} from '@noble/curves/nist';
 import {base64urlnopad} from '@scure/base';
 
@@ -127,7 +128,7 @@ test('invalid URLs are rejected before fetching or starting card work', async t 
     'https://user:password@example.com',
     'https://example.com?key=1',
     'https://example.com/#key',
-    'https://example.com/' + 'a'.repeat(150),
+    `https://example.com/${'a'.repeat(150)}`,
   ]) {
     await assert.rejects(
       resolveOTPAuthorityInstallationOptions(url, signal()),

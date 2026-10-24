@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
+
 import {reaction} from 'mobx';
+
 import {OTPStore} from '../.bld/app/@services/otp-store.js';
 
 function account(overrides = {}) {
   return {
-    index: 'f201' + '12'.repeat(8),
+    index: `f201${'12'.repeat(8)}`,
     label: 'Example: alice',
-    keyIndex: '0514' + '34'.repeat(8),
+    keyIndex: `0514${'34'.repeat(8)}`,
     algorithm: 'SHA1',
     digits: 6,
     period: 30,
@@ -60,7 +62,7 @@ test('Authority hints remain session-local and do not bind accounts to a card', 
 test('scans merge across cards and duplicate backup accounts update in place', async context => {
   const storage = storageFixture(context);
   const store = await OTPStore.create(storage);
-  const other = account({index: 'f201' + '56'.repeat(8)});
+  const other = account({index: `f201${'56'.repeat(8)}`});
   await store.save([account()]);
   await store.save([other]);
   await store.save([account({label: 'Updated label'})]);
@@ -76,7 +78,7 @@ test('scans merge across cards and duplicate backup accounts update in place', a
 test('only account metadata survives, without card identity, PINs, secrets or codes', async context => {
   const input = account({
     id: '11223344',
-    publicKey: '04' + '11'.repeat(64),
+    publicKey: `04${'11'.repeat(64)}`,
     installed: true,
     authorized: true,
     secret: 'SENSITIVE',
@@ -97,8 +99,8 @@ test('only account metadata survives, without card identity, PINs, secrets or co
 
 test('indices normalize and deduplicate before selecting or forgetting', async context => {
   const canonical = account({
-    index: 'f201' + 'ab'.repeat(8),
-    keyIndex: '05ff' + 'cd'.repeat(8),
+    index: `f201${'ab'.repeat(8)}`,
+    keyIndex: `05ff${'cd'.repeat(8)}`,
   });
   const upper = {
     ...canonical,
@@ -123,10 +125,10 @@ test('malformed cached records are skipped without hiding valid accounts', async
     null,
     {},
     ...[
-      {index: 'f101' + '12'.repeat(8)},
+      {index: `f101${'12'.repeat(8)}`},
       {index: 'f20100'},
-      {keyIndex: '0500' + '34'.repeat(8)},
-      {keyIndex: '0101' + '34'.repeat(8)},
+      {keyIndex: `0500${'34'.repeat(8)}`},
+      {keyIndex: `0101${'34'.repeat(8)}`},
       {label: null},
       {algorithm: 'MD5'},
       {digits: 7},
@@ -176,7 +178,7 @@ test('concurrent merges and forgetting remain ordered across a pending write', a
   });
   const first = store.save([account()]);
   await setImmediate();
-  const other = account({index: 'f201' + '56'.repeat(8)});
+  const other = account({index: `f201${'56'.repeat(8)}`});
   const second = store.save([other]);
   const removal = store.forget(account().index);
   await setImmediate();

@@ -9,6 +9,7 @@ import {
 } from '../.bld/app/@components/views/safe/card-derivations.js';
 import {AppletISOError} from '../.bld/app/@lib/applet.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+
 import {credential} from './helpers/security-key-credential.mjs';
 
 const PIN = 'Secret-42';

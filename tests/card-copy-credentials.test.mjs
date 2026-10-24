@@ -4,6 +4,7 @@ import {test} from 'node:test';
 import {CardBackupSession} from '../.bld/app/@components/views/safe/@card/card-backup-session.js';
 import {AppletISOError} from '../.bld/app/@lib/applet.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+
 import {credential} from './helpers/security-key-credential.mjs';
 
 const PIN = 'Secret-42';
@@ -232,7 +233,6 @@ test('Copy skips old and malformed source records before exporting them', async 
     credential(1, {secret: true}),
   ]) {
     const source = card(1, [item]);
-    const target = card(2, []);
     const session = new CardBackupSession();
     await session.readSource(source, source.hello, signal());
     assert.deepEqual(session.backup.items, []);

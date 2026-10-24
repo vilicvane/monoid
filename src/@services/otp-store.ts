@@ -1,6 +1,7 @@
 import {observable, runInAction} from 'mobx';
 
-import {MonoidIdHex, PublicKeyHex, SafeIndexHex} from '../@atomics.js';
+import type {MonoidIdHex, PublicKeyHex} from '../@atomics.js';
+import {SafeIndexHex} from '../@atomics.js';
 import type {OTPAccountConfiguration} from '../@lib/otp.js';
 import {createFlowId} from '../@utils/index.js';
 

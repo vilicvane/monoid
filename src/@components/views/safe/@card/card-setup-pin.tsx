@@ -1,6 +1,6 @@
 import {type ReactNode, useEffect, useRef} from 'react';
 
-import {type MonoidIdHex, MonoidPIN} from '../../../../@atomics.js';
+import type {MonoidIdHex, MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import {
   type MonoidAppletHello,

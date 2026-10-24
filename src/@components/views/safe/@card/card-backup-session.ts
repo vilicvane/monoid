@@ -2,8 +2,8 @@ import {observable, runInAction} from 'mobx';
 
 import {MonoidPIN, PublicKey, SafeIndex} from '../../../../@atomics.js';
 import {AppletISOError} from '../../../../@lib/applet.js';
-import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {InvalidCardItemError} from '../../../../@lib/card-item-error.js';
+import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {
   type MonoidApplet,
   type MonoidAppletHello,
@@ -24,8 +24,8 @@ import {
   validateCardImmutableItem,
 } from '../card-item-merge.js';
 import {
-  isCardOTPItem,
   filterCardOTPAssociations,
+  isCardOTPItem,
   readCardOTPKeyIndex,
   validateCardOTPItem,
 } from '../card-otp.js';

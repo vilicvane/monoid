@@ -8,8 +8,8 @@ import {
   SafeIndexHex,
 } from '../../../../@atomics.js';
 import {AppletISOError} from '../../../../@lib/applet.js';
-import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {InvalidCardItemError} from '../../../../@lib/card-item-error.js';
+import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {
   type MonoidApplet,
   type MonoidAppletHello,
@@ -20,7 +20,7 @@ import {
 import {
   type CardMaintenanceBundleRecovery,
   assertCardMaintenanceBundleRecovery,
-} from '../../../../@services/card-maintenance-service.js';
+} from '../../../../@services/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 import {xCBOR} from '../../../../@x-value/index.js';
 import {

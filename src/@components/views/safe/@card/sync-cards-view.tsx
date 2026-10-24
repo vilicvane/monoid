@@ -57,11 +57,11 @@ import {
   type CardBackupIdentity,
   readBackupCardIdentity,
 } from './card-backup-session.js';
+import {CardSecretPINSession} from './card-secret-pin-session.js';
 import {
   type CardSyncProgress,
   authenticateCardSync,
 } from './card-sync-session.js';
-import {CardSecretPINSession} from './card-secret-pin-session.js';
 import {SyncCardsState} from './sync-cards-state.js';
 
 const Description = styled.p`

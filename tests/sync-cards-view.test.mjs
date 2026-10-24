@@ -9,6 +9,7 @@ import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
+import {assertCardMaintenanceBundleRecovery} from '../.bld/app/@services/card-maintenance-service.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
 
 let fixture;
@@ -69,6 +70,7 @@ mock.module('../.bld/app/@entrances.js', {
 });
 mock.module('../.bld/app/@services/index.js', {
   namedExports: {
+    assertCardMaintenanceBundleRecovery,
     isCredentialRequestCancelled: error => error?.code === 'CANCELLED',
   },
 });

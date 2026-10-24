@@ -1,6 +1,6 @@
 import {SafeKnownType} from '../../../@atomics.js';
-import {CBORAppletError} from '../../../@lib/cbor-applet.js';
 import {InvalidCardItemError} from '../../../@lib/card-item-error.js';
+import {CBORAppletError} from '../../../@lib/cbor-applet.js';
 import type {MonoidApplet} from '../../../@lib/monoid/index.js';
 import {ADDRESS_TYPES} from '../../../@lib/wallet-address.js';
 // eslint-disable-next-line @mufan/import -- Keep card scanning independent of UI services.

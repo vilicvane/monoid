@@ -19,6 +19,7 @@ import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
+import {MonoidAppletInvalidPINError} from '../.bld/app/@lib/monoid/monoid-applet.js';
 
 let fixture;
 let rendering;
@@ -81,7 +82,11 @@ mock.module('../.bld/app/@services/index.js', {
   },
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
-  namedExports: {MonoidCardError, MonoidWrongCardError},
+  namedExports: {
+    MonoidAppletInvalidPINError,
+    MonoidCardError,
+    MonoidWrongCardError,
+  },
 });
 mock.module('../.bld/app/@components/@animations.js', {
   namedExports: {

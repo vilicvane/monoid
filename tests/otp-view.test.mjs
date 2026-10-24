@@ -893,7 +893,7 @@ test('missing or conflicting selected accounts never calculate or display a code
   const first = cachedCard(1);
   for (const accounts of [
     [],
-    [{...first.accounts[0], keyIndex: '0514' + 'ff'.repeat(8)}],
+    [{...first.accounts[0], keyIndex: `0514${'ff'.repeat(8)}`}],
   ]) {
     const state = mount([first]);
     state.openAccount(first);

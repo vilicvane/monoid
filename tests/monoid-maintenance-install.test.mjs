@@ -484,7 +484,7 @@ test('Fresh combines Card ID and Authority and reserves room for both', async ()
         fresh: true,
         expectedCardId: '01020304',
         authorityPublicKey,
-        authorityUrl: 'https://a.example/' + 'a'.repeat(125),
+        authorityUrl: `https://a.example/${'a'.repeat(125)}`,
       }),
     ),
     /too long/,

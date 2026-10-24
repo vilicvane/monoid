@@ -29,7 +29,7 @@ import {useToast} from '../@ui/toast.js';
 import {useInputModal} from '../@ui/use-input-modal.js';
 
 import {getPINInputPlaceholder} from './pin-input-placeholder.js';
-import {requestCardPINs, type CardSetupPINs} from './request-card-pins.js';
+import {type CardSetupPINs, requestCardPINs} from './request-card-pins.js';
 
 export const MonoidScanStatePromptContentHighlight = styled.span`
   color: white;
@@ -848,7 +848,8 @@ export function useMonoidScanPrompt({
 
     const abort = (): void => {
       if (disposed || settled) return;
-      dispose();
+      // `stopping` below observes the native stop promise.
+      void dispose();
       setState('hidden');
       // Cancellation also waits for an in-flight native callback and the overlay.
       // The existing finish path may already own the native stop promise.

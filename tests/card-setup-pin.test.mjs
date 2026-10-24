@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {afterEach, mock, test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
 
+import {CardSecretPINSession} from '../.bld/app/@components/views/safe/@card/card-secret-pin-session.js';
 import {
   MonoidCardError,
   MonoidWrongCardError,
@@ -12,7 +13,6 @@ import {
   MonoidCredentialsStore,
   MonoidPINSession,
 } from '../.bld/app/@services/monoid-credentials-store.js';
-import {CardSecretPINSession} from '../.bld/app/@components/views/safe/@card/card-secret-pin-session.js';
 
 let fixture;
 const owners = [];

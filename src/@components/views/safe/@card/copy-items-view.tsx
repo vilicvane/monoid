@@ -12,7 +12,6 @@ import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
 import {MonoidPIN} from '../../../../@atomics.js';
-import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {useEntrances} from '../../../../@entrances.js';
 import type {CardInformation} from '../../../../@lib/global-platform/card-information.js';
 import {
@@ -22,6 +21,7 @@ import {
 } from '../../../../@lib/monoid/index.js';
 import type {Router} from '../../../../@routes.js';
 import {isCredentialRequestCancelled} from '../../../../@services/index.js';
+import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {
   CardGrid,
   CardPlaceholder,
@@ -33,6 +33,7 @@ import {
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
+import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
 import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
 import {AppIcon} from '../../../@ui/app-icon.js';
 import {Button, Buttons} from '../../../@ui/button.js';
@@ -54,7 +55,6 @@ import {OperationComplete} from '../../../@ui/operation-complete.js';
 import {OperationSteps, Step} from '../../../@ui/step.js';
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
-import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
 import {
   View,
   ViewContent,
@@ -80,9 +80,9 @@ import {
   initializeBackupTarget,
   readBackupCardIdentity,
 } from './card-backup-session.js';
+import {CardSecretPINSession} from './card-secret-pin-session.js';
 import {CopyItemsState} from './copy-items-state.js';
 import {readCardForSetup} from './read-card-for-setup.js';
-import {CardSecretPINSession} from './card-secret-pin-session.js';
 
 const Description = styled.p`
   margin: 0;

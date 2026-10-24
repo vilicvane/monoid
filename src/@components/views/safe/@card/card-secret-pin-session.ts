@@ -1,10 +1,10 @@
 import {MonoidPIN} from '../../../../@atomics.js';
 import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {
+  MonoidAppletInvalidPINError,
   MonoidCardError,
   MonoidWrongCardError,
-} from '../../../../@lib/monoid/card-error.js';
-import {MonoidAppletInvalidPINError} from '../../../../@lib/monoid/monoid-applet.js';
+} from '../../../../@lib/monoid/index.js';
 
 import type {CardBackupIdentity} from './card-backup-session.js';
 

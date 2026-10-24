@@ -5,7 +5,7 @@ import {setImmediate} from 'node:timers/promises';
 import {p256} from '@noble/curves/nist';
 import {observable, runInAction} from 'mobx';
 
-import '../.bld/app/@components/views/safe/@card/card-backup-session.js';
+import {readBackupCardIdentity} from '../.bld/app/@components/views/safe/@card/card-backup-session.js';
 import {AppletNotFoundError} from '../.bld/app/@lib/applet.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
@@ -152,12 +152,13 @@ for (const [path, names] of [
     ],
   ],
   ['views/card/card-management-content', ['CardScanPlaceholder']],
-  ['views/safe/@card/@resource-item', ['CardResourceItem', 'CardResourceList']],
+  ['views/safe/index', ['CardResourceItem', 'CardResourceList']],
 ]) {
   mock.module(`../.bld/app/@components/${path}.js`, {
     namedExports: {
       ...Object.fromEntries(names.map(name => [name, name])),
       ...(path === '@view/index' ? {useViewActive} : {}),
+      ...(path === 'views/safe/index' ? {readBackupCardIdentity} : {}),
     },
   });
 }

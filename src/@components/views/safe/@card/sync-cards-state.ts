@@ -1,6 +1,6 @@
 import {makeAutoObservable} from 'mobx';
 
-import type {CardMaintenanceOperation} from '../../../../@services/card-maintenance-service.js';
+import type {CardMaintenanceOperation} from '../../../../@services/index.js';
 import type {CardAppletSnapshot} from '../../card/card-applet-snapshot.js';
 import type {ScannedCardData} from '../common.js';
 

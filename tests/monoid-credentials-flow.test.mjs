@@ -1450,14 +1450,6 @@ test('prompt: a business command returning 6a82 does not redirect to applet inst
   assert.equal(state.outcome, undefined);
 });
 
-function inputText(value) {
-  if (Array.isArray(value)) return value.map(inputText).join('');
-  if (typeof value === 'object' && value !== null) {
-    return inputText(value.props?.children);
-  }
-  return value === undefined || value === null ? '' : String(value);
-}
-
 for (const order of ['stop-first', 'animation-first']) {
   test(`prompt: new card initializes inline after ${order} cleanup and resumes business`, async () => {
     const state = mount({allowSetup: true, accessPIN: false, secretPIN: false});
@@ -2672,8 +2664,7 @@ test('prompt: a completed scan cannot overwrite progress in the next scan', asyn
 
 test('prompt: client preparation precedes fresh Monoid authorization on the same scan', async () => {
   const aid = new Uint8Array([0xf0, 0x6d, 0x6f, 0x6e, 0x6f, 0x69, 0x64, 5, 1]);
-  let state;
-  state = mount({
+  const state = mount({
     savedPINs: {[CARD_ID]: PIN},
     authentication: {
       aid,
@@ -2708,8 +2699,7 @@ test('prompt: client preparation precedes fresh Monoid authorization on the same
 });
 
 test('prompt: preparation without a client AID reselects Monoid and uses ordinary PIN authentication', async () => {
-  let state;
-  state = mount({
+  const state = mount({
     savedPINs: {[CARD_ID]: PIN},
     authentication: {
       async prepare(applet) {

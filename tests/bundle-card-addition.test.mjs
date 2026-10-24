@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import {afterEach, mock, test} from 'node:test';
 
 import {observable} from 'mobx';
-import {CardSecretPINSession} from '../.bld/app/@components/views/safe/@card/card-secret-pin-session.js';
 
+import {CardSecretPINSession} from '../.bld/app/@components/views/safe/@card/card-secret-pin-session.js';
 import {
   MonoidCardError,
   MonoidWrongCardError,

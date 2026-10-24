@@ -6,6 +6,7 @@ import {
   mergeCardItemData,
   validateCardCredentialItem,
 } from '../.bld/app/@components/views/safe/card-item-merge.js';
+
 import {credential} from './helpers/security-key-credential.mjs';
 
 test('credential merge retains identical bytes and refuses differing valid payload or scope', () => {

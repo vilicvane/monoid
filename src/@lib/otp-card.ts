@@ -8,7 +8,7 @@ import {
   SafeKnownType,
   SafeUnknownType,
 } from '../@atomics.js';
-import type {OTPAccount, OTPCard} from '../@services/otp-store.js';
+import type {OTPAccount, OTPCard} from '../@services/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../@utils/index.js';
 
 import {AppletISOError, AppletNotFoundError} from './applet.js';
@@ -21,9 +21,9 @@ import {
 } from './monoid/index.js';
 import {createOTPApplet} from './otp-applet.js';
 import {
+  type OTPImportAccount,
   OTP_AID,
   OTP_ITEM_TYPE,
-  type OTPImportAccount,
   decodeOTPConfiguration,
   decodeOTPKeyReference,
   encodeOTPConfiguration,
@@ -73,8 +73,19 @@ export async function readOTPAccounts(
   return (await readOTPInventory(applet, signal)).accounts;
 }
 
+type MonoidListItem = Awaited<
+  ReturnType<MonoidApplet['list']>
+>['items'][number];
+
 /** A snapshot belongs to this operation only; never reuse it across card taps. */
-async function readOTPInventory(applet: MonoidApplet, signal: AbortSignal) {
+async function readOTPInventory(
+  applet: MonoidApplet,
+  signal: AbortSignal,
+): Promise<{
+  accounts: OTPAccount[];
+  items: MonoidListItem[];
+  hmacKeys: MonoidListItem[];
+}> {
   signal.throwIfAborted();
   const {items} = await applet.list({type: accountType});
   signal.throwIfAborted();

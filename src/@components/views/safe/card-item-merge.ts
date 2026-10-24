@@ -1,5 +1,5 @@
-import {MonoidCardError} from '../../../@lib/monoid/card-error.js';
 import {InvalidCardItemError} from '../../../@lib/card-item-error.js';
+import {MonoidCardError} from '../../../@lib/monoid/index.js';
 import {
   SECURITY_KEY_ITEM_TYPE,
   decodeSecurityKeyCredential,

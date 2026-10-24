@@ -86,7 +86,7 @@ function card(options = {}) {
       commands.push(['view', hex(index)]);
       const item = items.get(hex(index));
       if (!item) throw new Error('NOT_FOUND');
-      const {data: _, ...metadata} = item;
+      const {data: _data, ...metadata} = item;
       return metadata;
     },
     async list(request) {
@@ -100,7 +100,7 @@ function card(options = {}) {
                 ? item.index[0] === 0xf2 && item.index[1] === 1
                 : true,
           )
-          .map(({data: _, ...item}) => item),
+          .map(({data: _data, ...item}) => item),
       };
     },
     async get({index}) {

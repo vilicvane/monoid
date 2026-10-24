@@ -23,6 +23,7 @@ import {
 } from '../../../@monoid/card-preview.js';
 import {MonoidScanStatePromptContentHighlight} from '../../../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
+import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
 import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
 import {Button, Buttons} from '../../../@ui/button.js';
 import {ConfirmPopup} from '../../../@ui/confirm-popup.js';
@@ -37,7 +38,6 @@ import {Step, Steps} from '../../../@ui/step.js';
 import {useToast} from '../../../@ui/toast.js';
 import {Toggle} from '../../../@ui/toggle.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
-import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
 import {
   View,
   ViewContent,
@@ -53,8 +53,8 @@ import {
   type CardResetIdentity,
   CardResetSession,
 } from './card-reset-session.js';
-import {CardSetupPIN} from './card-setup-pin.js';
 import {CardSecretPINSession} from './card-secret-pin-session.js';
+import {CardSetupPIN} from './card-setup-pin.js';
 import {readCardForSetup} from './read-card-for-setup.js';
 
 type BundleCandidate =

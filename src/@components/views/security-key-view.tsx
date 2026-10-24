@@ -67,8 +67,8 @@ import {CardScanPlaceholder} from './card/card-management-content.js';
 import {
   CardResourceItem,
   CardResourceList,
-} from './safe/@card/@resource-item.js';
-import {readBackupCardIdentity} from './safe/@card/card-backup-session.js';
+  readBackupCardIdentity,
+} from './safe/index.js';
 
 const Hero = styled.div`
   width: 224px;

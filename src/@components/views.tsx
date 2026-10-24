@@ -14,8 +14,8 @@ import {EthereumTransactionReplacementView} from './views/ethereum-transaction-r
 import {EthereumTransactionsView} from './views/ethereum-transactions-view.js';
 import {EthereumWalletsView} from './views/ethereum-wallets-view.js';
 import {FeaturesView} from './views/features-view.js';
-import {OTPView} from './views/otp-view.js';
 import {OTPAccountView} from './views/otp/otp-account-view.js';
+import {OTPView} from './views/otp-view.js';
 import {SafeMatch} from './views/safe/index.js';
 import {ScanView} from './views/scan-view.js';
 import {SecurityKeyView} from './views/security-key-view.js';

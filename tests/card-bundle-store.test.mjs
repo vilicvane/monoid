@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-import {CardBundleSession} from '../.bld/app/@components/views/safe/@card/card-bundle-session.js';
 import {CardBundleExtensionSession} from '../.bld/app/@components/views/safe/@card/card-bundle-extension-session.js';
+import {CardBundleSession} from '../.bld/app/@components/views/safe/@card/card-bundle-session.js';
 import {CardBundleStore} from '../.bld/app/@services/card-bundle-store.js';
 
 const createSession = () => new CardBundleSession();

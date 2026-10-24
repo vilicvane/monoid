@@ -1,7 +1,7 @@
 import {reaction, runInAction} from 'mobx';
 import {type ReactNode, useEffect, useRef, useState} from 'react';
 
-import {type MonoidIdHex, MonoidPIN} from '../../../../@atomics.js';
+import type {MonoidIdHex, MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import type {CardInformation} from '../../../../@lib/global-platform/card-information.js';
 import {
@@ -12,19 +12,19 @@ import {
 import {isCredentialRequestCancelled} from '../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {MonoidScanStatePromptContentHighlight} from '../../../@monoid/monoid-scan-prompt.js';
+import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
 import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
 import {ConfirmPopup} from '../../../@ui/confirm-popup.js';
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
-import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
 
 import {readBackupCardIdentity} from './card-backup-session.js';
 import {
   type CardResetIdentity,
   CardResetSession,
 } from './card-reset-session.js';
-import {CardSetupPIN} from './card-setup-pin.js';
 import type {CardSecretPINSession} from './card-secret-pin-session.js';
+import {CardSetupPIN} from './card-setup-pin.js';
 import {readCardForSetup} from './read-card-for-setup.js';
 
 function hasInitializedPINs(hello: MonoidAppletHello): boolean {

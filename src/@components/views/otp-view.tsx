@@ -28,8 +28,8 @@ import {
 } from '../../@lib/otp-card.js';
 import type {OTPAlgorithm, OTPImportAccount} from '../../@lib/otp.js';
 import type {Router} from '../../@routes.js';
+import type {OTPAccount, OTPCard} from '../../@services/index.js';
 import {isCredentialRequestCancelled} from '../../@services/index.js';
-import type {OTPAccount, OTPCard} from '../../@services/otp-store.js';
 import {uint8ArrayToHex} from '../../@utils/index.js';
 import {
   ExpandableKeyGroup,
@@ -130,7 +130,12 @@ const ProviderTag = styled(WhiteTag)`
     }
   }
 `;
-function groupAccounts(accounts: readonly OTPAccount[]) {
+function groupAccounts(
+  accounts: readonly OTPAccount[],
+): Map<
+  string,
+  {provider: string; accounts: {account: OTPAccount; name: string}[]}
+> {
   const groups = new Map<
     string,
     {provider: string; accounts: {account: OTPAccount; name: string}[]}

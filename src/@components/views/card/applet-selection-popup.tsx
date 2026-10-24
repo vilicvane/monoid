@@ -19,10 +19,10 @@ import {
   DetailsPopupSection,
   DetailsPopupTitle,
 } from '../../@ui/details-popup.js';
-import {Toggle} from '../../@ui/toggle.js';
 import {InfoSectionItem, InfoSectionItemLabel} from '../../@ui/info-section.js';
 import {PopupInput} from '../../@ui/input.js';
 import {InfoMessage} from '../../@ui/message-content.js';
+import {Toggle} from '../../@ui/toggle.js';
 
 const AppletToggle = styled(Toggle)`
   color: inherit;

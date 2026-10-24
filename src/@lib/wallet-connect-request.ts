@@ -4,8 +4,8 @@ import {getAddress, getBytes, hashMessage} from 'ethers';
 
 import type {WalletKitSession} from '../@services/index.js';
 
-import {parseEvmTransaction} from './evm-transaction.js';
 import {formatEvmTransactionError} from './evm-transaction-error.js';
+import {parseEvmTransaction} from './evm-transaction.js';
 import {type EvmTypedData, parseEvmTypedData} from './evm-typed-data.js';
 import type {SolanaSendOptions} from './send-solana-transaction.js';
 import {assertSolanaMessage} from './solana-message.js';

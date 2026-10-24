@@ -50,6 +50,7 @@ export const otpCommandDefinitions = {
   },
 } satisfies CBORCommandDefinitions;
 
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type
 export function createOTPApplet() {
   return CBORApplet.create(OTP_AID, otpCommandDefinitions);
 }

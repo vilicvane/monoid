@@ -69,7 +69,6 @@ mock.module('../.bld/app/@lib/monoid/install.js', {
 
 const {CardMaintenanceService, assertCardMaintenanceBundleRecovery} =
   await import('../.bld/app/@services/card-maintenance-service.js');
-const {MonoidCardError} = await import('../.bld/app/@lib/monoid/card-error.js');
 const bytes = hex => new Uint8Array(Buffer.from(hex, 'hex'));
 const hex = value => Buffer.from(value).toString('hex');
 const aid = bytes('f06d6f6e6f69640201');
@@ -1049,7 +1048,7 @@ test('restart discards unstarted and completed Fresh setup records while preserv
     ...before,
     operations: before.operations
       .filter(item => !['unstarted', 'setup'].includes(item.id))
-      .map(({restored, ...item}) => item),
+      .map(({restored: _restored, ...item}) => item),
   });
   assert.deepEqual(restarted.get('restore').archive, operation.archive);
   const writes = storage.writes.length;
@@ -1671,7 +1670,7 @@ for (const [name, mutate] of [
   ['malformed source ID', recovery => (recovery.source.id = '112233zz')],
   [
     'malformed source public key',
-    recovery => (recovery.source.publicKey = '05' + '22'.repeat(64)),
+    recovery => (recovery.source.publicKey = `05${'22'.repeat(64)}`),
   ],
   [
     'invalid hexadecimal item data',
@@ -1692,7 +1691,7 @@ for (const [name, mutate] of [
   [
     'v1 envelope',
     recovery =>
-      (recovery.items[0].data = '01' + recovery.items[0].data.slice(2)),
+      (recovery.items[0].data = `01${recovery.items[0].data.slice(2)}`),
   ],
   [
     'truncated v2 envelope',
@@ -1701,17 +1700,15 @@ for (const [name, mutate] of [
   [
     'wrong embedded Bundle',
     recovery =>
-      (recovery.items[0].data =
-        '02' + 'ee'.repeat(32) + recovery.items[0].data.slice(66)),
+      (recovery.items[0].data = `02${'ee'.repeat(32)}${recovery.items[0].data.slice(66)}`),
   ],
   [
     'wrong embedded sender',
     recovery =>
-      (recovery.items[0].data =
-        recovery.items[0].data.slice(0, 66) +
-        '04' +
-        'ee'.repeat(64) +
-        recovery.items[0].data.slice(196)),
+      (recovery.items[0].data = `${recovery.items[0].data.slice(
+        0,
+        66,
+      )}04${'ee'.repeat(64)}${recovery.items[0].data.slice(196)}`),
   ],
   [
     'oversized Import request',

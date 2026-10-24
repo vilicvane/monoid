@@ -58,8 +58,8 @@ test('OTP records validate configuration and HMAC references without reading sec
     {metadata: '0101060000'},
     {metadata: '0101068000'},
     {metadata: 'gg'},
-    {data: '0500' + '00'.repeat(8)},
-    {data: '0240' + '00'.repeat(8)},
+    {data: `0500${'00'.repeat(8)}`},
+    {data: `0240${'00'.repeat(8)}`},
     {data: '051400'},
     {otpKeyIndex: OTHER_KEY_INDEX},
   ])
@@ -229,7 +229,7 @@ test('Safe Card scan reads public OTP references without deriving HMAC and snaps
   assert.equal(items[0].otpKeyIndex, KEY_INDEX);
   const state = new CardStore().set({
     id: '11223344',
-    publicKey: '04' + '11'.repeat(64),
+    publicKey: `04${'11'.repeat(64)}`,
     bundle: false,
     items,
   });
@@ -241,7 +241,7 @@ test('Safe Card scan reads public OTP references without deriving HMAC and snaps
 function copyFixture() {
   const hello = number => ({
     id: bytes(`1122330${number}`),
-    publicKey: bytes('04' + String(number).repeat(128)),
+    publicKey: bytes(`04${String(number).repeat(128)}`),
     bundle: false,
     authority: false,
     pins: {access: 5, secret: 5},

@@ -2,15 +2,16 @@ import {p256} from '@noble/curves/nist';
 import {Tag, decode} from 'cbor2';
 import {getBytes, sha256, toUtf8Bytes} from 'ethers';
 
-import {SafeIndex, SafeIndexHex} from '../@atomics.js';
+import type {SafeIndexHex} from '../@atomics.js';
+import {SafeIndex} from '../@atomics.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../@utils/index.js';
 
 import {AppletISOError} from './applet.js';
-import {CBORAppletError} from './cbor-applet.js';
 import {InvalidCardItemError} from './card-item-error.js';
+import {CBORAppletError} from './cbor-applet.js';
 import {equalBytes} from './global-platform/commands.js';
-import {MonoidCardError, MonoidWrongCardError} from './monoid/card-error.js';
-import type {MonoidApplet, MonoidAppletHello} from './monoid/monoid-applet.js';
+import type {MonoidApplet, MonoidAppletHello} from './monoid/index.js';
+import {MonoidCardError, MonoidWrongCardError} from './monoid/index.js';
 
 export const SECURITY_KEY_AID = hexToUint8Array('a0000006472f0001');
 export const SECURITY_KEY_ITEM_TYPE = 0xf101;

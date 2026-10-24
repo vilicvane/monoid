@@ -1,6 +1,6 @@
 import type {SafeIndexHex} from '../../../@atomics.js';
 import {InvalidCardItemError} from '../../../@lib/card-item-error.js';
-import type {MonoidApplet} from '../../../@lib/monoid/monoid-applet.js';
+import type {MonoidApplet} from '../../../@lib/monoid/index.js';
 import {
   decodeOTPConfiguration,
   decodeOTPKeyReference,

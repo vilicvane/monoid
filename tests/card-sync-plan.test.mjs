@@ -6,6 +6,7 @@ import {
   encodeCardDerivationRecord,
   getCardDerivationItemIndex,
 } from '../.bld/app/@components/views/safe/card-derivations.js';
+
 import {credential} from './helpers/security-key-credential.mjs';
 
 const keyIndex = '03010000000000000001';

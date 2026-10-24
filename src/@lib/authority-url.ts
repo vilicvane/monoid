@@ -14,7 +14,7 @@ export function normalizeAuthorityUrl(value: string): string {
     url.hash
   )
     throw new Error('Invalid Authority URL');
-  url.pathname = url.pathname.replace(/\/+$/, '') + '/';
+  url.pathname = `${url.pathname.replace(/\/+$/, '')}/`;
   return url.href;
 }
 
