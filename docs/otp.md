@@ -149,9 +149,10 @@ replace the real signed-time request. No time proofs are prefetched or reused.
 Prepare must finish before Access PIN authentication because it revokes the
 previous client permission. NFC commands remain sequential.
 
-Scan prompts use `Preparing, hold tight...` for applet selection, Challenge and
-card proof verification; `Getting time, hold tight...` covers only the Authority
-request and local proof validation. They then distinguish authentication and the actual
+Scan prompts use `Preparing, hold tight...` for applet selection and Challenge;
+`Getting time, hold tight...` covers only the Authority request and local proof
+validation. `Verifying time, hold tight...` covers the card's proof verification,
+without returning to Preparing. They then distinguish authentication and the actual
 `Getting codes, hold tight...` operation. Retrieval wording is plural because one
 scan returns three code windows.
 

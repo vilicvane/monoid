@@ -370,7 +370,7 @@ test('selected OTP calculation uses one NFC session and explicit post-prepare Mo
     const request = decode(new Uint8Array(data.slice(5)));
     commands.push([selected, data[1], request]);
     if (selected === hex(OTP_AID) && [0x21, 0x22].includes(data[1]))
-      assert.equal(stages.at(-1), 'preparing');
+      assert.equal(stages.at(-1), data[1] === 0x21 ? 'preparing' : 'verifying');
     const response =
       data[1] === 0x21 && selected === hex(OTP_AID)
         ? {challenge}
@@ -396,7 +396,7 @@ test('selected OTP calculation uses one NFC session and explicit post-prepare Mo
     signal(),
     stage => stages.push(stage),
   );
-  assert.deepEqual(stages, ['preparing', 'time', 'preparing']);
+  assert.deepEqual(stages, ['preparing', 'time', 'verifying']);
   const authenticated = await monoid.useSession(prepared.applet);
   await authenticated.authenticate({pin: '123456', aid: OTP_AID});
   const result = await calculatePreparedOTP(prepared, authenticated, signal());

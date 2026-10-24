@@ -150,6 +150,7 @@ for (const [path, names] of [
     '@monoid/card-preview',
     ['CardGrid', 'CardPlaceholder', 'CardPreview', 'CardPreviewButton'],
   ],
+  ['@key/key-list', ['KeyListItem', 'KeyListPlaceholder']],
   ['@ui/app-icon', ['AppIcon']],
   ['@ui/button', ['Button', 'Buttons']],
   ['@ui/confirm-popup', ['ConfirmPopup']],

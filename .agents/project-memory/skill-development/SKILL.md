@@ -5,15 +5,18 @@ description: Monoid app development basics, sibling firmware, Capacitor iOS/Andr
 
 # Monoid app development
 
-Source: `../records.md`, records 13, 14, 25–38 and 42–46. Treat these records as authoritative and keep them up to date.
+Source: `../records.md`, records 13, 14, 25–38, 42–46, 62 and 64. Treat these records as authoritative and keep them up to date.
 
 - The app (Ionic React + Capacitor, iOS and Android) drives the card applets of the sibling repo `monoid-javacard`, which owns the card protocol. The app mirrors its commands as x-value schemas in `src/@lib/monoid/monoid-applet.ts`, on top of the generic `CBORApplet`/`Applet` transport in `src/@lib`.
 - The project is old: point out whenever the user's choices conflict with the interactions its existing code implies.
 - The phone's HTTP development WebView is not a secure context: `crypto.randomUUID` is unavailable even when it works in Node or desktop localhost. Use the shared `createFlowId()` from `@utils` for flow IDs; it uses `crypto.getRandomValues`, which remains available over HTTP. Preserve the same constraint for QR/NFC scan IDs. For route regressions, test the real route initializer with `randomUUID` absent; a mocked button handler misses this failure. The user chose project-memory guidance, not a lint restriction (record 46).
 - When a wallet list is the main content of a page (including Transactions wallet selection), use the shared roomy layout by default. Embedded account summaries opt into `WalletAccountList`'s `compact` spacing; `compactContent` separately controls the gap between tags and address.
+- Empty states (record 64): an empty main list shows only `ViewPlaceholder` and drops its section label; an empty list inside a list uses `KeyListItem` + `KeyListPlaceholder`; `InfoMessage` is for notices, not emptiness. Identifier-plus-alias headers follow the Safe key header: `ViewHeaderIdentifier` and an alias tag with `viewHeaderTagCSS` as direct `ViewHeader` children (Security Key does this for the card and Seed); multi-card flows (Copy, Sync, Extend, Setup) keep `CardPreview`.
 - Verify from the repo root with `npx tsc --build --pretty false` and `npx prettier --check <files>`.
 - Run ESLint from `src`, e.g. `Push-Location src; npx eslint --report-unused-disable-directives '<path>'; Pop-Location`. From the root it fails with "TSConfig does not include this file". Quote `@`-prefixed paths in PowerShell.
-- The old 14-error lint count is historical; compare actual changed files against the current baseline.
+- `npm run lint` is clean on main (record 62); keep it error-free. Cross-directory imports go through `index.js` barrels per `@mufan/import`; when a barrel gains an export, update tests that mock that barrel path.
+- `vite.config.js`/`.d.ts` are stale tracked compiler output that Vite may load before `vite.config.ts`.
+- Branch `archive/security-key-cloud-backup` holds the unmerged Security Key phone-backup exploration (CloudKV plugin); do not reintroduce it on main without a new request.
 - Use Node 22.12+ and Capacitor 8.5.3. `npm run ios:sync` builds web assets and regenerates the iOS SPM dependencies; avoid hand-editing generated `CapApp-SPM`. `npm run ios` opens Xcode; Xcode 27 launches simulators through Device Hub.
 - After `npm run build`, run application tests with `node --experimental-test-module-mocks --test tests/*.test.mjs`. The native plugin packages have independent XCTest targets; simulator checks do not establish NFC or Secure Enclave behavior. Core iOS decisions and remaining physical-device checks are in `../29.md`.
 - The shared `MonoidUITests` scheme verifies first camera authorization on a real iPhone, resetting only Monoid's camera permission and preserving app data and other permissions. First authorization must wait for an actual app-activation notification after requesting access, because the reply can precede deactivation while activity snapshots still appear active.

@@ -20,7 +20,6 @@ export function credential(number, options = {}) {
     [5, new Uint8Array([1, 2, 3, 4])],
     [6, 'alice'],
     [7, 'Alice'],
-    [8, true],
     [9, p256.getPublicKey(1n, false)],
     [10, scopeBytes],
   ]);

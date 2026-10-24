@@ -25,7 +25,6 @@ export type SecurityKeyCredential = {
   userId: Uint8Array;
   userName?: string;
   displayName?: string;
-  resident: boolean;
   publicKey: Uint8Array;
   scope: Uint8Array;
 };
@@ -75,11 +74,9 @@ export function decodeSecurityKeyCredential(
   const rpHash = bytes(3, 32);
   const rpId = text(4);
   const userId = bytes(5);
-  const resident: unknown = fields.get(8);
   const publicKey = bytes(9, 65);
   const scope = bytes(10, 32);
   if (
-    typeof resident !== 'boolean' ||
     publicKey[0] !== 4 ||
     !equalBytes(rpHash, getBytes(sha256(toUtf8Bytes(rpId))))
   )
@@ -112,7 +109,6 @@ export function decodeSecurityKeyCredential(
     userId,
     ...(fields.has(6) && {userName: text(6)}),
     ...(fields.has(7) && {displayName: text(7)}),
-    resident,
     publicKey,
     scope,
   };
@@ -272,13 +268,13 @@ export async function readSecurityKeySnapshot(
   };
 }
 
+/** Non-resident credentials leave no record, so any bound Seed may have accounts. */
 export function securityKeySeedChangeNeedsConfirmation(
   snapshot: SecurityKeySnapshot,
   seed: SafeIndexHex | 'create',
 ): boolean {
   return (
     !!snapshot.grant?.seed &&
-    snapshot.credentials.length + (snapshot.skippedCredentials ?? 0) > 0 &&
     seed !== uint8ArrayToHex(snapshot.grant.seed.index)
   );
 }

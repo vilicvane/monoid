@@ -23,7 +23,7 @@ import {
 import type {Router} from '../../@routes.js';
 import {isCredentialRequestCancelled} from '../../@services/index.js';
 import {uint8ArrayToHex} from '../../@utils/index.js';
-import {CardPreview} from '../@monoid/card-preview.js';
+import {KeyAliasTag} from '../@key/key-tags.js';
 import {
   MonoidScanRedirectError,
   MonoidScanStatePromptContentHighlight,
@@ -59,8 +59,11 @@ import {
   ViewContent,
   ViewHeader,
   ViewHeaderButton,
+  ViewHeaderIdentifier,
   ViewHeaderTitle,
+  ViewPlaceholder,
   useViewActive,
+  viewHeaderTagCSS,
 } from '../@view/index.js';
 
 import {CardScanPlaceholder} from './card/card-management-content.js';
@@ -70,10 +73,8 @@ import {
   readBackupCardIdentity,
 } from './safe/index.js';
 
-const Hero = styled.div`
-  width: 224px;
-  max-width: 100%;
-  margin: 12px auto 24px;
+const SeedAliasTag = styled(KeyAliasTag)`
+  ${viewHeaderTagCSS}
 `;
 
 const CredentialIcon = styled(AppIcon)`
@@ -124,7 +125,6 @@ function CredentialDetails({
           : [['Display name', credential.displayName] as [string, string]]),
         ['User ID', uint8ArrayToHex(credential.userId)],
         ['Credential ID', uint8ArrayToHex(credential.credentialId)],
-        ['Discoverable', credential.resident ? 'Yes' : 'No'],
         ['Status', available ? 'Available' : 'Inactive'],
       ]
     : [];
@@ -329,6 +329,17 @@ export const SecurityKeyView = observer(
         <ViewHeader>
           <ViewHeaderTitle>Security Key</ViewHeaderTitle>
           {snapshot && (
+            <ViewHeaderIdentifier
+              identifier={{
+                type: 'card',
+                id: MonoidIdHex.satisfies(uint8ArrayToHex(snapshot.hello.id)),
+              }}
+            />
+          )}
+          {configured && boundSeed.alias && (
+            <SeedAliasTag>{boundSeed.alias}</SeedAliasTag>
+          )}
+          {snapshot && (
             <ViewHeaderButton
               aria-label="Security Key menu"
               disabled={busy}
@@ -374,18 +385,6 @@ export const SecurityKeyView = observer(
         >
           {snapshot ? (
             <>
-              <Hero>
-                <CardPreview
-                  id={uint8ArrayToHex(snapshot.hello.id)}
-                  description={
-                    configuration?.complete
-                      ? 'enabled'
-                      : configured
-                        ? (boundSeed.alias ?? 'Security Key')
-                        : 'not enabled'
-                  }
-                />
-              </Hero>
               {needsInstall && (
                 <InfoMessage>Install Monoid Security Key Applet</InfoMessage>
               )}
@@ -394,13 +393,13 @@ export const SecurityKeyView = observer(
                   Scan card again to check changes before continuing
                 </WarningMessage>
               )}
-              <InfoSection>
-                <InfoSectionHeader>
-                  <ListSectionTitle>Credentials</ListSectionTitle>
-                </InfoSectionHeader>
-                {snapshot.credentials.length === 0 ? (
-                  <InfoMessage>No credentials</InfoMessage>
-                ) : (
+              {snapshot.credentials.length === 0 ? (
+                <ViewPlaceholder>No credentials</ViewPlaceholder>
+              ) : (
+                <InfoSection>
+                  <InfoSectionHeader>
+                    <ListSectionTitle>Credentials</ListSectionTitle>
+                  </InfoSectionHeader>
                   <Credentials>
                     {snapshot.credentials.map(item => (
                       <ListItemButton
@@ -425,8 +424,8 @@ export const SecurityKeyView = observer(
                       </ListItemButton>
                     ))}
                   </Credentials>
-                )}
-              </InfoSection>
+                </InfoSection>
+              )}
             </>
           ) : (
             <>
@@ -504,8 +503,8 @@ export const SecurityKeyView = observer(
             onCancel={() => setSelection(undefined)}
             onConfirm={() => configure(selection, true)}
           >
-            Credentials from other Seeds remain on the card. Select their
-            original Seed to use them again.
+            Accounts registered with the current Seed stop working, including
+            ones not listed here. Select the current Seed again to restore them.
           </ConfirmPopup>
         )}
         {detail && (

@@ -110,7 +110,7 @@ const {useViewActive} = await import(
   '../.bld/app/@components/@view/use-view-active.js'
 );
 for (const [path, names] of [
-  ['@monoid/card-preview', ['CardPreview']],
+  ['@key/key-tags', ['KeyAliasTag']],
   ['@ui/app-icon', ['AppIcon']],
   ['@ui/button', ['Button', 'Buttons']],
   ['@ui/confirm-popup', ['ConfirmPopup']],
@@ -148,7 +148,10 @@ for (const [path, names] of [
       'ViewContent',
       'ViewHeader',
       'ViewHeaderButton',
+      'ViewHeaderIdentifier',
       'ViewHeaderTitle',
+      'ViewPlaceholder',
+      'viewHeaderTagCSS',
     ],
   ],
   ['views/card/card-management-content', ['CardScanPlaceholder']],
@@ -439,7 +442,7 @@ test('leaving while shared authentication is pending prevents a late configurati
   await tap;
   assert.deepEqual(first.writes, []);
   assert.equal(
-    find(state.tree, node => node.type === 'CardPreview'),
+    find(state.tree, node => node.type === 'ViewHeaderIdentifier'),
     undefined,
   );
   assert.deepEqual(state.errors, []);

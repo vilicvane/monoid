@@ -96,6 +96,15 @@ const ViewHeaderContainer = styled.div`
     grid-template-columns: auto auto minmax(0, 1fr);
   }
 
+  /* A tag after the identifier takes the flexible column; keep the button last. */
+  &:has(> ${IdentifierContainer}):has(> ${ViewHeaderButton}) {
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+
+    > ${ViewHeaderButton} {
+      grid-column: 4;
+    }
+  }
+
   > ${IdentifierContainer} + :not(${ViewHeaderButton}) {
     margin-left: calc(-1 * var(--view-header-gap) - var(--tag-overlap));
   }

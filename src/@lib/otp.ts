@@ -278,7 +278,7 @@ export async function prepareOTP(
   indices: readonly Uint8Array[],
   authority: string | false,
   signal: AbortSignal,
-  onStage?: (stage: 'preparing' | 'time') => void,
+  onStage?: (stage: 'preparing' | 'time' | 'verifying') => void,
 ): Promise<PreparedOTP> {
   const selected = validateOTPSelection(indices);
   signal.throwIfAborted();
@@ -316,7 +316,7 @@ export async function prepareOTP(
     signal,
   );
   signal.throwIfAborted();
-  onStage?.('preparing');
+  onStage?.('verifying');
   await applet.prepare({
     data: proof.data,
     signature: proof.signature,

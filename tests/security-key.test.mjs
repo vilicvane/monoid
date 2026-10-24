@@ -45,7 +45,6 @@ function credentialFields() {
     [5, bytes('01234567')],
     [6, 'alice'],
     [7, 'Alice'],
-    [8, true],
     [9, publicKey],
     [10, scope],
   ]);
@@ -139,15 +138,12 @@ test('decodes actual numeric-map credential fields and metadata association', ()
     userId: bytes('01234567'),
     userName: 'alice',
     displayName: 'Alice',
-    resident: true,
     publicKey,
     scope,
   });
   const minimal = credentialFields();
   minimal.delete(6);
   minimal.delete(7);
-  minimal.set(8, false);
-  assert.equal(decodeSecurityKeyCredential(encode(minimal)).resident, false);
   assert.equal(
     decodeSecurityKeyCredential(encode(minimal)).userName,
     undefined,
@@ -167,8 +163,6 @@ for (const [name, mutate] of [
   ['RP hash mismatch', fields => fields.set(4, 'other.example')],
   ['user ID as text', fields => fields.set(5, 'alice')],
   ['user name as bstr', fields => fields.set(6, toUtf8Bytes('alice'))],
-  ['missing resident flag', fields => fields.delete(8)],
-  ['resident flag as integer', fields => fields.set(8, 1)],
   ['wrong public key length', fields => fields.set(9, new Uint8Array(64))],
   ['old record without scope', fields => fields.delete(10)],
   ['scope as text', fields => fields.set(10, hex(scope))],
@@ -204,11 +198,11 @@ for (const [name, mutate] of [
 test('rejects duplicate fields, trailing data and mismatched index/metadata', () => {
   const record = credentialRecord();
   const encoded = encode(credentialFields());
-  assert.equal(encoded[0], 0xaa);
+  assert.equal(encoded[0], 0xa9);
   assert.throws(
     () =>
       decodeSecurityKeyCredential(
-        Uint8Array.from([0xab, ...encoded.subarray(1), 1, 1]),
+        Uint8Array.from([0xaa, ...encoded.subarray(1), 1, 1]),
       ),
     /Invalid/,
   );
@@ -576,10 +570,12 @@ test('acknowledgement survives cancellation before cleanup; no second grant is s
   assert.equal(commands.filter(([name]) => name === 'grant').length, 1);
 });
 
-test('changing an already configured Seed with credentials requires confirmation', () => {
+test('changing an already configured Seed requires confirmation', () => {
+  // Without records, non-resident credentials may still depend on the Seed.
   for (const records of [
     {credentials: [{index: 'f1010000000000000000'}]},
     {skippedCredentials: 1},
+    {},
   ]) {
     const current = snapshot({...records, grant: grant()});
     assert.equal(
@@ -595,13 +591,6 @@ test('changing an already configured Seed with credentials requires confirmation
       true,
     );
   }
-  assert.equal(
-    securityKeySeedChangeNeedsConfirmation(
-      snapshot({grant: grant()}),
-      'create',
-    ),
-    false,
-  );
 });
 
 for (const [name, currentGrant] of [

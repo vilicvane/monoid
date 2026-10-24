@@ -181,7 +181,7 @@ mock.module('../.bld/app/@lib/otp.js', {
       onStage?.('preparing');
       if (authority !== false) {
         onStage?.('time');
-        onStage?.('preparing');
+        onStage?.('verifying');
       }
       fixture.prepared = {indexes, authority, signal};
       return fixture.prepared;

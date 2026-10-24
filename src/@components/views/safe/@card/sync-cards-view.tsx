@@ -13,6 +13,7 @@ import {
 } from '../../../../@lib/monoid/index.js';
 import type {Router} from '../../../../@routes.js';
 import {isCredentialRequestCancelled} from '../../../../@services/index.js';
+import {KeyListItem, KeyListPlaceholder} from '../../../@key/key-list.js';
 import {
   CardGrid,
   CardPlaceholder,
@@ -703,7 +704,9 @@ export const SyncCardsView = observer(
                 />
               ))}
               {!selectedCard.items.length && (
-                <Description>No items</Description>
+                <KeyListItem>
+                  <KeyListPlaceholder>No items</KeyListPlaceholder>
+                </KeyListItem>
               )}
             </CardResourceList>
             <Buttons data-popup-animation-group>

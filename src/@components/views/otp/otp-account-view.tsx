@@ -326,9 +326,11 @@ export const OTPAccountView = observer(
                 signal,
                 stage =>
                   setState(
-                    stage === 'time'
-                      ? 'Getting time, hold tight...'
-                      : 'Preparing, hold tight...',
+                    {
+                      preparing: 'Preparing, hold tight...',
+                      time: 'Getting time, hold tight...',
+                      verifying: 'Verifying time, hold tight...',
+                    }[stage],
                   ),
               );
             },

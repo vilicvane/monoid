@@ -5,7 +5,7 @@ description: Monoid NFC card sessions, Access/Safe PIN ownership, biometric vaul
 
 # Monoid card sessions
 
-Source: `../records.md`, especially records 29–32, 34, 38–41 and 47–50, and `../29.md`, `../48.md` and `../50.md`. Treat records
+Source: `../records.md`, especially records 29–32, 34, 38–41, 47–50 and 63, and `../29.md`, `../48.md` and `../50.md`. Treat records
 as authoritative and keep them up to date. Records 19–24 describe an older WIP;
 do not reintroduce their plain-storage design or assume those TODOs still exist.
 
@@ -99,3 +99,7 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   Access PIN authentication in the same NFC session. Optional Identity Authority
   installation parameters require URL and public key together; ordinary Monoid
   replacement preserves them. See record 56.
+- Every Security Key `0xF101` record is resident; non-resident credentials have no
+  record and recover from the granted Seed and domain alone. Decoding ignores
+  record field 8. Replacing any bound Seed asks for confirmation, because
+  non-resident accounts may exist without a visible record. See record 63.
