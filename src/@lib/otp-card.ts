@@ -308,20 +308,21 @@ export async function addOTPAccount(
   }
 }
 
+/** Resolves `undefined` without writing when this card lacks the account. */
 export async function removeOTPAccount(
   applet: MonoidApplet,
   account: OTPAccount,
   signal: AbortSignal,
   onMutation: () => void,
   installed = true,
-): Promise<OTPAccount[]> {
+): Promise<OTPAccount[] | undefined> {
   const {accounts, items: accountItems} = await readOTPInventory(
     applet,
     signal,
   );
   const current = accounts.find(item => item.index === account.index);
+  if (!current) return undefined;
   if (
-    !current ||
     current.keyIndex !== account.keyIndex ||
     !equalBytes(
       encodeOTPConfiguration(current),

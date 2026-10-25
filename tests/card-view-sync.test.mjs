@@ -82,6 +82,7 @@ mock.module('../.bld/app/@services/index.js', {
     assertWalletPublicKeys,
     getWalletData,
     getWalletReference,
+    isCredentialRequestCancelled: error => error?.code === 'CANCELLED',
     matchesWalletReference,
   },
 });
@@ -394,6 +395,11 @@ function mount({items, keys = []}) {
     },
     async finish() {
       state.scans.at(-1).resolve();
+      await new Promise(resolve => setImmediate(resolve));
+      // Deletion then asks for further cards; close that prompt as a user would.
+      const next = state.scans.at(-1);
+      if (next.label === 'Scan next card to delete')
+        next.reject(Object.assign(new Error('Cancelled'), {code: 'CANCELLED'}));
       await state.finished;
       state.render();
     },
@@ -616,6 +622,38 @@ test('deleting a selected group and standalone resource removes companions first
   assert.deepEqual(state.errors, []);
 });
 
+test('deletion continues on further cards with the same indices and rejects a finished card', async () => {
+  const state = mount({
+    items: cardItems(INDEX, [wallet(0)]),
+    keys: [key(INDEX, [wallet(0)])],
+  });
+  state.select(INDEX);
+  state.confirmDelete()();
+  await state.tap();
+  state.scans.at(-1).resolve();
+  await new Promise(resolve => setImmediate(resolve));
+
+  const next = state.scans.at(-1);
+  assert.equal(next.label, 'Scan next card to delete');
+  assert.throws(() => next.validate(state.hello), /Card already done/);
+  const removals = [...state.removals];
+  state.removals.length = 0;
+  await state.tap({...state.hello, publicKey: bytes('05'.repeat(65))});
+  assert.deepEqual(state.removals, removals);
+  assert.deepEqual(state.rowIndexes(), []);
+
+  next.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  state.scans
+    .at(-1)
+    .reject(Object.assign(new Error('Cancelled'), {code: 'CANCELLED'}));
+  await state.finished;
+  state.render();
+  assert.equal(state.scans.length, 3);
+  assert.equal(state.menuButton().props.disabled, false);
+  assert.deepEqual(state.errors, []);
+});
+
 test('deletion rejects a mismatched full Safe identity before authentication and permits a correct retry', async () => {
   const state = mount({items: cardItems(INDEX, [wallet(0)])});
   state.select(INDEX);
@@ -694,6 +732,11 @@ test('two confirmation clicks before rerender start only one deletion scan', asy
 
   await state.tap();
   state.scans[0].resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(state.scans.length, 2);
+  state.scans[1].reject(
+    Object.assign(new Error('Cancelled'), {code: 'CANCELLED'}),
+  );
   await finished;
   assert.deepEqual(state.removals, [metadata(INDEX, [wallet(0)]).index, INDEX]);
   assert.deepEqual(state.card.items, []);

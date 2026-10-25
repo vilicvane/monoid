@@ -46,7 +46,8 @@ Labels without a provider retain their full name and an OTP tag, and stay
 independent. Collapsed groups do not expose an individual account's swipe actions.
 
 Forget (yellow broom) removes only the local entry. Delete from card (red
-credit-card-minus) removes it from the tapped card and retains the cache for other backups. Installation/authorization status
+credit-card-minus) removes it from the tapped card and retains the cache for other backups; the
+prompt then asks for the next card until dismissed. Installation/authorization status
 belongs only to the current page's scanned card, not to cached accounts. Enable
 OTP on card remains a separate menu action and is never performed by code retrieval.
 

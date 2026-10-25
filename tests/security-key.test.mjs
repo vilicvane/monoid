@@ -370,15 +370,19 @@ test('missing granted Seed leaves scope unavailable without deriving or reading 
 });
 
 test('only explicit FIDO SELECT not-found is reported as missing', async () => {
-  const missing = card({
-    onSelect: async () => {
-      throw new AppletISOError('not found', 0x6a82, new Uint8Array());
-    },
-  });
-  assert.equal(
-    (await readSecurityKeySnapshot(missing.applet, hello, signal())).installed,
-    false,
-  );
+  // 6D00 is the selected Monoid applet rejecting a SELECT with no matching AID.
+  for (const sw of [0x6a82, 0x6d00]) {
+    const missing = card({
+      onSelect: async () => {
+        throw new AppletISOError('not found', sw, new Uint8Array());
+      },
+    });
+    assert.equal(
+      (await readSecurityKeySnapshot(missing.applet, hello, signal()))
+        .installed,
+      false,
+    );
+  }
   const unexpected = card({
     onSelect: async () => {
       throw new AppletISOError('failed', 0x6985, new Uint8Array());

@@ -76,19 +76,27 @@ export type MonoidScanPromptOptions = {
   pinSession?: MonoidPINSession;
 };
 
-type MonoidScanPromptCallback = (
+export type MonoidScanPromptCallback = (
   applet: MonoidApplet,
   setStateContent: MonoidScanPromptSetStateContentCallback,
   hello: MonoidAppletHello,
   signal: AbortSignal,
 ) => Promise<void | {message: string}>;
 
-type MonoidScanPromptValidateCard = (hello: MonoidAppletHello) => void;
+export type MonoidScanPromptValidateCard = (hello: MonoidAppletHello) => void;
 
 export type MonoidScanAuthentication = {
   aid?: Uint8Array;
   prepare: MonoidScanPromptCallback;
 };
+
+export type MonoidScanPrompt = (
+  initialStateContent: ReactNode,
+  appletCallback: MonoidScanPromptCallback,
+  validateCard?: MonoidScanPromptValidateCard,
+  signal?: AbortSignal,
+  authentication?: MonoidScanAuthentication,
+) => Promise<void>;
 
 type PINRequest =
   | {type: 'access'; id: MonoidIdHex}
@@ -111,16 +119,7 @@ export function useMonoidScanPrompt({
   auth = false,
   retryOnError = false,
   pinSession,
-}: MonoidScanPromptOptions = {}): [
-  ReactNode,
-  (
-    initialStateContent: ReactNode,
-    appletCallback: MonoidScanPromptCallback,
-    validateCard?: MonoidScanPromptValidateCard,
-    signal?: AbortSignal,
-    authentication?: MonoidScanAuthentication,
-  ) => Promise<void>,
-] {
+}: MonoidScanPromptOptions = {}): [ReactNode, MonoidScanPrompt] {
   const {
     router,
     monoidApplet,

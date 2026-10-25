@@ -163,6 +163,11 @@ test('standby awaits missing-SELECT preflight on the same open connection before
   assert.deepEqual(state.failures, []);
 });
 
+test('a SELECT forwarded to the selected applet as an unsupported instruction is a missing applet', async () => {
+  respond = () => [0x6d, 0x00];
+  await assert.rejects(openApplet(), AppletNotFoundError);
+});
+
 test('standby forwards a missing SELECT when no preflight handler was supplied', async () => {
   respond = () => [0x6a, 0x82];
   const state = standby({

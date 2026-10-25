@@ -29,10 +29,12 @@ import {ADDRESS_CHAIN_OPTIONS} from '../../../@key/address-type-selector.js';
 import {KeyListPlaceholder} from '../../../@key/key-list.js';
 import {keyTypeColorsCSS} from '../../../@key/key-tags.js';
 import {
+  type MonoidScanPromptSetStateContentCallback,
   MonoidScanStatePromptProgress,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
 import {PINKind} from '../../../@monoid/pin-input-placeholder.js';
+import {scanNextCards} from '../../../@monoid/scan-next-cards.js';
 import {AppIcon} from '../../../@ui/app-icon.js';
 import {Button, Buttons} from '../../../@ui/button.js';
 import {
@@ -933,7 +935,8 @@ const CardContent = observer(
           [...group.items].reverse().map(item => item.index),
         ),
       );
-      const total = pending.size;
+      const indices = [...pending];
+      const total = indices.length;
       const operation = new AbortController();
       let deletingItems: Promise<void> | undefined;
       deletion.current = operation;
@@ -945,59 +948,75 @@ const CardContent = observer(
         {fireImmediately: true},
       );
 
+      // Each card deletes the same indices; missing items are already done.
+      const deleteFromCard = async (
+        applet: MonoidApplet,
+        setStateContent: MonoidScanPromptSetStateContentCallback,
+        signal: AbortSignal,
+        remaining: Set<SafeIndexHex>,
+        onDeleted: (index: SafeIndexHex) => void = () => {},
+      ): Promise<void> => {
+        const cancel = (): void => operation.abort();
+        signal.addEventListener('abort', cancel, {once: true});
+        if (signal.aborted) cancel();
+
+        const showProgress = (): void => {
+          if (operation.signal.aborted) return;
+
+          setStateContent(
+            <MonoidScanStatePromptProgress
+              current={total - remaining.size}
+              total={total}
+            >
+              Deleting items
+            </MonoidScanStatePromptProgress>,
+          );
+        };
+
+        try {
+          showProgress();
+          deletingItems = deleteCardResources(
+            applet,
+            remaining,
+            operation.signal,
+            index => {
+              onDeleted(index);
+              showProgress();
+            },
+          );
+          await deletingItems;
+        } finally {
+          signal.removeEventListener('abort', cancel);
+        }
+      };
+
       try {
         await scanPrompt(
           'Scan card to delete',
-          async (applet, setStateContent, _hello, signal) => {
-            const cancel = (): void => operation.abort();
-            signal.addEventListener('abort', cancel, {once: true});
-            if (signal.aborted) cancel();
+          (applet, setStateContent, _hello, signal) =>
+            deleteFromCard(applet, setStateContent, signal, pending, index => {
+              const sourceIndex = card.items.find(item => item.index === index)
+                ?.derivationRecord?.index;
 
-            const showProgress = (): void => {
-              if (operation.signal.aborted) return;
-
-              setStateContent(
-                <MonoidScanStatePromptProgress
-                  current={total - pending.size}
-                  total={total}
-                >
-                  Deleting items
-                </MonoidScanStatePromptProgress>,
-              );
-            };
-
-            try {
-              showProgress();
-              deletingItems = deleteCardResources(
-                applet,
-                pending,
-                operation.signal,
-                index => {
-                  const sourceIndex = card.items.find(
-                    item => item.index === index,
-                  )?.derivationRecord?.index;
-
-                  runInAction(() => {
-                    card.items = card.items.filter(
-                      item => item.index !== index,
-                    );
-                    selectedIndexSet.delete(index);
-                    const source = card.items.find(
-                      item => item.index === sourceIndex,
-                    );
-                    if (source) source.derivations = [];
-                  });
-
-                  showProgress();
-                },
-              );
-              await deletingItems;
-            } finally {
-              signal.removeEventListener('abort', cancel);
-            }
-          },
+              runInAction(() => {
+                card.items = card.items.filter(item => item.index !== index);
+                selectedIndexSet.delete(index);
+                const source = card.items.find(
+                  item => item.index === sourceIndex,
+                );
+                if (source) source.derivations = [];
+              });
+            }),
           hello => assertCardForUpdate(hello, card),
         );
+        await scanNextCards({
+          scan: scanPrompt,
+          scanned: new Set([card.publicKey]),
+          content: 'Scan next card to delete',
+          callback: (applet, setStateContent, _hello, signal) =>
+            deleteFromCard(applet, setStateContent, signal, new Set(indices)),
+          signal: operation.signal,
+        });
       } finally {
         operation.abort();
         // Dismissing the prompt can finish before an in-flight command returns.

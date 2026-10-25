@@ -6,9 +6,12 @@ import {p256} from '@noble/curves/nist';
 import {observable, runInAction} from 'mobx';
 
 import {readBackupCardIdentity} from '../.bld/app/@components/views/safe/@card/card-backup-session.js';
+import {deleteCardResources} from '../.bld/app/@components/views/safe/card-resource-delete.js';
 import {AppletNotFoundError} from '../.bld/app/@lib/applet.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
+
+import {credential} from './helpers/security-key-credential.mjs';
 
 let fixture;
 let rendering;
@@ -56,7 +59,11 @@ mock.module('mobx-react-lite', {
   namedExports: {observer: component => component},
 });
 mock.module('lucide-react', {
-  namedExports: {Ellipsis: 'Ellipsis', KeyRound: 'KeyRound'},
+  namedExports: {
+    CreditCardMinus: 'CreditCardMinus',
+    Ellipsis: 'Ellipsis',
+    KeyRound: 'KeyRound',
+  },
 });
 mock.module('styled-components', {
   namedExports: {
@@ -129,6 +136,7 @@ for (const [path, names] of [
       'InfoSectionItemLabel',
     ],
   ],
+  ['@ui/swipeable-item', ['SwipeAction', 'SwipeActionIcon', 'SwipeableItem']],
   [
     '@ui/list',
     [
@@ -161,7 +169,9 @@ for (const [path, names] of [
     namedExports: {
       ...Object.fromEntries(names.map(name => [name, name])),
       ...(path === '@view/index' ? {useViewActive} : {}),
-      ...(path === 'views/safe/index' ? {readBackupCardIdentity} : {}),
+      ...(path === 'views/safe/index'
+        ? {deleteCardResources, readBackupCardIdentity}
+        : {}),
     },
   });
 }
@@ -183,7 +193,7 @@ function find(node, predicate) {
   if (predicate(node)) return node;
   for (const child of Array.isArray(node)
     ? node
-    : [node.props?.children, node.props?.footer]) {
+    : [node.props?.children, node.props?.footer, node.props?.actions]) {
     const result = find(child, predicate);
     if (result) return result;
   }
@@ -537,3 +547,52 @@ for (const kind of ['access', 'secret']) {
     );
   });
 }
+
+test('deleting a credential removes it from this card, then further cards until dismissed', async () => {
+  const record = credential(1);
+  const bytes = hex => Uint8Array.from(Buffer.from(hex, 'hex'));
+  const holder = number => {
+    const current = card(number);
+    current.removals = [];
+    current.items.push({
+      index: bytes(record.index),
+      metadata: bytes(record.metadata),
+      secret: false,
+    });
+    current.applet.get = async () => ({data: bytes(record.data)});
+    current.applet.remove = async ({index}) => {
+      current.removals.push(Buffer.from(index).toString('hex'));
+    };
+    return current;
+  };
+  const first = holder(1);
+  const second = holder(2);
+  const state = mount();
+  await state.read(first);
+
+  find(
+    state.render(),
+    node =>
+      node.type === 'SwipeAction' && node.props.children.includes('Delete'),
+  ).props.onClick();
+  find(state.render(), node => node.type === 'ConfirmPopup').props.onConfirm();
+  await state.flush();
+  await state.tap(first);
+  assert.deepEqual(first.removals, [record.index]);
+  assert.equal(
+    find(state.render(), node => node.type === 'ListItemButton'),
+    undefined,
+  );
+
+  const next = state.scans.at(-1);
+  assert.equal(next.content, 'Scan next card to delete');
+  assert.throws(() => next.validate(first.hello), /Card already done/);
+  await state.tap(second);
+  assert.deepEqual(second.removals, [record.index]);
+
+  state.scans
+    .at(-1)
+    .finished.reject(Object.assign(new Error(), {code: 'CANCELLED'}));
+  await state.flush();
+  assert.deepEqual(state.errors, []);
+});

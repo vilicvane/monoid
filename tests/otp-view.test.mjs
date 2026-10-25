@@ -1014,9 +1014,43 @@ test('deletion detects a backup without OTP and removes its account without reau
     'authenticate',
     'remove',
     'cache',
+    'scan',
   ]);
   assert.equal(state.removeInstalled, false);
   assert.deepEqual(state.entrances.otpStore.accounts, first.accounts);
+  assert.deepEqual(state.errors, []);
+  assert.equal(state.scans.at(-1).content, 'Scan next card to delete');
+});
+
+test('deletion continues on further cards until the next-card prompt is dismissed', async () => {
+  const first = cachedCard(1);
+  const second = {...cachedCard(2), accounts: first.accounts};
+  const state = mount([first]);
+  find(
+    state.render(),
+    node =>
+      node.type === 'SwipeAction' && node.props.children.includes('Delete'),
+  ).props.onClick();
+  find(state.render(), node => node.type === 'ConfirmPopup').props.onConfirm();
+  await state.flush();
+  await state.tap(first);
+  await state.tap(second);
+  assert.equal(state.events.filter(event => event === 'remove').length, 2);
+
+  const next = state.scans.at(-1);
+  assert.equal(next.content, 'Scan next card to delete');
+  assert.throws(
+    () =>
+      next.validate({
+        id: bytes(first.id),
+        publicKey: bytes(first.publicKey),
+        pins: {access: 5, secret: 5},
+      }),
+    /Card already done/,
+  );
+  next.finished.reject(Object.assign(new Error(), {code: 'CANCELLED'}));
+  await state.flush();
+  assert.equal(state.scans.length, 3);
   assert.deepEqual(state.errors, []);
 });
 

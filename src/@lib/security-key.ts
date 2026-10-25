@@ -6,7 +6,7 @@ import type {SafeIndexHex} from '../@atomics.js';
 import {SafeIndex} from '../@atomics.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../@utils/index.js';
 
-import {AppletISOError} from './applet.js';
+import {AppletISOError, isAppletNotFoundStatus} from './applet.js';
 import {InvalidCardItemError} from './card-item-error.js';
 import {CBORAppletError} from './cbor-applet.js';
 import {equalBytes} from './global-platform/commands.js';
@@ -254,7 +254,8 @@ export async function readSecurityKeySnapshot(
     if (!installed)
       throw new MonoidCardError('Could not identify Security Key Applet');
   } catch (error) {
-    if (!(error instanceof AppletISOError && error.sw === 0x6a82)) throw error;
+    if (!(error instanceof AppletISOError && isAppletNotFoundStatus(error.sw)))
+      throw error;
   }
   signal.throwIfAborted();
   return {

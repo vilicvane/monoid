@@ -719,6 +719,24 @@ test('OTP delete preserves HMAC keys referenced by another account or applet', a
   }
 });
 
+test('OTP deletion skips a card without the account and writes nothing', async () => {
+  const source = card({
+    items: [accountRecord(), {index: hmacIndex, secret: true, data: secret}],
+  });
+  const [account] = await readOTPAccounts(source.applet, signal());
+  const other = card({items: [{index: hmacIndex, secret: true, data: secret}]});
+  let mutations = 0;
+  assert.equal(
+    await removeOTPAccount(other.applet, account, signal(), () => mutations++),
+    undefined,
+  );
+  assert.equal(
+    other.commands.some(([name]) => name === 'remove' || name === 'grant'),
+    false,
+  );
+  assert.equal(mutations, 0);
+});
+
 test('OTP account deletion still works after the optional applet was removed', async () => {
   const fixture = card({
     items: [accountRecord(), {index: hmacIndex, secret: true, data: secret}],

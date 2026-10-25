@@ -116,7 +116,7 @@ export abstract class Applet<TCommandDefinitions> {
         new Uint8Array([0x00, 0xa4, 0x04, 0x00, this.aid.length, ...this.aid]),
       );
     } catch (error) {
-      if (error instanceof AppletISOError && error.sw === 0x6a82) {
+      if (error instanceof AppletISOError && isAppletNotFoundStatus(error.sw)) {
         throw new AppletNotFoundError(error.data);
       }
 
@@ -221,6 +221,15 @@ export class AppletISOError extends Error {
     );
     this.name = new.target.name;
   }
+}
+
+/**
+ * Whether a SELECT status word means no applet has the AID. Java Card passes a
+ * SELECT without a matching applet to the currently selected one, which rejects
+ * the instruction as unsupported; a selected target never answers that way.
+ */
+export function isAppletNotFoundStatus(sw: number): boolean {
+  return sw === 0x6a82 || sw === 0x6d00;
 }
 
 export class AppletNotFoundError extends AppletISOError {

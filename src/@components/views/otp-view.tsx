@@ -43,11 +43,15 @@ import {
 import {KeyList, KeyListItemContent} from '../@key/key-list.js';
 import {KeyDerivationBadge, KeyTags} from '../@key/key-tags.js';
 import {
+  type MonoidScanAuthentication,
+  type MonoidScanPromptCallback,
+  type MonoidScanPromptValidateCard,
   MonoidScanRedirectError,
   MonoidScanStatePromptContentHighlight,
   useMonoidScanPrompt,
 } from '../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../@monoid/pin-input-placeholder.js';
+import {scanNextCards} from '../@monoid/scan-next-cards.js';
 import {AppIcon} from '../@ui/app-icon.js';
 import {Button, Buttons} from '../@ui/button.js';
 import {ConfirmPopup} from '../@ui/confirm-popup.js';
@@ -296,78 +300,77 @@ export const OTPView = observer(
         task.signal.throwIfAborted();
         if (!active()) return;
         scanning.current = true;
-        await scan(
-          expected ? (
-            <>
-              Scan card{' '}
-              <MonoidScanStatePromptContentHighlight>
-                {expected.id}
-              </MonoidScanStatePromptContentHighlight>
-            </>
-          ) : (
-            'Scan a card'
-          ),
-          async (applet, setState, hello, scanSignal) => {
-            const signal = AbortSignal.any([task.signal, scanSignal]);
-            const identity = {
-              id: uint8ArrayToHex(hello.id),
-              publicKey: uint8ArrayToHex(hello.publicKey),
-            };
-            const changed = (): void => cardStore.forget(identity);
-            signal.throwIfAborted();
-            let accounts: OTPAccount[] | undefined;
-            if (operation.type === 'add') {
-              setState('Adding account, hold tight...');
-              accounts = await addOTPAccount(
-                applet,
-                operation.account,
-                signal,
-                changed,
-              );
-            } else if (operation.type === 'remove') {
-              setState('Removing account, hold tight...');
-              accounts = await removeOTPAccount(
-                applet,
-                operation.account,
-                signal,
-                changed,
-                installed,
-              );
-            } else if (operation.type === 'authorize') {
-              setState('Enabling OTP, hold tight...');
-              accounts = await authorizeOTPAccounts(applet, signal);
-            }
-            let next: OTPCard;
-            if (accounts) {
-              // Successful writes and the fresh grant are authoritative for this tap.
-              next = {...identity, accounts, installed, authorized: installed};
-            } else {
-              setState('Reading accounts, hold tight...');
-              next = await readOTPCard(applet, hello, signal);
-            }
-            signal.throwIfAborted();
-            await otpStore.save(next.accounts);
-            if (active() && mounted.current) {
-              setCard(next);
-            }
-          },
+
+        const scanned = new Set<string>();
+        const process: MonoidScanPromptCallback = async (
+          applet,
+          setState,
+          hello,
+          scanSignal,
+        ) => {
+          const signal = AbortSignal.any([task.signal, scanSignal]);
+          const identity = {
+            id: uint8ArrayToHex(hello.id),
+            publicKey: uint8ArrayToHex(hello.publicKey),
+          };
+          const changed = (): void => cardStore.forget(identity);
+          signal.throwIfAborted();
+          let accounts: OTPAccount[] | undefined;
+          if (operation.type === 'add') {
+            setState('Adding account, hold tight...');
+            accounts = await addOTPAccount(
+              applet,
+              operation.account,
+              signal,
+              changed,
+            );
+          } else if (operation.type === 'remove') {
+            setState('Removing account, hold tight...');
+            accounts = await removeOTPAccount(
+              applet,
+              operation.account,
+              signal,
+              changed,
+              installed,
+            );
+          } else if (operation.type === 'authorize') {
+            setState('Enabling OTP, hold tight...');
+            accounts = await authorizeOTPAccounts(applet, signal);
+          }
+          let next: OTPCard;
+          if (accounts) {
+            // Successful writes and the fresh grant are authoritative for this tap.
+            next = {...identity, accounts, installed, authorized: installed};
+          } else {
+            setState('Reading accounts, hold tight...');
+            next = await readOTPCard(applet, hello, signal);
+          }
+          scanned.add(identity.publicKey);
+          signal.throwIfAborted();
+          await otpStore.save(next.accounts);
+          if (active() && mounted.current) {
+            setCard(next);
+          }
+        };
+        const validate =
+          (card: typeof expected): MonoidScanPromptValidateCard =>
           hello => {
             task.signal.throwIfAborted();
             if (!active()) throw new MonoidScanRedirectError();
             if (
-              expected &&
-              (uint8ArrayToHex(hello.id) !== expected.id ||
-                uint8ArrayToHex(hello.publicKey) !== expected.publicKey)
+              card &&
+              (uint8ArrayToHex(hello.id) !== card.id ||
+                uint8ArrayToHex(hello.publicKey) !== card.publicKey)
             )
-              throw new MonoidWrongCardError(expected.id);
+              throw new MonoidWrongCardError(card.id);
             if (hello.pins.access === false || hello.pins.secret === false) {
               throw new MonoidCardError('Set up card PINs first');
             }
             if (hello.pins.access === 0)
               throw new MonoidCardError('Access PIN blocked');
             otpStore.authorityHint = hello.authority;
-          },
-          task.signal,
+          };
+        const authentication: MonoidScanAuthentication | undefined =
           operation.type === 'add' || operation.type === 'remove'
             ? {
                 prepare: async (applet, setState, _hello, scanSignal) => {
@@ -380,8 +383,34 @@ export const OTPView = observer(
                     );
                 },
               }
-            : undefined,
+            : undefined;
+
+        await scan(
+          expected ? (
+            <>
+              Scan card{' '}
+              <MonoidScanStatePromptContentHighlight>
+                {expected.id}
+              </MonoidScanStatePromptContentHighlight>
+            </>
+          ) : (
+            'Scan a card'
+          ),
+          process,
+          validate(expected),
+          task.signal,
+          authentication,
         );
+        if (operation.type === 'remove')
+          await scanNextCards({
+            scan,
+            scanned,
+            content: 'Scan next card to delete',
+            callback: process,
+            validate: validate(undefined),
+            signal: task.signal,
+            authentication,
+          });
       } catch (error) {
         if (
           !task.signal.aborted &&

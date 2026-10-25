@@ -1,4 +1,8 @@
-import {Ellipsis as ellipsis, KeyRound as keyRound} from 'lucide-react';
+import {
+  CreditCardMinus as creditCardMinus,
+  Ellipsis as ellipsis,
+  KeyRound as keyRound,
+} from 'lucide-react';
 import {reaction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useRef, useState} from 'react';
@@ -25,10 +29,13 @@ import {isCredentialRequestCancelled} from '../../@services/index.js';
 import {uint8ArrayToHex} from '../../@utils/index.js';
 import {KeyAliasTag} from '../@key/key-tags.js';
 import {
+  type MonoidScanPromptCallback,
+  type MonoidScanPromptValidateCard,
   MonoidScanRedirectError,
   MonoidScanStatePromptContentHighlight,
   useMonoidScanPrompt,
 } from '../@monoid/monoid-scan-prompt.js';
+import {scanNextCards} from '../@monoid/scan-next-cards.js';
 import {AppIcon} from '../@ui/app-icon.js';
 import {Button, Buttons} from '../@ui/button.js';
 import {ConfirmPopup} from '../@ui/confirm-popup.js';
@@ -55,6 +62,11 @@ import {
 } from '../@ui/list.js';
 import {InfoMessage, WarningMessage} from '../@ui/message-content.js';
 import {
+  SwipeAction,
+  SwipeActionIcon,
+  SwipeableItem,
+} from '../@ui/swipeable-item.js';
+import {
   View,
   ViewContent,
   ViewHeader,
@@ -70,6 +82,7 @@ import {CardScanPlaceholder} from './card/card-management-content.js';
 import {
   CardResourceItem,
   CardResourceList,
+  deleteCardResources,
   readBackupCardIdentity,
 } from './safe/index.js';
 
@@ -154,6 +167,8 @@ export const SecurityKeyView = observer(
     const [busy, setBusy] = useState(false);
     const [popup, setPopup] = useState<'menu' | 'configure'>();
     const [detail, setDetail] = useState<SecurityKeyCredentialItem>();
+    const [deleting, setDeleting] = useState<SecurityKeyCredentialItem>();
+    const [openRow, setOpenRow] = useState<SafeIndexHex>();
     const [selection, setSelection] = useState<SafeIndexHex | 'create'>();
     const [configuration, setConfiguration] =
       useState<SecurityKeyConfiguration>();
@@ -189,6 +204,8 @@ export const SecurityKeyView = observer(
           pinSession.clear();
           setPopup(undefined);
           setDetail(undefined);
+          setDeleting(undefined);
+          setOpenRow(undefined);
           setSelection(undefined);
           setConfiguration(undefined);
           setSnapshot(undefined);
@@ -203,6 +220,95 @@ export const SecurityKeyView = observer(
         dispose();
       };
     }, [active, pinSession]);
+
+    async function deleteCredential(
+      item: SecurityKeyCredentialItem,
+    ): Promise<void> {
+      if (!snapshot || controller.current || !active()) return;
+      const operation = new AbortController();
+      controller.current = operation;
+      setBusy(true);
+      setDeleting(undefined);
+      setDetail(undefined);
+      const identity = readBackupCardIdentity(snapshot.hello);
+
+      const validate =
+        (card: typeof identity | undefined): MonoidScanPromptValidateCard =>
+        hello => {
+          if (operation.signal.aborted || !mounted.current || !active())
+            throw new MonoidScanRedirectError();
+          const current = readBackupCardIdentity(hello);
+          if (
+            card &&
+            (current.id !== card.id || current.publicKey !== card.publicKey)
+          )
+            throw new MonoidWrongCardError(card.id);
+          if (hello.pins.access === false || hello.pins.secret === false)
+            throw new MonoidCardError('Set up card PINs first');
+          if (hello.pins.access === 0)
+            throw new MonoidCardError('Access PIN blocked');
+        };
+      // A card without the record has nothing left to delete.
+      const deleteFromCard: MonoidScanPromptCallback = async (
+        applet,
+        setState,
+        _hello,
+        scanSignal,
+      ) => {
+        const signal = AbortSignal.any([operation.signal, scanSignal]);
+        setState('Deleting credential, hold tight...');
+        await deleteCardResources(
+          applet,
+          new Set([item.index]),
+          signal,
+          () => {},
+        );
+      };
+
+      try {
+        await scan(
+          <>
+            Scan card{' '}
+            <MonoidScanStatePromptContentHighlight>
+              {identity.id}
+            </MonoidScanStatePromptContentHighlight>
+          </>,
+          async (applet, setState, hello, scanSignal) => {
+            await deleteFromCard(applet, setState, hello, scanSignal);
+            if (mounted.current && active())
+              setSnapshot(
+                current =>
+                  current && {
+                    ...current,
+                    credentials: current.credentials.filter(
+                      credential => credential.index !== item.index,
+                    ),
+                  },
+              );
+          },
+          validate(identity),
+          operation.signal,
+        );
+        await scanNextCards({
+          scan,
+          scanned: new Set([identity.publicKey]),
+          content: 'Scan next card to delete',
+          callback: deleteFromCard,
+          validate: validate(undefined),
+          signal: operation.signal,
+        });
+      } catch (error) {
+        if (
+          !operation.signal.aborted &&
+          !isCredentialRequestCancelled(error) &&
+          !(error instanceof Error && error.name === 'AbortError')
+        )
+          throw error;
+      } finally {
+        if (controller.current === operation) controller.current = undefined;
+        if (mounted.current) setBusy(false);
+      }
+    }
 
     async function run(config?: SecurityKeyConfiguration): Promise<void> {
       if (controller.current || !active()) return;
@@ -402,26 +508,55 @@ export const SecurityKeyView = observer(
                   </InfoSectionHeader>
                   <Credentials>
                     {snapshot.credentials.map(item => (
-                      <ListItemButton
+                      <SwipeableItem
                         key={item.index}
-                        onClick={() => setDetail(item)}
+                        open={openRow === item.index}
+                        disabled={busy}
+                        onOpenChange={open =>
+                          setOpenRow(open ? item.index : undefined)
+                        }
+                        actions={
+                          <SwipeAction
+                            type="button"
+                            $color="var(--ion-color-danger)"
+                            disabled={busy}
+                            onClick={() => {
+                              setOpenRow(undefined);
+                              setDeleting(item);
+                            }}
+                          >
+                            <SwipeActionIcon>
+                              <AppIcon icon={creditCardMinus} />
+                            </SwipeActionIcon>
+                            Delete
+                          </SwipeAction>
+                        }
                       >
-                        <CredentialIcon icon={keyRound} />
-                        <ListItemContent>
-                          <ListItemName>
-                            {item.credential?.rpId ?? 'Invalid credential'}
-                          </ListItemName>
-                          <ListItemDescription>
-                            {item.credential?.displayName ||
-                              item.credential?.userName ||
-                              item.index}
-                          </ListItemDescription>
-                        </ListItemContent>
-                        {item.credential &&
-                          !isSecurityKeyCredentialActive(snapshot, item) && (
-                            <ListItemDescription>Inactive</ListItemDescription>
-                          )}
-                      </ListItemButton>
+                        <ListItemButton
+                          data-swipeable-content
+                          onClick={() =>
+                            openRow ? setOpenRow(undefined) : setDetail(item)
+                          }
+                        >
+                          <CredentialIcon icon={keyRound} />
+                          <ListItemContent>
+                            <ListItemName>
+                              {item.credential?.rpId ?? 'Invalid credential'}
+                            </ListItemName>
+                            <ListItemDescription>
+                              {item.credential?.displayName ||
+                                item.credential?.userName ||
+                                item.index}
+                            </ListItemDescription>
+                          </ListItemContent>
+                          {item.credential &&
+                            !isSecurityKeyCredentialActive(snapshot, item) && (
+                              <ListItemDescription>
+                                Inactive
+                              </ListItemDescription>
+                            )}
+                        </ListItemButton>
+                      </SwipeableItem>
                     ))}
                   </Credentials>
                 </InfoSection>
@@ -515,6 +650,18 @@ export const SecurityKeyView = observer(
             }
             onDismiss={() => setDetail(undefined)}
           />
+        )}
+        {deleting && (
+          <ConfirmPopup
+            title="Delete credential?"
+            confirmColor="danger"
+            confirmText="Delete"
+            onCancel={() => setDeleting(undefined)}
+            onConfirm={() => errorService.catch(deleteCredential(deleting))}
+          >
+            Websites can no longer sign in with it on this card. Scan any other
+            cards that hold it next.
+          </ConfirmPopup>
         )}
         {scanContent}
       </View>
