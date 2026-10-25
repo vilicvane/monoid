@@ -1,21 +1,30 @@
 import {observable, runInAction} from 'mobx';
 
-import {MonoidPIN, PublicKey, SafeIndex} from '../../../../@atomics.js';
+import {
+  MonoidIdHex,
+  MonoidPIN,
+  PublicKey,
+  PublicKeyHex,
+  SafeIndex,
+} from '../../../../@atomics.js';
 import {InvalidCardItemError} from '../../../../@lib/card-item-error.js';
 import {
   CBORAppletError,
   CardItemNotFoundError,
 } from '../../../../@lib/cbor-applet.js';
 import {
+  type CardBackupIdentity,
   CardItemConflictError,
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidAppletInvalidPINError,
   MonoidCardError,
-  MonoidWrongCardError,
   acceptMatchingItem,
+  assertCardPINsNotBlocked,
+  assertSameCardWithBundle,
   hasMatchingItem,
   initializeMonoidCard,
+  readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 import {
@@ -37,12 +46,6 @@ import {
 } from '../card-otp.js';
 import {getCardResourceGroups} from '../card-resource-groups.js';
 import type {ScannedCardData, ScannedCardItemData} from '../common.js';
-
-export type CardBackupIdentity = {
-  id: string;
-  publicKey: string;
-  bundle: string | false;
-};
 
 export type CardBackupItem = Pick<
   ScannedCardItemData,
@@ -145,8 +148,8 @@ function createBackup(
 
   return {
     source: {
-      id: source.id.toLowerCase(),
-      publicKey: source.publicKey.toLowerCase(),
+      id: MonoidIdHex.satisfies(source.id.toLowerCase()),
+      publicKey: PublicKeyHex.satisfies(source.publicKey.toLowerCase()),
       bundle: source.bundle === false ? false : source.bundle.toLowerCase(),
     },
     items: groupedItems,
@@ -157,33 +160,12 @@ function createBackup(
   };
 }
 
-export function readBackupCardIdentity(
-  hello: MonoidAppletHello,
-): CardBackupIdentity {
-  const {id, publicKey, bundle} = hello;
-
-  if (
-    id.length !== 4 ||
-    publicKey.length !== 65 ||
-    publicKey[0] !== 0x04 ||
-    (bundle !== false && bundle.length !== 32)
-  ) {
-    throw new MonoidCardError('This card did not provide a valid identity.');
-  }
-
-  return {
-    id: uint8ArrayToHex(id),
-    publicKey: uint8ArrayToHex(publicKey),
-    bundle: bundle === false ? false : uint8ArrayToHex(bundle),
-  };
-}
-
 export function getBackupCardIdentity(
   hello: MonoidAppletHello,
 ): CardBackupIdentity {
   const identity = readBackupCardIdentity(hello);
 
-  assertBackupPINsNotBlocked(hello);
+  assertCardPINsNotBlocked(hello);
 
   if (hello.pins.access === false || hello.pins.secret === false) {
     throw new MonoidCardError('Initialize card from Safe');
@@ -201,23 +183,12 @@ export function assertBackupBundle(
   }
 }
 
-function assertBackupPINsNotBlocked(hello: MonoidAppletHello): void {
-  if (hello.pins.secret === 0) {
-    throw new MonoidCardError('Secret PIN blocked');
-  }
-
-  if (hello.pins.access === 0) {
-    throw new MonoidCardError('Access PIN blocked');
-  }
-}
-
 export function assertBackupCard(
   hello: MonoidAppletHello,
   expected: CardBackupIdentity,
+  bundleChangedMessage = 'Card bundle changed, scan source again',
 ): void {
-  if (readBackupCardIdentity(hello).publicKey !== expected.publicKey) {
-    throw new MonoidWrongCardError(expected.id);
-  }
+  assertSameCardWithBundle(hello, expected, bundleChangedMessage);
 
   getBackupCardIdentity(hello);
 }
@@ -318,14 +289,11 @@ export async function initializeBackupTarget(
   onAuthenticated?: () => void,
   accessPIN?: MonoidPIN,
 ): Promise<MonoidAppletHello> {
-  const identity = readBackupCardIdentity(hello);
   const expectedIdentity = readBackupCardIdentity(expected);
 
-  if (identity.publicKey !== expectedIdentity.publicKey) {
-    throw new MonoidWrongCardError(expectedIdentity.id);
-  }
+  assertSameCardWithBundle(hello, expectedIdentity);
 
-  assertBackupPINsNotBlocked(hello);
+  assertCardPINsNotBlocked(hello);
   throwIfCancelled(signal);
 
   if (hello.pins.access !== false && hello.pins.secret !== false) {
@@ -641,9 +609,6 @@ export class CardBackupSession {
     return this.exclusive(async () => {
       const backup = this.requireBackup();
       assertBackupCard(hello, backup.source);
-      if (readBackupCardIdentity(hello).bundle !== backup.source.bundle) {
-        throw new MonoidCardError('Card bundle changed, scan source again');
-      }
 
       if (!backup.targetsConfirmed) {
         throw new MonoidCardError('Confirm the destination cards first.');
@@ -772,7 +737,7 @@ export class CardBackupSession {
         );
       }
 
-      assertBackupCard(hello, target);
+      assertBackupCard(hello, target, 'Use a card in the same bundle');
       assertBackupBundle(backup.source, identity);
       const selected = target.items;
 

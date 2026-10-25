@@ -2,6 +2,7 @@ import {p256} from '@noble/curves/nist';
 import {IsoDepNfc} from 'capacitor-isodep-nfc';
 import {sha256, toUtf8Bytes} from 'ethers';
 
+import type {MonoidIdHex, PublicKeyHex} from '../../@atomics.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../@utils/index.js';
 import {AppletISOError, AppletNotFoundError, probeApplet} from '../applet.js';
 import {
@@ -17,6 +18,7 @@ import {
 
 import {appletBundle} from './@applet-bundle.js';
 import {MonoidCardError} from './card-error.js';
+import {assertSameCardWithBundle} from './card-identity.js';
 import {MonoidAppletHello, createMonoidApplet} from './monoid-applet.js';
 
 export type BundledApplet = {
@@ -589,8 +591,8 @@ export async function replaceMonoidApplets(
   }: {
     fresh: boolean;
     checkpoint?: AppletReplacementCheckpoint;
-    expectedPublicKey?: string;
-    expectedCardId?: string;
+    expectedPublicKey?: PublicKeyHex;
+    expectedCardId?: MonoidIdHex;
     expectedAppletAid?: string;
     expectedBundle?: string | false;
     expectedFingerprint: string;
@@ -696,18 +698,15 @@ export async function replaceMonoidApplets(
     signal?.throwIfAborted();
     if (installed) {
       const hello = await applet.hello({});
-      if (
-        !expectedPublicKey ||
-        uint8ArrayToHex(hello.publicKey) !== expectedPublicKey
-      ) {
-        throw new Error('Wrong card');
-      }
-      if (
-        (hello.bundle ? uint8ArrayToHex(hello.bundle) : false) !==
-        expectedBundle
-      ) {
-        throw new Error('The card Bundle changed during maintenance');
-      }
+      assertSameCardWithBundle(
+        hello,
+        {
+          id: expectedCardId!,
+          publicKey: expectedPublicKey!,
+          bundle: expectedBundle!,
+        },
+        'The card Bundle changed during maintenance',
+      );
     } else if (!checkpoint) {
       throw new AppletNotFoundError(new Uint8Array());
     }
@@ -845,20 +844,24 @@ export async function replaceMonoidApplets(
     onProgress,
     signal,
   );
-  if (!fresh && uint8ArrayToHex(hello.publicKey) !== expectedPublicKey) {
-    throw new Error('Card identity changed during maintenance');
+  if (!fresh) {
+    assertSameCardWithBundle(
+      hello,
+      {
+        id: expectedCardId!,
+        publicKey: expectedPublicKey!,
+        bundle: expectedBundle!,
+      },
+      'The card Bundle changed during maintenance',
+    );
   }
   if (
+    fresh &&
     expectedCardId !== undefined &&
     uint8ArrayToHex(hello.id) !== expectedCardId
   ) {
     throw new Error('Card ID changed during maintenance');
   }
-  if (
-    !fresh &&
-    (hello.bundle ? uint8ArrayToHex(hello.bundle) : false) !== expectedBundle
-  ) {
-    throw new Error('The card Bundle changed during maintenance');
-  }
+
   return hello;
 }

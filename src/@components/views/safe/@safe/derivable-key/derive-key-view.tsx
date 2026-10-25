@@ -6,15 +6,18 @@ import type {RouteComponentProps} from 'routra-react';
 import {BIP39PathString} from '../../../../../@atomics.js';
 import {useEntrances} from '../../../../../@entrances.js';
 import {CardItemNotFoundError} from '../../../../../@lib/cbor-applet.js';
-import {getAppletKey} from '../../../../../@lib/monoid/index.js';
-import type {AddressType} from '../../../../../@lib/wallet-address.js';
+import {
+  assertSameCard,
+  getAppletKey,
+} from '../../../../../@lib/monoid/index.js';
 import {
   ADDRESS_TYPES,
+  type AddressType,
   getDerivationPathError,
 } from '../../../../../@lib/wallet-address.js';
 import type {Router} from '../../../../../@routes.js';
-import type {WalletKeyPublicKeyData} from '../../../../../@services/index.js';
 import {
+  type WalletKeyPublicKeyData,
   getWalletData,
   getWalletReference,
 } from '../../../../../@services/index.js';
@@ -38,7 +41,6 @@ import {
   getLocalCardWalletDerivation,
   readCardKeyAddress,
 } from '../../card-address.js';
-import {assertCardForUpdate} from '../../card-alias-update.js';
 import {writeCardDerivationRecord} from '../../card-derivations.js';
 import type {ScannedCardData} from '../../common.js';
 
@@ -304,7 +306,7 @@ export const DeriveKeyView = observer(
             }
           },
           hello => {
-            if (card) assertCardForUpdate(hello, card);
+            if (card) assertSameCard(hello, card);
           },
         );
 

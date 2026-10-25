@@ -207,6 +207,7 @@ function options(overrides = {}) {
   return {
     fresh: false,
     expectedPublicKey: publicKey,
+    ...(!overrides.fresh && {expectedCardId: '01020304'}),
     expectedAppletAid: monoidAid,
     expectedBundle: false,
     expectedFingerprint: getCardMaintenanceFingerprint(information),
@@ -906,6 +907,9 @@ test('bundle integrity, caller AID, physical card and Hello must pass before ord
         ...information,
         cplc: {...information.cplc, icSerialNumber: 'deadbeef'},
       };
+    },
+    () => {
+      fixture.hello.id = bytes('55667788');
     },
     () => {
       fixture.hello.publicKey = bytes(`04${'22'.repeat(64)}`);

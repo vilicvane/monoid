@@ -5,10 +5,10 @@ import {setImmediate} from 'node:timers/promises';
 import {p256} from '@noble/curves/nist';
 import {observable, runInAction} from 'mobx';
 
-import {readBackupCardIdentity} from '../.bld/app/@components/views/safe/@card/card-backup-session.js';
 import {AppletNotFoundError} from '../.bld/app/@lib/applet.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
+import {readBackupCardIdentity} from '../.bld/app/@lib/monoid/card-identity.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
 
 import {credential} from './helpers/security-key-credential.mjs';
@@ -167,7 +167,6 @@ for (const [path, names] of [
     namedExports: {
       ...Object.fromEntries(names.map(name => [name, name])),
       ...(path === '@view/index' ? {useViewActive} : {}),
-      ...(path === 'views/safe/index' ? {readBackupCardIdentity} : {}),
     },
   });
 }
@@ -384,19 +383,32 @@ test('reading then configuring reuses one page-owned Access PIN session and auth
 });
 
 test('configuration validates the full identity before shared Access PIN authentication', async () => {
-  for (const change of ['identity', 'bundle']) {
+  for (const change of ['id', 'publicKey']) {
     const state = mount();
     const first = card(1);
     await state.read(first);
     state.configure();
     await state.flush();
-    const wrong = card(change === 'identity' ? 2 : 1);
-    if (change === 'bundle') wrong.hello.bundle = new Uint8Array(32).fill(2);
+    const wrong = card(1);
+    wrong.hello[change] = card(2).hello[change];
     await state.tap(wrong);
     assert.deepEqual(wrong.authentications, []);
     assert.deepEqual(wrong.writes, []);
     assert.match(state.errors[0].message, /Wrong card/);
   }
+});
+
+test('configuration accepts changed Bundle membership for the same card', async () => {
+  const state = mount();
+  const first = card(1);
+  await state.read(first);
+  state.configure();
+  await state.flush();
+  first.hello.bundle = new Uint8Array(32).fill(2);
+  await state.tap(first);
+  assert.deepEqual(first.authentications, [{pin: PIN}, {pin: PIN}]);
+  assert.deepEqual(first.writes, ['grant']);
+  assert.deepEqual(state.errors, []);
 });
 
 test('failed shared authentication never invokes or retries the configuration', async () => {

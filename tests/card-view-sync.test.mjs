@@ -7,6 +7,7 @@ import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
+import {assertSameCard} from '../.bld/app/@lib/monoid/card-identity.js';
 import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
 import {
   acceptMatchingItem,
@@ -92,6 +93,7 @@ mock.module('../.bld/app/@services/index.js', {
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    assertSameCard,
     getAppletKey,
     MonoidCardError,
     MonoidWrongCardError,

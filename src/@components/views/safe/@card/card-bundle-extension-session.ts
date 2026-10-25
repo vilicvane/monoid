@@ -1,18 +1,23 @@
 import {observable, runInAction} from 'mobx';
 
-import {MonoidPIN, PublicKey} from '../../../../@atomics.js';
+import {
+  MonoidIdHex,
+  MonoidPIN,
+  PublicKey,
+  PublicKeyHex,
+} from '../../../../@atomics.js';
 import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {
+  type CardIdentity,
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidAppletInvalidPINError,
   MonoidCardError,
-  MonoidWrongCardError,
+  assertCardPINsNotBlocked,
+  assertSameCard,
 } from '../../../../@lib/monoid/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 import type {ScannedCardData} from '../common.js';
-
-import type {CardBundleIdentity} from './card-bundle-session.js';
 
 export type CardBundleExtensionPhase =
   | 'collecting'
@@ -23,14 +28,14 @@ export type CardBundleExtensionPhase =
 
 type ExtensionState = {
   phase: CardBundleExtensionPhase;
-  target?: CardBundleIdentity;
-  requester?: CardBundleIdentity;
-  approver?: CardBundleIdentity;
+  target?: CardIdentity;
+  requester?: CardIdentity;
+  approver?: CardIdentity;
 };
 
 function readIdentity(
   card: Pick<ScannedCardData, 'id' | 'publicKey' | 'bundle'>,
-): CardBundleIdentity {
+): CardIdentity {
   if (
     !/^[0-9a-f]{8}$/i.test(card.id) ||
     !/^04[0-9a-f]{128}$/i.test(card.publicKey) ||
@@ -38,10 +43,13 @@ function readIdentity(
   ) {
     throw new MonoidCardError('Invalid card identity');
   }
-  return {id: card.id.toLowerCase(), publicKey: card.publicKey.toLowerCase()};
+  return {
+    id: MonoidIdHex.satisfies(card.id.toLowerCase()),
+    publicKey: PublicKeyHex.satisfies(card.publicKey.toLowerCase()),
+  };
 }
 
-function readCardIdentity(hello: MonoidAppletHello): CardBundleIdentity {
+function readCardIdentity(hello: MonoidAppletHello): CardIdentity {
   return readIdentity({
     id: uint8ArrayToHex(hello.id),
     publicKey: uint8ArrayToHex(hello.publicKey),
@@ -50,19 +58,9 @@ function readCardIdentity(hello: MonoidAppletHello): CardBundleIdentity {
 }
 
 function requireReadyCard(hello: MonoidAppletHello): void {
-  if (hello.pins.secret === 0) throw new MonoidCardError('Secret PIN blocked');
-  if (hello.pins.access === 0) throw new MonoidCardError('Access PIN blocked');
+  assertCardPINsNotBlocked(hello);
   if (hello.pins.secret === false || hello.pins.access === false) {
     throw new MonoidCardError('Set up the card first');
-  }
-}
-
-function requireIdentity(
-  actual: CardBundleIdentity,
-  expected: CardBundleIdentity,
-): void {
-  if (actual.id !== expected.id || actual.publicKey !== expected.publicKey) {
-    throw new MonoidWrongCardError(expected.id);
   }
 }
 
@@ -76,7 +74,7 @@ function throwIfCancelled(signal: AbortSignal): void {
 
 /** Keeps one target and its opaque extension packets in the current flow. */
 export class CardBundleExtensionSession {
-  readonly source: CardBundleIdentity;
+  readonly source: CardIdentity;
   readonly bundle: string;
   private readonly current = observable.box<ExtensionState>(
     {phase: 'collecting'},
@@ -100,15 +98,15 @@ export class CardBundleExtensionSession {
     return this.current.get().phase;
   }
 
-  get target(): CardBundleIdentity | undefined {
+  get target(): CardIdentity | undefined {
     return this.current.get().target;
   }
 
-  get requester(): CardBundleIdentity | undefined {
+  get requester(): CardIdentity | undefined {
     return this.current.get().requester;
   }
 
-  get approver(): CardBundleIdentity | undefined {
+  get approver(): CardIdentity | undefined {
     return this.current.get().approver;
   }
 
@@ -139,7 +137,7 @@ export class CardBundleExtensionSession {
   }
 
   private validateTarget(
-    card: CardBundleIdentity,
+    card: CardIdentity,
     bundle: string | false,
     allowOtherBundle = false,
   ): void {
@@ -151,7 +149,7 @@ export class CardBundleExtensionSession {
       throw new MonoidCardError('Card already belongs to a bundle');
     }
     if (this.target) {
-      requireIdentity(card, this.target);
+      assertSameCard(card, this.target);
     }
   }
 
@@ -201,7 +199,7 @@ export class CardBundleExtensionSession {
       hello.bundle === false ? false : uint8ArrayToHex(hello.bundle);
     switch (this.phase) {
       case 'requesting':
-        if (this.requester) requireIdentity(card, this.requester);
+        if (this.requester) assertSameCard(card, this.requester);
         if (card.publicKey === this.target!.publicKey) {
           throw new MonoidCardError('Scan a bundle card');
         }
@@ -221,7 +219,7 @@ export class CardBundleExtensionSession {
         }
         break;
       case 'joining':
-        requireIdentity(card, this.target!);
+        assertSameCard(card, this.target!);
         if (bundle !== false && bundle !== this.bundle) {
           throw new MonoidCardError('Card belongs to a different bundle');
         }

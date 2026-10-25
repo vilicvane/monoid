@@ -7,7 +7,11 @@ import {keyframes, styled} from 'styled-components';
 import {UnmountAnimationClone} from 'unmount-animation-clone';
 
 import {useEntrances} from '../../../@entrances.js';
-import {MonoidCardError, setItemAlias} from '../../../@lib/monoid/index.js';
+import {
+  MonoidCardError,
+  assertCardPINs,
+  setItemAlias,
+} from '../../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../../@lib/operation-cancelled.js';
 import {
   OTPAuthorityWarmup,
@@ -331,10 +335,7 @@ export const OTPAccountView = observer(
           hello => {
             task.signal.throwIfAborted();
             if (!active()) throw new MonoidScanRedirectError();
-            if (hello.pins.access === false || hello.pins.secret === false)
-              throw new MonoidCardError('Set up card PINs first');
-            if (hello.pins.access === 0)
-              throw new MonoidCardError('Access PIN blocked');
+            assertCardPINs(hello);
             otpStore.authorityHint = hello.authority;
             warmup.start(hello.authority);
           },
@@ -415,10 +416,7 @@ export const OTPAccountView = observer(
           hello => {
             task.signal.throwIfAborted();
             if (!active()) throw new MonoidScanRedirectError();
-            if (hello.pins.access === false || hello.pins.secret === false)
-              throw new MonoidCardError('Set up card PINs first');
-            if (hello.pins.access === 0)
-              throw new MonoidCardError('Access PIN blocked');
+            assertCardPINs(hello);
           },
           task.signal,
         );

@@ -7,7 +7,11 @@ import {styled} from 'styled-components';
 
 import {type SafeIndexHex, SafeKnownType} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
-import {type MonoidApplet, removeItems} from '../../../../@lib/monoid/index.js';
+import {
+  type MonoidApplet,
+  assertSameCard,
+  removeItems,
+} from '../../../../@lib/monoid/index.js';
 import {
   ADDRESS_TYPES,
   type AddressChain,
@@ -63,7 +67,7 @@ import {
   readCardKeyAddress,
   readCardWalletDerivations,
 } from '../card-address.js';
-import {assertCardForUpdate, writeCardAliases} from '../card-alias-update.js';
+import {writeCardAliases} from '../card-alias-update.js';
 import {writeCardDerivations} from '../card-derivations.js';
 import {
   CARD_KEY_TYPES,
@@ -80,8 +84,11 @@ import {getCardResourceGroups} from '../card-resource-groups.js';
 import {type ScannedCardKeyData, isCardKeyItem} from '../common.js';
 
 import {AddressTypePicker} from './@address-type-picker.js';
-import type {KeyItemState, KeySyncDirection} from './@key-item.js';
-import {KeyItem} from './@key-item.js';
+import {
+  KeyItem,
+  type KeyItemState,
+  type KeySyncDirection,
+} from './@key-item.js';
 import {CardResourceItem, CardResourceList} from './@resource-item.js';
 import {CardPINUpdate} from './card-pin-update.js';
 
@@ -524,7 +531,7 @@ const CardContent = observer(
               signal.removeEventListener('abort', cancel);
             }
           },
-          hello => assertCardForUpdate(hello, card),
+          hello => assertSameCard(hello, card),
         );
 
         if (createdIndex && mounted.current && !operation.signal.aborted) {
@@ -575,7 +582,7 @@ const CardContent = observer(
               showProgress(index + 1);
             }
           },
-          hello => assertCardForUpdate(hello, card),
+          hello => assertSameCard(hello, card),
         );
 
         if (mounted.current && isViewActive()) {
@@ -720,7 +727,7 @@ const CardContent = observer(
               signal.removeEventListener('abort', cancel);
             }
           },
-          hello => assertCardForUpdate(hello, card),
+          hello => assertSameCard(hello, card),
         );
       } finally {
         operation.abort();
@@ -1034,7 +1041,7 @@ const CardContent = observer(
                 cardStore.set(card);
               });
             }),
-          hello => assertCardForUpdate(hello, card),
+          hello => assertSameCard(hello, card),
         );
         await scanNextCards({
           scan: scanPrompt,

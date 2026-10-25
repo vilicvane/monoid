@@ -4,13 +4,17 @@ import {setImmediate} from 'node:timers/promises';
 
 import {observable, runInAction} from 'mobx';
 
-import {readBackupCardIdentity} from '../.bld/app/@components/views/safe/@card/card-backup-session.js';
 import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
+import {readBackupCardIdentity} from '../.bld/app/@lib/monoid/card-identity.js';
 import {assertCardMaintenanceBundleRecovery} from '../.bld/app/@services/card-maintenance-service.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
+import {
+  getWalletReference,
+  matchesWalletReference,
+} from '../.bld/app/@services/wallet-storage-service.js';
 
 let fixture;
 let rendering;
@@ -71,6 +75,8 @@ mock.module('../.bld/app/@entrances.js', {
 mock.module('../.bld/app/@services/index.js', {
   namedExports: {
     assertCardMaintenanceBundleRecovery,
+    getWalletReference,
+    matchesWalletReference,
   },
 });
 mock.module('../.bld/app/@components/@animations.js', {

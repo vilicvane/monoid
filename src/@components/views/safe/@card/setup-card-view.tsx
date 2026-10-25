@@ -9,8 +9,10 @@ import type {CardInformation} from '../../../../@lib/global-platform/card-inform
 import {
   MonoidAppletHello,
   MonoidCardError,
-  MonoidWrongCardError,
+  assertCardPINsNotBlocked,
+  assertSameCard,
   initializeMonoidCard,
+  readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
@@ -47,7 +49,6 @@ import {
 } from '../../../@view/index.js';
 import type {ScannedCardData} from '../common.js';
 
-import {readBackupCardIdentity} from './card-backup-session.js';
 import {CardBundleSession} from './card-bundle-session.js';
 import {
   type CardResetIdentity,
@@ -334,10 +335,7 @@ export const SetupCardView = observer(
       if (bundleEnabled) bundleSession.validateAddition(hello);
       // An enrolled card may be reset even when its old PINs are blocked.
       if (bundleEnabled && hello.bundle !== false) return;
-      if (hello.pins.secret === 0)
-        throw new MonoidCardError('Secret PIN blocked');
-      if (hello.pins.access === 0)
-        throw new MonoidCardError('Access PIN blocked');
+      assertCardPINsNotBlocked(hello);
     };
 
     const acceptScan = async (hello: MonoidAppletHello): Promise<void> => {
@@ -597,13 +595,7 @@ export const SetupCardView = observer(
                   await applet.hello({}),
                 );
                 signal.throwIfAborted();
-                if (
-                  selected &&
-                  (uint8ArrayToHex(hello.id) !== selected.id ||
-                    uint8ArrayToHex(hello.publicKey) !== selected.publicKey)
-                ) {
-                  throw new MonoidWrongCardError(selected.id);
-                }
+                if (selected) assertSameCard(hello, selected);
                 const member = bundleSession.validateCard(hello);
                 const {pin, onAuthenticated} = credentials(
                   readBackupCardIdentity(hello),

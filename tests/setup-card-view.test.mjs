@@ -7,6 +7,13 @@ import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
+import {
+  assertSameCard,
+  assertSameCardWithBundle,
+  readBackupCardIdentity,
+  readCardIdentity,
+} from '../.bld/app/@lib/monoid/card-identity.js';
+import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
 import {initializeMonoidCard} from '../.bld/app/@lib/monoid/initialize-card.js';
 import {
   MonoidAppletHello,
@@ -134,18 +141,7 @@ mock.module('../.bld/app/@components/@ui/operation-complete.js', {
 mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => fixture.entrances},
 });
-mock.module('../.bld/app/@components/views/safe/@card/card-backup-session.js', {
-  namedExports: {
-    readBackupCardIdentity: hello => ({
-      id: Buffer.from(hello.id).toString('hex'),
-      publicKey: Buffer.from(hello.publicKey).toString('hex'),
-      bundle:
-        hello.bundle === false
-          ? false
-          : Buffer.from(hello.bundle).toString('hex'),
-    }),
-  },
-});
+
 mock.module('../.bld/app/@services/index.js', {
   namedExports: {},
 });
@@ -324,6 +320,11 @@ const install = async (sessionId, onProgress, signal) => {
 };
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    assertSameCard,
+    assertSameCardWithBundle,
+    readCardIdentity,
+    readBackupCardIdentity,
+    assertCardPINsNotBlocked,
     MonoidCardError,
     MonoidWrongCardError,
     MonoidAppletInvalidPINError,

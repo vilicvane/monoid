@@ -248,6 +248,29 @@ test('a same-bundle transfer omits asymmetric keys and verifies the live destina
   assert.equal(session.backup.complete, true);
 });
 
+test('Copy rejects changed source and destination IDs even when public keys match', async () => {
+  const {session, source, target} = await ready();
+  const originalId = source.hello.id;
+  source.hello.id = bytes('55667788');
+  await assert.rejects(
+    session.exportItems(source, source.hello, PIN, signal(), progress),
+    /Wrong card/,
+  );
+  assert.deepEqual(
+    source.calls.map(([name]) => name),
+    ['list'],
+  );
+
+  source.hello.id = originalId;
+  await session.exportItems(source, source.hello, PIN, signal(), progress);
+  target.hello.id = bytes('55667788');
+  await assert.rejects(
+    session.importItems(target, target.hello, PIN, signal(), progress),
+    /Wrong card/,
+  );
+  assert.deepEqual(target.calls, []);
+});
+
 test('a changed source bundle is rejected before authentication or export', async () => {
   const {session, source} = await ready();
   source.hello.bundle = new Uint8Array(32).fill(1);

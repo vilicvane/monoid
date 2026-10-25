@@ -10,7 +10,6 @@ export {
   CardResourceList,
   CardSetupInformation,
   SyncCardsState,
-  readBackupCardIdentity,
 } from './@card/index.js';
 export * from './card-address-progress.js';
 export * from './card-address.js';

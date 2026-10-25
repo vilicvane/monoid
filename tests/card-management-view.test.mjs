@@ -9,6 +9,11 @@ import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
+import {
+  assertSameCard,
+  readCardIdentity,
+} from '../.bld/app/@lib/monoid/card-identity.js';
+import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
 import * as monoid from '../.bld/app/@lib/monoid/index.js';
 import {SyncCardsStore} from '../.bld/app/@services/sync-cards-store.js';
 
@@ -87,6 +92,9 @@ mock.module('../.bld/app/@lib/global-platform/installation-support.js', {
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    assertSameCard,
+    readCardIdentity,
+    assertCardPINsNotBlocked,
     ...monoid,
     MonoidCardError,
     MonoidWrongCardError,

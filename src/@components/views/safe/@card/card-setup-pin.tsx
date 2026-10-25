@@ -5,8 +5,10 @@ import {useEntrances} from '../../../../@entrances.js';
 import {
   type MonoidAppletHello,
   MonoidCardError,
-  MonoidWrongCardError,
+  assertCardPINsNotBlocked,
+  assertSameCardWithBundle,
   initializeMonoidCard,
+  readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import {type MonoidPINSession} from '../../../../@services/index.js';
@@ -19,7 +21,6 @@ import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 
-import {readBackupCardIdentity} from './card-backup-session.js';
 import type {CardSecretPINSession} from './card-secret-pin-session.js';
 
 function waitForOperation<T>(
@@ -94,10 +95,7 @@ export function CardSetupPIN({
           initialized = true;
           return;
         }
-        if (hello.pins.secret === 0)
-          throw new MonoidCardError('Secret PIN blocked');
-        if (hello.pins.access === 0)
-          throw new MonoidCardError('Access PIN blocked');
+        assertCardPINsNotBlocked(hello);
 
         await using temporarySession = pinSession
           ? undefined
@@ -199,13 +197,10 @@ export function CardSetupPIN({
               },
               current => {
                 signal.throwIfAborted();
-                if (
-                  uint8ArrayToHex(current.id) !== uint8ArrayToHex(hello.id) ||
-                  uint8ArrayToHex(current.publicKey) !==
-                    uint8ArrayToHex(hello.publicKey)
-                ) {
-                  throw new MonoidWrongCardError(uint8ArrayToHex(hello.id));
-                }
+                assertSameCardWithBundle(
+                  current,
+                  readBackupCardIdentity(hello),
+                );
                 latestHello = current;
               },
             ),

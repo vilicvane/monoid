@@ -5,10 +5,11 @@ import {
   type MonoidAppletHello,
   MonoidAppletInvalidPINError,
   MonoidCardError,
+  assertCardPINNotBlocked,
+  assertSameCard,
 } from '../../../@lib/monoid/index.js';
 import {uint8ArrayToHex} from '../../../@utils/index.js';
 
-import {assertCardForUpdate} from './card-alias-update.js';
 import type {ScannedCardData} from './common.js';
 
 export type CardPINKind = 'Access' | 'Secret';
@@ -22,9 +23,9 @@ export async function updateCardPIN(
   newPIN: MonoidPIN,
   signal: AbortSignal,
 ): Promise<MonoidIdHex> {
-  assertCardForUpdate(hello, card);
+  assertSameCard(hello, card);
   signal.throwIfAborted();
-  if (hello.pins.secret === 0) throw new MonoidCardError('Secret PIN blocked');
+  assertCardPINNotBlocked(hello, 'secret');
   if (hello.pins.secret === false)
     throw new MonoidCardError('Secret PIN not set');
   if (!MonoidPIN.is(currentSecretPIN) || !MonoidPIN.is(newPIN)) {

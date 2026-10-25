@@ -13,8 +13,9 @@ import {MonoidIdHex, type SafeIndexHex} from '../../@atomics.js';
 import {useEntrances} from '../../@entrances.js';
 import {AppletNotFoundError} from '../../@lib/applet.js';
 import {
-  MonoidCardError,
-  MonoidWrongCardError,
+  assertCardPINs,
+  assertSameCard,
+  readCardIdentity,
   removeItems,
 } from '../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../@lib/operation-cancelled.js';
@@ -80,11 +81,7 @@ import {
 } from '../@view/index.js';
 
 import {CardScanPlaceholder} from './card/card-management-content.js';
-import {
-  CardResourceItem,
-  CardResourceList,
-  readBackupCardIdentity,
-} from './safe/index.js';
+import {CardResourceItem, CardResourceList} from './safe/index.js';
 
 const SeedAliasTag = styled(KeyAliasTag)`
   ${viewHeaderTagCSS}
@@ -229,23 +226,15 @@ export const SecurityKeyView = observer(
       setBusy(true);
       setDeleting(undefined);
       setDetail(undefined);
-      const identity = readBackupCardIdentity(snapshot.hello);
+      const identity = readCardIdentity(snapshot.hello);
 
       const validate =
         (card: typeof identity | undefined): MonoidScanPromptValidateCard =>
         hello => {
           if (operation.signal.aborted || !mounted.current || !active())
             throw new MonoidScanRedirectError();
-          const current = readBackupCardIdentity(hello);
-          if (
-            card &&
-            (current.id !== card.id || current.publicKey !== card.publicKey)
-          )
-            throw new MonoidWrongCardError(card.id);
-          if (hello.pins.access === false || hello.pins.secret === false)
-            throw new MonoidCardError('Set up card PINs first');
-          if (hello.pins.access === 0)
-            throw new MonoidCardError('Access PIN blocked');
+          if (card) assertSameCard(hello, card);
+          assertCardPINs(hello);
         };
       // A card without the record has nothing left to delete.
       const deleteFromCard: MonoidScanPromptCallback = async (
@@ -306,7 +295,7 @@ export const SecurityKeyView = observer(
       setBusy(true);
       setPopup(undefined);
       const identity = config
-        ? readBackupCardIdentity(config.snapshot.hello)
+        ? readCardIdentity(config.snapshot.hello)
         : undefined;
       try {
         await scan(
@@ -339,14 +328,7 @@ export const SecurityKeyView = observer(
           hello => {
             if (operation.signal.aborted || !mounted.current || !active())
               throw new MonoidScanRedirectError();
-            const card = readBackupCardIdentity(hello);
-            if (
-              identity &&
-              (card.id !== identity.id ||
-                card.publicKey !== identity.publicKey ||
-                card.bundle !== identity.bundle)
-            )
-              throw new MonoidWrongCardError(identity.id);
+            if (identity) assertSameCard(hello, identity);
             if (hello.pins.access === false || hello.pins.secret === false) {
               setConfiguration(undefined);
               setSnapshot(undefined);
@@ -354,10 +336,7 @@ export const SecurityKeyView = observer(
               setNeedsPINSetup(true);
               throw new MonoidScanRedirectError();
             }
-            if (hello.pins.access === 0)
-              throw new MonoidCardError('Access PIN blocked');
-            if (hello.pins.secret === 0)
-              throw new MonoidCardError('Secret PIN blocked');
+            assertCardPINs(hello, {secret: true});
           },
           operation.signal,
         );

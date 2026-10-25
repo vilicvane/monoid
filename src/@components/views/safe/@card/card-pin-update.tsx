@@ -5,6 +5,7 @@ import type {RouteComponentProps} from 'routra-react';
 
 import {type MonoidIdHex, MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
+import {assertSameCard} from '../../../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
 import {type MonoidPINSession} from '../../../../@services/index.js';
@@ -13,7 +14,6 @@ import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js'
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 import {useViewActive} from '../../../@view/index.js';
-import {assertCardForUpdate} from '../card-alias-update.js';
 import {type CardPINKind, updateCardPIN} from '../card-pin-update.js';
 import type {ScannedCardData} from '../common.js';
 
@@ -162,7 +162,7 @@ export const CardPINUpdate = observer(
                     scanSignal.removeEventListener('abort', cancel);
                   }
                 },
-                hello => assertCardForUpdate(hello, card),
+                hello => assertSameCard(hello, card),
               ),
               signal,
             );

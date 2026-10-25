@@ -1,7 +1,11 @@
 import {MonoidPIN} from '../../@atomics.js';
-import {uint8ArrayToHex} from '../../@utils/index.js';
 
-import {MonoidCardError, MonoidWrongCardError} from './card-error.js';
+import {MonoidCardError} from './card-error.js';
+import {
+  assertSameCardWithBundle,
+  readBackupCardIdentity,
+} from './card-identity.js';
+import {assertCardPINsNotBlocked} from './card-pins.js';
 import {type MonoidApplet, MonoidAppletHello} from './monoid-applet.js';
 
 function throwIfCancelled(signal: AbortSignal): void {
@@ -9,16 +13,6 @@ function throwIfCancelled(signal: AbortSignal): void {
     throw Object.assign(new Error('Card setup was cancelled.'), {
       code: 'CANCELLED',
     });
-  }
-}
-
-function assertPINsNotBlocked(hello: MonoidAppletHello): void {
-  if (hello.pins.secret === 0) {
-    throw new MonoidCardError('Secret PIN blocked');
-  }
-
-  if (hello.pins.access === 0) {
-    throw new MonoidCardError('Access PIN blocked');
   }
 }
 
@@ -30,7 +24,7 @@ export async function initializeMonoidCard(
   accessPIN?: MonoidPIN,
 ): Promise<MonoidAppletHello> {
   throwIfCancelled(signal);
-  assertPINsNotBlocked(hello);
+  assertCardPINsNotBlocked(hello);
 
   if (!MonoidPIN.is(pin)) {
     throw new MonoidCardError('Secret PIN must contain 6 to 16 characters');
@@ -66,14 +60,9 @@ export async function initializeMonoidCard(
   const initialized = MonoidAppletHello.satisfies(await applet.hello({}));
   throwIfCancelled(signal);
 
-  if (
-    uint8ArrayToHex(initialized.id) !== uint8ArrayToHex(hello.id) ||
-    uint8ArrayToHex(initialized.publicKey) !== uint8ArrayToHex(hello.publicKey)
-  ) {
-    throw new MonoidWrongCardError(uint8ArrayToHex(hello.id));
-  }
+  assertSameCardWithBundle(initialized, readBackupCardIdentity(hello));
 
-  assertPINsNotBlocked(initialized);
+  assertCardPINsNotBlocked(initialized);
 
   if (initialized.pins.access === false || initialized.pins.secret === false) {
     throw new MonoidCardError('Card setup incomplete');

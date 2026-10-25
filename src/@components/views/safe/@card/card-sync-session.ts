@@ -18,8 +18,11 @@ import {
   MonoidAppletInvalidPINError,
   MonoidCardError,
   acceptMatchingItem,
+  assertCardPINNotBlocked,
+  assertSameCardWithBundle,
   hasMatchingItem,
   monoidCommandDefinitions,
+  readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
 import {
   type CardMaintenanceBundleRecovery,
@@ -41,7 +44,6 @@ import {
 } from '../card-otp.js';
 import type {ScannedCardData} from '../common.js';
 
-import {readBackupCardIdentity} from './card-backup-session.js';
 import {
   type CardSyncIdentity,
   type CardSyncItem,
@@ -126,7 +128,7 @@ export async function authenticateCardSync(
 ): Promise<void> {
   if (hello.pins.secret === false)
     throw new MonoidCardError('Secret PIN not set');
-  if (hello.pins.secret === 0) throw new MonoidCardError('Secret PIN blocked');
+  assertCardPINNotBlocked(hello, 'secret');
   if (pin === undefined) throw new MonoidCardError('Enter Secret PIN');
   if (!MonoidPIN.is(pin)) {
     throw new MonoidCardError('Secret PIN must contain 6 to 16 characters');
@@ -674,7 +676,7 @@ export class CardSyncSession {
         item => item.publicKey === identity.publicKey,
       );
       if (!card) throw new MonoidCardError('Scan a card in this sync');
-      if (identity.id !== card.id || identity.bundle !== card.bundle) changed();
+      assertSameCardWithBundle(hello, card, 'Card changed, start sync again');
       if (card.complete) return card;
 
       const execution = this.executions.get(identity.publicKey)!;
@@ -739,14 +741,13 @@ export class CardSyncSession {
         card => card.publicKey === target.publicKey,
       );
       if (!source) throw new MonoidCardError('Scan a card in this sync');
-      if (
-        source.id !== identity.id ||
-        source.bundle !== identity.bundle ||
-        !destination ||
-        destination.id !== target.id ||
-        destination.bundle !== target.bundle
-      )
-        changed();
+      assertSameCardWithBundle(hello, source, 'Card changed, start sync again');
+      if (!destination) changed();
+      assertSameCardWithBundle(
+        target,
+        destination,
+        'Card changed, start sync again',
+      );
       if (!source.complete) throw new MonoidCardError('Sync the card first');
       if (source.skippedIndexes?.length || destination.skippedIndexes?.length)
         throw new MonoidCardError('Cannot back up unsupported items');

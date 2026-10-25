@@ -6,7 +6,10 @@ import type {RouteComponentProps} from 'routra-react';
 import {MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import type {CardInformation} from '../../../../@lib/global-platform/card-information.js';
-import {MonoidAppletHello} from '../../../../@lib/monoid/index.js';
+import {
+  MonoidAppletHello,
+  readBackupCardIdentity,
+} from '../../../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
@@ -32,7 +35,6 @@ import {
   useViewActive,
 } from '../../../@view/index.js';
 
-import {readBackupCardIdentity} from './card-backup-session.js';
 import {CardBundleExtensionSession} from './card-bundle-extension-session.js';
 import {CardSecretPINSession} from './card-secret-pin-session.js';
 import {useBundleCardAddition} from './use-bundle-card-addition.js';

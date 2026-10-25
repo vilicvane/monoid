@@ -1,12 +1,11 @@
 import {MonoidPIN} from '../../../../@atomics.js';
 import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {
+  type CardBackupIdentity,
   MonoidAppletInvalidPINError,
   MonoidCardError,
-  MonoidWrongCardError,
+  assertSameCardWithBundle,
 } from '../../../../@lib/monoid/index.js';
-
-import type {CardBackupIdentity} from './card-backup-session.js';
 
 type Identity = Pick<CardBackupIdentity, 'id' | 'publicKey' | 'bundle'>;
 type Credentials = {pin: MonoidPIN; onAuthenticated: () => void};
@@ -81,9 +80,7 @@ export class CardSecretPINSession {
         try {
           await scan(card => {
             signal.throwIfAborted();
-            if (expected && key(card) !== key(expected)) {
-              throw new MonoidWrongCardError(expected.id);
-            }
+            if (expected) assertSameCardWithBundle(card, expected);
             const pin = entered ?? this.pins.get(key(card));
             if (pin === undefined) throw new SecretPINRequired(card);
             // A PIN entered before an unknown card is scanned belongs only to

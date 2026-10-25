@@ -776,7 +776,7 @@ test('card identity and bundle are still checked before authentication or writes
   target.calls.length = 0;
   const originalId = target.hello.id;
   target.hello.id = bytes('11111111');
-  await assert.rejects(write(session, target), /Card changed/);
+  await assert.rejects(write(session, target), /Wrong card/);
   assert.deepEqual(target.calls, []);
   target.hello.id = originalId;
   target.hello.bundle = new Uint8Array(32).fill(2);
@@ -1182,7 +1182,9 @@ for (const changedIdentity of [
     peer.calls.length = 0;
     await assert.rejects(
       session.exportRecovery(peer, hello, target, signal()),
-      /same bundle|Card changed|card in this sync/,
+      changedIdentity.endsWith('ID')
+        ? /Wrong card/
+        : /same bundle|Card changed|card in this sync/,
     );
     assert.deepEqual(peer.calls, []);
   });

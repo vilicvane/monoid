@@ -21,7 +21,8 @@ import {MonoidPIN} from '../../@atomics.js';
 import {useEntrances} from '../../@entrances.js';
 import {
   MonoidCardError,
-  MonoidWrongCardError,
+  assertCardPINs,
+  assertSameCard,
 } from '../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../@lib/operation-cancelled.js';
 import {
@@ -350,17 +351,8 @@ export const OTPView = observer(
           hello => {
             task.signal.throwIfAborted();
             if (!active()) throw new MonoidScanRedirectError();
-            if (
-              card &&
-              (uint8ArrayToHex(hello.id) !== card.id ||
-                uint8ArrayToHex(hello.publicKey) !== card.publicKey)
-            )
-              throw new MonoidWrongCardError(card.id);
-            if (hello.pins.access === false || hello.pins.secret === false) {
-              throw new MonoidCardError('Set up card PINs first');
-            }
-            if (hello.pins.access === 0)
-              throw new MonoidCardError('Access PIN blocked');
+            if (card) assertSameCard(hello, card);
+            assertCardPINs(hello);
             otpStore.authorityHint = hello.authority;
           };
         const authentication: MonoidScanAuthentication | undefined =

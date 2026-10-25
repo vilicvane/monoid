@@ -7,9 +7,11 @@ import {styled} from 'styled-components';
 
 import {useEntrances} from '../../../../@entrances.js';
 import {
+  type CardBackupIdentity,
   type MonoidAppletHello,
   MonoidCardError,
-  MonoidWrongCardError,
+  assertSameCardWithBundle,
+  readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
@@ -54,10 +56,6 @@ import {
 import {readCardAddressPreviews} from '../scan-card.js';
 
 import {CardResourceItem, CardResourceList} from './@resource-item.js';
-import {
-  type CardBackupIdentity,
-  readBackupCardIdentity,
-} from './card-backup-session.js';
 import {CardSecretPINSession} from './card-secret-pin-session.js';
 import {
   type CardSyncProgress,
@@ -76,16 +74,7 @@ function assertSyncCard(
   hello: MonoidAppletHello,
   expected: CardBackupIdentity,
 ): void {
-  const identity = readBackupCardIdentity(hello);
-  if (
-    identity.publicKey !== expected.publicKey ||
-    identity.id !== expected.id
-  ) {
-    throw new MonoidWrongCardError(expected.id);
-  }
-  if (identity.bundle !== expected.bundle) {
-    throw new MonoidCardError('Card bundle changed, start over');
-  }
+  assertSameCardWithBundle(hello, expected, 'Card bundle changed, start over');
 }
 
 function progressContent(progress: CardSyncProgress): ReactNode {

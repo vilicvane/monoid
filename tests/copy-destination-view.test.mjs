@@ -9,7 +9,6 @@ import {
   assertBackupBundle,
   assertBackupCard,
   getBackupCardIdentity,
-  readBackupCardIdentity,
 } from '../.bld/app/@components/views/safe/@card/card-backup-session.js';
 import {
   encodeCardDerivationRecord,
@@ -19,6 +18,11 @@ import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
+import {
+  assertSameCardWithBundle,
+  readBackupCardIdentity,
+} from '../.bld/app/@lib/monoid/card-identity.js';
+import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
 import {MonoidAppletInvalidPINError} from '../.bld/app/@lib/monoid/monoid-applet.js';
 
 let fixture;
@@ -81,6 +85,9 @@ mock.module('../.bld/app/@services/index.js', {
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    assertSameCardWithBundle,
+    readBackupCardIdentity,
+    assertCardPINsNotBlocked,
     MonoidAppletInvalidPINError,
     MonoidCardError,
     MonoidWrongCardError,
@@ -150,7 +157,7 @@ mock.module('../.bld/app/@components/views/safe/@card/card-backup-session.js', {
     assertBackupCard,
     assertBackupBundle,
     getBackupCardIdentity,
-    readBackupCardIdentity,
+
     initializeBackupTarget: async (...args) => {
       fixture.initializations.push(args);
       if (fixture.initializationPending) {

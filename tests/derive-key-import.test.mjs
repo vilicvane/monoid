@@ -4,6 +4,7 @@ import {afterEach, mock, test} from 'node:test';
 import {observable, runInAction, toJS} from 'mobx';
 
 import {MonoidWrongCardError} from '../.bld/app/@lib/monoid/card-error.js';
+import {assertSameCard} from '../.bld/app/@lib/monoid/card-identity.js';
 import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
 import {
@@ -66,7 +67,11 @@ mock.module('../.bld/app/@services/index.js', {
   namedExports: {getWalletData, getWalletReference, matchesWalletReference},
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
-  namedExports: {getAppletKey, MonoidWrongCardError},
+  namedExports: {
+    assertSameCard,
+    getAppletKey,
+    MonoidWrongCardError,
+  },
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {

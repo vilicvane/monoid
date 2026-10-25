@@ -1,4 +1,7 @@
-import {MonoidCardError} from '../../../../@lib/monoid/index.js';
+import {
+  type CardBackupIdentity,
+  MonoidCardError,
+} from '../../../../@lib/monoid/index.js';
 import {isCardDerivationItem} from '../card-derivations.js';
 import {
   mergeCardItemData,
@@ -7,11 +10,7 @@ import {
 import {isCardOTPItem, validateCardOTPItem} from '../card-otp.js';
 import type {ScannedCardItemData} from '../common.js';
 
-export type CardSyncIdentity = {
-  id: string;
-  publicKey: string;
-  bundle: string | false;
-};
+export type CardSyncIdentity = CardBackupIdentity;
 
 export type CardSyncExport = {metadata?: string; alias?: string; data: string};
 

@@ -5,8 +5,7 @@ import {type ReactNode, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
-import type {MonoidPIN} from '../../../@atomics.js';
-import {MonoidIdHex, PublicKeyHex} from '../../../@atomics.js';
+import {MonoidIdHex, type MonoidPIN, PublicKeyHex} from '../../../@atomics.js';
 import {useEntrances} from '../../../@entrances.js';
 import {
   type CardInformation,
@@ -22,12 +21,15 @@ import {
   type MonoidAppletHello,
   MonoidCardError,
   MonoidWrongCardError,
+  assertCardPINsNotBlocked,
+  assertSameCard,
   createMonoidApplet,
   getAppletCatalog,
   getAppletDependents,
   hasAppletBundle,
   initializeMonoidCard,
   installMonoidApplets,
+  readCardIdentity,
   readMonoidAppletInstallation,
   resolveMonoidAppletMaintenanceAid,
 } from '../../../@lib/monoid/index.js';
@@ -418,10 +420,7 @@ export const CardManagementView = observer(
             applet: MonoidApplet,
             next: MonoidAppletHello,
           ): Promise<MonoidAppletHello> => {
-            if (next.pins.secret === 0)
-              throw new MonoidCardError('Secret PIN blocked');
-            if (next.pins.access === 0)
-              throw new MonoidCardError('Access PIN blocked');
+            assertCardPINsNotBlocked(next);
             if (next.pins.access !== false && next.pins.secret !== false)
               return next;
             setState('Setting up PINs...');
@@ -468,13 +467,10 @@ export const CardManagementView = observer(
             throw new MonoidCardError('Scan the same card');
           }
           if (!pending && hello) {
-            if (
-              !current.hello ||
-              uint8ArrayToHex(current.hello.publicKey) !==
-                uint8ArrayToHex(hello.publicKey)
-            ) {
+            if (!current.hello) {
               throw new MonoidWrongCardError(uint8ArrayToHex(hello.id));
             }
+            assertSameCard(current.hello, readCardIdentity(hello));
           }
           // A newly chosen action must never inherit an earlier destructive
           // operation. Resuming binds the user's confirmation to its saved plan.

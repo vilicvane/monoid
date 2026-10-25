@@ -6,6 +6,11 @@ import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
+import {
+  assertSameCardWithBundle,
+  readBackupCardIdentity,
+} from '../.bld/app/@lib/monoid/card-identity.js';
+import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
 import {isOperationCancelled} from '../.bld/app/@lib/operation-cancelled.js';
 
 // Exercise the built hooks with effect cleanup and state-driven rerenders, without a DOM or sensor.
@@ -172,6 +177,9 @@ const {initializeMonoidCard} = await import(
 );
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    assertSameCardWithBundle,
+    readBackupCardIdentity,
+    assertCardPINsNotBlocked,
     initializeMonoidCard,
     MonoidCardError,
     MonoidWrongCardError,
@@ -289,7 +297,7 @@ function mount(overrides = {}) {
       secureChannels: ['SCP03'],
     },
     exitedTokens: new Set(),
-    identityPublicKey: new Uint8Array(65),
+    identityPublicKey: Uint8Array.from([4, ...new Uint8Array(64)]),
     ...overrides,
   };
   state.presenter = new MonoidScanPromptPresenter();

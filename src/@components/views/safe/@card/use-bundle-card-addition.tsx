@@ -6,8 +6,9 @@ import {useEntrances} from '../../../../@entrances.js';
 import type {CardInformation} from '../../../../@lib/global-platform/card-information.js';
 import {
   MonoidAppletHello,
-  MonoidCardError,
+  assertCardPINsNotBlocked,
   initializeMonoidCard,
+  readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
@@ -18,7 +19,6 @@ import {ConfirmPopup} from '../../../@ui/confirm-popup.js';
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 
-import {readBackupCardIdentity} from './card-backup-session.js';
 import {
   type CardResetIdentity,
   CardResetSession,
@@ -135,10 +135,7 @@ export function useBundleCardAddition({
     validateAddition(hello);
     // Reset does not need the old PINs, even when they are blocked.
     if (hello.bundle !== false) return;
-    if (hello.pins.secret === 0)
-      throw new MonoidCardError('Secret PIN blocked');
-    if (hello.pins.access === 0)
-      throw new MonoidCardError('Access PIN blocked');
+    assertCardPINsNotBlocked(hello);
   };
 
   const acceptScan = async (hello: MonoidAppletHello): Promise<void> => {

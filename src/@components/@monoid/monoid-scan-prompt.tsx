@@ -1,11 +1,15 @@
 import {Capacitor} from '@capacitor/core';
 import {X as x} from 'lucide-react';
-import type {ReactNode} from 'react';
-import {useCallback, useEffect, useLayoutEffect, useState} from 'react';
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useState,
+} from 'react';
 import {styled} from 'styled-components';
 
-import type {MonoidIdHex} from '../../@atomics.js';
-import {MonoidPIN} from '../../@atomics.js';
+import {type MonoidIdHex, MonoidPIN} from '../../@atomics.js';
 import {useEntrances} from '../../@entrances.js';
 import {AppletNotFoundError} from '../../@lib/applet.js';
 import {CBORAppletError} from '../../@lib/cbor-applet.js';
@@ -17,7 +21,10 @@ import {
   MonoidAppletInvalidPINError,
   MonoidCardError,
   MonoidWrongCardError,
+  assertCardPINsNotBlocked,
+  assertSameCardWithBundle,
   initializeMonoidCard,
+  readBackupCardIdentity,
 } from '../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../@lib/operation-cancelled.js';
 import {renderIcon} from '../../@lib/render-icon.js';
@@ -413,14 +420,11 @@ export function useMonoidScanPrompt({
           const id = uint8ArrayToHex(hello.id);
 
           // A setup PIN belongs to the exact Identity seen before input.
-          if (
-            setupPIN &&
-            (id !== uint8ArrayToHex(setupPIN.hello.id) ||
-              uint8ArrayToHex(hello.publicKey) !==
-                uint8ArrayToHex(setupPIN.hello.publicKey))
-          ) {
-            throw new MonoidWrongCardError(uint8ArrayToHex(setupPIN.hello.id));
-          }
+          if (setupPIN)
+            assertSameCardWithBundle(
+              hello,
+              readBackupCardIdentity(setupPIN.hello),
+            );
 
           const setup = setupPIN;
           setupPIN = undefined;
@@ -446,16 +450,10 @@ export function useMonoidScanPrompt({
               return;
             }
 
-            if (hello.pins.secret === 0 || hello.pins.access === 0) {
-              result = {
-                type: 'error',
-                error: new MonoidCardError(
-                  hello.pins.secret === 0
-                    ? 'Secret PIN blocked'
-                    : 'Access PIN blocked',
-                ),
-                retry: false,
-              };
+            try {
+              assertCardPINsNotBlocked(hello);
+            } catch (error) {
+              result = {type: 'error', error, retry: false};
               return;
             }
 

@@ -2,16 +2,19 @@ import {p256} from '@noble/curves/nist';
 import {Tag, decode} from 'cbor2';
 import {getBytes, sha256, toUtf8Bytes} from 'ethers';
 
-import type {SafeIndexHex} from '../@atomics.js';
-import {SafeIndex} from '../@atomics.js';
+import {SafeIndex, type SafeIndexHex} from '../@atomics.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../@utils/index.js';
 
 import {probeApplet} from './applet.js';
 import {InvalidCardItemError} from './card-item-error.js';
 import {CBORAppletError, CardItemExistsError} from './cbor-applet.js';
 import {equalBytes} from './global-platform/commands.js';
-import type {MonoidApplet, MonoidAppletHello} from './monoid/index.js';
-import {MonoidCardError, MonoidWrongCardError} from './monoid/index.js';
+import {
+  type MonoidApplet,
+  type MonoidAppletHello,
+  MonoidCardError,
+  assertSameCard,
+} from './monoid/index.js';
 
 export const SECURITY_KEY_AID = hexToUint8Array('a0000006472f0001');
 export const SECURITY_KEY_ITEM_TYPE = 0xf101;
@@ -178,17 +181,6 @@ export function isSecurityKeyCredentialActive(
   );
 }
 
-export function assertSecurityKeyCard(
-  hello: MonoidAppletHello,
-  expected: {id: string; publicKey: string},
-): void {
-  if (
-    uint8ArrayToHex(hello.id) !== expected.id ||
-    uint8ArrayToHex(hello.publicKey) !== expected.publicKey
-  )
-    throw new MonoidWrongCardError(expected.id);
-}
-
 /** Requires Access authentication. The final SELECT changes the selected applet. */
 export async function readSecurityKeySnapshot(
   applet: MonoidApplet,
@@ -299,7 +291,7 @@ export class SecurityKeyConfiguration {
     if (this.busy || this.complete) return;
     if (this.uncertain)
       throw new MonoidCardError('Scan card again to check changes');
-    assertSecurityKeyCard(hello, {
+    assertSameCard(hello, {
       id: uint8ArrayToHex(this.snapshot.hello.id),
       publicKey: uint8ArrayToHex(this.snapshot.hello.publicKey),
     });

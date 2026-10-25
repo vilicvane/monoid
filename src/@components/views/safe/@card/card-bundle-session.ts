@@ -1,19 +1,25 @@
 import {observable, runInAction} from 'mobx';
 
-import {MonoidPIN, PublicKey} from '../../../../@atomics.js';
+import {
+  MonoidIdHex,
+  MonoidPIN,
+  PublicKey,
+  PublicKeyHex,
+} from '../../../../@atomics.js';
 import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {
+  type CardIdentity,
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidAppletInvalidPINError,
   MonoidCardError,
-  MonoidWrongCardError,
+  assertCardPINsNotBlocked,
+  assertSameCard,
 } from '../../../../@lib/monoid/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 import type {ScannedCardData} from '../common.js';
 
-export type CardBundleIdentity = {id: string; publicKey: string};
-export type CardBundleCard = CardBundleIdentity & {
+export type CardBundleCard = CardIdentity & {
   status: 'pending' | 'complete';
   /** Latest round-two observation or ACK, absent after uncertain creation. */
   bundle?: string | false;
@@ -24,13 +30,13 @@ type BundleState = {
   cards: readonly CardBundleCard[];
   phase: CardBundlePhase;
   bundle?: string;
-  creator?: CardBundleIdentity;
+  creator?: CardIdentity;
   generationUncertain: boolean;
 };
 
 function readIdentity(
-  card: CardBundleIdentity & {bundle: string | false},
-): CardBundleIdentity {
+  card: CardIdentity & {bundle: string | false},
+): CardIdentity {
   if (
     !/^[0-9a-f]{8}$/i.test(card.id) ||
     !/^04[0-9a-f]{128}$/i.test(card.publicKey) ||
@@ -38,10 +44,13 @@ function readIdentity(
   ) {
     throw new MonoidCardError('Invalid card identity');
   }
-  return {id: card.id.toLowerCase(), publicKey: card.publicKey.toLowerCase()};
+  return {
+    id: MonoidIdHex.satisfies(card.id.toLowerCase()),
+    publicKey: PublicKeyHex.satisfies(card.publicKey.toLowerCase()),
+  };
 }
 
-function readCardIdentity(hello: MonoidAppletHello): CardBundleIdentity {
+function readCardIdentity(hello: MonoidAppletHello): CardIdentity {
   return readIdentity({
     id: uint8ArrayToHex(hello.id),
     publicKey: uint8ArrayToHex(hello.publicKey),
@@ -49,10 +58,9 @@ function readCardIdentity(hello: MonoidAppletHello): CardBundleIdentity {
   });
 }
 
-function readCard(hello: MonoidAppletHello): CardBundleIdentity {
+function readCard(hello: MonoidAppletHello): CardIdentity {
   const identity = readCardIdentity(hello);
-  if (hello.pins.secret === 0) throw new MonoidCardError('Secret PIN blocked');
-  if (hello.pins.access === 0) throw new MonoidCardError('Access PIN blocked');
+  assertCardPINsNotBlocked(hello);
   if (hello.pins.secret === false || hello.pins.access === false) {
     throw new MonoidCardError('Set up the card first');
   }
@@ -89,7 +97,7 @@ export class CardBundleSession {
     return this.current.get().bundle;
   }
 
-  get creator(): CardBundleIdentity | undefined {
+  get creator(): CardIdentity | undefined {
     return this.current.get().creator;
   }
 
@@ -127,7 +135,7 @@ export class CardBundleSession {
     }
   }
 
-  private validateAdditionIdentity(card: CardBundleIdentity): void {
+  private validateAdditionIdentity(card: CardIdentity): void {
     if (this.cards.some(current => current.publicKey === card.publicKey)) {
       throw new MonoidCardError('Card already added');
     }
@@ -144,7 +152,7 @@ export class CardBundleSession {
     this.validateAdditionIdentity(readCardIdentity(hello));
   }
 
-  private addIdentity(card: CardBundleIdentity, bundle: string | false): void {
+  private addIdentity(card: CardIdentity, bundle: string | false): void {
     this.requireCollecting();
     if (bundle !== false) {
       throw new MonoidCardError('Card already belongs to a bundle');
@@ -215,7 +223,7 @@ export class CardBundleSession {
     const identity = readCardIdentity(hello);
     const card = this.cards.find(card => card.publicKey === identity.publicKey);
     if (!card) throw new MonoidCardError('Scan one of the added cards');
-    if (card.id !== identity.id) throw new MonoidWrongCardError(card.id);
+    assertSameCard(hello, card);
     if (card.status === 'complete') {
       throw new MonoidCardError('Card already configured');
     }

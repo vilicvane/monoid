@@ -1132,7 +1132,7 @@ test('interrupted replacement resumes the persisted checkpoint after an app rest
 });
 
 test('restore verifies the full Identity, caller AID and unchanged Bundle before import', async () => {
-  for (const mismatch of ['publicKey', 'aid', 'bundle']) {
+  for (const mismatch of ['id', 'publicKey', 'aid', 'bundle']) {
     const service = await CardMaintenanceService.create(storageFixture());
     const card = cardFixture();
     const operation = await service.prepare(card, {
@@ -1141,7 +1141,8 @@ test('restore verifies the full Identity, caller AID and unchanged Bundle before
       appletAid: hex(aid),
     });
     await service.replace('session', operation.id);
-    if (mismatch === 'publicKey')
+    if (mismatch === 'id') card.state.id = bytes('55667788');
+    else if (mismatch === 'publicKey')
       card.state.publicKey = bytes(`04${'22'.repeat(64)}`);
     else if (mismatch === 'aid') card.aid = bytes('f06d6f6e6f69640202');
     else card.state.bundle = new Uint8Array(32);

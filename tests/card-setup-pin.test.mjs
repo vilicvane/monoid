@@ -7,6 +7,11 @@ import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
+import {
+  assertSameCardWithBundle,
+  readBackupCardIdentity,
+} from '../.bld/app/@lib/monoid/card-identity.js';
+import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
 import {initializeMonoidCard} from '../.bld/app/@lib/monoid/initialize-card.js';
 import {MonoidAppletInvalidPINError} from '../.bld/app/@lib/monoid/monoid-applet.js';
 import {
@@ -36,20 +41,12 @@ mock.module('react/jsx-runtime', {
 mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => fixture.entrances},
 });
-mock.module('../.bld/app/@components/views/safe/@card/card-backup-session.js', {
-  namedExports: {
-    readBackupCardIdentity: hello => ({
-      id: Buffer.from(hello.id).toString('hex'),
-      publicKey: Buffer.from(hello.publicKey).toString('hex'),
-      bundle:
-        hello.bundle === false
-          ? false
-          : Buffer.from(hello.bundle).toString('hex'),
-    }),
-  },
-});
+
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    assertSameCardWithBundle,
+    readBackupCardIdentity,
+    assertCardPINsNotBlocked,
     MonoidCardError,
     MonoidWrongCardError,
     MonoidAppletInvalidPINError,
@@ -526,13 +523,15 @@ test('invalid PIN formats stay in the input flow without scanning', async () => 
   assert.deepEqual(state.saved, []);
 });
 
-for (const field of ['applet ID', 'Safe public key']) {
+for (const field of ['applet ID', 'Safe public key', 'Bundle']) {
   test(`a different ${field} is rejected before sending credentials`, async () => {
     const state = mount();
     await state.answer(PIN);
     const wrong = structuredClone(state.current);
     if (field === 'applet ID') wrong.id = bytes('55667788');
-    else wrong.publicKey = bytes(`04${'34'.repeat(64)}`);
+    else if (field === 'Safe public key')
+      wrong.publicKey = bytes(`04${'34'.repeat(64)}`);
+    else wrong.bundle = new Uint8Array(32).fill(1);
 
     await assert.rejects(state.tap(wrong), MonoidWrongCardError);
     await state.finished.promise;

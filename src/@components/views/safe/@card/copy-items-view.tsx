@@ -15,9 +15,12 @@ import {MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import type {CardInformation} from '../../../../@lib/global-platform/card-information.js';
 import {
+  type CardBackupIdentity,
   type MonoidAppletHello,
   MonoidCardError,
-  MonoidWrongCardError,
+  assertCardPINsNotBlocked,
+  assertSameCardWithBundle,
+  readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
@@ -71,14 +74,12 @@ import {
 
 import {CardResourceItem, CardResourceList} from './@resource-item.js';
 import {
-  type CardBackupIdentity,
   type CardBackupItem,
   type CardBackupTarget,
   assertBackupBundle,
   assertBackupCard,
   getBackupCardIdentity,
   initializeBackupTarget,
-  readBackupCardIdentity,
 } from './card-backup-session.js';
 import {CardSecretPINSession} from './card-secret-pin-session.js';
 import {CopyItemsState} from './copy-items-state.js';
@@ -362,10 +363,7 @@ export const CopyItemsView = observer(
           if (targets.some(target => target.publicKey === identity.publicKey)) {
             throw new MonoidCardError('Card already added');
           }
-          if (hello.pins.secret === 0)
-            throw new MonoidCardError('Secret PIN blocked');
-          if (hello.pins.access === 0)
-            throw new MonoidCardError('Access PIN blocked');
+          assertCardPINsNotBlocked(hello);
           scanned = hello;
         },
       );
@@ -465,11 +463,7 @@ export const CopyItemsView = observer(
             }
           },
           hello => {
-            if (
-              readBackupCardIdentity(hello).publicKey !== identity.publicKey
-            ) {
-              throw new MonoidWrongCardError(identity.id);
-            }
+            assertSameCardWithBundle(hello, identity);
           },
         );
       } finally {

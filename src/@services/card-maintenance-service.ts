@@ -1,7 +1,12 @@
 import {randomBytes, sha256, toUtf8Bytes} from 'ethers';
 import {observable, runInAction} from 'mobx';
 
-import {PublicKey, SafeIndex} from '../@atomics.js';
+import {
+  type MonoidIdHex,
+  PublicKey,
+  type PublicKeyHex,
+  SafeIndex,
+} from '../@atomics.js';
 import {
   type CardInformation,
   readCardInformation,
@@ -16,6 +21,7 @@ import {
   type MonoidAppletHello,
   MonoidCardError,
   acceptMatchingItem,
+  assertSameCardWithBundle,
   createMonoidApplet,
   getAppletCatalog,
   getAppletDependents,
@@ -66,8 +72,8 @@ export type CardMaintenanceOperation = {
   mode: CardMaintenanceMode;
   phase: CardMaintenancePhase;
   card: {
-    id?: string;
-    publicKey?: string;
+    id?: MonoidIdHex;
+    publicKey?: PublicKeyHex;
     bundle: string | false;
     appletAid: string;
     fingerprint: string;
@@ -1031,15 +1037,18 @@ function assertIdentity(
   hello: MonoidAppletHello,
   monoid: Pick<MonoidApplet, 'aid'>,
 ): void {
-  if (
-    uint8ArrayToHex(hello.publicKey) !== operation.card.publicKey ||
-    uint8ArrayToHex(monoid.aid) !== operation.card.appletAid
-  ) {
+  assertSameCardWithBundle(
+    hello,
+    {
+      id: operation.card.id!,
+      publicKey: operation.card.publicKey!,
+      bundle: operation.card.bundle,
+    },
+    'The card Bundle changed during maintenance',
+  );
+
+  if (uint8ArrayToHex(monoid.aid) !== operation.card.appletAid) {
     throw new Error('Wrong card');
-  }
-  const bundle = hello.bundle ? uint8ArrayToHex(hello.bundle) : false;
-  if (bundle !== operation.card.bundle) {
-    throw new Error('The card Bundle changed during maintenance');
   }
 }
 

@@ -2,7 +2,8 @@ import {
   type MonoidApplet,
   MonoidAppletHello,
   MonoidCardError,
-  MonoidWrongCardError,
+  assertSameCardWithBundle,
+  readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import type {ScannedCardData} from '../common.js';
@@ -18,18 +19,6 @@ export class CardResetSession {
   replacement: MonoidAppletHello | undefined;
 
   constructor(readonly card: CardResetIdentity) {}
-
-  private assertIdentity(
-    hello: MonoidAppletHello,
-    identity: Pick<CardResetIdentity, 'id' | 'publicKey'> = this.card,
-  ): void {
-    if (
-      uint8ArrayToHex(hello.id) !== identity.id ||
-      uint8ArrayToHex(hello.publicKey) !== identity.publicKey
-    ) {
-      throw new MonoidWrongCardError(identity.id);
-    }
-  }
 
   async readOrReset(
     applet: MonoidApplet,
@@ -47,23 +36,19 @@ export class CardResetSession {
           'Card reset not confirmed, add the card again',
         );
       }
-      this.assertIdentity(hello, {
-        id: uint8ArrayToHex(this.replacement.id),
-        publicKey: uint8ArrayToHex(this.replacement.publicKey),
-      });
-      if (hello.bundle !== false) {
-        throw new MonoidCardError('Card bundle changed, scan again');
-      }
+      assertSameCardWithBundle(
+        hello,
+        readBackupCardIdentity(this.replacement),
+        'Card bundle changed, scan again',
+      );
       return hello;
     }
 
-    this.assertIdentity(hello);
-    if (
-      hello.bundle === false ||
-      uint8ArrayToHex(hello.bundle) !== this.card.bundle
-    ) {
-      throw new MonoidCardError('Card bundle changed, scan again');
-    }
+    assertSameCardWithBundle(
+      hello,
+      this.card,
+      'Card bundle changed, scan again',
+    );
 
     await beforeReset();
     signal.throwIfAborted();
