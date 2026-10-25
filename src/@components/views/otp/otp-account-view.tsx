@@ -1,4 +1,3 @@
-import {App} from '@capacitor/app';
 import {reaction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useRef, useState} from 'react';
@@ -12,7 +11,6 @@ import {
   assertCardPINs,
   setItemAlias,
 } from '../../../@lib/monoid/index.js';
-import {isOperationCancelled} from '../../../@lib/operation-cancelled.js';
 import {
   OTPAuthorityWarmup,
   getDefaultOTPAuthorityUrl,
@@ -30,10 +28,8 @@ import {
 import type {Router} from '../../../@routes.js';
 import {hexToUint8Array} from '../../../@utils/index.js';
 import {fadeInAnimationCSS, popOutAnimationCSS} from '../../@animations.js';
-import {
-  MonoidScanRedirectError,
-  useMonoidScanPrompt,
-} from '../../@monoid/monoid-scan-prompt.js';
+import {useMonoidScanPrompt} from '../../@monoid/monoid-scan-prompt.js';
+import {useCardOperation} from '../../@monoid/use-card-operation.js';
 import {Button, Buttons} from '../../@ui/button.js';
 import {CopyButton} from '../../@ui/copy-button.js';
 import {WhiteTag} from '../../@ui/tag.js';
@@ -208,7 +204,6 @@ export const OTPAccountView = observer(
     const account = otpStore.accounts.find(account => account.index === index);
     const [batch, setBatch] = useState<OTPBatch>();
     const [clock, setClock] = useState(() => performance.now());
-    const [busy, setBusy] = useState(false);
     const [pinSession] = useState(() =>
       monoidCredentialsStore.createPINSession(),
     );
@@ -218,11 +213,25 @@ export const OTPAccountView = observer(
       pinSession,
     });
     const [nameInput, showNameInput] = useInputModal();
-    const controller = useRef<AbortController | undefined>(undefined);
-    const scanning = useRef(false);
-    const mounted = useRef(true);
     const started = useRef(false);
     const animateExit = useRef(true);
+    const {
+      busy,
+      running,
+      run: runOperation,
+    } = useCardOperation({
+      active,
+      pinSession,
+      scan,
+      onLeave: () => {
+        animateExit.current = false;
+        setBatch(undefined);
+      },
+      onBackground: () => {
+        animateExit.current = false;
+        setBatch(undefined);
+      },
+    });
 
     const prepareExit = (clone: HTMLElement): void => {
       clone.inert = true;
@@ -230,39 +239,12 @@ export const OTPAccountView = observer(
       if (!animateExit.current || !active() || document.hidden) clone.remove();
     };
 
-    useEffect(() => {
-      mounted.current = true;
-      const clear = (): void => {
+    useEffect(
+      () => () => {
         animateExit.current = false;
-        controller.current?.abort();
-        pinSession.clear();
-        setBatch(undefined);
-      };
-      const dispose = reaction(active, value => {
-        if (!value) clear();
-      });
-      const background = (): void => {
-        animateExit.current = false;
-        // The biometric prompt can deactivate the app before NFC starts.
-        if (scanning.current) controller.current?.abort();
-        setBatch(undefined);
-        if (!controller.current) pinSession.clear();
-      };
-      const visibility = (): void => {
-        if (document.hidden) background();
-      };
-      document.addEventListener('visibilitychange', visibility);
-      const listener = App.addListener('appStateChange', ({isActive}) => {
-        if (!isActive) background();
-      });
-      return () => {
-        mounted.current = false;
-        clear();
-        dispose();
-        document.removeEventListener('visibilitychange', visibility);
-        void listener.then(handle => handle.remove());
-      };
-    }, [active, pinSession]);
+      },
+      [],
+    );
 
     useEffect(() => {
       let disposed = false;
@@ -300,77 +282,62 @@ export const OTPAccountView = observer(
     }, [batch]);
 
     async function run(): Promise<void> {
-      if (!account || controller.current || !active()) return;
-      const task = new AbortController();
-      controller.current = task;
-      setBusy(true);
-      const warmup = new OTPAuthorityWarmup(task.signal);
-      warmup.start(otpStore.authorityHint ?? getDefaultOTPAuthorityUrl());
-      let prepared: PreparedOTP | undefined;
-      try {
+      if (!account) return;
+      await runOperation(async ({signal, active, scan}) => {
+        const warmup = new OTPAuthorityWarmup(signal);
+        warmup.start(otpStore.authorityHint ?? getDefaultOTPAuthorityUrl());
+        let prepared: PreparedOTP | undefined;
         try {
-          await pinSession.getPINs(task.signal);
-        } catch (error) {
-          pinSession.clear();
-          throw error;
-        }
-        task.signal.throwIfAborted();
-        if (!active()) return;
-        scanning.current = true;
-        await scan(
-          'Scan a card',
-          async (applet, setState, _hello, scanSignal) => {
-            const signal = AbortSignal.any([task.signal, scanSignal]);
-            setState('Getting codes, hold tight...');
-            const value = await calculatePreparedOTP(prepared!, applet, signal);
-            signal.throwIfAborted();
-            if (active() && mounted.current && !document.hidden) {
-              animateExit.current = true;
-              setClock(performance.now());
-              setBatch(value);
-            }
-          },
-          hello => {
-            task.signal.throwIfAborted();
-            if (!active()) throw new MonoidScanRedirectError();
-            assertCardPINs(hello);
-            otpStore.authorityHint = hello.authority;
-            warmup.start(hello.authority);
-          },
-          task.signal,
-          {
-            aid: OTP_AID,
-            prepare: async (applet, setState, hello, scanSignal) => {
-              const signal = AbortSignal.any([task.signal, scanSignal]);
-              prepared = await prepareOTP(
+          await scan(
+            'Scan a card',
+            async (applet, setState, _hello, signal) => {
+              setState('Getting codes, hold tight...');
+              const value = await calculatePreparedOTP(
+                prepared!,
                 applet,
-                [hexToUint8Array(account.index)],
-                hello.authority,
                 signal,
-                stage =>
-                  setState(
-                    {
-                      preparing: 'Preparing, hold tight...',
-                      time: 'Getting time, hold tight...',
-                      verifying: 'Verifying time, hold tight...',
-                    }[stage],
-                  ),
               );
+              signal.throwIfAborted();
+              if (active() && !document.hidden) {
+                animateExit.current = true;
+                setClock(performance.now());
+                setBatch(value);
+              }
             },
-          },
-        );
-      } catch (error) {
-        if (!isOperationCancelled(error, task.signal)) throw error;
-      } finally {
-        warmup.stop();
-        scanning.current = false;
-        if (controller.current === task) controller.current = undefined;
-        if (mounted.current) setBusy(false);
-      }
+            hello => {
+              assertCardPINs(hello);
+              otpStore.authorityHint = hello.authority;
+              warmup.start(hello.authority);
+            },
+            signal,
+            {
+              aid: OTP_AID,
+              prepare: async (applet, setState, hello, signal) => {
+                prepared = await prepareOTP(
+                  applet,
+                  [hexToUint8Array(account.index)],
+                  hello.authority,
+                  signal,
+                  stage =>
+                    setState(
+                      {
+                        preparing: 'Preparing, hold tight...',
+                        time: 'Getting time, hold tight...',
+                        verifying: 'Verifying time, hold tight...',
+                      }[stage],
+                    ),
+                );
+              },
+            },
+          );
+        } finally {
+          warmup.stop();
+        }
+      });
     }
 
     async function rename(part: 'provider' | 'name'): Promise<void> {
-      if (!account || controller.current || !active()) return;
+      if (!account || running() || !active()) return;
 
       const value = await showNameInput({
         placeholder: 'Enter account name',
@@ -381,22 +348,7 @@ export const OTPAccountView = observer(
       if (value === undefined || value.trim() === account.label) return;
 
       const label = validateOTPAccountLabel(value);
-      if (controller.current || !active()) return;
-
-      const task = new AbortController();
-      controller.current = task;
-      setBusy(true);
-      try {
-        try {
-          await pinSession.getPINs(task.signal);
-        } catch (error) {
-          pinSession.clear();
-          throw error;
-        }
-        task.signal.throwIfAborted();
-        if (!active()) return;
-
-        scanning.current = true;
+      await runOperation(async ({scan}) => {
         await scan(
           'Scan card to save name',
           async (applet, setState) => {
@@ -411,20 +363,9 @@ export const OTPAccountView = observer(
             // An acknowledged write is kept even if the page closes meanwhile.
             await otpStore.save([{...account, label}]);
           },
-          hello => {
-            task.signal.throwIfAborted();
-            if (!active()) throw new MonoidScanRedirectError();
-            assertCardPINs(hello);
-          },
-          task.signal,
+          hello => assertCardPINs(hello),
         );
-      } catch (error) {
-        if (!isOperationCancelled(error, task.signal)) throw error;
-      } finally {
-        scanning.current = false;
-        if (controller.current === task) controller.current = undefined;
-        if (mounted.current) setBusy(false);
-      }
+      });
     }
 
     const item = batch?.items.find(item => item.index === index);

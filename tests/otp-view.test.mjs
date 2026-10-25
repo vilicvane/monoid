@@ -1335,3 +1335,78 @@ test('tapping the provider tag selects the provider and cancelling starts no sca
   assert.equal(state.scans.length, scans);
   assert.equal(state.entrances.otpStore.accounts[0].label, 'Example:  alice');
 });
+
+test('rename keeps an acknowledged alias after leaving while the write is pending', async () => {
+  const card = cachedCard(1);
+  const state = mount([card]);
+  state.openAccount(card);
+  await state.flush();
+  await state.tap(card);
+  state.input = {promise: Promise.resolve('Renamed')};
+  find(
+    state.render(),
+    node => node.props?.['aria-label'] === 'Edit account name',
+  ).props.onClick();
+  await state.flush();
+  const scan = state.scans.at(-1);
+  const write = deferred();
+  const set = mock.fn(() => write.promise);
+  const callback = scan.callback({set}, () => {}, undefined, scan.signal);
+  state.leave();
+  write.resolve();
+  await callback;
+  scan.finished.resolve();
+  await state.flush();
+  assert.equal(state.entrances.otpStore.accounts[0].label, 'Renamed');
+  assert.equal(set.mock.callCount(), 1);
+  assert.equal(state.scans.length, 2);
+  assert.deepEqual(state.errors, []);
+});
+
+test('an uncertain rename reports the original error without saving or replaying the write', async () => {
+  const card = cachedCard(1);
+  const state = mount([card]);
+  state.openAccount(card);
+  await state.flush();
+  await state.tap(card);
+  state.input = {promise: Promise.resolve('Renamed')};
+  find(
+    state.render(),
+    node => node.props?.['aria-label'] === 'Edit account name',
+  ).props.onClick();
+  await state.flush();
+  const scan = state.scans.at(-1);
+  const failure = new Error('Unknown set result');
+  const set = mock.fn(async () => {
+    throw failure;
+  });
+  await scan
+    .callback({set}, () => {}, undefined, scan.signal)
+    .catch(scan.finished.reject);
+  await state.flush();
+  assert.equal(
+    state.entrances.otpStore.accounts[0].label,
+    card.accounts[0].label,
+  );
+  assert.equal(set.mock.callCount(), 1);
+  assert.equal(state.scans.length, 2);
+  assert.deepEqual(state.errors, [failure]);
+});
+
+test('leaving while the rename input is open prevents a late scan', async () => {
+  const card = cachedCard(1);
+  const state = mount([card]);
+  state.openAccount(card);
+  await state.flush();
+  await state.tap(card);
+  state.input = deferred();
+  find(
+    state.render(),
+    node => node.props?.['aria-label'] === 'Edit account name',
+  ).props.onClick();
+  state.leave();
+  state.input.resolve('Renamed');
+  await state.flush();
+  assert.equal(state.scans.length, 1);
+  assert.deepEqual(state.errors, []);
+});

@@ -3,9 +3,8 @@ import {
   Ellipsis as ellipsis,
   KeyRound as keyRound,
 } from 'lucide-react';
-import {reaction} from 'mobx';
 import {observer} from 'mobx-react-lite';
-import {type ReactNode, useEffect, useRef, useState} from 'react';
+import {type ReactNode, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
@@ -18,7 +17,6 @@ import {
   readCardIdentity,
   removeItems,
 } from '../../@lib/monoid/index.js';
-import {isOperationCancelled} from '../../@lib/operation-cancelled.js';
 import {
   SecurityKeyConfiguration,
   type SecurityKeyCredentialItem,
@@ -38,6 +36,7 @@ import {
   useMonoidScanPrompt,
 } from '../@monoid/monoid-scan-prompt.js';
 import {scanNextCards} from '../@monoid/scan-next-cards.js';
+import {useCardOperation} from '../@monoid/use-card-operation.js';
 import {AppIcon} from '../@ui/app-icon.js';
 import {Button, Buttons} from '../@ui/button.js';
 import {ConfirmPopup} from '../@ui/confirm-popup.js';
@@ -160,7 +159,6 @@ export const SecurityKeyView = observer(
     const [snapshot, setSnapshot] = useState<SecurityKeySnapshot>();
     const [missingMonoid, setMissingMonoid] = useState(false);
     const [needsPINSetup, setNeedsPINSetup] = useState(false);
-    const [busy, setBusy] = useState(false);
     const [popup, setPopup] = useState<'menu' | 'configure'>();
     const [detail, setDetail] = useState<SecurityKeyCredentialItem>();
     const [deleting, setDeleting] = useState<SecurityKeyCredentialItem>();
@@ -176,8 +174,22 @@ export const SecurityKeyView = observer(
       ensureSetup: false,
       pinSession,
     });
-    const controller = useRef<AbortController | undefined>(undefined);
-    const mounted = useRef(true);
+    const {busy, run: runOperation} = useCardOperation({
+      active,
+      pinSession,
+      scan,
+      onLeave: () => {
+        setPopup(undefined);
+        setDetail(undefined);
+        setDeleting(undefined);
+        setOpenRow(undefined);
+        setSelection(undefined);
+        setConfiguration(undefined);
+        setSnapshot(undefined);
+        setMissingMonoid(false);
+        setNeedsPINSetup(false);
+      },
+    });
     const configuredSeed = snapshot?.grant?.seed;
     const boundSeed =
       configuredSeed &&
@@ -192,63 +204,32 @@ export const SecurityKeyView = observer(
         ([type, writable]) => type === -3839 && writable,
       );
 
-    useEffect(() => {
-      mounted.current = true;
-      const dispose = reaction(active, value => {
-        if (!value) {
-          controller.current?.abort();
-          pinSession.clear();
-          setPopup(undefined);
-          setDetail(undefined);
-          setDeleting(undefined);
-          setOpenRow(undefined);
-          setSelection(undefined);
-          setConfiguration(undefined);
-          setSnapshot(undefined);
-          setMissingMonoid(false);
-          setNeedsPINSetup(false);
-        }
-      });
-      return () => {
-        mounted.current = false;
-        controller.current?.abort();
-        pinSession.clear();
-        dispose();
-      };
-    }, [active, pinSession]);
-
     async function deleteCredential(
       item: SecurityKeyCredentialItem,
     ): Promise<void> {
-      if (!snapshot || controller.current || !active()) return;
-      const operation = new AbortController();
-      controller.current = operation;
-      setBusy(true);
-      setDeleting(undefined);
-      setDetail(undefined);
-      const identity = readCardIdentity(snapshot.hello);
+      if (!snapshot) return;
+      await runOperation(async ({signal, active, scan}) => {
+        setDeleting(undefined);
+        setDetail(undefined);
+        const identity = readCardIdentity(snapshot.hello);
 
-      const validate =
-        (card: typeof identity | undefined): MonoidScanPromptValidateCard =>
-        hello => {
-          if (operation.signal.aborted || !mounted.current || !active())
-            throw new MonoidScanRedirectError();
-          if (card) assertSameCard(hello, card);
-          assertCardPINs(hello);
+        const validate =
+          (card: typeof identity | undefined): MonoidScanPromptValidateCard =>
+          hello => {
+            if (card) assertSameCard(hello, card);
+            assertCardPINs(hello);
+          };
+        // A card without the record has nothing left to delete.
+        const deleteFromCard: MonoidScanPromptCallback = async (
+          applet,
+          setState,
+          _hello,
+          signal,
+        ) => {
+          setState('Deleting credential, hold tight...');
+          await removeItems(applet, new Set([item.index]), signal, () => {});
         };
-      // A card without the record has nothing left to delete.
-      const deleteFromCard: MonoidScanPromptCallback = async (
-        applet,
-        setState,
-        _hello,
-        scanSignal,
-      ) => {
-        const signal = AbortSignal.any([operation.signal, scanSignal]);
-        setState('Deleting credential, hold tight...');
-        await removeItems(applet, new Set([item.index]), signal, () => {});
-      };
 
-      try {
         await scan(
           <>
             Scan card{' '}
@@ -258,7 +239,7 @@ export const SecurityKeyView = observer(
           </>,
           async (applet, setState, hello, scanSignal) => {
             await deleteFromCard(applet, setState, hello, scanSignal);
-            if (mounted.current && active())
+            if (active())
               setSnapshot(
                 current =>
                   current && {
@@ -270,7 +251,7 @@ export const SecurityKeyView = observer(
               );
           },
           validate(identity),
-          operation.signal,
+          signal,
         );
         await scanNextCards({
           scan,
@@ -278,89 +259,75 @@ export const SecurityKeyView = observer(
           content: 'Scan next card to delete',
           callback: deleteFromCard,
           validate: validate(undefined),
-          signal: operation.signal,
+          signal,
         });
-      } catch (error) {
-        if (!isOperationCancelled(error, operation.signal)) throw error;
-      } finally {
-        if (controller.current === operation) controller.current = undefined;
-        if (mounted.current) setBusy(false);
-      }
+      });
     }
 
     async function run(config?: SecurityKeyConfiguration): Promise<void> {
-      if (controller.current || !active()) return;
-      const operation = new AbortController();
-      controller.current = operation;
-      setBusy(true);
-      setPopup(undefined);
-      const identity = config
-        ? readCardIdentity(config.snapshot.hello)
-        : undefined;
-      try {
-        await scan(
-          identity ? (
-            <>
-              Scan card{' '}
-              <MonoidScanStatePromptContentHighlight>
-                {identity.id}
-              </MonoidScanStatePromptContentHighlight>
-            </>
-          ) : (
-            'Scan a card'
-          ),
-          async (applet, setState, hello, scanSignal) => {
-            const signal = AbortSignal.any([operation.signal, scanSignal]);
-            signal.throwIfAborted();
-            if (config) {
-              await config.apply(applet, hello, signal);
-            }
-            signal.throwIfAborted();
-            setState('Reading credentials, hold tight...');
-            const next = await readSecurityKeySnapshot(applet, hello, signal);
-            if (mounted.current && active()) {
-              setSnapshot(next);
-              setMissingMonoid(false);
-              setNeedsPINSetup(false);
-              setConfiguration(undefined);
-            }
-          },
-          hello => {
-            if (operation.signal.aborted || !mounted.current || !active())
-              throw new MonoidScanRedirectError();
-            if (identity) assertSameCard(hello, identity);
-            if (hello.pins.access === false || hello.pins.secret === false) {
-              setConfiguration(undefined);
-              setSnapshot(undefined);
-              setMissingMonoid(false);
-              setNeedsPINSetup(true);
-              throw new MonoidScanRedirectError();
-            }
-            assertCardPINs(hello, {secret: true});
-          },
-          operation.signal,
-        );
-      } catch (error) {
-        if (
-          !config &&
-          !operation.signal.aborted &&
-          mounted.current &&
-          active() &&
-          error instanceof Error &&
-          error.cause instanceof AppletNotFoundError
-        ) {
-          setMissingMonoid(true);
-          setNeedsPINSetup(false);
-          setSnapshot(undefined);
-          setConfiguration(undefined);
-          return;
+      await runOperation(async ({signal, active, scan}) => {
+        setPopup(undefined);
+        const identity = config
+          ? readCardIdentity(config.snapshot.hello)
+          : undefined;
+        try {
+          await scan(
+            identity ? (
+              <>
+                Scan card{' '}
+                <MonoidScanStatePromptContentHighlight>
+                  {identity.id}
+                </MonoidScanStatePromptContentHighlight>
+              </>
+            ) : (
+              'Scan a card'
+            ),
+            async (applet, setState, hello, signal) => {
+              signal.throwIfAborted();
+              if (config) {
+                await config.apply(applet, hello, signal);
+              }
+              signal.throwIfAborted();
+              setState('Reading credentials, hold tight...');
+              const next = await readSecurityKeySnapshot(applet, hello, signal);
+              if (active()) {
+                setSnapshot(next);
+                setMissingMonoid(false);
+                setNeedsPINSetup(false);
+                setConfiguration(undefined);
+              }
+            },
+            hello => {
+              if (identity) assertSameCard(hello, identity);
+              if (hello.pins.access === false || hello.pins.secret === false) {
+                setConfiguration(undefined);
+                setSnapshot(undefined);
+                setMissingMonoid(false);
+                setNeedsPINSetup(true);
+                throw new MonoidScanRedirectError();
+              }
+              assertCardPINs(hello, {secret: true});
+            },
+            signal,
+          );
+        } catch (error) {
+          if (
+            !config &&
+            active() &&
+            error instanceof Error &&
+            error.cause instanceof AppletNotFoundError
+          ) {
+            setMissingMonoid(true);
+            setNeedsPINSetup(false);
+            setSnapshot(undefined);
+            setConfiguration(undefined);
+            return;
+          }
+          throw error;
+        } finally {
+          if (config?.complete) pinSession.clear();
         }
-        if (!isOperationCancelled(error, operation.signal)) throw error;
-      } finally {
-        if (config?.complete) pinSession.clear();
-        if (controller.current === operation) controller.current = undefined;
-        if (mounted.current) setBusy(false);
-      }
+      });
     }
 
     function configure(seed: SafeIndexHex | 'create', confirmed = false): void {

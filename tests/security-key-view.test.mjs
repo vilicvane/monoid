@@ -333,7 +333,13 @@ function mount() {
   });
   state.entrances = {
     monoidCredentialsStore: {
-      createPINSession: mock.fn(() => ({clear: mock.fn()})),
+      createPINSession: mock.fn(() => ({
+        clear: mock.fn(),
+        getPINs: mock.fn(async () => {
+          await state.unlock?.promise;
+          return {};
+        }),
+      })),
     },
     cardStore: new CardStore(),
     router: {cardApplets: () => ({$push() {}})},
@@ -352,6 +358,38 @@ function mount() {
   return state;
 }
 afterEach(() => owners.splice(0).forEach(owner => owner.unmount()));
+
+test('leaving during Access PIN preload prevents Security Key NFC from starting', async () => {
+  const state = mount();
+  state.unlock = deferred();
+  state.click('Scan a card');
+  await state.flush();
+  assert.equal(state.scans.length, 0);
+  state.leave();
+  state.unlock.resolve();
+  await state.flush();
+  assert.equal(state.scans.length, 0);
+  assert.deepEqual(state.errors, []);
+});
+
+test('failed PIN preload clears the scope and allows an explicit Security Key retry', async () => {
+  const state = mount();
+  state.unlock = deferred();
+  state.click('Scan a card');
+  const failure = new Error('Vault unavailable');
+  state.unlock.reject(failure);
+  await state.flush();
+  const pinSession =
+    state.entrances.monoidCredentialsStore.createPINSession.mock.calls[0]
+      .result;
+  assert.equal(pinSession.clear.mock.callCount(), 1);
+  assert.equal(state.scans.length, 0);
+  assert.deepEqual(state.errors, [failure]);
+  state.unlock = undefined;
+  await state.read(card(1));
+  assert.equal(state.scans.length, 1);
+  assert.equal(pinSession.getPINs.mock.callCount(), 2);
+});
 
 test('reading then configuring reuses one page-owned Access PIN session and authenticates once per scan', async () => {
   const state = mount();
