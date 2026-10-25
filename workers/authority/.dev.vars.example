@@ -1,7 +1,6 @@
-# Test-only values. Never put production key material in local development.
-# Use Worker encrypted secrets with these names in production.
-AUTHORITY_PRIVATE_JWK='{"kty":"EC","crv":"P-256","x":"...","y":"...","d":"..."}'
-BUNDLE_MASTER_KEY="base64url-encoded-32-random-bytes"
+# Local configuration only. The local Durable Object generates development keys.
+# Authority key material is not imported through environment variables.
+# GitHub organization OAuth is optional and uses its own development credentials.
 GITHUB_CLIENT_SECRET="test-only"
 GITHUB_CLIENT_ID="your-development-oauth-app-client-id"
 AUTHORITY_URL="http://localhost:8787/api/authority"

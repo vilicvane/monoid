@@ -7,7 +7,6 @@ import {
   createDecipheriv,
 } from 'node:crypto';
 import {AuthorityCrypto} from '../.bld/crypto.js';
-import {keyEnv} from './helpers.mjs';
 
 const cat = (...parts) =>
   Buffer.concat(
@@ -61,7 +60,9 @@ function decrypt(packet, recipient, sender) {
 }
 
 test('Java Card wire packet independently decrypts; group roots stable and isolated', async () => {
-  const authority = await AuthorityCrypto.create(await keyEnv());
+  const authority = await AuthorityCrypto.create(
+    await AuthorityCrypto.generateMaterial(),
+  );
   const recipient = createECDH('prime256v1');
   recipient.generateKeys();
   const other = createECDH('prime256v1');
@@ -112,7 +113,9 @@ test('Java Card wire packet independently decrypts; group roots stable and isola
 });
 
 test('time proof binds domain, challenge and big-endian timestamp with P1363 signature', async () => {
-  const authority = await AuthorityCrypto.create(await keyEnv());
+  const authority = await AuthorityCrypto.create(
+    await AuthorityCrypto.generateMaterial(),
+  );
   const challenge = crypto.getRandomValues(new Uint8Array(32));
   const proof = await authority.issueTime(challenge, 1792720500123);
   const data = b64(proof.data);

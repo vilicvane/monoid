@@ -19,7 +19,6 @@ import {
   string,
 } from './http.js';
 import {githubAccount} from './github.js';
-import {openSession, sealSession} from './session.js';
 
 interface Flow {
   challenge: string;
@@ -206,7 +205,9 @@ export async function githubCallback(
   // Retain only encrypted, short-lived provider credentials for live org checks.
   const existing = await stateStore(env).get(flow.sessionKey);
   if (!existing) throw new HttpError(401, 'unauthorized');
-  const session = await openSession<Session>(existing, env.BUNDLE_MASTER_KEY);
+  const session = JSON.parse(
+    await stateStore(env).openSession(existing),
+  ) as Session;
   const grant: Grant = {
     challenge: flow.challenge,
     redirectUri: flow.redirectUri,
@@ -217,7 +218,7 @@ export async function githubCallback(
   const approval = randomToken();
   await stateStore(env).put(
     `approve:${await tokenHash(approval)}`,
-    await sealSession(grant, env.BUNDLE_MASTER_KEY),
+    await stateStore(env).sealSession(JSON.stringify(grant)),
     await tokenHash(browser),
     Date.now() + LOGIN_TTL,
   );
@@ -242,15 +243,14 @@ export async function approve(
     await tokenHash(browser),
   );
   requireValue(saved, 'invalid_approval');
-  const grant = await openSession<Grant>(saved, env.BUNDLE_MASTER_KEY);
+  const grant = JSON.parse(await stateStore(env).openSession(saved)) as Grant;
   if (!(await stateStore(env).get(grant.sessionKey)))
     throw new HttpError(401, 'unauthorized');
   const code = randomToken();
   await stateStore(env).put(
     `code:${await tokenHash(code)}`,
-    await sealSession(
-      {session: grant.session, sessionKey: grant.sessionKey},
-      env.BUNDLE_MASTER_KEY,
+    await stateStore(env).sealSession(
+      JSON.stringify({session: grant.session, sessionKey: grant.sessionKey}),
     ),
     grant.challenge,
     Date.now() + CODE_TTL,
@@ -277,10 +277,12 @@ export async function exchange(
   );
   requireValue(saved, 'invalid_grant');
 
-  const {session, sessionKey} = await openSession<{
+  const {session, sessionKey} = JSON.parse(
+    await stateStore(env).openSession(saved),
+  ) as {
     session: Session;
     sessionKey: string;
-  }>(saved, env.BUNDLE_MASTER_KEY);
+  };
   await validateSession(session, env, fetcher);
   if (!(await stateStore(env).take(sessionKey, '')))
     throw new HttpError(401, 'unauthorized');

@@ -25,24 +25,36 @@ export function createWebHandler(fetcher: typeof fetch = fetch) {
   return async (request: Request, env: WebEnv): Promise<Response> => {
     const url = new URL(request.url);
     const base = new URL(env.AUTHORITY_URL);
-    const path = url.pathname.slice(base.pathname.length);
+    const prefix = base.pathname.replace(/\/$/, '');
+    const path = url.pathname.slice(prefix.length);
+    const atBase = url.pathname === prefix || url.pathname === `${prefix}/`;
     if (
       url.origin !== base.origin ||
-      !url.pathname.startsWith(`${base.pathname}/`) ||
       !['GET', 'HEAD'].includes(request.method) ||
-      (path !== '/login' && !path.startsWith('/assets/'))
+      (!atBase &&
+        (!url.pathname.startsWith(`${prefix}/`) ||
+          (path !== '/login' && !path.startsWith('/assets/'))))
     )
       return api(request, env);
 
-    const assetUrl = new URL(url);
-    assetUrl.pathname = path === '/login' ? '/index.html' : path;
-    assetUrl.search = '';
-    const asset = await env.ASSETS.fetch(new Request(assetUrl, request));
-    const response = new Response(asset.body, asset);
-    response.headers.set('Referrer-Policy', 'origin');
+    let response: Response;
+    if (atBase) {
+      response = new Response(null, {
+        status: 302,
+        headers: {Location: `${prefix}/login`},
+      });
+    } else {
+      const assetUrl = new URL(url);
+      assetUrl.pathname = path === '/login' ? '/index.html' : path;
+      assetUrl.search = '';
+      const asset = await env.ASSETS.fetch(new Request(assetUrl, request));
+      response = new Response(asset.body, asset);
+    }
+    response.headers.set('Referrer-Policy', atBase ? 'no-referrer' : 'origin');
     response.headers.set('X-Content-Type-Options', 'nosniff');
     response.headers.set('Content-Security-Policy', LOGIN_CSP);
-    if (path === '/login') response.headers.set('Cache-Control', 'no-store');
+    if (atBase || path === '/login')
+      response.headers.set('Cache-Control', 'no-store');
     return response;
   };
 }

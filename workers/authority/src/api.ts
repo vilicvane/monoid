@@ -20,20 +20,16 @@ import {
   githubCallback,
   startLogin,
 } from './github-oauth.js';
-import {AuthorityCrypto, type KeyEnvironment, TIME_PROTOCOL} from './crypto.js';
-import {encode} from './encoding.js';
 import {body, bytes, HttpError, json, requireValue} from './http.js';
 import {organizations} from './github.js';
 import {groupName} from './names.js';
 import {authorizeOwner, identities} from './identities.js';
 
-export interface Env extends AuthEnv, KeyEnvironment {
+export interface Env extends AuthEnv {
   REQUEST_LIMIT: RateLimit;
 }
 
 export function createHandler(fetcher: typeof fetch = fetch) {
-  let keys: Promise<AuthorityCrypto> | undefined;
-
   return async (request: Request, env: Env): Promise<Response> => {
     const origin = request.headers.get('Origin');
     let allowed = false;
@@ -63,16 +59,11 @@ export function createHandler(fetcher: typeof fetch = fetch) {
 
         const url = new URL(request.url);
         requireValue(url.origin === base.origin, 'invalid_authority_origin');
-        const path = url.pathname.startsWith(`${base.pathname}/`)
-          ? url.pathname.slice(base.pathname.length)
+        const prefix = base.pathname.replace(/\/$/, '');
+        const path = url.pathname.startsWith(`${prefix}/`)
+          ? url.pathname.slice(prefix.length)
           : '';
         const route = `${request.method} ${path}`;
-
-        const cryptoKeys = () =>
-          (keys ??= AuthorityCrypto.create(env).catch(error => {
-            keys = undefined;
-            throw error;
-          }));
 
         const resolveOwner = async (
           input: unknown,
@@ -87,11 +78,7 @@ export function createHandler(fetcher: typeof fetch = fetch) {
 
         switch (route) {
           case 'GET /v1/metadata':
-            response = json({
-              publicKey: encode((await cryptoKeys()).publicKey),
-              bundle: 'hpke-auth-p256-sha256-aes128gcm',
-              time: TIME_PROTOCOL,
-            });
+            response = json(await stateStore(env).metadata());
             break;
           case 'POST /auth/reown':
             response = await reownLogin(request, env, fetcher);
@@ -183,7 +170,7 @@ export function createHandler(fetcher: typeof fetch = fetch) {
           case 'POST /v1/time': {
             const input = await body(request);
             const challenge = bytes(input.challenge, 32);
-            response = json(await (await cryptoKeys()).issueTime(challenge));
+            response = json(await stateStore(env).issueTime(challenge));
             break;
           }
           case 'POST /v1/bundle': {
@@ -217,7 +204,6 @@ export function createHandler(fetcher: typeof fetch = fetch) {
               throw new HttpError(400, 'invalid_public_key');
             }
 
-            const authority = await cryptoKeys();
             const owner = await resolveOwner(input.owner, session);
             const group = await stateStore(env).group(
               owner,
@@ -228,7 +214,7 @@ export function createHandler(fetcher: typeof fetch = fetch) {
               throw new HttpError(409, 'bundle_policy_conflict');
 
             response = json(
-              await authority.issueBundle(
+              await stateStore(env).issueBundle(
                 owner,
                 name,
                 group!.allowPeerExtension,

@@ -2,16 +2,26 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {Miniflare, convertV4MiniflareOptions} from 'miniflare';
 import {createECDH} from 'node:crypto';
-import {keyEnv} from './helpers.mjs';
+import {mkdtemp, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {basename, dirname, join} from 'node:path';
 import {randomToken, tokenHash} from '../.bld/encoding.js';
 
-test('workerd executes signing, HPKE and SQLite Durable Object session RPC', async context => {
-  const project = 'runtime-test';
-  const mf = new Miniflare(
-    convertV4MiniflareOptions({
+const project = 'runtime-test';
+const base = 'https://authority.monoid.app';
+
+async function removePersistence(root) {
+  assert.equal(dirname(root), tmpdir());
+  assert.equal(basename(root).startsWith('monoid-authority-runtime-'), true);
+  await rm(root, {recursive: true, force: true});
+}
+
+function options(resourcePersistencePath, script) {
+  return {
+    ...convertV4MiniflareOptions({
       name: 'authority-test',
       modules: true,
-      scriptPath: '.wrangler/test/worker.js',
+      ...(script ? {script} : {scriptPath: '.wrangler/test/worker.js'}),
       compatibilityDate: '2026-10-19',
       durableObjects: {
         AUTHORITY_STATE: {className: 'AuthorityState', useSQLite: true},
@@ -20,12 +30,11 @@ test('workerd executes signing, HPKE and SQLite Durable Object session RPC', asy
         REQUEST_LIMIT: {namespace_id: '1002', simple: {limit: 30, period: 60}},
       },
       bindings: {
-        ...(await keyEnv()),
-        AUTHORITY_URL: 'https://www.monoid.app/api/authority',
+        AUTHORITY_URL: 'https://authority.monoid.app',
         APP_ORIGINS: '[]',
         APP_REDIRECT_URIS: '["app.monoid://authority/callback"]',
         REOWN_PROJECT_ID: project,
-        REOWN_AUTH_ORIGINS: '["https://www.monoid.app"]',
+        REOWN_AUTH_ORIGINS: '["https://authority.monoid.app"]',
       },
       outboundService: request => {
         const url = new URL(request.url);
@@ -39,16 +48,26 @@ test('workerd executes signing, HPKE and SQLite Durable Object session RPC', asy
           projectIdKey: project,
           profileUuid: '11111111-1111-4111-8111-111111111111',
           exp: Math.floor(Date.now() / 1000) + 3600,
-          uri: 'https://www.monoid.app',
-          domain: 'www.monoid.app',
+          uri: 'https://authority.monoid.app/login',
+          domain: 'authority.monoid.app',
           address: '0x123',
         });
       },
     }),
-  );
-  context.after(() => mf.dispose());
+    // V5's persistence option must not pass through the V4 adapter.
+    resourcePersistencePath,
+  };
+}
+
+test('workerd keeps generated keys, group roots and sessions across a complete restart', async context => {
+  const root = await mkdtemp(join(tmpdir(), 'monoid-authority-runtime-'));
+  let mf = new Miniflare(options(root));
+  context.after(async () => {
+    await mf.dispose();
+    await removePersistence(root);
+  });
   const call = (path, body, token, headers = {}) =>
-    mf.dispatchFetch('https://www.monoid.app/api/authority' + path, {
+    mf.dispatchFetch(base + path, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -57,14 +76,27 @@ test('workerd executes signing, HPKE and SQLite Durable Object session RPC', asy
       },
       body: JSON.stringify(body),
     });
-  assert.equal(
-    (
-      await call('/v1/time', {
-        challenge: Buffer.alloc(32, 1).toString('base64url'),
-      })
-    ).status,
-    200,
+  const firstRequests = await Promise.all(
+    Array.from({length: 5}, () => mf.dispatchFetch(base + '/v1/metadata')),
   );
+  const metadata = await Promise.all(firstRequests.map(r => r.json()));
+  for (const value of metadata)
+    assert.equal(value.publicKey, metadata[0].publicKey);
+  assert.deepEqual(Object.keys(metadata[0]).sort(), [
+    'bundle',
+    'publicKey',
+    'time',
+  ]);
+  const challenge = Buffer.alloc(32, 1).toString('base64url');
+  const signed = await call('/v1/time', {challenge});
+  assert.equal(signed.status, 200);
+  assert.equal((await signed.json()).publicKey, metadata[0].publicKey);
+  const namespace = await mf.getDurableObjectNamespace('AUTHORITY_STATE');
+  const stub = namespace.getByName('authority');
+  assert.equal(await stub.get('authority-keys:v1'), null);
+  assert.equal(await stub.take('authority-keys:v1', ''), null);
+  for (const path of ['/v1/keys', '/v1/keys/export', '/v1/keys/rotate'])
+    assert.equal((await call(path, {})).status, 404);
   const login = await call('/auth/reown', {token: 'test-token'});
   assert.equal(login.status, 200, await login.clone().text());
   const session = await login.json();
@@ -104,6 +136,38 @@ test('workerd executes signing, HPKE and SQLite Durable Object session RPC', asy
     ).status,
     409,
   );
+
+  await mf.dispose();
+  mf = new Miniflare(options(root));
+  const restored = await (await mf.dispatchFetch(base + '/v1/metadata')).json();
+  assert.deepEqual(restored, metadata[0]);
+  const afterRestart = await call('/v1/bundle', input, session.accessToken);
+  assert.equal(afterRestart.status, 200, await afterRestart.clone().text());
+  const restoredBundle = await afterRestart.json();
+  assert.equal(restoredBundle.bundle, original.bundle);
+  assert.equal(restoredBundle.publicKey, original.publicKey);
+  assert.equal(restoredBundle.owner.displayName, 'Local family');
+  const afterRestartTime = await call('/v1/time', {challenge});
+  const proof = await afterRestartTime.json();
+  const publicKey = await crypto.subtle.importKey(
+    'raw',
+    Buffer.from(restored.publicKey, 'base64url'),
+    {name: 'ECDSA', namedCurve: 'P-256'},
+    false,
+    ['verify'],
+  );
+  assert.equal(
+    await crypto.subtle.verify(
+      {name: 'ECDSA', hash: 'SHA-256'},
+      publicKey,
+      Buffer.from(proof.signature, 'base64url'),
+      Buffer.concat([
+        Buffer.from('Monoid Authority Time'),
+        Buffer.from(proof.data, 'base64url'),
+      ]),
+    ),
+    true,
+  );
   assert.equal(
     (await call('/auth/logout', {}, session.accessToken)).status,
     204,
@@ -128,6 +192,7 @@ test('workerd executes signing, HPKE and SQLite Durable Object session RPC', asy
     {redirect: 'manual'},
   );
   assert.equal(authorized.status, 303);
+  assert.equal(new URL(authorized.headers.get('Location')).pathname, '/login');
   const flow = new URL(authorized.headers.get('Location')).searchParams.get(
     'flow',
   );
@@ -137,7 +202,7 @@ test('workerd executes signing, HPKE and SQLite Durable Object session RPC', asy
     undefined,
     {
       Cookie: authorized.headers.get('Set-Cookie').split(';')[0],
-      Origin: 'https://www.monoid.app',
+      Origin: 'https://authority.monoid.app',
     },
   );
   assert.equal(completed.status, 200, await completed.clone().text());
@@ -163,4 +228,65 @@ test('workerd executes signing, HPKE and SQLite Durable Object session RPC', asy
     (await call('/v1/bundle', input, hostedSession.accessToken)).status,
     200,
   );
+});
+
+test('first internal key generation retires old credentials once while retaining group policy', async context => {
+  const root = await mkdtemp(join(tmpdir(), 'monoid-authority-runtime-'));
+  // Test-only previous deployment: data exists, but there is no internal key.
+  // This fixture cannot be bundled into the production entrypoint.
+  const legacy = `
+    import {DurableObject} from 'cloudflare:workers';
+    export class AuthorityState extends DurableObject {
+      async seed() {
+        const sql = this.ctx.storage.sql;
+        sql.exec("CREATE TABLE records (key TEXT PRIMARY KEY, value TEXT NOT NULL, proof TEXT NOT NULL, expires INTEGER NOT NULL)");
+        sql.exec("CREATE TABLE groups (owner_source TEXT NOT NULL, owner_id TEXT NOT NULL, name TEXT NOT NULL, allow_peer_extension INTEGER NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (owner_source, owner_id, name))");
+        sql.exec("CREATE TABLE namespace_names (source TEXT NOT NULL, id TEXT NOT NULL, display_name TEXT NOT NULL, PRIMARY KEY (source, id))");
+        sql.exec("INSERT INTO records VALUES (?, ?, ?, ?)", "session:retired", "old-ciphertext", "", Date.now() + 3600000);
+        sql.exec("INSERT INTO records VALUES (?, ?, ?, ?)", "login-code:retired", "old-grant", "", Date.now() + 60000);
+        sql.exec("INSERT INTO groups VALUES (?, ?, ?, ?, ?)", "github", "7", "retained", 0, 123);
+        sql.exec("INSERT INTO namespace_names VALUES (?, ?, ?)", "github", "7", "Existing name");
+      }
+    }
+    export default { async fetch(request, env) {
+      await env.AUTHORITY_STATE.getByName('authority').seed();
+      return new Response('seeded');
+    }};
+  `;
+  let mf = new Miniflare(options(root, legacy));
+  context.after(async () => {
+    await mf.dispose();
+    await removePersistence(root);
+  });
+  assert.equal((await mf.dispatchFetch(base)).status, 200);
+  await mf.dispose();
+  mf = new Miniflare(options(root));
+  const namespace = await mf.getDurableObjectNamespace('AUTHORITY_STATE');
+  const stub = namespace.getByName('authority');
+  const metadata = await stub.metadata();
+  const publicKey = metadata.publicKey;
+  assert.equal(Buffer.from(publicKey, 'base64url').length, 65);
+  for (const key of [
+    'session:retired',
+    'login-code:retired',
+    'authority-keys:v1',
+  ])
+    assert.equal(await stub.get(key), null);
+  const owner = {source: 'github', id: '7'};
+  const retained = await stub.group(owner, 'retained', true);
+  assert.equal(retained.name, 'retained');
+  assert.equal(retained.allowPeerExtension, false);
+  assert.equal(retained.createdAt, 123);
+  assert.equal(
+    (await stub.namespace(owner, 'Provider name')).displayName,
+    'Existing name',
+  );
+  await stub.put('current-record', 'survives-restart', '', Date.now() + 60000);
+  await mf.dispose();
+  mf = new Miniflare(options(root));
+  const restarted = (
+    await mf.getDurableObjectNamespace('AUTHORITY_STATE')
+  ).getByName('authority');
+  assert.equal((await restarted.metadata()).publicKey, publicKey);
+  assert.equal(await restarted.get('current-record'), 'survives-restart');
 });

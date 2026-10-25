@@ -1,5 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 import {AuthorityStore} from '../.bld/storage.js';
+import {AuthorityCrypto, TIME_PROTOCOL} from '../.bld/crypto.js';
+import {encode} from '../.bld/encoding.js';
 
 export function database(context) {
   const db = new DatabaseSync(':memory:');
@@ -21,16 +23,19 @@ export function database(context) {
   });
 }
 
-export async function keyEnv() {
-  const pair = await crypto.subtle.generateKey(
-    {name: 'ECDH', namedCurve: 'P-256'},
-    true,
-    ['deriveBits'],
+export function cryptoState() {
+  const keys = AuthorityCrypto.generateMaterial().then(material =>
+    AuthorityCrypto.create(material),
   );
   return {
-    AUTHORITY_PRIVATE_JWK: JSON.stringify(
-      await crypto.subtle.exportKey('jwk', pair.privateKey),
-    ),
-    BUNDLE_MASTER_KEY: Buffer.alloc(32, 7).toString('base64url'),
+    metadata: async () => ({
+      publicKey: encode((await keys).publicKey),
+      bundle: 'hpke-auth-p256-sha256-aes128gcm',
+      time: TIME_PROTOCOL,
+    }),
+    issueTime: async (...args) => (await keys).issueTime(...args),
+    issueBundle: async (...args) => (await keys).issueBundle(...args),
+    sealSession: async value => (await keys).sealSession(value),
+    openSession: async value => (await keys).openSession(value),
   };
 }

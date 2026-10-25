@@ -16,7 +16,6 @@ import {
   requireValue,
   string,
 } from './http.js';
-import {openSession, sealSession} from './session.js';
 
 interface LoginRequest {
   redirectUri: string;
@@ -184,7 +183,7 @@ export async function completeBrowserLogin(
   const code = randomToken();
   await stateStore(env).put(
     `login-code:${await tokenHash(code)}`,
-    await sealSession(session, env.BUNDLE_MASTER_KEY),
+    await stateStore(env).sealSession(JSON.stringify(session)),
     await grantProof(login.challenge, login.redirectUri),
     Math.min(session.expiresAt, Date.now() + CODE_TTL),
   );
@@ -221,7 +220,9 @@ export async function exchangeBrowserLogin(
     await grantProof(await tokenHash(verifier), redirectUri),
   );
   requireValue(saved, 'invalid_grant');
-  const session = await openSession<Session>(saved, env.BUNDLE_MASTER_KEY);
+  const session = JSON.parse(
+    await stateStore(env).openSession(saved),
+  ) as Session;
   await validateSession(session, env, fetcher);
   return issueSession(session, env);
 }

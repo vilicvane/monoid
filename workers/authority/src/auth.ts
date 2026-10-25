@@ -1,7 +1,6 @@
 import type {Session} from './domain.js';
 import {randomToken, tokenHash} from './encoding.js';
 import {body, HttpError, json, string} from './http.js';
-import {openSession, sealSession} from './session.js';
 import {reownIdentity, type ReownEnv} from './reown.js';
 import type {AuthorityState} from './state.js';
 
@@ -11,7 +10,6 @@ export interface AuthEnv extends ReownEnv {
   GITHUB_CLIENT_SECRET: string;
   APP_REDIRECT_URIS: string;
   APP_ORIGINS: string;
-  BUNDLE_MASTER_KEY: string;
   AUTHORITY_STATE: DurableObjectNamespace<AuthorityState>;
 }
 
@@ -38,7 +36,9 @@ export async function authenticate(
   const saved = await stateStore(env).get(`session:${await tokenHash(token)}`);
   if (!saved) throw new HttpError(401, 'unauthorized');
 
-  const session = await openSession<Session>(saved, env.BUNDLE_MASTER_KEY);
+  const session = JSON.parse(
+    await stateStore(env).openSession(saved),
+  ) as Session;
   await validateSession(session, env, fetcher);
   return session;
 }
@@ -74,7 +74,7 @@ export async function issueSession(
   if (expiresIn <= 0) throw new HttpError(401, 'unauthorized');
   await stateStore(env).put(
     `session:${await tokenHash(token)}`,
-    await sealSession(session, env.BUNDLE_MASTER_KEY),
+    await stateStore(env).sealSession(JSON.stringify(session)),
     '',
     session.expiresAt,
   );

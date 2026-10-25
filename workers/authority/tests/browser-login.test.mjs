@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {createHandler} from '../.bld/api.js';
 import {randomToken, tokenHash} from '../.bld/encoding.js';
-import {database} from './helpers.mjs';
+import {cryptoState, database} from './helpers.mjs';
 
 function setup(context) {
   const store = database(context);
+  const cryptography = cryptoState();
   const env = {
     AUTHORITY_URL: 'https://www.monoid.app/api/authority',
     REOWN_PROJECT_ID: 'test-project',
@@ -13,9 +14,9 @@ function setup(context) {
     APP_ORIGINS: '["capacitor://localhost"]',
     APP_REDIRECT_URIS:
       '["app.monoid://authority/callback","app.monoid://other/callback"]',
-    BUNDLE_MASTER_KEY: Buffer.alloc(32, 7).toString('base64url'),
     AUTHORITY_STATE: {
       getByName: () => ({
+        ...cryptography,
         put: (...args) => store.put(...args),
         get: key => store.get(key, Date.now()),
         take: (key, proof) => store.take(key, proof, Date.now()),

@@ -13,14 +13,12 @@
     "html_handling": "none",
     "not_found_handling": "none",
   },
-  "routes": [
-    {"pattern": "www.monoid.app/api/authority/*", "zone_name": "monoid.app"},
-  ],
+  "routes": [{"pattern": "authority.monoid.app", "custom_domain": true}],
   "vars": {
-    "AUTHORITY_URL": "https://www.monoid.app/api/authority",
+    "AUTHORITY_URL": "https://authority.monoid.app",
     "GITHUB_CLIENT_ID": "",
-    "REOWN_PROJECT_ID": "db10694c682f513cc020fe1937646807",
-    "REOWN_AUTH_ORIGINS": "[\"https://www.monoid.app\"]",
+    "REOWN_PROJECT_ID": "aec3500aba9026d07588b3b244c402c7",
+    "REOWN_AUTH_ORIGINS": "[\"https://authority.monoid.app\"]",
     "APP_REDIRECT_URIS": "[\"app.monoid://authority/callback\",\"https://www.monoid.app/authority\"]",
     "APP_ORIGINS": "[\"capacitor://localhost\",\"https://localhost\",\"http://localhost\"]",
   },

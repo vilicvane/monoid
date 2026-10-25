@@ -1,6 +1,47 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {createWebHandler} from '../.bld/web.js';
+import {cryptoState} from './helpers.mjs';
+
+test('custom domain serves root API and login assets without the development prefix', async () => {
+  const requests = [];
+  const stub = cryptoState();
+  const env = {
+    AUTHORITY_STATE: {getByName: () => stub},
+    AUTHORITY_URL: 'https://authority.monoid.app',
+    APP_ORIGINS: '[]',
+    REQUEST_LIMIT: {limit: async () => ({success: true})},
+    ASSETS: {
+      fetch: async request => {
+        requests.push(new URL(request.url).pathname);
+        return new Response('asset');
+      },
+    },
+  };
+  const handler = createWebHandler();
+  const call = path => handler(new Request(env.AUTHORITY_URL + path), env);
+  for (const method of ['GET', 'HEAD']) {
+    const root = await handler(
+      new Request(env.AUTHORITY_URL + '/?flow=discarded', {method}),
+      env,
+    );
+    assert.equal(root.status, 302);
+    assert.equal(root.headers.get('Location'), '/login');
+    assert.equal(root.headers.get('Cache-Control'), 'no-store');
+    assert.equal(root.headers.get('Referrer-Policy'), 'no-referrer');
+    assert.equal(await root.text(), '');
+  }
+  assert.equal((await call('/login')).status, 200);
+  assert.equal((await call('/assets/login.js')).status, 200);
+  assert.deepEqual(requests, ['/index.html', '/assets/login.js']);
+
+  const metadata = await call('/v1/metadata');
+  assert.equal(metadata.status, 200);
+  assert.equal((await metadata.json()).time.protocol, 'monoid-authority-time');
+  for (const path of ['/api/authority/login', '/api/authority/v1/metadata'])
+    assert.equal((await call(path)).status, 404);
+  assert.equal(requests.length, 2);
+});
 
 test('hosted login assets never receive the browser flow query and use scoped security headers', async () => {
   const requests = [];
@@ -19,6 +60,12 @@ test('hosted login assets never receive the browser flow query and use scoped se
     },
   };
   const handler = createWebHandler();
+  for (const suffix of ['', '/']) {
+    const root = await handler(new Request(env.AUTHORITY_URL + suffix), env);
+    assert.equal(root.status, 302);
+    assert.equal(root.headers.get('Location'), '/api/authority/login');
+    assert.equal(root.headers.get('Cache-Control'), 'no-store');
+  }
   const page = await handler(
     new Request(`${env.AUTHORITY_URL}/login?flow=private-flow`),
     env,

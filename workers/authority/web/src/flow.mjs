@@ -21,14 +21,20 @@ export class LoginError extends Error {}
 export class BrowserFlow {
   state = 'active';
 
-  constructor(flow, storage, fetcher = fetch.bind(globalThis)) {
+  constructor(
+    flow,
+    storage,
+    fetcher = fetch.bind(globalThis),
+    base = import.meta.env?.BASE_URL ?? '/',
+  ) {
     this.flow = flow;
     this.storage = storage;
     this.fetcher = fetcher;
+    this.base = base;
   }
 
   async request(path, body) {
-    const response = await this.fetcher(`/api/authority/auth/login/${path}`, {
+    const response = await this.fetcher(`${this.base}auth/login/${path}`, {
       method: body ? 'POST' : 'GET',
       credentials: 'same-origin',
       headers: body ? {'Content-Type': 'application/json'} : undefined,

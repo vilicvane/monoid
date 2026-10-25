@@ -5,13 +5,29 @@ time proofs. AppKit / ReownAuthentication is the primary login. Optional GitHub
 OAuth connects organization permissions to the current session.
 
 This implementation includes the Worker, hosted sign-in page, authorization-code
-and PKCE interfaces, protocol/OAuth tests and workerd tests. It is not deployed.
+and PKCE interfaces, protocol/OAuth tests and workerd tests. The current deployment
+at `https://authority.monoid.app` is version
+`482cd348-5e3a-41bd-9c68-8757c2836b67` (2026-10-25). Both Authority secrets were
+replaced by keys generated inside the Durable Object; the old Worker Secrets and
+local private recovery file were removed. Live checks verified the new time
+signature and stable public key after secret-removal deployments, plus login
+creation/cancellation without key environment bindings. The public key SHA-256 is
+`670715b03702f37aea1ec44d97699b0428d87c8ccb2874e2bb6a04419265550d`.
+Earlier HTTPS/asset and fresh-Chrome GitHub navigation checks also passed. A complete
+authenticated production login remains unverified.
 APP integration is a future step: no APP entry, Authority service, native callback
 handler or platform registration is included. The optional demo remains a
 diagnostic tool. Card trusted-time support and APP Bundle enrollment are also
 future work. The Bundle format follows the
 current sibling Java Card
 [`authority.md`](../../../monoid-javacard/doc/authority.md).
+
+The production Authority uses AppKit project
+`aec3500aba9026d07588b3b244c402c7` for browser login. The Monoid APP's WalletKit
+project is `f1bac1f17e8531e322bd69250c6cc7b4`; it serves wallet connectivity and
+remains separate. Changing the Authority configuration does not change the APP's
+WalletKit project. Reown personal namespace IDs include the AppKit project ID,
+so retain this choice for production identity continuity.
 
 ## Identity and groups
 
@@ -141,8 +157,11 @@ References: [AppKit SIWX](https://docs.reown.com/appkit/react/core/siwx),
 
 ## HTTP API
 
-Base: `https://www.monoid.app/api/authority`. All bytes use canonical unpadded
-base64url. JSON request bodies are limited to 4096 bytes. Responses are no-store.
+Production base: `https://authority.monoid.app`, with API and login endpoints at
+the origin root, for example `/v1/metadata`, `/auth/login/start` and `/login`.
+Local development retains the base `http://localhost:8787/api/authority`.
+All bytes use canonical unpadded base64url. JSON request bodies are limited to
+4096 bytes. Responses are no-store.
 Errors are `{error: string}` with 400/401/403/409/413/429/502/503 as applicable.
 Unknown internal failures return sanitized 500 without credential logging.
 
@@ -188,8 +207,8 @@ master secret derives roots using HMAC-SHA256 over UTF-8 `JSON.stringify` of:
 ```
 
 `displayName` is deliberately excluded. Changing
-this canonical derivation changes all affected roots. This is an undeployed
-prototype schema replacement, with no legacy API or SQL migration support.
+this canonical derivation changes all affected roots. Preserve this deployed
+schema and use an explicit migration for future identity or derivation changes.
 HPKE uses RFC 9180 Auth,
 DHKEM(P256, HKDF-SHA256), HKDF-SHA256, AES-128-GCM, empty AAD and fresh enc per
 issuance. The 182-byte packet is verified by an independent test receiver.
@@ -220,17 +239,35 @@ for issuance to any valid P-256 public key, including a software-held one.
 
 ## Keys, configuration and migration
 
-This Worker uses Cloudflare **Worker secrets**, not an HSM or remote signing KMS.
-Private JWK and master secret are readable by the running Worker. Imported
-WebCrypto private keys are non-extractable, but that does not prevent someone
-with deployment control from changing code to read the original secret binding.
-This implements pure Cloudflare hosting, not hardware-enforced key isolation.
+The Authority Durable Object generates its P-256 identity and independent
+32-byte Bundle master inside the Workers runtime, then persists both in its
+private Cloudflare storage. Initialization is serialized and commits the complete
+key record atomically. Later requests, object restarts and ordinary deployments
+reuse that record; there is no automatic rotation, key import or export endpoint.
+Only the public key, signatures, encrypted Bundle packets and normal session
+results leave the cryptographic operations.
 
-Provision `AUTHORITY_PRIVATE_JWK` (P-256 private JWK with x/y/d),
-`BUNDLE_MASTER_KEY` (32 random bytes, base64url), and optional
-`GITHUB_CLIENT_SECRET` through Wrangler's secret input or the dashboard. Generate
-and encrypt an offline backup before provisioning; never print secrets in shell
-history, logs, chat or committed files. `.dev.vars.example` only has placeholders.
+The storage record contains a private JWK and master bytes because workerd cannot
+serialize `CryptoKey` objects into Durable Object storage. The object imports
+non-extractable WebCrypto keys for use in memory. Raw material stays within the
+Durable Object's storage/runtime and is not returned by its RPC interface,
+written to logs, provisioned as Worker Secrets, or backed up on a local machine.
+This is software isolation, not an HSM guarantee: someone with deployment
+control could change the code to read and disclose the persisted material.
+
+The transition from the initial imported keys was explicitly approved as a
+replacement of both secrets. It changes the Authority public key and every
+derived Bundle root. Initialization invalidates the old short-lived sessions and
+login grants while preserving namespace labels and group policies. Clients must
+sign in again; cards that pinned the previous public key need an explicit trust
+update. Existing offline Bundles remain usable under their old roots and are not
+remotely revoked. The old Worker Secrets and local recovery copy are retired as
+part of this rollout; they must not be reused as fallback keys.
+
+Do not put `AUTHORITY_PRIVATE_JWK` or `BUNDLE_MASTER_KEY` in `.dev.vars`, Wrangler
+secrets or deployment input. `GITHUB_CLIENT_SECRET` is unrelated optional OAuth
+configuration and can still be provisioned through Wrangler's secret input or
+the dashboard. Never print it in shell history, logs, chat or committed files.
 
 Set `GITHUB_CLIENT_ID` when organization support is enabled; callback URL is
 `<AUTHORITY_URL>/auth/github/callback`. GitHub organization OAuth restrictions/SSO
@@ -240,19 +277,36 @@ The checked-in configuration contains proposed callback allowlist entries
 `app.monoid://authority/callback` and `https://www.monoid.app/authority`;
 native CORS origins are listed separately. These are protocol configuration,
 not implemented APP handlers; confirm them when the future client is integrated.
-The hosted page and Worker share `https://www.monoid.app`, which is the Reown
-authentication origin. The production Reown project must have **Social & Email**
-and **Reown Authentication** enabled and allow that origin. The original default
-project ID is retained; enabling another project changes Reown namespace IDs.
-Never add wildcard origins or redirect URLs.
+The hosted page and Worker share `https://authority.monoid.app`, which is the
+Reown authentication origin. The AppKit project must have **Social & Email** and
+**Reown Authentication** enabled and permit that origin. Read-only preflight on
+2026-10-25 confirmed both features enabled for
+`aec3500aba9026d07588b3b244c402c7` using the production Origin and Referer.
+`https://authority.monoid.app` was then explicitly added to the project's Domain
+allowlist. An empty allowlist passes the AppKit connectivity check but leaves
+the embedded wallet's CSP restricted to development hosts, causing social login
+to stall. Verify the `/sdk` response's `frame-ancestors` includes the production
+origin; that response may remain in browser cache for 24 hours after an early
+failed attempt. The Worker independently restricts SIWX authentication to the
+same origin. Complete production login still requires end-to-end verification.
+Never add wildcard Worker origins or redirect URLs.
 
-Before enrollment, back up the Authority private JWK, Bundle master, group policy
-table and identity mapping/configuration. Cloudflare secret bindings are not an
-export API; migration depends on the offline backup. Move the same derivation,
-keys and policies to another host to preserve roots. Reown project/profile IDs
-are part of personal identities: changing provider/project requires an explicit
-identity migration, not automatic email matching. Do not rotate either key as
-a routine deploy; cards pin the Authority public key at installation.
+Keep the Durable Object namespace, object name and key record stable. Deleting
+the object/storage, changing its namespace or rolling storage back before key
+creation can lose the identity and lead to newly generated keys. A point-in-time
+restore also rewinds group policies and short-lived records, potentially
+restoring previously consumed codes or revoked sessions. Restore the key record
+and related state together, invalidate sessions after recovery, and verify the
+public key against the expected public fingerprint before resuming enrollment.
+Do not reset storage or use point-in-time recovery as a routine deployment step.
+
+There is no off-platform key backup or export workflow under this policy.
+Moving to another provider therefore requires a new Authority identity and
+client/card enrollment unless a different migration policy is explicitly
+approved later. Reown project/profile IDs are also part of personal identities:
+changing provider/project requires an explicit identity migration, not automatic
+email matching. The public metadata may be retained outside Cloudflare for trust
+verification; it contains no private key material.
 
 SQLite Durable Object `authority` stores policies and short-lived login records.
 Provider tokens are encrypted with AES-GCM under a domain-separated key derived
@@ -274,13 +328,21 @@ npm run dev:init
 npm run dev
 ```
 
-`dev:init` creates an ignored `.dev.vars` containing fresh local-only keys and
-localhost settings. It never prints keys or overwrites an existing file. The
+`dev:init` creates an ignored `.dev.vars` containing only localhost and OAuth
+settings, using AppKit project `aec3500aba9026d07588b3b244c402c7`. It does not
+generate keys or overwrite an existing file. The existing local
+`.dev.vars` remains on development AppKit project
+`0bcfe1f323c1f7234a1fba3d77491aea`. Existing files retain their configured project
+and OAuth settings. Remove obsolete `AUTHORITY_PRIVATE_JWK` and
+`BUNDLE_MASTER_KEY` entries from older development configurations; they are no
+longer inputs. Change the project setting only when deliberately changing the
+development identity space. The
 default local URL is `http://localhost:8787/api/authority`. `npm run dev` builds
 the production page into `web/dist` and serves it through the Worker's `ASSETS`
 binding alongside the API. Wrangler uses local
-SQLite under `.wrangler/state`; no cloud deployment is needed. Keep these test
-keys separate from production and do not install their public key on production
+SQLite under `.wrangler/state`; no cloud deployment is needed. The local Durable
+Object generates and persists separate development keys on first use. Do not
+copy local persistence into production or install its public key on production
 cards. After prototype schema changes, use a new local persistence directory
 (`npm run dev -- --persist-to .wrangler/state-namespaces`) if an older database
 already exists; this does not remove the old state.
@@ -327,23 +389,20 @@ npm run demo
 ```
 
 Open **http://localhost:5173/**. Use `localhost`, not `127.0.0.1`; origins must
-match exactly. The demo uses project `db10694c682f513cc020fe1937646807`; enable
-Reown Authentication and allow `http://localhost:5173` in that project's
-dashboard. Signing in requires network access to Reown and the selected wallet
-or social provider. There is no authentication bypass or fake local login.
+match exactly. Set `VITE_REOWN_PROJECT_ID` in ignored `demo/.env.local` to the
+same `REOWN_PROJECT_ID` as the local Worker's ignored `.dev.vars`, then restart
+both local servers. The existing development configuration uses
+`0bcfe1f323c1f7234a1fba3d77491aea`; newly generated configuration defaults to
+`aec3500aba9026d07588b3b244c402c7`. Both sides must agree. The hosted production
+page instead obtains the configured project directly from the Worker.
+Project IDs are public identifiers; switching projects changes Reown namespace
+IDs. Signing in requires network access to Reown and the selected wallet or
+social provider. There is no authentication bypass or fake local login.
 
-To use a separate development project, set `VITE_REOWN_PROJECT_ID=<project ID>`
-in ignored `demo/.env.local` and the same `REOWN_PROJECT_ID` in ignored
-`.dev.vars`, then restart both local servers. Project IDs are public identifiers.
-Both sides must agree; switching projects also changes Reown namespace IDs.
-Local testing on 2026-10-24 uses the enabled Reown `test` project
-`0bcfe1f323c1f7234a1fba3d77491aea` through these local overrides.
-
-The default WalletConnect project returned `features: []` when checked on
-2026-10-24; the separate Reown test project has Social & Email and Reown
-Authentication enabled. Configure these in Reown Dashboard, not WalletConnect
-Dashboard. Missing `social_login` overrides the demo's local email/social
-options. The Worker additionally enforces its own explicit origin checks.
+The selected AppKit project has Social & Email and Reown Authentication enabled.
+Configure these in Reown Dashboard, not WalletConnect Dashboard. Missing
+`social_login` overrides the demo's local email/social options. The Worker
+additionally enforces its own explicit origin checks.
 
 Choose **使用 AppKit 登录**, complete the identity signature, and the demo
 automatically exchanges the Reown credential with the local Worker. It displays
@@ -411,12 +470,24 @@ npm --prefix demo test
 npm --prefix demo run build
 ```
 
+For an authorized production deployment, build and publish without a key file:
+
+```sh
+npm run deploy
+```
+
+The first activation initializes the Durable Object key record. Verify
+`/v1/metadata` and a challenge-bound time proof after deployment,
+then restart/redeploy and check that the public key remains unchanged. Keep the
+same namespace and object identity on later releases; never generate replacement
+keys in a local provisioning script.
+
 The runtime test bundles with `wrangler deploy --dry-run` and uses local workerd,
 real SQLite Durable Objects and mocked provider responses. It makes no deployment
 or external OAuth requests. Unit tests include independent HPKE decryption,
 signature binding, PKCE/state/cookie/replay checks, live permission changes,
 policy immutability and owner isolation. Physical Java Card acceptance,
-production Reown configuration and GitHub organization OAuth remain rollout checks.
+complete production Reown login and GitHub organization OAuth remain rollout checks.
 
 The hosted page has been checked in Chrome: AppKit displays wallet/email/social
 options and GitHub social sign-in reaches GitHub's login page. The header
@@ -438,9 +509,9 @@ Demo tests cover logout and identity-switch races, including late provider
 events and late exchanges. The earlier successful desktop demo login does not
 establish acceptance of the new system-browser flow on physical devices.
 
-Before an authorized deployment, verify the route and secrets, backup recovery,
-actual Reown login/profile stability, mobile callbacks, card enrollment, and
-Cloudflare CPU usage. Local tests do not prove that cryptographic requests fit
+Before enabling client enrollment, verify actual Reown login/profile stability,
+mobile callbacks, card enrollment, and Cloudflare CPU usage under expected load.
+The initial production time request succeeded; local tests do not prove that all cryptographic requests fit
 the account's Free CPU limit. Account quotas are shared with gas-history; measure
 request/CPU/DO SQL usage and set a traffic expectation before expanding access.
 The per-IP/per-account rate limiter is approximate and location scoped; it is

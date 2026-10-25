@@ -3,12 +3,12 @@ import {test} from 'node:test';
 import {createECDH} from 'node:crypto';
 import {createHandler} from '../.bld/api.js';
 import {tokenHash} from '../.bld/encoding.js';
-import {openSession, sealSession} from '../.bld/session.js';
-import {database, keyEnv} from './helpers.mjs';
+import {cryptoState, database} from './helpers.mjs';
 
 async function setup(context) {
   const store = database(context);
   const stub = {
+    ...cryptoState(),
     put: (...args) => store.put(...args),
     get: key => store.get(key, Date.now()),
     take: (key, proof) => store.take(key, proof, Date.now()),
@@ -22,7 +22,6 @@ async function setup(context) {
       ),
   };
   const env = {
-    ...(await keyEnv()),
     AUTHORITY_URL: 'https://www.monoid.app/api/authority',
     REOWN_PROJECT_ID: 'test-project',
     REOWN_AUTH_ORIGINS: '["https://www.monoid.app"]',
@@ -96,7 +95,7 @@ async function setup(context) {
     assert.equal(response.status, 200);
     return response.json();
   };
-  return {env, upstream, call, login, store};
+  return {env, upstream, call, login, store, stub};
 }
 
 test('remote identity verification fails closed for project, expiry, origin, missing profile and provider denial', async context => {
@@ -464,15 +463,14 @@ test('provider failure during GitHub exchange preserves the existing Authority s
   const f = await setup(context);
   const signedIn = await f.login();
   const sessionKey = `session:${await tokenHash(signedIn.accessToken)}`;
-  const session = await openSession(
-    f.store.get(sessionKey, Date.now()),
-    f.env.BUNDLE_MASTER_KEY,
+  const session = JSON.parse(
+    await f.stub.openSession(f.store.get(sessionKey, Date.now())),
   );
   const code = 'd'.repeat(43);
   const verifier = 'e'.repeat(43);
   f.store.put(
     `code:${await tokenHash(code)}`,
-    await sealSession({session, sessionKey}, f.env.BUNDLE_MASTER_KEY),
+    await f.stub.sealSession(JSON.stringify({session, sessionKey})),
     await tokenHash(verifier),
     Date.now() + 60000,
   );

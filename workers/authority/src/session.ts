@@ -1,13 +1,9 @@
 import {concat, decode, encode, utf8} from './encoding.js';
 
-async function sessionKey(master: string): Promise<CryptoKey> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    decode(master),
-    'HKDF',
-    false,
-    ['deriveKey'],
-  );
+export async function createSessionKey(master: Uint8Array): Promise<CryptoKey> {
+  const key = await crypto.subtle.importKey('raw', master, 'HKDF', false, [
+    'deriveKey',
+  ]);
   return crypto.subtle.deriveKey(
     {
       name: 'HKDF',
@@ -24,27 +20,27 @@ async function sessionKey(master: string): Promise<CryptoKey> {
 
 // Provider credentials are encrypted at application level as well as by DO storage.
 export async function sealSession(
-  value: unknown,
-  master: string,
+  value: string,
+  key: CryptoKey,
 ): Promise<string> {
   const nonce = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt(
     {name: 'AES-GCM', iv: nonce},
-    await sessionKey(master),
-    utf8(JSON.stringify(value)),
+    key,
+    utf8(value),
   );
   return encode(concat(nonce, new Uint8Array(ciphertext)));
 }
 
-export async function openSession<T>(
+export async function openSession(
   value: string,
-  master: string,
-): Promise<T> {
+  key: CryptoKey,
+): Promise<string> {
   const bytes = decode(value);
   const plaintext = await crypto.subtle.decrypt(
     {name: 'AES-GCM', iv: bytes.slice(0, 12)},
-    await sessionKey(master),
+    key,
     bytes.slice(12),
   );
-  return JSON.parse(new TextDecoder().decode(plaintext)) as T;
+  return new TextDecoder().decode(plaintext);
 }

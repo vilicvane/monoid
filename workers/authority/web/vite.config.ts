@@ -1,8 +1,8 @@
 import {fileURLToPath} from 'node:url';
 import {defineConfig} from 'vite';
 
-export default defineConfig({
-  base: '/api/authority/',
+export default defineConfig(({mode}) => ({
+  base: mode === 'development' ? '/api/authority/' : '/',
   resolve: {
     dedupe: [
       'react',
@@ -22,4 +22,4 @@ export default defineConfig({
       '/api/authority/auth/': 'http://localhost:8787',
     },
   },
-});
+}));

@@ -2,9 +2,61 @@ import {DurableObject} from 'cloudflare:workers';
 
 import {AuthorityStore} from './storage.js';
 import type {Owner, Namespace} from './domain.js';
+import {AuthorityCrypto, type KeyMaterial, TIME_PROTOCOL} from './crypto.js';
+import {encode} from './encoding.js';
+import type {Env} from './api.js';
 
-export class AuthorityState extends DurableObject {
-  private readonly store = new AuthorityStore(this.ctx.storage);
+export class AuthorityState extends DurableObject<Env> {
+  private readonly store: AuthorityStore;
+  #keys: Promise<AuthorityCrypto>;
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    this.store = new AuthorityStore(ctx.storage);
+    this.#keys = ctx.blockConcurrencyWhile(async () => {
+      let material = await ctx.storage.get<KeyMaterial>('authority-keys:v1');
+      if (!material) {
+        material = await AuthorityCrypto.generateMaterial();
+        const generated = material;
+        await ctx.storage.transaction(async transaction => {
+          await transaction.put('authority-keys:v1', generated);
+          // Existing sessions were sealed with the retired environment secret.
+          // Keep namespace names and group policies across this one-time change.
+          ctx.storage.sql.exec('DELETE FROM records');
+        });
+      }
+      return AuthorityCrypto.create(material);
+    });
+  }
+
+  async metadata() {
+    return {
+      publicKey: encode((await this.#keys).publicKey),
+      bundle: 'hpke-auth-p256-sha256-aes128gcm',
+      time: TIME_PROTOCOL,
+    };
+  }
+
+  async issueTime(challenge: Uint8Array) {
+    return (await this.#keys).issueTime(challenge);
+  }
+
+  async issueBundle(
+    owner: Owner,
+    name: string,
+    policy: boolean,
+    recipient: Uint8Array,
+  ) {
+    return (await this.#keys).issueBundle(owner, name, policy, recipient);
+  }
+
+  async sealSession(value: string): Promise<string> {
+    return (await this.#keys).sealSession(value);
+  }
+
+  async openSession(value: string): Promise<string> {
+    return (await this.#keys).openSession(value);
+  }
 
   async put(
     key: string,

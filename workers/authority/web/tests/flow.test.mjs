@@ -16,6 +16,30 @@ function storage() {
   };
 }
 
+test('browser flow follows the production root or configured development base', async () => {
+  for (const base of ['/', '/api/authority/']) {
+    const requests = [];
+    const flow = new BrowserFlow(
+      'a'.repeat(43),
+      storage(),
+      async (url, options) => {
+        requests.push({url, options});
+        return Response.json({redirectUrl: 'app.monoid://authority/callback'});
+      },
+      base,
+    );
+    await flow.context();
+    await flow.finish('cancel');
+    assert.equal(
+      requests[0].url,
+      `${base}auth/login/context?flow=${flow.flow}`,
+    );
+    assert.equal(requests[1].url, `${base}auth/login/cancel`);
+    assert.equal(requests[1].options.credentials, 'same-origin');
+    assert.equal(requests[1].options.redirect, 'error');
+  }
+});
+
 test('flow restoration scrubs the URL before storage and rejects malformed replacements', () => {
   const saved = storage();
   const order = [];

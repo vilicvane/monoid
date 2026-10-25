@@ -6,9 +6,10 @@
   "scripts": {
     "dev:init": "node scripts/init-dev.mjs",
     "demo": "npm --prefix demo run dev",
-    "dev": "npm run build:web && wrangler dev --ip 0.0.0.0 --local-upstream localhost:8787 --upstream-protocol http",
-    "dev:web": "npm --prefix web run build -- --watch",
+    "dev": "npm run build:web:dev && wrangler dev --ip 0.0.0.0 --local-upstream localhost:8787 --upstream-protocol http",
+    "dev:web": "npm --prefix web run build -- --mode development --watch",
     "build:web": "npm --prefix web run build",
+    "build:web:dev": "npm --prefix web run build -- --mode development",
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
