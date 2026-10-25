@@ -37,11 +37,7 @@ import {
   isCardDerivationItem,
 } from '../card-derivations.js';
 import {validateCardImmutableItem} from '../card-item-merge.js';
-import {
-  filterCardOTPAssociations,
-  isCardOTPItem,
-  validateCardOTPItem,
-} from '../card-otp.js';
+import {isCardOTPItem} from '../card-otp.js';
 import type {ScannedCardData} from '../common.js';
 
 import {
@@ -389,15 +385,14 @@ export class CardSyncSession {
       };
 
       try {
-        if (item.secret) {
-          // App metadata must be public; never read a mislabeled Secret record.
+        if (item.secret || isCardOTPItem(item)) {
+          // Validate public configuration before exporting Secret items.
           validateCardImmutableItem(item);
           item.fingerprint = await readFingerprint(applet, item);
         } else {
           const {data} = await applet.get({index: entry.index});
           item.data = uint8ArrayToHex(data);
           validateCardImmutableItem(item);
-          if (isCardOTPItem(item)) item.otpKeyIndex = validateCardOTPItem(item);
 
           if (isCardDerivationItem(item)) {
             const record = decodeCardDerivationRecord(data);
@@ -428,9 +423,7 @@ export class CardSyncSession {
 
     cancelled(signal);
     const compatible =
-      stage === 'reading'
-        ? filterCardDerivationAssociations(filterCardOTPAssociations(items))
-        : items;
+      stage === 'reading' ? filterCardDerivationAssociations(items) : items;
     for (const item of items) {
       if (!compatible.includes(item)) skippedIndexes.push(item.index);
     }

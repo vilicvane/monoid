@@ -7,7 +7,7 @@ import {
   mergeCardItemData,
   validateCardImmutableItem,
 } from '../card-item-merge.js';
-import {isCardOTPItem, validateCardOTPItem} from '../card-otp.js';
+import {isCardOTPItem} from '../card-otp.js';
 import type {ScannedCardItemData} from '../common.js';
 
 export type CardSyncIdentity = CardBackupIdentity;
@@ -46,15 +46,13 @@ function fail(index: string, reason: string): never {
 }
 
 function association(item: CardSyncItem): string | undefined {
-  return isCardOTPItem(item)
-    ? validateCardOTPItem(item)
-    : item.derivationRecord?.index;
+  return item.derivationRecord?.index;
 }
 
 function scope(card: CardSyncSnapshot, item: CardSyncItem): string {
   let root = item;
 
-  if (isCardDerivationItem(item) || isCardOTPItem(item)) {
+  if (isCardDerivationItem(item)) {
     const sourceIndex = association(item);
     if (!sourceIndex) fail(item.index, 'invalid address records');
     const source = card.items.find(
@@ -62,8 +60,6 @@ function scope(card: CardSyncSnapshot, item: CardSyncItem): string {
     );
 
     if (!source) fail(item.index, 'associated key is missing');
-    if (isCardOTPItem(item) && !source.secret)
-      fail(item.index, 'invalid OTP key');
     root = source;
   }
 
@@ -142,7 +138,7 @@ export function createCardSyncPlans(
 
       const first = previous.item;
 
-      if (item.secret) {
+      if (item.secret && !isCardOTPItem(item)) {
         if (!first.fingerprint && !item.fingerprint) {
           if (first.alias !== item.alias) {
             fail(
@@ -189,7 +185,12 @@ export function createCardSyncPlans(
       targetIndexes.add(desired.index);
       let current = card.items.find(item => item.index === desired.index);
 
-      if (current?.secret && !current.fingerprint && sources.length > 1) {
+      if (
+        current?.secret &&
+        !isCardOTPItem(current) &&
+        !current.fingerprint &&
+        sources.length > 1
+      ) {
         operations.push({
           kind: 'verify',
           before: current,

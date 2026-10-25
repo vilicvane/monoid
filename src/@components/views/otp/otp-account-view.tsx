@@ -17,7 +17,6 @@ import {
   OTPAuthorityWarmup,
   getDefaultOTPAuthorityUrl,
 } from '../../../@lib/otp-authority.js';
-import {assertOTPAccounts} from '../../../@lib/otp-card.js';
 import {
   type OTPBatch,
   OTP_AID,
@@ -323,7 +322,6 @@ export const OTPAccountView = observer(
           async (applet, setState, _hello, scanSignal) => {
             const signal = AbortSignal.any([task.signal, scanSignal]);
             setState('Getting codes, hold tight...');
-            await assertOTPAccounts(applet, [account], signal);
             const value = await calculatePreparedOTP(prepared!, applet, signal);
             signal.throwIfAborted();
             if (active() && mounted.current && !document.hidden) {

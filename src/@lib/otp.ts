@@ -2,7 +2,7 @@ import {p256} from '@noble/curves/nist';
 import {base32, base32nopad, base64urlnopad} from '@scure/base';
 import {getBytes, sha256, toUtf8Bytes} from 'ethers';
 
-import {SafeIndex, SafeIndexHex} from '../@atomics.js';
+import {SafeIndex, type SafeIndexHex} from '../@atomics.js';
 import {uint8ArrayToHex} from '../@utils/index.js';
 
 import {authorityApiUrl} from './authority-url.js';
@@ -161,12 +161,6 @@ export function decodeOTPConfiguration(
   if (period < 1 || period > 32767)
     throw new InvalidCardItemError('Invalid OTP configuration');
   return {algorithm: algorithms[metadata[1] - 1], digits: metadata[2], period};
-}
-
-export function decodeOTPKeyReference(data: Uint8Array): SafeIndexHex {
-  if (data.length !== 10 || data[0] !== 5 || data[1] === 0)
-    throw new InvalidCardItemError('Invalid OTP key reference');
-  return SafeIndexHex.satisfies(uint8ArrayToHex(data));
 }
 
 export type OTPAuthority = {endpoint: string; publicKey: Uint8Array};

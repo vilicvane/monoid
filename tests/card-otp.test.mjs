@@ -3,12 +3,7 @@ import {test} from 'node:test';
 
 import {CardBackupSession} from '../.bld/app/@components/views/safe/@card/card-backup-session.js';
 import {mergeCardItemData} from '../.bld/app/@components/views/safe/card-item-merge.js';
-import {
-  assertCardOTPAssociations,
-  filterCardOTPAssociations,
-  readCardOTPKeyIndex,
-  validateCardOTPItem,
-} from '../.bld/app/@components/views/safe/card-otp.js';
+import {validateCardOTPItem} from '../.bld/app/@components/views/safe/card-otp.js';
 import {
   formatCardResourceCount,
   getCardResourceGroups,
@@ -23,226 +18,109 @@ import {removeItems} from '../.bld/app/@lib/monoid/item-operations.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
 
 const KEY_INDEX = '05140000000000000001';
-const OTHER_KEY_INDEX = '05140000000000000002';
 const ACCOUNT_INDEX = 'f2010000000000000001';
 const key = {index: KEY_INDEX, type: 'hmac', secret: true};
 const account = {
   index: ACCOUNT_INDEX,
-  type: 0xf201,
+  type: -3583,
   alias: 'Example: alice',
-  secret: false,
+  secret: true,
   metadata: '010106001e',
-  data: KEY_INDEX,
-  otpKeyIndex: KEY_INDEX,
 };
 const bytes = value => Uint8Array.from(Buffer.from(value, 'hex'));
 const hex = value => Buffer.from(value).toString('hex');
+const signal = () => new AbortController().signal;
 
-test('OTP records validate configuration and HMAC references without reading secrets', async () => {
-  const calls = [];
-  assert.equal(validateCardOTPItem(account), KEY_INDEX);
-  assert.equal(
-    await readCardOTPKeyIndex(
-      {
-        async get({index}) {
-          calls.push(hex(index));
-          return {data: bytes(KEY_INDEX)};
-        },
-      },
-      account,
-    ),
-    KEY_INDEX,
-  );
-  assert.deepEqual(calls, [ACCOUNT_INDEX]);
-  for (const change of [
-    {secret: true},
-    {metadata: '010107001e'},
+test('OTP validation accepts public configuration on one secret item without data', () => {
+  assert.doesNotThrow(() => validateCardOTPItem(account));
+  for (const override of [
+    {index: 'f20100'},
+    {index: KEY_INDEX},
+    {secret: false},
+    {metadata: undefined},
+    {metadata: '0g'},
     {metadata: '0101060000'},
-    {metadata: '0101068000'},
-    {metadata: 'gg'},
-    {data: `0500${'00'.repeat(8)}`},
-    {data: `0240${'00'.repeat(8)}`},
-    {data: '051400'},
-    {otpKeyIndex: OTHER_KEY_INDEX},
+    {metadata: '020106001e'},
+    {metadata: '010406001e'},
   ])
     assert.throws(
-      () => validateCardOTPItem({...account, ...change}),
+      () => validateCardOTPItem({...account, ...override}),
       /invalid OTP account/,
     );
-  await assert.rejects(
-    readCardOTPKeyIndex(
-      {get: () => assert.fail('Secret metadata must not be read')},
-      {...account, secret: true},
-    ),
-    /invalid OTP account/,
-  );
 });
 
-test('an OTP account must reference a present Secret HMAC key', () => {
-  assertCardOTPAssociations([key, account]);
-  for (const items of [
-    [account],
-    [{...key, secret: false}, account],
-    [key, {...account, secret: true}],
-    [key, {...account, otpKeyIndex: undefined}],
-    [key, {...account, otpKeyIndex: '03010000000000000001'}],
-  ])
-    assert.throws(
-      () => assertCardOTPAssociations(items),
-      /associated key is missing|invalid OTP/,
-    );
-});
-
-test('filtering incompatible OTP associations retains valid accounts and independent keys', () => {
-  const orphan = {
-    ...account,
-    index: 'f2010000000000000002',
-    otpKeyIndex: OTHER_KEY_INDEX,
-  };
-  const unsupported = {
-    ...account,
-    index: 'f2010000000000000003',
-    otpKeyIndex: undefined,
-  };
-  assert.deepEqual(
-    filterCardOTPAssociations([orphan, key, unsupported, account]),
-    [key, account],
-  );
-});
-
-test('Safe scan skips malformed and orphan OTP accounts and never reads protected metadata', async () => {
-  const invalid = {
-    ...account,
-    index: 'f2010000000000000002',
-    metadata: '020106001e',
-  };
-  const orphan = {
-    ...account,
-    index: 'f2010000000000000003',
-    otpKeyIndex: OTHER_KEY_INDEX,
-  };
-  const protectedRecord = {
-    ...account,
-    index: 'f2010000000000000004',
-    secret: true,
-  };
-  const entries = [invalid, key, orphan, protectedRecord, account];
-  const reads = [];
-  const result = await scanCardItems(
-    {
-      list: async () => ({
-        items: entries.map(({index, type, alias, secret, metadata}) => ({
-          index: bytes(index),
-          type,
-          alias,
-          secret,
-          metadata: metadata && bytes(metadata),
-        })),
-      }),
-      get: async ({index}) => {
-        reads.push(hex(index));
-        assert.notEqual(hex(index), protectedRecord.index);
-        return {
-          data: bytes(
-            hex(index) === orphan.index ? OTHER_KEY_INDEX : KEY_INDEX,
-          ),
-        };
-      },
-    },
-    () => {},
-  );
-  assert.deepEqual(
-    result.map(item => item.index),
-    [KEY_INDEX, ACCOUNT_INDEX],
-  );
-  assert.ok(!reads.includes(protectedRecord.index));
-});
-
-test('accounts sharing a secret form one selection group and delete before the secret', async () => {
-  const second = {...account, index: 'f2010000000000000002'};
-  const groups = getCardResourceGroups([account, key, second]);
-  assert.deepEqual(groups, [{item: key, items: [key, account, second]}]);
-  assert.equal(formatCardResourceCount(groups), '1+2');
-  assert.equal(
-    formatCardResourceCount(groups, () => false),
-    '0/3',
-  );
-  assert.equal(isCardKeyItem(key), false, 'HMAC is not a wallet key');
+test('OTP and built-in HMAC resources are independent for selection and deletion', async () => {
+  const groups = getCardResourceGroups([account, key]);
+  assert.deepEqual(groups, [
+    {item: account, items: [account]},
+    {item: key, items: [key]},
+  ]);
+  assert.equal(formatCardResourceCount(groups), '2');
   assert.equal(isCardKeyItem(account), false);
-  const deleted = [];
-  const pending = new Set(
-    groups.flatMap(group => [...group.items].reverse().map(item => item.index)),
-  );
+  assert.equal(isCardKeyItem(key), false);
+  const removed = [];
   await removeItems(
     {
       remove: async ({index}) => {
-        deleted.push(hex(index));
+        removed.push(hex(index));
         return {removed: true};
       },
     },
-    pending,
-    new AbortController().signal,
-    () => {},
+    new Set(groups[0].items.map(item => item.index)),
+    signal(),
   );
-  assert.deepEqual(deleted, [second.index, account.index, key.index]);
-  assert.throws(
-    () => getCardResourceGroups([account]),
-    /associated key is missing/,
-  );
+  assert.deepEqual(removed, [ACCOUNT_INDEX]);
 });
 
-test('matching OTP records retain display aliases but configuration or reference collisions fail', () => {
+test('same OTP index pins its secret and conflicts only on configuration when merging', () => {
   assert.equal(
     mergeCardItemData(account, {...account, alias: 'Other'}),
     account,
+  );
+  assert.equal(
+    mergeCardItemData({...account, data: 'aa'}, {...account, data: 'bb'}).data,
+    'aa',
+    'ciphertexts do not compare plaintext secrets',
   );
   assert.throws(
     () => mergeCardItemData(account, {...account, metadata: '010108001e'}),
     /conflicting OTP data/,
   );
-  assert.throws(
-    () =>
-      mergeCardItemData(account, {
-        ...account,
-        data: OTHER_KEY_INDEX,
-        otpKeyIndex: OTHER_KEY_INDEX,
-      }),
-    /conflicting OTP data/,
-  );
 });
 
-test('Safe Card scan reads public OTP references without deriving HMAC and snapshots preserve grouping', async () => {
-  const calls = [];
+test('Safe scan uses only the list for OTP, skips incompatible items and keeps a single-item snapshot', async () => {
+  const incompatible = {
+    ...account,
+    index: 'f2010000000000000002',
+    secret: false,
+  };
   const items = await scanCardItems(
     {
       list: async () => ({
-        items: [account, key].map(({index, type, alias, secret, metadata}) => ({
-          index: bytes(index),
-          type,
-          alias,
-          secret,
-          metadata: metadata && bytes(metadata),
-        })),
+        items: [account, key, incompatible].map(
+          ({index, type, alias, secret, metadata}) => ({
+            index: bytes(index),
+            type,
+            alias,
+            secret,
+            metadata: metadata && bytes(metadata),
+          }),
+        ),
       }),
-      get: async ({index}) => {
-        calls.push(hex(index));
-        return {data: bytes(KEY_INDEX)};
-      },
-      viewKey: () => assert.fail('HMAC must not be treated as a wallet key'),
+      get: () => assert.fail('OTP must not use Get'),
+      viewKey: () => assert.fail('OTP must not derive a wallet key'),
     },
     () => {},
   );
-  assert.deepEqual(calls, [ACCOUNT_INDEX]);
-  assert.equal(items[0].otpKeyIndex, KEY_INDEX);
+  assert.deepEqual(items, [account, key]);
   const state = new CardStore().set({
     id: '11223344',
     publicKey: `04${'11'.repeat(64)}`,
     bundle: false,
     items,
   });
-  assert.equal(state.items[0].otpKeyIndex, KEY_INDEX);
-  assert.equal(state.snapshot().items[0].otpKeyIndex, KEY_INDEX);
-  assert.equal(getCardResourceGroups(state.snapshot().items).length, 1);
+  assert.deepEqual(state.snapshot().items, [account, key]);
+  assert.equal(getCardResourceGroups(state.snapshot().items).length, 2);
 });
 
 function copyFixture() {
@@ -254,6 +132,7 @@ function copyFixture() {
     pins: {access: 5, secret: 5},
   });
   const entries = [account, key];
+  const exports = [];
   const source = {
     hello: hello(1),
     authenticate: async () => {},
@@ -270,18 +149,13 @@ function copyFixture() {
       const item = entries.find(item => item.index === hex(index));
       return {
         secret: item.secret,
+        alias: item.alias,
         metadata: item.metadata && bytes(item.metadata),
       };
     },
-    get: async ({index}) => {
-      assert.equal(
-        hex(index),
-        ACCOUNT_INDEX,
-        'only public metadata is readable',
-      );
-      return {data: bytes(KEY_INDEX)};
-    },
+    get: async () => assert.fail('OTP plaintext must never be requested'),
     exportItem: async ({index}) => {
+      exports.push(hex(index));
       const item = entries.find(item => item.index === hex(index));
       return {
         metadata: item.metadata && bytes(item.metadata),
@@ -300,11 +174,12 @@ function copyFixture() {
       if (!item) throw new CardItemNotFoundError({code: 'NOT_FOUND'});
       return {
         secret: item.secret,
+        alias: item.alias,
         metadata: item.metadata && bytes(item.metadata),
       };
     },
-    async get({index}) {
-      return {data: bytes(this.records.get(hex(index)).data)};
+    async get() {
+      assert.fail('OTP plaintext must never be requested');
     },
     async importItem({index}) {
       const id = hex(index);
@@ -314,100 +189,97 @@ function copyFixture() {
         id,
         structuredClone(entries.find(item => item.index === id)),
       );
+      await this.afterImport?.();
     },
   };
-  return {source, target};
+  return {source, target, exports};
 }
 
-test('Copy selecting an OTP account or its HMAC expands the pair and writes the secret first', async () => {
-  for (const selected of [ACCOUNT_INDEX, KEY_INDEX]) {
+async function prepareCopy(source, target, indexes = [ACCOUNT_INDEX]) {
+  const session = new CardBackupSession();
+  await session.readSource(source, source.hello, signal(), indexes);
+  await session.addTarget(target.hello);
+  await session.confirmTargets();
+  await session.exportItems(
+    source,
+    source.hello,
+    'Secret-42',
+    signal(),
+    () => {},
+  );
+  return session;
+}
+const importCopy = (session, target) =>
+  session.importItems(target, target.hello, 'Secret-42', signal(), () => {});
+
+test('Copy selects, exports and imports an OTP account as one secret item', async () => {
+  const {source, target, exports} = copyFixture();
+  const session = await prepareCopy(source, target);
+  assert.deepEqual(
+    session.backup.items.filter(item => item.selected).map(item => item.index),
+    [ACCOUNT_INDEX],
+  );
+  assert.deepEqual(exports, [ACCOUNT_INDEX]);
+  assert.equal(
+    session.backup.targets[0].items[0].exported.plaintext,
+    undefined,
+  );
+  await importCopy(session, target);
+  assert.deepEqual(target.calls, [ACCOUNT_INDEX]);
+  assert.deepEqual([...target.records.values()], [account]);
+  assert.equal(session.backup.complete, true);
+});
+
+test('Copy accepts the same OTP configuration while preserving the destination alias', async () => {
+  const {source, target} = copyFixture();
+  const existing = {...account, alias: 'Destination'};
+  target.records.set(ACCOUNT_INDEX, existing);
+  const session = await prepareCopy(source, target);
+  await importCopy(session, target);
+  assert.deepEqual(target.calls, []);
+  assert.equal(target.records.get(ACCOUNT_INDEX), existing);
+  assert.equal(session.backup.complete, true);
+});
+
+test('Copy preserves conflicting OTP configurations and unprotected legacy items', async () => {
+  for (const override of [{metadata: '010108001e'}, {secret: false}]) {
     const {source, target} = copyFixture();
-    const session = new CardBackupSession();
-    const signal = new AbortController().signal;
-    await session.readSource(source, source.hello, signal, [selected]);
-    assert.deepEqual(
-      session.backup.items
-        .filter(item => item.selected)
-        .map(item => item.index),
-      [KEY_INDEX, ACCOUNT_INDEX],
-    );
-    await session.addTarget(target.hello);
-    await session.confirmTargets();
-    await session.exportItems(
-      source,
-      source.hello,
-      'Secret-42',
-      signal,
-      () => {},
-    );
-    await session.importItems(
-      target,
-      target.hello,
-      'Secret-42',
-      signal,
-      () => {},
-    );
-    assert.deepEqual(target.calls, [KEY_INDEX, ACCOUNT_INDEX]);
-    assert.equal(session.backup.complete, true);
+    const existing = {...account, ...override};
+    target.records.set(ACCOUNT_INDEX, existing);
+    const session = await prepareCopy(source, target);
+    await importCopy(session, target);
+    assert.deepEqual(target.calls, []);
+    assert.equal(target.records.get(ACCOUNT_INDEX), existing);
+    if (override.secret === false) {
+      assert.deepEqual(session.backup.targets[0].items, []);
+    } else {
+      assert.equal(session.backup.complete, false);
+      assert.equal(session.backup.targets[0].items[0].conflict, true);
+    }
   }
 });
 
-test('Copy does not write an OTP account after its HMAC import conflicts', async () => {
+test('Copy catches configuration changes between listing and encrypted export', async () => {
   const {source, target} = copyFixture();
-  target.records.set(KEY_INDEX, {...key, secret: false});
-  const session = new CardBackupSession();
-  const signal = new AbortController().signal;
-  await session.readSource(source, source.hello, signal);
-  await session.addTarget(target.hello);
-  await session.confirmTargets();
-  await session.exportItems(
-    source,
-    source.hello,
-    'Secret-42',
-    signal,
-    () => {},
-  );
-  await session.importItems(
-    target,
-    target.hello,
-    'Secret-42',
-    signal,
-    () => {},
-  );
-  assert.deepEqual(target.calls, [KEY_INDEX]);
-  assert.deepEqual([...target.records.values()], [{...key, secret: false}]);
-  assert.equal(session.backup.complete, false);
-  assert.ok(session.backup.targets[0].items.every(item => item.conflict));
+  const exportItem = source.exportItem;
+  source.exportItem = async request => ({
+    ...(await exportItem(request)),
+    metadata: bytes('010108001e'),
+  });
+  await assert.rejects(prepareCopy(source, target), /conflicting OTP data/);
+  assert.deepEqual(target.calls, []);
 });
 
-test('Copy preserves an existing OTP account with conflicting configuration', async () => {
+test('Copy reconciles an uncertain OTP import with View on the next explicit attempt', async () => {
   const {source, target} = copyFixture();
-  const existing = {...account, metadata: '010108001e'};
-  target.records.set(ACCOUNT_INDEX, existing);
-  const session = new CardBackupSession();
-  const signal = new AbortController().signal;
-  await session.readSource(source, source.hello, signal);
-  await session.addTarget(target.hello);
-  await session.confirmTargets();
-  await session.exportItems(
-    source,
-    source.hello,
-    'Secret-42',
-    signal,
-    () => {},
-  );
-  await session.importItems(
-    target,
-    target.hello,
-    'Secret-42',
-    signal,
-    () => {},
-  );
-  assert.deepEqual(target.calls, [KEY_INDEX]);
-  assert.equal(target.records.get(ACCOUNT_INDEX), existing);
-  assert.equal(
-    session.backup.targets[0].items.find(item => item.index === ACCOUNT_INDEX)
-      .conflict,
-    true,
-  );
+  const session = await prepareCopy(source, target);
+  target.afterImport = () => {
+    throw new Error('Lost response');
+  };
+  await assert.rejects(importCopy(session, target), /Lost response/);
+  assert.deepEqual(target.calls, [ACCOUNT_INDEX]);
+  assert.equal(session.backup.complete, false);
+  await importCopy(session, target);
+  assert.deepEqual(target.calls, [ACCOUNT_INDEX]);
+  assert.equal(session.backup.complete, true);
 });

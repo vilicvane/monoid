@@ -325,19 +325,18 @@ export const OTPView = observer(
               applet,
               operation.account,
               signal,
-              installed,
             );
           } else if (operation.type === 'authorize') {
             setState('Enabling OTP, hold tight...');
             accounts = await authorizeOTPAccounts(applet, signal);
           }
           let next: OTPCard;
-          if (accounts) {
-            // Successful writes and the fresh grant are authoritative for this tap.
+          if (operation.type === 'authorize' && accounts) {
+            // The explicit grant is authoritative for this tap.
             next = {...identity, accounts, installed, authorized: installed};
           } else {
             setState('Reading accounts, hold tight...');
-            next = await readOTPCard(applet, hello, signal);
+            next = await readOTPCard(applet, hello, signal, accounts);
           }
           scanned.add(identity.publicKey);
           signal.throwIfAborted();

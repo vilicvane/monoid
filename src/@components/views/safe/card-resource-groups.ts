@@ -1,10 +1,9 @@
-import {assertCardOTPAssociations, isCardHMACItem} from './card-otp.js';
 import type {ScannedCardItemData} from './common.js';
 
 type CardResourceData = Pick<
   ScannedCardItemData,
-  'index' | 'type' | 'derivationRecord' | 'otpKeyIndex'
-> & {secret?: boolean};
+  'index' | 'type' | 'derivationRecord'
+>;
 
 export type CardResourceGroup<T> = {
   item: T;
@@ -14,15 +13,13 @@ export type CardResourceGroup<T> = {
 export function getCardResourceGroups<T extends CardResourceData>(
   items: readonly T[],
 ): CardResourceGroup<T>[] {
-  assertCardOTPAssociations(items);
   const roots = new Map<string, CardResourceGroup<T>>();
 
   for (const item of items) {
     if (
       item.type === 'seed' ||
       item.type === 'secp256k1' ||
-      item.type === 'ed25519' ||
-      isCardHMACItem(item)
+      item.type === 'ed25519'
     ) {
       roots.set(item.index, {item, items: [item]});
     }
@@ -31,10 +28,10 @@ export function getCardResourceGroups<T extends CardResourceData>(
   const groups: CardResourceGroup<T>[] = [];
 
   for (const item of items) {
-    const sourceIndex = item.otpKeyIndex ?? item.derivationRecord?.index;
+    const sourceIndex = item.derivationRecord?.index;
     const source = sourceIndex ? roots.get(sourceIndex) : undefined;
 
-    if (source && (item.otpKeyIndex || !isCardHMACItem(source.item))) {
+    if (source) {
       source.items.push(item);
     } else {
       groups.push(roots.get(item.index) ?? {item, items: [item]});

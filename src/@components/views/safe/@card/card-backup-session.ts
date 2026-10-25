@@ -34,28 +34,18 @@ import {
 } from '../card-derivations.js';
 import {
   CardItemMergeConflict,
+  isCardCredentialItem,
   isCardImmutableItem,
   mergeCardItemData,
   validateCardImmutableItem,
 } from '../card-item-merge.js';
-import {
-  filterCardOTPAssociations,
-  isCardOTPItem,
-  readCardOTPKeyIndex,
-  validateCardOTPItem,
-} from '../card-otp.js';
+import {isCardOTPItem, validateCardOTPItem} from '../card-otp.js';
 import {getCardResourceGroups} from '../card-resource-groups.js';
 import type {ScannedCardData, ScannedCardItemData} from '../common.js';
 
 export type CardBackupItem = Pick<
   ScannedCardItemData,
-  | 'index'
-  | 'type'
-  | 'alias'
-  | 'secret'
-  | 'metadata'
-  | 'derivationRecord'
-  | 'otpKeyIndex'
+  'index' | 'type' | 'alias' | 'secret' | 'metadata' | 'derivationRecord'
 > & {
   selected: boolean;
 };
@@ -105,7 +95,7 @@ function createBackup(
   const selectedIndexes =
     sourceIndexes === undefined ? undefined : new Set(sourceIndexes);
   const backupItems = items.map(
-    ({index, type, alias, secret, metadata, derivationRecord, otpKeyIndex}) => {
+    ({index, type, alias, secret, metadata, derivationRecord}) => {
       if (!/^[0-9a-f]{20}$/i.test(index)) {
         throw new MonoidCardError('The card returned an invalid item index.');
       }
@@ -115,7 +105,6 @@ function createBackup(
         ...(type !== undefined && {type}),
         ...(alias !== undefined && {alias}),
         ...(metadata !== undefined && {metadata}),
-        ...(otpKeyIndex !== undefined && {otpKeyIndex}),
         ...(derivationRecord !== undefined && {
           derivationRecord: {
             index: derivationRecord.index,
@@ -244,7 +233,7 @@ async function hasMatchingImmutableItem(
   const exported = item.exported!;
   const source = {
     index: item.index,
-    secret: false,
+    secret: isCardOTPItem(item),
     metadata: exported.metadata,
     data: exported.plaintext,
   };
@@ -260,21 +249,20 @@ async function hasMatchingImmutableItem(
     throw error;
   }
   throwIfCancelled(signal);
-  if (metadata.secret) {
-    validateCardImmutableItem({index: item.index, secret: true});
+  const current = {
+    index: item.index,
+    secret: metadata.secret,
+    metadata: metadata.metadata && uint8ArrayToHex(metadata.metadata),
+    data: undefined as string | undefined,
+  };
+  if (isCardOTPItem(item) || metadata.secret)
+    validateCardImmutableItem(current);
+  if (!metadata.secret) {
+    const {data} = await applet.get({index});
+    throwIfCancelled(signal);
+    current.data = uint8ArrayToHex(data);
   }
-
-  const {data} = await applet.get({index});
-  throwIfCancelled(signal);
-  mergeCardItemData(
-    {
-      index: item.index,
-      secret: metadata.secret,
-      metadata: metadata.metadata && uint8ArrayToHex(metadata.metadata),
-      data: uint8ArrayToHex(data),
-    },
-    source,
-  );
+  mergeCardItemData(current, source);
 
   // Alias is display metadata; identical records keep the destination name.
   return true;
@@ -486,7 +474,7 @@ export class CardBackupSession {
         throwIfCancelled(signal);
         try {
           if (isCardOTPItem(item)) {
-            item.otpKeyIndex = await readCardOTPKeyIndex(applet, item);
+            validateCardOTPItem(item);
           } else if (isCardDerivationItem(item)) {
             item.derivationRecord = await readCardDerivationRecord(
               applet,
@@ -509,12 +497,9 @@ export class CardBackupSession {
       }
 
       throwIfCancelled(signal);
-      const compatible = filterCardOTPAssociations(
-        scannedItems.filter(item => !skippedIndexes.has(item.index)),
+      const compatible = scannedItems.filter(
+        item => !skippedIndexes.has(item.index),
       );
-      for (const item of scannedItems) {
-        if (!compatible.includes(item)) skippedIndexes.add(item.index);
-      }
       this.setBackup(
         createBackup(
           source,
@@ -643,7 +628,7 @@ export class CardBackupSession {
           let exported = bundleExports?.get(item.index);
           if (!exported) {
             let plaintext: string | undefined;
-            if (isCardImmutableItem(item)) {
+            if (isCardCredentialItem(item)) {
               const index = SafeIndex.satisfies(hexToUint8Array(item.index));
               const metadata = await applet.view({index});
               throwIfCancelled(signal);
@@ -662,21 +647,6 @@ export class CardBackupSession {
                   metadata.metadata && uint8ArrayToHex(metadata.metadata),
                 data: plaintext,
               });
-              if (
-                isCardOTPItem(item) &&
-                validateCardOTPItem({
-                  index: item.index,
-                  secret: metadata.secret,
-                  metadata:
-                    metadata.metadata && uint8ArrayToHex(metadata.metadata),
-                  data: plaintext,
-                }) !==
-                  backup.items.find(source => source.index === item.index)
-                    ?.otpKeyIndex
-              )
-                throw new MonoidCardError(
-                  'OTP account changed, start copy again',
-                );
             }
             const result = await applet.exportItem({
               index: SafeIndex.satisfies(hexToUint8Array(item.index)),
@@ -693,12 +663,17 @@ export class CardBackupSession {
               data: uint8ArrayToHex(result.data),
               ...(plaintext !== undefined && {plaintext}),
             };
-            validateCardImmutableItem({
+            const source = backup.items.find(
+              source => source.index === item.index,
+            )!;
+            const current = {
               index: item.index,
-              secret: false,
+              secret: source.secret,
               metadata: exported.metadata,
               data: plaintext,
-            });
+            };
+            validateCardImmutableItem(current);
+            if (isCardOTPItem(item)) mergeCardItemData(source, current);
             bundleExports?.set(item.index, exported);
           }
           this.updateTransfer(target.publicKey, {...item, exported});
@@ -767,17 +742,6 @@ export class CardBackupSession {
         const sourceItem = backup.items.find(
           source => source.index === item.index,
         )!;
-        const sourceIndex = sourceItem.otpKeyIndex;
-        if (
-          sourceIndex &&
-          !this.requireBackup()
-            .targets.find(current => current.publicKey === target.publicKey)!
-            .items.find(source => source.index === sourceIndex)?.imported
-        ) {
-          this.updateTransfer(target.publicKey, {...item, conflict: true});
-          continue;
-        }
-
         const exported = item.exported!;
         throwIfCancelled(signal);
         const request = {

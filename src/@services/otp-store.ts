@@ -10,7 +10,6 @@ import type {StorageService} from './storage-service.js';
 export type OTPAccount = OTPAccountConfiguration & {
   index: SafeIndexHex;
   label: string;
-  keyIndex: SafeIndexHex;
 };
 
 export type OTPCard = {
@@ -38,8 +37,8 @@ function readAccount(value: unknown): OTPAccount | undefined {
     typeof index !== 'string' ||
     !/^f201[0-9a-f]{16}$/i.test(index) ||
     typeof label !== 'string' ||
-    typeof keyIndex !== 'string' ||
-    !/^05(?!00)[0-9a-f]{18}$/i.test(keyIndex) ||
+    // Old reference-based accounts have different indices; discard their cache.
+    keyIndex !== undefined ||
     (algorithm !== 'SHA1' &&
       algorithm !== 'SHA256' &&
       algorithm !== 'SHA512') ||
@@ -54,7 +53,6 @@ function readAccount(value: unknown): OTPAccount | undefined {
   return {
     index: SafeIndexHex.satisfies(index.toLowerCase()),
     label,
-    keyIndex: SafeIndexHex.satisfies(keyIndex.toLowerCase()),
     algorithm,
     digits,
     period,

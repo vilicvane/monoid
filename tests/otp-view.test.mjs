@@ -112,32 +112,16 @@ mock.module('../.bld/app/@lib/otp-card.js', {
       fixture.events.push('probe');
       return applet.card.installed;
     },
-    assertOTPAccounts: async (applet, accounts) => {
-      fixture.events.push('verify');
-      for (const account of accounts) {
-        const actual = applet.card.accounts.find(
-          item => item.index === account.index,
-        );
-        if (
-          !actual ||
-          ['keyIndex', 'algorithm', 'digits', 'period'].some(
-            key => actual[key] !== account[key],
-          )
-        )
-          throw new Error('OTP account does not match');
-      }
-    },
-    readOTPCard: async applet => {
+    readOTPCard: async (applet, _hello, _signal, accounts) => {
       fixture.events.push('read');
-      return applet.card;
+      return {...applet.card, accounts: accounts ?? applet.card.accounts};
     },
     addOTPAccount: async applet => {
       fixture.events.push('add');
       return applet.card.accounts;
     },
-    removeOTPAccount: async (applet, account, _signal, installed) => {
+    removeOTPAccount: async (applet, account) => {
       fixture.events.push('remove');
-      fixture.removeInstalled = installed;
       applet.card = {
         ...applet.card,
         accounts: applet.card.accounts.filter(
@@ -184,9 +168,19 @@ mock.module('../.bld/app/@lib/otp.js', {
       fixture.prepared = {indexes, authority, signal};
       return fixture.prepared;
     },
-    calculatePreparedOTP: async (prepared, _applet, signal) => {
+    calculatePreparedOTP: async (prepared, applet, signal) => {
       const owner = fixture;
       owner.events.push('calculate');
+      if (owner.calculateError) throw owner.calculateError;
+      if (
+        prepared.indexes.some(
+          index =>
+            !applet.card.accounts.some(
+              account => account.index === Buffer.from(index).toString('hex'),
+            ),
+        )
+      )
+        throw new Error('OTP account not found');
       await owner.calculation?.promise;
       signal.throwIfAborted();
       return {
@@ -371,7 +365,6 @@ function cachedCard(number, count = 1) {
     authorized: true,
     accounts: Array.from({length: count}, (_unused, index) => ({
       index: `f201${(number * 100 + index).toString(16).padStart(16, '0')}`,
-      keyIndex: `0514${index.toString(16).padStart(16, '0')}`,
       label: `Account ${number}-${index}`,
       algorithm: 'SHA1',
       digits: 6,
@@ -605,6 +598,7 @@ test('a scanned account waits for confirmation then checks OTP before authentica
     'probe',
     'authenticate',
     'add',
+    'read',
     'cache',
   ]);
   assert(account.secret.every(byte => byte === 0));
@@ -717,7 +711,6 @@ test('tapping a cached account starts one scan and prepares before authenticatio
     'scan',
     'prepare',
     'authenticate',
-    'verify',
     'calculate',
   ]);
   assert.deepEqual(state.prepared.indexes, [bytes(card.accounts[0].index)]);
@@ -887,23 +880,26 @@ test('backup copies render as one account and scanning a subset keeps other acco
   );
 });
 
-test('missing or conflicting selected accounts never calculate or display a code', async () => {
+test('missing accounts and Calculate failures never display a code', async () => {
   const first = cachedCard(1);
-  for (const accounts of [
-    [],
-    [{...first.accounts[0], keyIndex: `0514${'ff'.repeat(8)}`}],
-  ]) {
+  for (const missing of [true, false]) {
     const state = mount([first]);
+    if (!missing) state.calculateError = new Error('OTP calculation failed');
     state.openAccount(first);
-
     await state.flush();
-    await state.tap({...cachedCard(2), accounts});
-    assert.equal(state.events.includes('calculate'), false);
+    await state.tap({
+      ...cachedCard(2),
+      accounts: missing ? [] : first.accounts,
+    });
+    assert.equal(state.events.includes('calculate'), true);
     assert.equal(
       find(state.tree, node => node.type === 'CopyButton'),
       undefined,
     );
-    assert.match(state.errors[0].message, /OTP account does not match/);
+    assert.match(
+      state.errors[0].message,
+      /OTP account not found|OTP calculation failed/,
+    );
   }
 });
 
@@ -1002,10 +998,11 @@ test('deletion detects a backup without OTP and removes its account without reau
     'probe',
     'authenticate',
     'remove',
+    'read',
     'cache',
     'scan',
   ]);
-  assert.equal(state.removeInstalled, false);
+  assert.equal(state.events.includes('authorize'), false);
   assert.deepEqual(state.entrances.otpStore.accounts, first.accounts);
   assert.deepEqual(state.errors, []);
   assert.equal(state.scans.at(-1).content, 'Scan next card to delete');

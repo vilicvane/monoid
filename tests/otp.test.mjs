@@ -25,7 +25,6 @@ const {
   otpCodeState,
   decodeOTPBatch,
   decodeOTPConfiguration,
-  decodeOTPKeyReference,
   decodeOTPSecret,
   decodeOTPTimeProof,
   encodeOTPConfiguration,
@@ -156,7 +155,7 @@ test('OTP import rejects unsupported semantics without silently replacing option
   assert.throws(() => decodeOTPSecret(base32nopad.encode(new Uint8Array(256))));
 });
 
-test('OTP metadata matches firmware F201 configuration and exact HMAC references', () => {
+test('OTP metadata matches firmware F201 configuration', () => {
   assert.equal(OTP_ITEM_TYPE, 0xf201);
   assert.equal(hex(OTP_AID), 'f06d6f6e6f69640501');
   for (const [algorithm, id] of [
@@ -179,17 +178,6 @@ test('OTP metadata matches firmware F201 configuration and exact HMAC references
     [1, 1, 6, 30],
   ])
     assert.throws(() => decodeOTPConfiguration(new Uint8Array(key)));
-
-  assert.equal(
-    decodeOTPKeyReference(bytes('05140102030405060708')),
-    '05140102030405060708',
-  );
-  for (const key of [
-    '05000102030405060708',
-    '02400102030405060708',
-    '05140102',
-  ])
-    assert.throws(() => decodeOTPKeyReference(bytes(key)));
 });
 
 test('signed time checks challenge, pinned key, domain signature and unsigned 64-bit time', () => {

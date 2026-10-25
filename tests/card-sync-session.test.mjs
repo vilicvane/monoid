@@ -186,22 +186,16 @@ const write = (session, card, pin = PIN) =>
 const mutationCalls = card =>
   card.calls.filter(([kind]) => ['create', 'set', 'import'].includes(kind));
 
-test('OTP sync keeps account metadata inside the bundle and resumes its interrupted create after the secret', async () => {
-  const hmac = {
-    index: '05140000000000000001',
-    type: 'hmac',
-    secret: true,
-    data: '1234',
-  };
+test('OTP sync imports one secret item and reconciles a lost response without replay', async () => {
   const account = {
     index: 'f2010000000000000001',
-    type: 0xf201,
-    secret: false,
+    type: -3583,
+    secret: true,
     metadata: '010106001e',
-    data: hmac.index,
+    data: '1234',
     alias: 'Example',
   };
-  const source = mockCard(1, 1, [account, hmac]);
+  const source = mockCard(1, 1, [account]);
   const target = mockCard(2, 1);
   const unrelated = mockCard(3, 2);
   const session = new CardSyncSession();
@@ -209,37 +203,23 @@ test('OTP sync keeps account metadata inside the bundle and resumes its interrup
   await add(session, target);
   await add(session, unrelated);
   assert.equal(
-    source.calls.some(([kind]) => kind === 'viewKey'),
+    source.calls.some(([kind]) => ['get', 'viewKey'].includes(kind)),
     false,
   );
+  assert.equal(session.cards[0].items[0].data, undefined);
   session.prepare();
-  let interrupted = false;
   target.afterMutation = async kind => {
-    if (kind === 'create' && !interrupted) {
-      interrupted = true;
-      throw new Error('Lost response');
-    }
+    if (kind === 'import') throw new Error('Lost response');
   };
   await assert.rejects(write(session, target), /Lost response/);
-  assert.deepEqual(
-    mutationCalls(target).map(([kind, index]) => [kind, index]),
-    [
-      ['import', hmac.index],
-      ['create', account.index],
-    ],
-  );
+  assert.deepEqual(mutationCalls(target), [['import', account.index]]);
   await write(session, target);
+  assert.deepEqual(mutationCalls(target), [['import', account.index]]);
+  assert.deepEqual(target.records.get(account.index), account);
   assert.equal(
-    mutationCalls(target).length,
-    2,
-    'do not replay acknowledged account creation',
-  );
-  assert.equal(target.records.get(account.index).data, hmac.index);
-  assert.equal(
-    session.cards
-      .find(card => card.publicKey === hex(target.hello.publicKey))
-      .items.find(item => item.index === account.index).otpKeyIndex,
-    hmac.index,
+    session.cards.find(card => card.publicKey === hex(target.hello.publicKey))
+      .items[0].data,
+    undefined,
   );
   assert.equal(
     session.cards.find(
@@ -247,6 +227,29 @@ test('OTP sync keeps account metadata inside the bundle and resumes its interrup
     ).items.length,
     0,
   );
+});
+
+test('OTP sync skips incompatible list entries without Get or overwriting their indices', async () => {
+  const account = {
+    index: 'f2010000000000000001',
+    type: -3583,
+    secret: true,
+    metadata: '010106001e',
+    data: '1234',
+  };
+  const source = mockCard(1, 1, [account]);
+  const target = mockCard(2, 1, [{...account, secret: false}]);
+  const session = new CardSyncSession();
+  await add(session, source);
+  await add(session, target);
+  assert.equal(
+    target.calls.some(([kind]) => ['get', 'viewKey'].includes(kind)),
+    false,
+  );
+  assert.deepEqual(session.cards[1].skippedIndexes, [account.index]);
+  session.prepare();
+  assert.deepEqual(mutationCalls(target), []);
+  assert.equal(target.records.get(account.index).secret, false);
 });
 
 test('public credential scopes coexist across Bundles without grant or Seed migration', async () => {

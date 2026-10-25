@@ -51,8 +51,8 @@ prompt then asks for the next card until dismissed. Installation/authorization s
 belongs only to the current page's scanned card, not to cached accounts. Enable
 OTP on card remains a separate menu action and is never performed by code retrieval.
 
-Incompatible account records are skipped individually, including missing or
-unprotected HMAC references. Valid accounts remain available. Transport,
+Incompatible account records are skipped individually, including invalid
+configuration and items not marked secret. Valid accounts remain available. Transport,
 authentication and cancellation failures still stop the scan; skipped records
 are not deleted from the card.
 
@@ -75,14 +75,19 @@ authenticates; a missing applet stops before creating any account data.
 Supported settings are SHA-1, SHA-256 or SHA-512, 6 or 8 digits, and periods from
 1 to 32767 seconds. HOTP is not supported by the current applet.
 
-Read only the F201 and HMAC resource lists, then the public references. Adding or
-deleting an account reuses that inventory within the same NFC operation, applies
-acknowledged mutations to it, grants the resulting key set and returns the known
-metadata directly. Do not reread all accounts or probe the grant after successfully
-setting it. Never carry this inventory across taps or assume an uncertain write
-succeeded. Incompatible records still reserve their indices; they cannot be
-overwritten as if absent. Deletion retains secrets possibly referenced by an
-incompatible record or another applet.
+Read accounts with one List of type `-3583` (`0xF201`). Configuration and alias
+come from the list; no Get or HMAC key listing is needed. Adding or deleting reuses
+that inventory within the same NFC operation and returns the acknowledged result.
+Adding sends one Create with the secret-derived index. EXISTS is accepted only if
+View confirms the same configuration, label and secret flag; a difference is a
+conflict, not a rename or overwrite. Delete removes only that account; a missing
+or incompatible account is skipped. Changed configuration requires scanning again.
+Never reuse an inventory across taps or replay an uncertain write.
+
+Enable OTP on card sets `types: [[-3583, false]]` once, with no `keys` entries.
+Adding and deleting do not change the grant or implicitly enable OTP. The page
+checks current authorization separately while reusing the operation's account
+snapshot. A stale installation token requires explicit enabling again.
 
 For provider interoperability, an explicit label prefix takes precedence over a
 differing issuer name. Base32 secrets accept nonzero unused bits in the final
@@ -95,7 +100,7 @@ secrets, never the contents of a user's QR code.
 
 Monoid OTP Applet is optional in Card Applets. Its matching Identity, Library and
 Monoid dependencies are included in the bundled CAP preparation. Existing
-dependency-aware update/reinstall and recovery flows also retain HMAC grants.
+dependency-aware update/reinstall and recovery flows retain the type grant.
 
 Time mode is determined by each tapped card's `Hello.authority`:
 
@@ -139,9 +144,9 @@ For a tapped account, one NFC connection performs:
    With Authority, OTP Challenge → signed time request → OTP Prepare receives
    the proof and account index.
 3. Select Monoid and authenticate Access PIN with the OTP applet AID.
-4. Use the cached account metadata without another View. Get checks only the public
-   HMAC reference against the cached account; no whole-list scan or secret reads are needed.
-5. Select OTP and Calculate, then read the full response before closing NFC.
+4. Select OTP and Calculate directly, then read the full response before closing NFC.
+   The card uses its current configuration and secret; the response supplies the
+   period and codes used for display. No View, Get or whole-list scan is needed.
 
 At the start of retrieval, a public metadata request warms the last observed
 Authority (or the configured default before a card is known), in parallel with
@@ -177,25 +182,32 @@ NFC is allowed to finish normally. Codes are never saved to local storage.
 
 ## Resources and transfer
 
-An account consists of a secret `05xx` HMAC key plus a public `0xf201` account record.
-Its immutable `metadata` contains version, algorithm, digits and period; its `data`
-contains the 10-byte HMAC index. APP-created account records use an explicit F201 index:
-the first eight bytes of SHA-256 over ASCII `monoid otp account`, the five-byte
-configuration and the HMAC index. Import reuses an existing protected HMAC and
-an existing matching account, preserving its index. It never repeats an uncertain
-card write automatically.
+An account is one secret item of type `0xF201`, mapped to HMAC by firmware.
+Its data is the 1–255-byte shared secret; metadata is the existing five-byte
+`01 || algorithm || digits || period_u16_BE` configuration, and alias is the label.
+The index is `F2 01 || SHA-256(secret)[0:8]`, validated by the card. A second
+account with the same secret returns EXISTS even with a different configuration
+or label. There is no separate HMAC item or key reference. Get cannot reveal the
+secret, and changing it requires a new item. Configuration changes require
+removal and recreation with the same secret.
 
-Safe Card groups the metadata with its HMAC. Copy includes both, and Sync applies
-the secret's Bundle scope to both. Import writes the secret first; deletion removes
-the account reference first and retains HMAC keys used by another account or
-applet. Differing immutable account data under one index is a conflict. After a
-transfer, Enable OTP on card grants access to the account keys on that destination.
+Safe Card shows one resource per account. Copy exports and imports that one item
+through the Secret-PIN-protected encrypted transfer path; it never reads plaintext
+OTP data. Sync keeps it within its own Bundle scope, like other secret items.
+Matching indices pin the secret, so different encrypted envelopes are not a
+conflict; different configuration under the same index is. Copy keeps an existing
+matching destination alias, while Sync uses its existing alias merge rules.
+A destination's OTP type grant covers all its accounts, including later imports.
+Built-in HMAC `keys` grants do not cover F201.
+
+The cache stores only index, label, algorithm, digits and period. Old cached
+entries carrying a key reference are discarded without migration; scan the card
+to load current accounts. No compatibility path for the old on-card format is
+provided.
 
 Protocol authority: sibling `monoid-javacard/doc/otp.md` and current Java sources.
-In particular, custom F201 creation uses an explicit index as required by Safe's
-implementation; it is not a digest-indexed built-in type.
 
 Software tests cover protocol framing, time proofs/windows, cache boundaries,
-PIN ordering, lifecycle cancellation and transfer relationships. Physical OTP
+PIN ordering, lifecycle cancellation and single-item encrypted transfers. Physical OTP
 acceptance still requires the matching card firmware. Signed-time acceptance
 additionally requires its configured service and matching Authority key.

@@ -48,22 +48,15 @@ function records(wallets) {
   };
 }
 
-test('OTP metadata follows its HMAC secret scope and imports after that secret', () => {
-  const hmac = {
-    index: '05140000000000000001',
-    type: 'hmac',
-    secret: true,
-    exported: {data: 'aa'},
-  };
+test('OTP sync uses a single secret item scoped to its Bundle', () => {
   const account = {
     index: 'f2010000000000000001',
-    secret: false,
+    secret: true,
     metadata: '010106001e',
-    data: hmac.index,
-    otpKeyIndex: hmac.index,
+    exported: {metadata: '010106001e', data: 'aa'},
   };
   const plans = createCardSyncPlans([
-    card(1, 'A', [account, hmac]),
+    card(1, 'A', [account]),
     card(2, 'A', []),
     card(3, 'B', []),
     card(4, false, []),
@@ -73,37 +66,56 @@ test('OTP metadata follows its HMAC secret scope and imports after that secret',
       operation.kind,
       operation.after.index,
     ]),
-    [
-      ['import', hmac.index],
-      ['create', account.index],
-    ],
+    [['import', account.index]],
   );
   assert.deepEqual(plans[2].items, []);
   assert.deepEqual(plans[3].items, []);
-
   const isolated = createCardSyncPlans([
-    card(1, false, [account, {...hmac, exported: undefined}]),
+    card(1, false, [{...account, exported: undefined}]),
     card(2, false, []),
   ]);
   assert.deepEqual(isolated[1].items, []);
   assert.throws(
-    () => createCardSyncPlans([card(1, 'A', [account]), card(2, 'A', [])]),
-    /associated key is missing/,
-  );
-  assert.throws(
     () =>
       createCardSyncPlans([
-        card(1, 'A', [account, {...hmac, secret: false, data: 'aa'}]),
+        card(1, 'A', [{...account, secret: false, data: 'aa'}]),
       ]),
-    /invalid OTP key/,
+    /invalid OTP account/,
   );
   assert.throws(
     () =>
       createCardSyncPlans([
-        card(1, 'A', [account, hmac]),
-        card(2, 'A', [{...account, metadata: '010108001e'}, hmac]),
+        card(1, 'A', [account]),
+        card(2, 'A', [{...account, metadata: '010108001e'}]),
       ]),
     /conflicting item metadata/,
+  );
+});
+
+test('OTP digest indices allow alias merging without comparing ciphertext or importing existing items', () => {
+  const account = {
+    index: 'f2010000000000000001',
+    secret: true,
+    metadata: '010106001e',
+    alias: 'First',
+  };
+  const plans = createCardSyncPlans([
+    card(1, 'A', [{...account, exported: {...account, data: 'aa'}}]),
+    card(2, 'A', [
+      {
+        ...account,
+        alias: 'Second',
+        exported: {...account, alias: 'Second', data: 'bb'},
+      },
+    ]),
+  ]);
+  assert.deepEqual(plans[0].operations, []);
+  assert.deepEqual(
+    plans[1].operations.map(operation => [
+      operation.kind,
+      operation.after.alias,
+    ]),
+    [['alias', 'First']],
   );
 });
 

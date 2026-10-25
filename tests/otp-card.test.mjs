@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {mock, test} from 'node:test';
 
 import {p256} from '@noble/curves/nist';
-import {getBytes, sha256, toUtf8Bytes} from 'ethers';
+import {sha256, toUtf8Bytes} from 'ethers';
 
 import {
   CardItemExistsError,
@@ -22,7 +22,6 @@ const {AppletISOError, AppletNotFoundError} = await import(
 );
 const {
   addOTPAccount,
-  assertOTPAccounts,
   authorizeOTPAccounts,
   isOTPInstalled,
   readOTPAccounts,
@@ -36,7 +35,7 @@ const signal = () => new AbortController().signal;
 const configuration = {algorithm: 'SHA1', digits: 6, period: 30};
 const secret = toUtf8Bytes('12345678901234567890');
 const hmacIndex = bytes(`0514${sha256(secret).slice(2, 18)}`);
-const accountIndex = bytes('f2010102030405060708');
+const accountIndex = bytes(`f201${sha256(secret).slice(2, 18)}`);
 const secondIndex = bytes('f2011112131415161718');
 const hello = {
   id: bytes('11223344'),
@@ -52,17 +51,16 @@ function accountRecord(index = accountIndex, overrides = {}) {
     index,
     metadata: new Uint8Array([1, 1, 6, 0, 30]),
     alias: 'Example: alice',
-    secret: false,
-    data: hmacIndex,
+    secret: true,
+    data: secret,
     ...overrides,
   };
 }
-function grant(keys = [hmacIndex], overrides = {}) {
+function grant(overrides = {}) {
   return {
     aid: OTP_AID,
     tokenHash: new Uint8Array(32),
     types: [[-3583, false]],
-    keys: keys.map(index => ({index, type: 'hmac'})),
     ...overrides,
   };
 }
@@ -98,6 +96,7 @@ function card(options = {}) {
     },
     async list(request) {
       commands.push(['list', request]);
+      await options.onList?.();
       return {
         items: [...items.values()]
           .filter(item =>
@@ -132,20 +131,10 @@ function card(options = {}) {
     },
     async create(request) {
       commands.push(['create', request]);
-      if ('type' in request) {
-        assert.equal(
-          request.type,
-          'hmac',
-          'custom OTP metadata requires an explicit index',
-        );
-      }
-      const index =
-        request.index ??
-        new Uint8Array([
-          5,
-          request.data.length,
-          ...getBytes(sha256(request.data)).subarray(0, 8),
-        ]);
+      assert.equal('type' in request, false);
+      const index = request.index;
+      assert.equal(hex(index), `f201${sha256(request.data).slice(2, 18)}`);
+      assert.equal(request.secret, true);
       if (items.has(hex(index)))
         throw new CardItemExistsError({code: 'EXISTS'});
       items.set(hex(index), {...request, index});
@@ -193,625 +182,306 @@ test('OTP preflight only probes Hello and distinguishes absence from failures', 
   assert.deepEqual(commands, []);
 });
 
-test('OTP list reads only public metadata references and returns no secrets or grant tokens', async () => {
+test('OTP list returns configuration and aliases in one list without reading secret data', async () => {
   const fixture = card({
-    items: [accountRecord(), {index: hmacIndex, secret: true, data: secret}],
+    items: [accountRecord(), {index: hmacIndex, secret: true}],
   });
   const accounts = await readOTPAccounts(fixture.applet, signal());
   assert.deepEqual(accounts, [
-    {
-      index: hex(accountIndex),
-      label: 'Example: alice',
-      ...configuration,
-      keyIndex: hex(hmacIndex),
-    },
+    {index: hex(accountIndex), label: 'Example: alice', ...configuration},
   ]);
-  assert.deepEqual(fixture.commands, [
-    ['list', {type: -3583}],
-    ['list', {type: 'hmac'}],
-    ['get', hex(accountIndex)],
-  ]);
+  assert.deepEqual(fixture.commands, [['list', {type: -3583}]]);
   assert.ok(!JSON.stringify(accounts).includes(hex(secret)));
 });
 
-test('adding an account reads each OTP reference once and grants the resulting snapshot', async () => {
-  const fixture = card({
-    items: [
-      accountRecord(),
-      {index: hmacIndex, secret: true, data: secret},
-      {index: bytes('01400102030405060708'), secret: true, data: secret},
-    ],
-  });
-  const next = await addOTPAccount(
-    fixture.applet,
-    {
-      ...configuration,
-      secret,
-      label: 'Example: second',
-      digits: 8,
-    },
-    signal(),
-  );
-  assert.equal(next.length, 2);
-  assert.deepEqual(
-    fixture.commands.map(command => command[0]),
-    ['list', 'list', 'get', 'create', 'grant'],
-  );
-  assert.deepEqual(
-    fixture.commands
-      .filter(command => command[0] === 'list')
-      .map(command => command[1]),
-    [{type: -3583}, {type: 'hmac'}],
-  );
-  assert.equal(next[1].digits, 8);
-  assert.equal(fixture.commands.at(-1)[1].keys.length, 1);
-  assert.deepEqual(await readOTPAccounts(fixture.applet, signal()), next);
-});
-
-test('removing an account grants the remaining snapshot without rereading references', async () => {
-  const fixture = card({
-    items: [
-      accountRecord(),
-      accountRecord(secondIndex),
-      {index: hmacIndex, secret: true, data: secret},
-    ],
-  });
-  const account = {
-    index: hex(accountIndex),
-    keyIndex: hex(hmacIndex),
-    label: 'Example: alice',
-    ...configuration,
-  };
-  const next = await removeOTPAccount(fixture.applet, account, signal());
-  assert.deepEqual(
-    next.map(account => account.index),
-    [hex(secondIndex)],
-  );
-  assert.deepEqual(
-    fixture.commands.map(command => command[0]),
-    ['list', 'list', 'get', 'get', 'grants', 'remove', 'grant'],
-  );
-});
-
-test('an incompatible record at the proposed index is never treated as absent', async () => {
-  const fixture = card();
-  const imported = {...configuration, secret, label: 'Example'};
-  const [created] = await addOTPAccount(fixture.applet, imported, signal());
-  fixture.items.get(created.index).metadata = new Uint8Array([9]);
-  fixture.commands.length = 0;
-  await assert.rejects(
-    addOTPAccount(fixture.applet, imported, signal()),
-    /OTP account conflict/,
-  );
-  assert.equal(
-    fixture.commands.some(command =>
-      ['create', 'set', 'grant'].includes(command[0]),
-    ),
-    false,
-  );
-});
-
-test('OTP list skips incompatible accounts and retains supported accounts', async () => {
+test('OTP list skips incompatible items individually', async () => {
   for (const override of [
-    {secret: true},
+    {secret: false},
     {metadata: undefined},
     {metadata: new Uint8Array()},
-    {metadata: new Uint8Array([2, 1, 6, 0, 30])},
-    {metadata: new Uint8Array([1, 4, 6, 0, 30])},
-    {metadata: new Uint8Array([1, 1, 7, 0, 30])},
-    {metadata: new Uint8Array([1, 1, 6, 0, 0])},
-    {metadata: new Uint8Array([1, 1, 6, 128, 0])},
-    {data: bytes('02400102030405060708')},
+    {metadata: bytes('020106001e')},
+    {metadata: bytes('010406001e')},
+    {metadata: bytes('010107001e')},
+    {metadata: bytes('0101060000')},
+    {metadata: bytes('0101068000')},
+    {index: bytes('f20100')},
   ]) {
     const fixture = card({
       items: [
         accountRecord(accountIndex, override),
         accountRecord(secondIndex),
-        {index: hmacIndex, secret: true, data: secret},
       ],
     });
-    const accounts = await readOTPAccounts(fixture.applet, signal());
     assert.deepEqual(
-      accounts.map(item => item.index),
+      (await readOTPAccounts(fixture.applet, signal())).map(item => item.index),
       [hex(secondIndex)],
     );
-    if (override.secret)
-      assert.ok(
-        !fixture.commands.some(
-          ([name, index]) => name === 'get' && index === hex(accountIndex),
-        ),
-      );
+    assert.deepEqual(fixture.commands, [['list', {type: -3583}]]);
   }
 });
 
-test('OTP list skips orphaned accounts but propagates communication and permission errors', async () => {
-  for (const parent of [undefined, {index: hmacIndex, secret: false}]) {
-    const fixture = card({
-      items: [accountRecord(), ...(parent ? [parent] : [])],
-    });
-    assert.deepEqual(await readOTPAccounts(fixture.applet, signal()), []);
-  }
-  const fixture = card({
-    items: [accountRecord(), {index: hmacIndex, secret: true}],
-  });
+test('OTP list propagates communication, permission and cancellation failures', async () => {
   for (const failure of [
     new Error('Tag lost'),
     new AppletISOError('Denied', 0x6982, new Uint8Array()),
   ]) {
-    fixture.applet.get = async () => {
-      throw failure;
-    };
+    const fixture = card({
+      onList() {
+        throw failure;
+      },
+    });
     await assert.rejects(
       readOTPAccounts(fixture.applet, signal()),
       error => error === failure,
     );
   }
-});
-
-test('retrieval uses cached metadata and checks the key reference with one get', async () => {
-  const fixture = card({
-    items: [accountRecord(), {index: hmacIndex, secret: true, data: secret}],
-  });
-  await assertOTPAccounts(
-    fixture.applet,
-    [
-      {
-        ...configuration,
-        index: hex(accountIndex),
-        keyIndex: hex(hmacIndex),
-        label: 'Cached label',
-      },
-    ],
-    signal(),
-  );
-  assert.deepEqual(fixture.commands, [['get', hex(accountIndex)]]);
-});
-
-test('a matching index with a different HMAC reference or protected data is rejected', async () => {
-  for (const override of [
-    {secret: true},
-    {data: bytes('05141112131415161718')},
-  ]) {
-    const fixture = card({items: [accountRecord(accountIndex, override)]});
-    await assert.rejects(
-      assertOTPAccounts(
-        fixture.applet,
-        [
-          {
-            ...configuration,
-            index: hex(accountIndex),
-            keyIndex: hex(hmacIndex),
-            label: 'Cached label',
-          },
-        ],
-        signal(),
-      ),
-      override.secret ? /ACCESS_DENIED/ : /OTP account does not match/,
-    );
-    assert.deepEqual(fixture.commands, [['get', hex(accountIndex)]]);
-  }
-});
-
-test('selected account checks propagate missing records, transport errors and cancellation', async () => {
-  const selected = [
-    {
-      ...configuration,
-      index: hex(accountIndex),
-      keyIndex: hex(hmacIndex),
-      label: 'Cached label',
-    },
-  ];
-  const missing = card();
-  await assert.rejects(
-    assertOTPAccounts(missing.applet, selected, signal()),
-    /NOT_FOUND/,
-  );
-  const failure = new Error('Tag lost');
-  const interrupted = card();
-  interrupted.applet.get = async () => {
-    throw failure;
-  };
-  await assert.rejects(
-    assertOTPAccounts(interrupted.applet, selected, signal()),
-    error => error === failure,
-  );
-  const cancelled = card({items: [accountRecord()]});
   const controller = new AbortController();
-  const get = cancelled.applet.get;
-  cancelled.applet.get = async request => {
-    const result = await get(request);
-    controller.abort();
-    return result;
-  };
-  await assert.rejects(
-    assertOTPAccounts(cancelled.applet, selected, controller.signal),
-    {name: 'AbortError'},
-  );
-  assert.deepEqual(cancelled.commands, [['get', hex(accountIndex)]]);
+  const fixture = card({
+    onList() {
+      controller.abort();
+    },
+  });
+  await assert.rejects(readOTPAccounts(fixture.applet, controller.signal), {
+    name: 'AbortError',
+  });
+  const cancelled = card();
+  await assert.rejects(readOTPAccounts(cancelled.applet, AbortSignal.abort()), {
+    name: 'AbortError',
+  });
+  assert.deepEqual(cancelled.commands, []);
 });
 
-test('OTP card authorization probes the installation token rather than trusting persisted grants', async () => {
-  const state = {
-    items: [accountRecord(), {index: hmacIndex, secret: true, data: secret}],
-    grants: [grant()],
-  };
-  const valid = card(state);
-  const cached = await readOTPCard(valid.applet, hello, signal());
-  assert.equal(cached.installed, true);
-  assert.equal(cached.authorized, true);
-  assert.deepEqual(valid.commands.slice(-2), [
-    ['otp.hello'],
-    ['otp.challenge'],
-  ]);
-  assert.ok(!('grant' in cached));
-  assert.ok(!('tokenHash' in cached));
+test('OTP authorization checks the exact type and installation token without HMAC key grants', async () => {
+  const items = [accountRecord()];
+  const valid = card({items, grants: [grant()]});
+  assert.equal(
+    (await readOTPCard(valid.applet, hello, signal())).authorized,
+    true,
+  );
+  assert.deepEqual(
+    valid.commands.map(([name]) => name),
+    ['list', 'grants', 'otp.hello', 'otp.challenge'],
+  );
+  for (const types of [undefined, [[-3582, false]]]) {
+    const fixture = card({
+      items,
+      grants: [grant({types, keys: [{index: hmacIndex, type: 'hmac'}]})],
+    });
+    assert.equal(
+      (await readOTPCard(fixture.applet, hello, signal())).authorized,
+      false,
+    );
+    assert.ok(!fixture.commands.some(([name]) => name === 'otp.challenge'));
+  }
   const stale = card({
-    ...state,
+    items,
+    grants: [grant()],
     challengeError: new AppletISOError('stale token', 0x6982, new Uint8Array()),
   });
   assert.equal(
     (await readOTPCard(stale.applet, hello, signal())).authorized,
     false,
   );
-  const missing = card({...state, notInstalled: true});
+  const missing = card({items, grants: [grant()], notInstalled: true});
   assert.equal(
-    (await readOTPCard(missing.applet, hello, signal())).installed,
+    (await readOTPCard(missing.applet, hello, signal())).authorized,
     false,
   );
-  const interrupted = card({...state, challengeError: new Error('Tag lost')});
+  const interrupted = card({
+    items,
+    grants: [grant()],
+    challengeError: new Error('Tag lost'),
+  });
   await assert.rejects(
     readOTPCard(interrupted.applet, hello, signal()),
     /Tag lost/,
   );
 });
 
-test('OTP authorization requires each exact HMAC key and read permission, deduplicating shared keys', async () => {
-  const incomplete = card({
-    items: [accountRecord(), {index: hmacIndex, secret: true, data: secret}],
-    grants: [grant([])],
-  });
-  assert.equal(
-    (await readOTPCard(incomplete.applet, hello, signal())).authorized,
-    false,
-  );
-  assert.equal(
-    incomplete.commands.some(command => command[0] === 'otp.challenge'),
-    false,
-  );
-  const fixture = card({
-    items: [
-      accountRecord(),
-      accountRecord(secondIndex, {metadata: new Uint8Array([1, 3, 8, 0, 60])}),
-      {index: hmacIndex, secret: true, data: secret},
-    ],
-  });
-  await authorizeOTPAccounts(fixture.applet, signal());
-  const written = fixture.commands.at(-1)[1];
-  assert.deepEqual(written, {
-    aid: OTP_AID,
-    types: [[-3583, false]],
-    keys: [{index: hmacIndex, type: 'hmac'}],
-  });
-});
-
-test('OTP account import uses explicit metadata indices and reuses the same protected HMAC key', async () => {
-  const fixture = card();
-  const first = {label: 'Example: alice', secret, ...configuration};
-  await addOTPAccount(fixture.applet, first, signal());
-  await addOTPAccount(
-    fixture.applet,
-    {...first, label: 'Example: other', period: 60},
-    signal(),
-  );
-  const creates = fixture.commands
-    .filter(command => command[0] === 'create')
-    .map(command => command[1]);
-  assert.equal(creates.filter(request => request.type === 'hmac').length, 1);
-  assert.equal(
-    creates.filter(request => request.index?.[0] === 0xf2).length,
-    2,
-  );
-  assert.deepEqual(
-    creates
-      .filter(request => request.index?.[0] === 0xf2)
-      .map(request => ({
-        metadata: request.metadata,
-        data: request.data,
-        key: request.key,
-      })),
-    [30, 60].map(period => ({
-      metadata: new Uint8Array([1, 1, 6, 0, period]),
-      data: hmacIndex,
-      key: undefined,
-    })),
-  );
-  assert.equal(fixture.items.size, 3);
-});
-
-test('reimport updates an existing account alias and preserves its original metadata index', async () => {
-  const fixture = card({
-    items: [accountRecord(), {index: hmacIndex, secret: true, data: secret}],
-  });
-  await addOTPAccount(
-    fixture.applet,
-    {label: 'Renamed', secret, ...configuration},
-    signal(),
-  );
-  assert.equal(
-    fixture.commands.some(command => command[0] === 'create'),
-    false,
-  );
-  assert.equal(fixture.items.get(hex(accountIndex)).alias, 'Renamed');
-  assert.deepEqual(fixture.commands.find(command => command[0] === 'set')[1], {
-    index: accountIndex,
-    alias: 'Renamed',
-  });
-});
-
-test('OTP metadata index conflicts never replace unrelated data', async () => {
-  // Domain-separated SHA-256 vector for SHA1/6/30 and RFC 6238's SHA1 secret.
-  const conflicting = accountRecord(bytes('f201e389217b1b478af1'), {
-    metadata: new Uint8Array([1, 3, 8, 0, 60]),
-  });
-  const fixture = card({
-    items: [conflicting, {index: hmacIndex, secret: true, data: secret}],
-  });
-  await assert.rejects(
-    addOTPAccount(
-      fixture.applet,
-      {label: 'Example', secret, ...configuration},
-      signal(),
-    ),
-    /conflict/,
-  );
-  assert.equal(
-    fixture.commands.some(command =>
-      ['create', 'set', 'grant'].includes(command[0]),
-    ),
-    false,
-  );
-  assert.deepEqual(fixture.items.get(hex(conflicting.index)), conflicting);
-});
-
-test('OTP grant can authorize more accounts than the per-calculation batch limit', async () => {
-  const items = Array.from({length: 17}, (_, value) =>
-    accountRecord(
-      bytes(`f20100000000000000${value.toString(16).padStart(2, '0')}`),
-      {data: bytes(`051400000000000000${value.toString(16).padStart(2, '0')}`)},
-    ),
-  );
-  const fixture = card({
-    items: [...items, ...items.map(item => ({index: item.data, secret: true}))],
-  });
-  await authorizeOTPAccounts(fixture.applet, signal());
-  assert.equal(fixture.commands.at(-1)[1].keys.length, 17);
-});
-
-test('OTP import never replaces an existing unprotected HMAC and does not replay uncertain writes', async () => {
-  const unprotected = card({
-    items: [{index: hmacIndex, secret: false, data: secret}],
-  });
-  await assert.rejects(
-    addOTPAccount(
-      unprotected.applet,
-      {label: 'Example', secret, ...configuration},
-      signal(),
-    ),
-    /not protected/,
-  );
-  assert.equal(
-    unprotected.commands.some(command =>
-      ['create', 'set', 'grant'].includes(command[0]),
-    ),
-    false,
-  );
-  const interrupted = card({
-    onCreate() {
-      throw new Error('Tag lost');
-    },
-  });
-  await assert.rejects(
-    addOTPAccount(
-      interrupted.applet,
-      {label: 'Example', secret, ...configuration},
-      signal(),
-    ),
-    /Tag lost/,
-  );
-  assert.equal(
-    interrupted.commands.filter(command => command[0] === 'create').length,
-    1,
-  );
-  assert.equal(
-    interrupted.commands.some(command => command[0] === 'grant'),
-    false,
-  );
-});
-
-test('OTP import cancellation after creating the HMAC does not write metadata or replay', async () => {
-  const controller = new AbortController();
-  const fixture = card({
-    onCreate() {
-      controller.abort();
-    },
-  });
-  await assert.rejects(
-    addOTPAccount(
-      fixture.applet,
-      {label: 'Example', secret, ...configuration},
-      controller.signal,
-    ),
-  );
-  assert.equal(
-    fixture.commands.filter(command => command[0] === 'create').length,
-    1,
-  );
-  assert.equal(
-    fixture.commands.some(command => command[0] === 'grant'),
-    false,
-  );
-  assert.ok(fixture.items.has(hex(hmacIndex)));
-});
-
-test('OTP delete removes metadata before an unshared HMAC key and refreshes the grant', async () => {
-  const fixture = card({
-    items: [accountRecord(), {index: hmacIndex, secret: true, data: secret}],
-    grants: [grant()],
-  });
-  const [account] = await readOTPAccounts(fixture.applet, signal());
-  await removeOTPAccount(fixture.applet, account, signal());
-  assert.deepEqual(
-    fixture.commands
-      .filter(command => command[0] === 'remove')
-      .map(command => command[1]),
-    [hex(accountIndex), hex(hmacIndex)],
-  );
-  assert.deepEqual(fixture.commands.at(-1), [
-    'grant',
-    {aid: OTP_AID, types: [[-3583, false]], keys: []},
-  ]);
-});
-
-test('OTP delete preserves HMAC keys referenced by another account or applet', async () => {
-  for (const sharedByAccount of [true, false]) {
+test('Enable writes one type grant with no keys regardless of account count', async () => {
+  for (const count of [0, 1, 17]) {
     const fixture = card({
-      items: [
-        accountRecord(),
-        {index: hmacIndex, secret: true, data: secret},
-        ...(sharedByAccount ? [accountRecord(secondIndex)] : []),
-      ],
-      grants: [
-        grant(),
-        ...(sharedByAccount
-          ? []
-          : [grant([hmacIndex], {aid: bytes('0102030405')})]),
-      ],
+      items: Array.from({length: count}, (_, i) =>
+        accountRecord(bytes(`f201${i.toString(16).padStart(16, '0')}`)),
+      ),
     });
-    const [account] = await readOTPAccounts(fixture.applet, signal());
-    await removeOTPAccount(fixture.applet, account, signal());
-    assert.ok(fixture.items.has(hex(hmacIndex)));
+    assert.equal(
+      (await authorizeOTPAccounts(fixture.applet, signal())).length,
+      count,
+    );
+    assert.deepEqual(fixture.commands, [
+      ['list', {type: -3583}],
+      ['grant', {aid: OTP_AID, types: [[-3583, false]]}],
+    ]);
+  }
+});
+
+test('adding an OTP account creates only the digest-indexed secret item and keeps grants unchanged', async () => {
+  const fixture = card({items: [accountRecord(secondIndex)]});
+  const accounts = await addOTPAccount(
+    fixture.applet,
+    {...configuration, secret, label: 'Example: alice'},
+    signal(),
+  );
+  assert.deepEqual(
+    fixture.commands.map(([name]) => name),
+    ['list', 'create'],
+  );
+  assert.deepEqual(fixture.commands[1][1], {
+    index: accountIndex,
+    metadata: bytes('010106001e'),
+    alias: 'Example: alice',
+    data: secret,
+    secret: true,
+  });
+  assert.equal(accounts.length, 2);
+  assert.deepEqual(accounts[1], {
+    index: hex(accountIndex),
+    label: 'Example: alice',
+    ...configuration,
+  });
+  const current = await readOTPCard(fixture.applet, hello, signal(), accounts);
+  assert.equal(current.authorized, false);
+  assert.equal(fixture.commands.filter(([name]) => name === 'list').length, 1);
+});
+
+test('same-secret EXISTS compares only View configuration, label and protection', async () => {
+  for (const override of [
+    {},
+    {alias: 'Other'},
+    {metadata: bytes('010108001e')},
+    {secret: false},
+    {metadata: bytes('09')},
+  ]) {
+    const fixture = card({items: [accountRecord(accountIndex, override)]});
+    const adding = addOTPAccount(
+      fixture.applet,
+      {...configuration, secret, label: 'Example: alice'},
+      signal(),
+    );
+    if (Object.keys(override).length)
+      await assert.rejects(adding, /conflicting item data/);
+    else assert.equal((await adding).length, 1);
     assert.deepEqual(
-      fixture.commands
-        .filter(command => command[0] === 'remove')
-        .map(command => command[1]),
-      [hex(accountIndex)],
+      fixture.commands.map(([name]) => name),
+      ['list', 'create', 'view'],
+    );
+    assert.deepEqual(
+      fixture.items.get(hex(accountIndex)),
+      accountRecord(accountIndex, override),
     );
   }
 });
 
-test('OTP deletion skips a card without the account and writes nothing', async () => {
-  const source = card({
-    items: [accountRecord(), {index: hmacIndex, secret: true, data: secret}],
-  });
-  const [account] = await readOTPAccounts(source.applet, signal());
-  const other = card({items: [{index: hmacIndex, secret: true, data: secret}]});
-  assert.equal(
-    await removeOTPAccount(other.applet, account, signal()),
-    undefined,
-  );
-  assert.equal(
-    other.commands.some(([name]) => name === 'remove' || name === 'grant'),
-    false,
-  );
+test('invalid secret lengths and configuration stop before NFC', async () => {
+  for (const override of [
+    {secret: new Uint8Array()},
+    {secret: new Uint8Array(256)},
+    {period: 0},
+  ]) {
+    const fixture = card();
+    await assert.rejects(
+      addOTPAccount(
+        fixture.applet,
+        {...configuration, secret, label: 'Example', ...override},
+        signal(),
+      ),
+    );
+    assert.deepEqual(fixture.commands, []);
+  }
 });
 
-test('OTP account deletion still works after the optional applet was removed', async () => {
-  const fixture = card({
-    items: [accountRecord(), {index: hmacIndex, secret: true, data: secret}],
-  });
-  const [account] = await readOTPAccounts(fixture.applet, signal());
-  await removeOTPAccount(fixture.applet, account, signal(), false);
-  assert.equal(fixture.items.size, 0);
-  assert.equal(
-    fixture.commands.some(command => command[0] === 'grant'),
-    false,
-  );
+test('an uncertain or cancelled create is never replayed or reconciled automatically', async () => {
+  for (const cancel of [false, true]) {
+    const controller = new AbortController();
+    const fixture = card({
+      onCreate() {
+        if (cancel) controller.abort();
+        else throw new Error('Tag lost');
+      },
+    });
+    await assert.rejects(
+      addOTPAccount(
+        fixture.applet,
+        {...configuration, secret, label: 'Example'},
+        controller.signal,
+      ),
+      cancel ? {name: 'AbortError'} : /Tag lost/,
+    );
+    assert.deepEqual(
+      fixture.commands.map(([name]) => name),
+      ['list', 'create'],
+    );
+    assert.equal(fixture.items.size, 1);
+  }
 });
 
-test('OTP deletion retains a secret that may still belong to an incompatible account', async () => {
+test('delete removes only F201, retains unrelated HMAC items and never rewrites grants', async () => {
   const fixture = card({
     items: [
       accountRecord(),
-      accountRecord(secondIndex, {metadata: Uint8Array.of(2, 1, 6, 0, 30)}),
-      {index: hmacIndex, secret: true, data: secret},
+      accountRecord(secondIndex),
+      {index: hmacIndex, secret: true},
     ],
+    notInstalled: true,
   });
-  const [account] = await readOTPAccounts(fixture.applet, signal());
-  await removeOTPAccount(fixture.applet, account, signal());
+  const next = await removeOTPAccount(
+    fixture.applet,
+    {index: hex(accountIndex), ...configuration},
+    signal(),
+  );
+  assert.deepEqual(
+    next.map(item => item.index),
+    [hex(secondIndex)],
+  );
+  assert.deepEqual(fixture.commands, [
+    ['list', {type: -3583}],
+    ['remove', hex(accountIndex)],
+  ]);
   assert.ok(fixture.items.has(hex(hmacIndex)));
-  assert.ok(fixture.items.has(hex(secondIndex)));
-  assert.deepEqual(
-    fixture.commands
-      .filter(([name]) => name === 'remove')
-      .map(([, index]) => index),
-    [hex(accountIndex)],
-  );
 });
 
-test('OTP delete rejects a changed key reference and stops on an uncertain metadata deletion', async () => {
+test('delete skips a missing or incompatible account without writing', async () => {
+  for (const items of [[], [accountRecord(accountIndex, {secret: false})]]) {
+    const fixture = card({items});
+    assert.equal(
+      await removeOTPAccount(
+        fixture.applet,
+        {index: hex(accountIndex), ...configuration},
+        signal(),
+      ),
+      undefined,
+    );
+    assert.deepEqual(fixture.commands, [['list', {type: -3583}]]);
+  }
+});
+
+test('delete checks changed configuration and never replays uncertain or cancelled removal', async () => {
+  const account = {index: hex(accountIndex), ...configuration};
   const changed = card({
-    items: [accountRecord(), {index: hmacIndex, secret: true, data: secret}],
-  });
-  const [account] = await readOTPAccounts(changed.applet, signal());
-  await assert.rejects(
-    removeOTPAccount(
-      changed.applet,
-      {...account, keyIndex: '05141112131415161718'},
-      signal(),
-    ),
-    /changed/,
-  );
-  assert.equal(
-    changed.commands.some(command => command[0] === 'remove'),
-    false,
-  );
-  const interrupted = card({
-    items: [accountRecord(), {index: hmacIndex, secret: true, data: secret}],
-    onRemove() {
-      throw new Error('Tag lost');
-    },
+    items: [accountRecord(accountIndex, {metadata: bytes('010108001e')})],
   });
   await assert.rejects(
-    removeOTPAccount(interrupted.applet, account, signal()),
-    /Tag lost/,
+    removeOTPAccount(changed.applet, account, signal()),
+    /Account changed/,
   );
-  assert.deepEqual(
-    interrupted.commands
-      .filter(command => command[0] === 'remove')
-      .map(command => command[1]),
-    [hex(accountIndex)],
-  );
-  assert.ok(interrupted.items.has(hex(hmacIndex)));
-});
-
-for (const conflicting of [false, true]) {
-  test(`OTP Create EXISTS ${
-    conflicting
-      ? 'rejects different public metadata'
-      : 'accepts only matching key and account'
-  }`, async () => {
-    const state = card({
-      onCreate(request, index) {
-        if (conflicting && request.index)
-          state.items.get(hex(index)).alias = 'Different';
-        throw new CardItemExistsError({code: 'EXISTS'});
+  assert.deepEqual(changed.commands, [['list', {type: -3583}]]);
+  for (const cancel of [false, true]) {
+    const controller = new AbortController();
+    const fixture = card({
+      items: [accountRecord()],
+      onRemove() {
+        if (cancel) controller.abort();
+        else throw new Error('Tag lost');
       },
     });
-    const adding = addOTPAccount(
-      state.applet,
-      {...configuration, label: 'Example: alice', secret},
-      signal(),
+    await assert.rejects(
+      removeOTPAccount(fixture.applet, account, controller.signal),
+      cancel ? {name: 'AbortError'} : /Tag lost/,
     );
-    if (conflicting) await assert.rejects(adding, /conflicting item data/);
-    else assert.equal((await adding).length, 1);
-    assert.equal(
-      state.commands.filter(([name]) => name === 'create').length,
-      2,
-    );
-    assert.equal(state.commands.filter(([name]) => name === 'view').length, 2);
-    assert.equal(
-      state.commands.filter(([name]) => name === 'grant').length,
-      conflicting ? 0 : 1,
-    );
-  });
-}
+    assert.deepEqual(fixture.commands, [
+      ['list', {type: -3583}],
+      ['remove', hex(accountIndex)],
+    ]);
+  }
+});

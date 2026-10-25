@@ -75,7 +75,7 @@ export function mergeCardItemData<T extends CardItemMergeData>(
   if (isCardOTPItem(first)) {
     validateCardOTPItem(first);
     validateCardOTPItem(next);
-    if (first.metadata !== next.metadata || first.data !== next.data)
+    if (first.metadata !== next.metadata)
       throw new CardItemMergeConflict(first.index, 'OTP');
     return first;
   }

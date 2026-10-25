@@ -26,11 +26,7 @@ import {
   isCardCredentialItem,
   validateCardCredentialItem,
 } from './card-item-merge.js';
-import {
-  filterCardOTPAssociations,
-  isCardOTPItem,
-  readCardOTPKeyIndex,
-} from './card-otp.js';
+import {isCardOTPItem, validateCardOTPItem} from './card-otp.js';
 import type {ScannedCardItemData} from './common.js';
 
 export async function scanCardItems(
@@ -79,7 +75,7 @@ export async function scanCardItems(
     assertActive();
     try {
       if (isCardOTPItem(item)) {
-        item.otpKeyIndex = await readCardOTPKeyIndex(applet, item);
+        validateCardOTPItem(item);
       } else if (isCardCredentialItem(item)) {
         if (item.secret)
           throw new InvalidCardItemError('Invalid Security Key credential');
@@ -95,10 +91,8 @@ export async function scanCardItems(
     assertActive();
     onProgress(index + 1, derivationItems.length, 'records');
   }
-  const compatibleItems = filterCardOTPAssociations(
-    filterCardDerivationAssociations(
-      scannedItems.filter(item => !incompatible.has(item)),
-    ),
+  const compatibleItems = filterCardDerivationAssociations(
+    scannedItems.filter(item => !incompatible.has(item)),
   );
 
   return readCardAddressPreviews(

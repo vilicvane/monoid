@@ -41,8 +41,6 @@ export type ScannedCardItemData = {
   /** Cached public keys only; the companion derivationRecord holds the full saved list. */
   derivations?: WalletKeyPublicKeyData[];
   derivationRecord?: CardDerivationRecord;
-  /** OTP account metadata references this HMAC secret and shares its sync scope. */
-  otpKeyIndex?: SafeIndexHex;
 };
 
 export function isCardKeyItem(

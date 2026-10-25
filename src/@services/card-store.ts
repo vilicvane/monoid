@@ -26,7 +26,6 @@ export class CardItem implements ScannedCardItemData {
   secret: boolean;
   publicKey: PublicKeyHex | undefined;
   derivationRecord: ScannedCardItemData['derivationRecord'];
-  otpKeyIndex: ScannedCardItemData['otpKeyIndex'];
   derivations: ScannedCardItemData['derivations'];
   addressType: AddressType | undefined;
   refs: Partial<Record<AddressType, ScannedCardKeyData['ref']>> = {};
@@ -59,7 +58,6 @@ export class CardItem implements ScannedCardItemData {
     this.secret = item.secret;
     this.publicKey = item.publicKey;
     this.derivationRecord = item.derivationRecord;
-    this.otpKeyIndex = item.otpKeyIndex;
     this.derivations = item.derivations;
 
     for (const wallet of item.derivations ?? []) {
@@ -155,7 +153,6 @@ export class CardState implements ScannedCardData {
         ...(item.derivationRecord !== undefined && {
           derivationRecord: toJS(item.derivationRecord),
         }),
-        ...(item.otpKeyIndex !== undefined && {otpKeyIndex: item.otpKeyIndex}),
       })),
     };
   }

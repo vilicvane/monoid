@@ -89,16 +89,11 @@ export const CardResourceItem = observer(
   }: {
     data: Pick<
       ScannedCardItemData,
-      | 'index'
-      | 'type'
-      | 'alias'
-      | 'publicKey'
-      | 'derivationRecord'
-      | 'otpKeyIndex'
+      'index' | 'type' | 'alias' | 'publicKey' | 'derivationRecord'
     >;
     resources?: readonly Pick<
       ScannedCardItemData,
-      'index' | 'type' | 'alias' | 'derivationRecord' | 'otpKeyIndex'
+      'index' | 'type' | 'alias' | 'derivationRecord'
     >[];
     selected?: boolean;
     disabled?: boolean;
@@ -121,13 +116,11 @@ export const CardResourceItem = observer(
         ? item.type
         : (RESOURCE_TYPE_LABELS[typeCode] ??
           `0x${typeCode.toString(16).padStart(4, '0')}`);
-    const sourceIndex =
-      item.otpKeyIndex ??
-      (
-        item.derivationRecord ??
-        resources?.find(resource => resource.index === item.index)
-          ?.derivationRecord
-      )?.index;
+    const sourceIndex = (
+      item.derivationRecord ??
+      resources?.find(resource => resource.index === item.index)
+        ?.derivationRecord
+    )?.index;
     const source = sourceIndex
       ? (resources?.find(resource => resource.index === sourceIndex) ??
         walletStorageService.indexToKeyMap.get(sourceIndex))

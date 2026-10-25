@@ -10,7 +10,6 @@ function account(overrides = {}) {
   return {
     index: `f201${'12'.repeat(8)}`,
     label: 'Example: alice',
-    keyIndex: `0514${'34'.repeat(8)}`,
     algorithm: 'SHA1',
     digits: 6,
     period: 30,
@@ -100,12 +99,10 @@ test('only account metadata survives, without card identity, PINs, secrets or co
 test('indices normalize and deduplicate before selecting or forgetting', async context => {
   const canonical = account({
     index: `f201${'ab'.repeat(8)}`,
-    keyIndex: `05ff${'cd'.repeat(8)}`,
   });
   const upper = {
     ...canonical,
     index: canonical.index.toUpperCase(),
-    keyIndex: canonical.keyIndex.toUpperCase(),
   };
   const store = await OTPStore.create(
     storageFixture(context, [canonical, upper]),
@@ -127,7 +124,7 @@ test('malformed cached records are skipped without hiding valid accounts', async
     ...[
       {index: `f101${'12'.repeat(8)}`},
       {index: 'f20100'},
-      {keyIndex: `0500${'34'.repeat(8)}`},
+      {keyIndex: `0514${'34'.repeat(8)}`},
       {keyIndex: `0101${'34'.repeat(8)}`},
       {label: null},
       {algorithm: 'MD5'},
