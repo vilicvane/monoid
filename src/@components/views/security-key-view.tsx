@@ -9,7 +9,7 @@ import {type ReactNode, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
-import {MonoidIdHex, PublicKeyHex, type SafeIndexHex} from '../../@atomics.js';
+import {MonoidIdHex, type SafeIndexHex} from '../../@atomics.js';
 import {useEntrances} from '../../@entrances.js';
 import {AppletNotFoundError} from '../../@lib/applet.js';
 import {
@@ -158,8 +158,7 @@ function CredentialDetails({
 
 export const SecurityKeyView = observer(
   ({view}: RouteComponentProps<Router['securityKey']>): ReactNode => {
-    const {router, monoidCredentialsStore, cardStore, errorService} =
-      useEntrances();
+    const {router, monoidCredentialsStore, errorService} = useEntrances();
     const active = useViewActive(view);
     const [snapshot, setSnapshot] = useState<SecurityKeySnapshot>();
     const [missingMonoid, setMissingMonoid] = useState(false);
@@ -335,14 +334,7 @@ export const SecurityKeyView = observer(
             const signal = AbortSignal.any([operation.signal, scanSignal]);
             signal.throwIfAborted();
             if (config) {
-              await config.apply(applet, hello, signal, () =>
-                cardStore.forget({
-                  id: MonoidIdHex.satisfies(uint8ArrayToHex(hello.id)),
-                  publicKey: PublicKeyHex.satisfies(
-                    uint8ArrayToHex(hello.publicKey),
-                  ),
-                }),
-              );
+              await config.apply(applet, hello, signal);
             }
             signal.throwIfAborted();
             setState('Reading credentials, hold tight...');

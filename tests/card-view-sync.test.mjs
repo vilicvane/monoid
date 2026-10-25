@@ -296,7 +296,7 @@ function mount({items, keys = []}) {
       state.index = 0;
       const outer = CardView({view: state.view});
       const content = find(outer, node => typeof node.type === 'function');
-      state.tree = content.type(content.props);
+      state.tree = content ? content.type(content.props) : outer;
       rendering = undefined;
       return state.tree;
     },
@@ -387,7 +387,7 @@ function mount({items, keys = []}) {
       scan.validate?.(hello);
       state.authCount++;
       await scan.callback(
-        state.applet,
+        state.cardStore.observeApplet(state.applet, hello),
         content => state.progressUpdates.push(content),
         hello,
         scan.controller.signal,
@@ -2269,5 +2269,16 @@ test('an unacknowledged creation stops without inventing an item or resending th
   await assert.rejects(state.tap(), /Creation not confirmed/);
   assert.equal(state.creations.length, 1);
   assert.deepEqual(state.card.snapshot().items, []);
+  assert.equal(state.cardStore.get(state.view.card), undefined);
   await state.dismiss();
+  assert.ok(state.menuButton(), 'the active page retains its working copy');
+  runInAction(() => {
+    state.view.$match.$exact.$active = false;
+  });
+  state.render();
+  runInAction(() => {
+    state.view.$match.$exact.$active = true;
+  });
+  assert.equal(state.menuButton(), undefined);
+  assert.ok(find(state.render(), node => node.type === 'placeholder'));
 });

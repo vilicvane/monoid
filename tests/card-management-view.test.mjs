@@ -523,6 +523,7 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     },
     cardBundleStore: {acceptInstalledCard: async () => {}},
     cardStore: {
+      observeApplet: applet => applet,
       get: () => undefined,
       forget: identity => state.events.push({type: 'forget', identity}),
     },

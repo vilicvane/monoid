@@ -310,7 +310,6 @@ export class SecurityKeyConfiguration {
     applet: MonoidApplet,
     hello: MonoidAppletHello,
     signal: AbortSignal,
-    onMutation: () => void,
   ): Promise<void> {
     if (this.busy || this.complete) return;
     if (this.uncertain)
@@ -352,9 +351,6 @@ export class SecurityKeyConfiguration {
           } catch (error) {
             if (error instanceof CBORAppletError) this.uncertain = false;
             throw error;
-          } finally {
-            // Also invalidate the cached Card list when the ACK was lost.
-            onMutation();
           }
           this.createdIndex = index;
           this.uncertain = false;
@@ -392,8 +388,6 @@ export class SecurityKeyConfiguration {
       } catch (error) {
         if (error instanceof CBORAppletError) this.uncertain = false;
         throw error;
-      } finally {
-        onMutation();
       }
       this.uncertain = false;
       this.complete = true;

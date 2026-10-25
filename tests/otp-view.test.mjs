@@ -133,18 +133,11 @@ mock.module('../.bld/app/@lib/otp-card.js', {
       fixture.events.push('read');
       return applet.card;
     },
-    addOTPAccount: async (applet, _account, _signal, onMutation) => {
+    addOTPAccount: async applet => {
       fixture.events.push('add');
-      onMutation();
       return applet.card.accounts;
     },
-    removeOTPAccount: async (
-      applet,
-      account,
-      _signal,
-      onMutation,
-      installed,
-    ) => {
+    removeOTPAccount: async (applet, account, _signal, installed) => {
       fixture.events.push('remove');
       fixture.removeInstalled = installed;
       applet.card = {
@@ -153,7 +146,6 @@ mock.module('../.bld/app/@lib/otp-card.js', {
           item => item.index !== account.index,
         ),
       };
-      onMutation();
       return applet.card.accounts;
     },
     authorizeOTPAccounts: async applet => {
@@ -504,7 +496,6 @@ function mount(cards = [cachedCard(1)], context = {}, importURI) {
   };
   state.entrances = {
     monoidCredentialsStore: {createPINSession: () => state.pinSession},
-    cardStore: {forget: () => {}},
     otpStore: {
       takeImport: id => {
         assert.equal(id, context.importId);

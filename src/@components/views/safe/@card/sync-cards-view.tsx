@@ -337,21 +337,6 @@ export const SyncCardsView = observer(
                     ],
                   }))
                 : flow.sourceCard?.items;
-              // Confirmed writes invalidate cached previews, including an ACK
-              // received after the owning view unmounts. Progress stays in session.
-              const stopObservingWrites = collecting
-                ? undefined
-                : reaction(
-                    () => session.confirmedSnapshot,
-                    snapshot => {
-                      if (
-                        snapshot?.id === identity.id &&
-                        snapshot.publicKey === identity.publicKey
-                      ) {
-                        cardStore.forget(snapshot);
-                      }
-                    },
-                  );
               try {
                 setState('Authenticating, hold tight...');
                 if (collecting) {
@@ -415,8 +400,6 @@ export const SyncCardsView = observer(
               } catch (error) {
                 flow.markInterrupted(identity.publicKey, true);
                 throw error;
-              } finally {
-                stopObservingWrites?.();
               }
 
               const confirmed = session.confirmedSnapshot;

@@ -250,6 +250,7 @@ export const DeriveKeyView = observer(
               }
 
               setStateContent('Saving derivation, hold tight...');
+              const cachedCard = cardStore.get(card);
               const resource = await writeCardDerivationRecord(
                 applet,
                 key,
@@ -263,7 +264,6 @@ export const DeriveKeyView = observer(
               );
               // Acknowledged card writes are committed locally before cancellation
               // or route checks; only navigation waits for the scan to finish.
-              const cachedCard = cardStore.get(card);
               if (cachedCard) {
                 const cachedKey = cachedCard.items.find(
                   item => item.index === key.index && item.type === key.type,
@@ -297,9 +297,8 @@ export const DeriveKeyView = observer(
                     // keys have not been read for this page's preview cache.
                     cachedCard.upsert(resource);
                     cachedKey.setRecordedWallets(derivations);
+                    cardStore.set(cachedCard);
                   });
-                } else {
-                  cardStore.forget(card);
                 }
               }
               walletStorageService.addWallet(key.index, wallet);

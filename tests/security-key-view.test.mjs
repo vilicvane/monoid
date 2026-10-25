@@ -10,6 +10,7 @@ import {deleteCardResources} from '../.bld/app/@components/views/safe/card-resou
 import {AppletNotFoundError} from '../.bld/app/@lib/applet.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
+import {CardStore} from '../.bld/app/@services/card-store.js';
 
 import {credential} from './helpers/security-key-credential.mjs';
 
@@ -248,7 +249,6 @@ function mount() {
     index: 0,
     scans: [],
     errors: [],
-    forgotten: [],
     mounted: true,
     slot: create => (state.slots[state.index++] ??= create()),
     render() {
@@ -295,7 +295,10 @@ function mount() {
         await current.applet.authenticate({pin: current.pin ?? PIN});
         scan.signal.throwIfAborted();
         await scan.callback(
-          current.applet,
+          state.entrances.cardStore.observeApplet(
+            current.applet,
+            current.hello,
+          ),
           () => {},
           current.hello,
           scan.controller.signal,
@@ -338,7 +341,7 @@ function mount() {
     monoidCredentialsStore: {
       createPINSession: mock.fn(() => ({clear: mock.fn()})),
     },
-    cardStore: {forget: identity => state.forgotten.push(identity)},
+    cardStore: new CardStore(),
     router: {cardApplets: () => ({$push() {}})},
     errorService: {
       catch(value) {
@@ -369,7 +372,6 @@ test('reading then configuring reuses one page-owned Access PIN session and auth
   await state.tap(first);
   assert.deepEqual(first.authentications, [{pin: PIN}, {pin: PIN}]);
   assert.deepEqual(first.writes, ['grant']);
-  assert.equal(state.forgotten.length, 1);
   assert.equal(
     state.entrances.monoidCredentialsStore.createPINSession.mock.callCount(),
     1,
@@ -568,7 +570,16 @@ test('deleting a credential removes it from this card, then further cards until 
   const first = holder(1);
   const second = holder(2);
   const state = mount();
+  const store = state.entrances.cardStore;
+  const firstIdentity = readBackupCardIdentity(first.hello);
+  const secondIdentity = readBackupCardIdentity(second.hello);
+  store.set({...firstIdentity, items: [{index: record.index, secret: false}]});
+  const other = store.set({
+    ...secondIdentity,
+    items: [{index: record.index, secret: false}],
+  });
   await state.read(first);
+  assert.ok(store.get(firstIdentity), 'reading does not invalidate the card');
 
   find(
     state.render(),
@@ -579,6 +590,8 @@ test('deleting a credential removes it from this card, then further cards until 
   await state.flush();
   await state.tap(first);
   assert.deepEqual(first.removals, [record.index]);
+  assert.equal(store.get(firstIdentity), undefined);
+  assert.equal(store.get(secondIdentity), other);
   assert.equal(
     find(state.render(), node => node.type === 'ListItemButton'),
     undefined,
@@ -589,6 +602,7 @@ test('deleting a credential removes it from this card, then further cards until 
   assert.throws(() => next.validate(first.hello), /Card already done/);
   await state.tap(second);
   assert.deepEqual(second.removals, [record.index]);
+  assert.equal(store.get(secondIdentity), undefined);
 
   state.scans
     .at(-1)

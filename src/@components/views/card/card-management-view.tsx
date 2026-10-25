@@ -623,9 +623,12 @@ export const CardManagementView = observer(
           }
 
           signal.throwIfAborted();
-          const applet = await createMonoidApplet(
-            saved ? hexToUint8Array(saved.card.appletAid) : undefined,
-          ).openSession(sessionId);
+          const applet = cardStore.observeApplet(
+            await createMonoidApplet(
+              saved ? hexToUint8Array(saved.card.appletAid) : undefined,
+            ).openSession(sessionId),
+            next,
+          );
           next = await setupPINs(applet, next);
           if (
             saved &&
@@ -655,26 +658,10 @@ export const CardManagementView = observer(
             setState('Authenticating, hold tight...');
             await applet.authenticate({secret: true, pin: pin!});
             signal.throwIfAborted();
-            const restoredCard =
-              saved.card.id && saved.card.publicKey
-                ? {
-                    id: MonoidIdHex.satisfies(saved.card.id),
-                    publicKey: PublicKeyHex.satisfies(saved.card.publicKey),
-                  }
-                : undefined;
             await maintenance.restore(
               applet,
               saved.id,
-              update => {
-                if (
-                  update.stage === 'restore' &&
-                  update.completed > 0 &&
-                  restoredCard
-                ) {
-                  cardStore.forget(restoredCard);
-                }
-                progress(update);
-              },
+              progress,
               signal,
               installedAppletAids,
             );

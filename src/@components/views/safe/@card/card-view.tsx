@@ -110,7 +110,26 @@ const CreateKeyButton = styled(Button)`
 export const CardView = observer(
   ({view}: RouteComponentProps<Router['safe']['card']>): ReactNode => {
     const {cardStore, router} = useEntrances();
-    const card = view.card && cardStore.get(view.card);
+    const isViewActive = useViewActive(view);
+    const [card, setCard] = useState(
+      () => view.card && cardStore.get(view.card),
+    );
+
+    useEffect(
+      () =>
+        reaction(
+          () => ({
+            active: isViewActive(),
+            cached: view.card && cardStore.get(view.card),
+          }),
+          ({active, cached}) => {
+            // Keep the working copy while this page applies acknowledged writes.
+            // An invalidated snapshot must not survive leaving and returning.
+            if (cached || !active) setCard(cached);
+          },
+        ),
+      [cardStore, view, isViewActive],
+    );
 
     return (
       <View>
@@ -177,8 +196,13 @@ const CardContent = observer(
     card: CardState;
     view: RouteComponentProps<Router['safe']['card']>['view'];
   }): ReactNode => {
-    const {walletStorageService, monoidCredentialsStore, errorService, router} =
-      useEntrances();
+    const {
+      walletStorageService,
+      monoidCredentialsStore,
+      cardStore,
+      errorService,
+      router,
+    } = useEntrances();
     const isViewActive = useViewActive(view);
     const [pinSession] = useState(() =>
       monoidCredentialsStore.createPINSession(),
@@ -485,6 +509,7 @@ const CardContent = observer(
                 operation.signal,
                 item => {
                   card.upsert(item);
+                  cardStore.set(card);
                   createdIndex = item.index;
                   if (!operation.signal.aborted)
                     setStateContent('Reading key, hold tight...');
@@ -671,6 +696,7 @@ const CardContent = observer(
                   runInAction(() => {
                     card.upsert(resource);
                     item.setRecordedWallets(derivations);
+                    cardStore.set(card);
                   });
                   onWritten?.(index, derivations);
                   showProgress();
@@ -683,6 +709,7 @@ const CardContent = observer(
                     runInAction(() => {
                       card.items.find(item => item.index === index)!.alias =
                         alias;
+                      cardStore.set(card);
                     });
 
                     showProgress();
@@ -1005,6 +1032,7 @@ const CardContent = observer(
                   item => item.index === sourceIndex,
                 );
                 if (source) source.derivations = [];
+                cardStore.set(card);
               });
             }),
           hello => assertCardForUpdate(hello, card),

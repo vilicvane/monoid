@@ -172,6 +172,7 @@ function mount() {
       $match: {$exact: {$active: true}},
     }),
     applet: {
+      async create() {},
       async viewKey() {
         state.keyReads++;
         return {publicKey: bytes(FRESH_PUBLIC_KEY)};
@@ -203,7 +204,7 @@ function mount() {
       scan.validate?.(hello);
       state.authCount++;
       await scan.callback(
-        state.applet,
+        state.cardStore.observeApplet(state.applet, hello),
         () => {},
         hello,
         scan.controller.signal,
@@ -233,6 +234,7 @@ function mount() {
     state.writes.push({applet, key, wallets, signal});
     if (signal.aborted)
       throw Object.assign(new Error('Cancelled'), {code: 'CANCELLED'});
+    await applet.create({});
     return {
       index: '0f010000000000000001',
       type: 0x0f01,

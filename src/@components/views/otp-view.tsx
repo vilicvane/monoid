@@ -169,7 +169,7 @@ type Operation =
 
 export const OTPView = observer(
   ({view}: RouteComponentProps<Router['otp']>): ReactNode => {
-    const {router, otpStore, monoidCredentialsStore, cardStore, errorService} =
+    const {router, otpStore, monoidCredentialsStore, errorService} =
       useEntrances();
     const active = useViewActive(view);
     const [requestedCard] = useState(() => view.card);
@@ -313,24 +313,17 @@ export const OTPView = observer(
             id: uint8ArrayToHex(hello.id),
             publicKey: uint8ArrayToHex(hello.publicKey),
           };
-          const changed = (): void => cardStore.forget(identity);
           signal.throwIfAborted();
           let accounts: OTPAccount[] | undefined;
           if (operation.type === 'add') {
             setState('Adding account, hold tight...');
-            accounts = await addOTPAccount(
-              applet,
-              operation.account,
-              signal,
-              changed,
-            );
+            accounts = await addOTPAccount(applet, operation.account, signal);
           } else if (operation.type === 'remove') {
             setState('Removing account, hold tight...');
             accounts = await removeOTPAccount(
               applet,
               operation.account,
               signal,
-              changed,
               installed,
             );
           } else if (operation.type === 'authorize') {

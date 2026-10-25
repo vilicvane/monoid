@@ -3,12 +3,13 @@ import {observer} from 'mobx-react-lite';
 import {type ReactNode, useCallback, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
-import {MonoidIdHex, MonoidPIN, PublicKeyHex} from '../../../../@atomics.js';
+import {MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import type {CardInformation} from '../../../../@lib/global-platform/card-information.js';
 import {MonoidAppletHello} from '../../../../@lib/monoid/index.js';
 import type {Router} from '../../../../@routes.js';
 import {isCredentialRequestCancelled} from '../../../../@services/index.js';
+import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {
   CardGrid,
   CardPlaceholder,
@@ -234,6 +235,10 @@ export const ExtendBundleView = observer(
                   readBackupCardIdentity(hello),
                 );
                 setState('Authenticating, hold tight...');
+                const cached = cardStore.get({
+                  id: uint8ArrayToHex(hello.id),
+                  publicKey: uint8ArrayToHex(hello.publicKey),
+                });
                 try {
                   await session.configureCard(
                     applet,
@@ -244,15 +249,11 @@ export const ExtendBundleView = observer(
                   );
                 } finally {
                   // Keep a confirmed join even if navigation follows its response.
-                  if (session.phase === 'complete' && session.target) {
-                    const cached = cardStore.get({
-                      id: MonoidIdHex.satisfies(session.target.id),
-                      publicKey: PublicKeyHex.satisfies(
-                        session.target.publicKey,
-                      ),
+                  if (session.phase === 'complete' && cached) {
+                    runInAction(() => {
+                      cached.bundle = session.bundle;
+                      cardStore.set(cached);
                     });
-                    if (cached)
-                      runInAction(() => (cached.bundle = session.bundle));
                   }
                 }
               },

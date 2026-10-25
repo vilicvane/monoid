@@ -405,7 +405,7 @@ test('configuration verifies full identity before reading or writing items', asy
       hex(seedIndex),
     );
     await assert.rejects(
-      configuration.apply(applet, wrong, signal(), () => {}),
+      configuration.apply(applet, wrong, signal()),
       /Wrong card/,
     );
     assert.deepEqual(commands, []);
@@ -418,8 +418,7 @@ test('new binding uses only F101 write and 64-byte Seed with the default domain,
     snapshot(),
     hex(seedIndex),
   );
-  let mutations = 0;
-  await configuration.apply(applet, hello, signal(), () => mutations++);
+  await configuration.apply(applet, hello, signal());
   assert.deepEqual(
     commands.map(([name]) => name),
     ['grants', 'list', 'grant'],
@@ -430,7 +429,6 @@ test('new binding uses only F101 write and 64-byte Seed with the default domain,
     seed: {index: seedIndex, domain: SECURITY_KEY_DOMAIN},
   });
   assert.equal(configuration.complete, true);
-  assert.equal(mutations, 1);
 });
 
 test('existing binding preserves the original byte domain when changing or reenrolling a Seed', async () => {
@@ -442,7 +440,7 @@ test('existing binding preserves the original byte domain when changing or reenr
   await new SecurityKeyConfiguration(
     snapshot({grant: previous}),
     hex(otherSeedIndex),
-  ).apply(applet, hello, signal(), () => {});
+  ).apply(applet, hello, signal());
   assert.deepEqual(commands.at(-1)[1].seed, {
     index: otherSeedIndex,
     domain: previous.seed.domain,
@@ -457,7 +455,7 @@ test('changed configuration aborts before creating a Seed or replacing a grant',
     'create',
   );
   await assert.rejects(
-    configuration.apply(applet, hello, signal(), () => {}),
+    configuration.apply(applet, hello, signal()),
     /configuration changed/,
   );
   assert.deepEqual(
@@ -473,7 +471,6 @@ test('rejects unavailable or incorrectly sized selected Seeds without granting a
       applet,
       hello,
       signal(),
-      () => {},
     ),
     /64-byte Seed not found/,
   );
@@ -495,12 +492,12 @@ test('acknowledged Seed creation is retained when alias writing fails and explic
   });
   const configuration = new SecurityKeyConfiguration(snapshot(), 'create');
   await assert.rejects(
-    configuration.apply(applet, hello, signal(), () => {}),
+    configuration.apply(applet, hello, signal()),
     /lost connection/,
   );
   assert.deepEqual(configuration.createdIndex, otherSeedIndex);
   assert.equal(configuration.uncertain, false);
-  await configuration.apply(applet, hello, signal(), () => {});
+  await configuration.apply(applet, hello, signal());
   assert.equal(commands.filter(([name]) => name === 'create').length, 1);
   assert.deepEqual(commands.find(([name]) => name === 'create')[1], {
     type: 'seed',
@@ -514,7 +511,7 @@ test('acknowledged Seed creation is retained when alias writing fails and explic
 });
 
 for (const stage of ['Create', 'Grant']) {
-  test(`unknown ${stage.toLowerCase()} outcome cannot be replayed and invalidates the Card snapshot`, async () => {
+  test(`unknown ${stage.toLowerCase()} outcome cannot be replayed`, async () => {
     const {applet, commands} = card({
       [`on${stage}`]: async () => {
         throw new Error('lost ACK');
@@ -524,16 +521,14 @@ for (const stage of ['Create', 'Grant']) {
       snapshot(),
       stage === 'Create' ? 'create' : hex(seedIndex),
     );
-    let mutations = 0;
     await assert.rejects(
-      configuration.apply(applet, hello, signal(), () => mutations++),
+      configuration.apply(applet, hello, signal()),
       /lost ACK/,
     );
     assert.equal(configuration.uncertain, true);
-    assert.equal(mutations, 1);
     const count = commands.length;
     await assert.rejects(
-      configuration.apply(applet, hello, signal(), () => mutations++),
+      configuration.apply(applet, hello, signal()),
       /Scan card again/,
     );
     assert.equal(commands.length, count);
@@ -551,7 +546,7 @@ test('known card rejection does not turn into an unknown write result', async ()
     hex(seedIndex),
   );
   await assert.rejects(
-    configuration.apply(applet, hello, signal(), () => {}),
+    configuration.apply(applet, hello, signal()),
     /NOT_FOUND/,
   );
   assert.equal(configuration.uncertain, false);
@@ -568,9 +563,9 @@ test('acknowledgement survives cancellation before cleanup; no second grant is s
     snapshot(),
     hex(seedIndex),
   );
-  await configuration.apply(applet, hello, controller.signal, () => {});
+  await configuration.apply(applet, hello, controller.signal);
   assert.equal(configuration.complete, true);
-  await configuration.apply(applet, hello, signal(), () => {});
+  await configuration.apply(applet, hello, signal());
   assert.equal(commands.filter(([name]) => name === 'grant').length, 1);
 });
 
@@ -618,7 +613,7 @@ for (const [name, currentGrant] of [
           items: [{index: seedIndex, secret: true}, record],
         });
         const configuration = new SecurityKeyConfiguration(current, selection);
-        await configuration.apply(applet, hello, signal(), () => {});
+        await configuration.apply(applet, hello, signal());
         assert.equal(configuration.complete, true);
         assert.deepEqual(commands.at(-1), [
           'grant',
@@ -642,7 +637,7 @@ for (const [name, currentGrant] of [
       'create',
     );
     await assert.rejects(
-      configuration.apply(applet, hello, signal(), () => {}),
+      configuration.apply(applet, hello, signal()),
       /configuration changed/,
     );
     assert.deepEqual(
@@ -661,7 +656,7 @@ test('credentials added after reading the card cannot bypass Seed-change confirm
   });
   const configuration = new SecurityKeyConfiguration(current, 'create');
   await assert.rejects(
-    configuration.apply(applet, hello, signal(), () => {}),
+    configuration.apply(applet, hello, signal()),
     /Credentials changed/,
   );
   assert.equal(
@@ -672,7 +667,6 @@ test('credentials added after reading the card cannot bypass Seed-change confirm
     applet,
     hello,
     signal(),
-    () => {},
   );
   assert.equal(commands.filter(([name]) => name === 'create').length, 1);
 });
@@ -686,7 +680,6 @@ test('cancelled configuration does not issue commands on an authenticated card',
       applet,
       hello,
       controller.signal,
-      () => {},
     ),
     {name: 'AbortError'},
   );

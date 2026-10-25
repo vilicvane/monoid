@@ -226,7 +226,6 @@ test('adding an account reads each OTP reference once and grants the resulting s
       digits: 8,
     },
     signal(),
-    () => {},
   );
   assert.equal(next.length, 2);
   assert.deepEqual(
@@ -258,12 +257,7 @@ test('removing an account grants the remaining snapshot without rereading refere
     label: 'Example: alice',
     ...configuration,
   };
-  const next = await removeOTPAccount(
-    fixture.applet,
-    account,
-    signal(),
-    () => {},
-  );
+  const next = await removeOTPAccount(fixture.applet, account, signal());
   assert.deepEqual(
     next.map(account => account.index),
     [hex(secondIndex)],
@@ -277,16 +271,11 @@ test('removing an account grants the remaining snapshot without rereading refere
 test('an incompatible record at the proposed index is never treated as absent', async () => {
   const fixture = card();
   const imported = {...configuration, secret, label: 'Example'};
-  const [created] = await addOTPAccount(
-    fixture.applet,
-    imported,
-    signal(),
-    () => {},
-  );
+  const [created] = await addOTPAccount(fixture.applet, imported, signal());
   fixture.items.get(created.index).metadata = new Uint8Array([9]);
   fixture.commands.length = 0;
   await assert.rejects(
-    addOTPAccount(fixture.applet, imported, signal(), () => {}),
+    addOTPAccount(fixture.applet, imported, signal()),
     /OTP account conflict/,
   );
   assert.equal(
@@ -502,14 +491,12 @@ test('OTP authorization requires each exact HMAC key and read permission, dedupl
 
 test('OTP account import uses explicit metadata indices and reuses the same protected HMAC key', async () => {
   const fixture = card();
-  let mutations = 0;
   const first = {label: 'Example: alice', secret, ...configuration};
-  await addOTPAccount(fixture.applet, first, signal(), () => mutations++);
+  await addOTPAccount(fixture.applet, first, signal());
   await addOTPAccount(
     fixture.applet,
     {...first, label: 'Example: other', period: 60},
     signal(),
-    () => mutations++,
   );
   const creates = fixture.commands
     .filter(command => command[0] === 'create')
@@ -534,7 +521,6 @@ test('OTP account import uses explicit metadata indices and reuses the same prot
     })),
   );
   assert.equal(fixture.items.size, 3);
-  assert.equal(mutations, 2);
 });
 
 test('reimport updates an existing account alias and preserves its original metadata index', async () => {
@@ -545,7 +531,6 @@ test('reimport updates an existing account alias and preserves its original meta
     fixture.applet,
     {label: 'Renamed', secret, ...configuration},
     signal(),
-    () => {},
   );
   assert.equal(
     fixture.commands.some(command => command[0] === 'create'),
@@ -571,7 +556,6 @@ test('OTP metadata index conflicts never replace unrelated data', async () => {
       fixture.applet,
       {label: 'Example', secret, ...configuration},
       signal(),
-      () => {},
     ),
     /conflict/,
   );
@@ -607,7 +591,6 @@ test('OTP import never replaces an existing unprotected HMAC and does not replay
       unprotected.applet,
       {label: 'Example', secret, ...configuration},
       signal(),
-      () => {},
     ),
     /not protected/,
   );
@@ -617,7 +600,6 @@ test('OTP import never replaces an existing unprotected HMAC and does not replay
     ),
     false,
   );
-  let mutations = 0;
   const interrupted = card({
     onCreate() {
       throw new Error('Tag lost');
@@ -628,7 +610,6 @@ test('OTP import never replaces an existing unprotected HMAC and does not replay
       interrupted.applet,
       {label: 'Example', secret, ...configuration},
       signal(),
-      () => mutations++,
     ),
     /Tag lost/,
   );
@@ -640,7 +621,6 @@ test('OTP import never replaces an existing unprotected HMAC and does not replay
     interrupted.commands.some(command => command[0] === 'grant'),
     false,
   );
-  assert.equal(mutations, 1);
 });
 
 test('OTP import cancellation after creating the HMAC does not write metadata or replay', async () => {
@@ -650,13 +630,11 @@ test('OTP import cancellation after creating the HMAC does not write metadata or
       controller.abort();
     },
   });
-  let mutations = 0;
   await assert.rejects(
     addOTPAccount(
       fixture.applet,
       {label: 'Example', secret, ...configuration},
       controller.signal,
-      () => mutations++,
     ),
   );
   assert.equal(
@@ -668,7 +646,6 @@ test('OTP import cancellation after creating the HMAC does not write metadata or
     false,
   );
   assert.ok(fixture.items.has(hex(hmacIndex)));
-  assert.equal(mutations, 1);
 });
 
 test('OTP delete removes metadata before an unshared HMAC key and refreshes the grant', async () => {
@@ -677,8 +654,7 @@ test('OTP delete removes metadata before an unshared HMAC key and refreshes the 
     grants: [grant()],
   });
   const [account] = await readOTPAccounts(fixture.applet, signal());
-  let mutations = 0;
-  await removeOTPAccount(fixture.applet, account, signal(), () => mutations++);
+  await removeOTPAccount(fixture.applet, account, signal());
   assert.deepEqual(
     fixture.commands
       .filter(command => command[0] === 'remove')
@@ -689,7 +665,6 @@ test('OTP delete removes metadata before an unshared HMAC key and refreshes the 
     'grant',
     {aid: OTP_AID, types: [[-3583, false]], keys: []},
   ]);
-  assert.equal(mutations, 1);
 });
 
 test('OTP delete preserves HMAC keys referenced by another account or applet', async () => {
@@ -708,7 +683,7 @@ test('OTP delete preserves HMAC keys referenced by another account or applet', a
       ],
     });
     const [account] = await readOTPAccounts(fixture.applet, signal());
-    await removeOTPAccount(fixture.applet, account, signal(), () => {});
+    await removeOTPAccount(fixture.applet, account, signal());
     assert.ok(fixture.items.has(hex(hmacIndex)));
     assert.deepEqual(
       fixture.commands
@@ -725,16 +700,14 @@ test('OTP deletion skips a card without the account and writes nothing', async (
   });
   const [account] = await readOTPAccounts(source.applet, signal());
   const other = card({items: [{index: hmacIndex, secret: true, data: secret}]});
-  let mutations = 0;
   assert.equal(
-    await removeOTPAccount(other.applet, account, signal(), () => mutations++),
+    await removeOTPAccount(other.applet, account, signal()),
     undefined,
   );
   assert.equal(
     other.commands.some(([name]) => name === 'remove' || name === 'grant'),
     false,
   );
-  assert.equal(mutations, 0);
 });
 
 test('OTP account deletion still works after the optional applet was removed', async () => {
@@ -742,7 +715,7 @@ test('OTP account deletion still works after the optional applet was removed', a
     items: [accountRecord(), {index: hmacIndex, secret: true, data: secret}],
   });
   const [account] = await readOTPAccounts(fixture.applet, signal());
-  await removeOTPAccount(fixture.applet, account, signal(), () => {}, false);
+  await removeOTPAccount(fixture.applet, account, signal(), false);
   assert.equal(fixture.items.size, 0);
   assert.equal(
     fixture.commands.some(command => command[0] === 'grant'),
@@ -759,7 +732,7 @@ test('OTP deletion retains a secret that may still belong to an incompatible acc
     ],
   });
   const [account] = await readOTPAccounts(fixture.applet, signal());
-  await removeOTPAccount(fixture.applet, account, signal(), () => {});
+  await removeOTPAccount(fixture.applet, account, signal());
   assert.ok(fixture.items.has(hex(hmacIndex)));
   assert.ok(fixture.items.has(hex(secondIndex)));
   assert.deepEqual(
@@ -780,7 +753,6 @@ test('OTP delete rejects a changed key reference and stops on an uncertain metad
       changed.applet,
       {...account, keyIndex: '05141112131415161718'},
       signal(),
-      () => {},
     ),
     /changed/,
   );
@@ -788,7 +760,6 @@ test('OTP delete rejects a changed key reference and stops on an uncertain metad
     changed.commands.some(command => command[0] === 'remove'),
     false,
   );
-  let mutations = 0;
   const interrupted = card({
     items: [accountRecord(), {index: hmacIndex, secret: true, data: secret}],
     onRemove() {
@@ -796,7 +767,7 @@ test('OTP delete rejects a changed key reference and stops on an uncertain metad
     },
   });
   await assert.rejects(
-    removeOTPAccount(interrupted.applet, account, signal(), () => mutations++),
+    removeOTPAccount(interrupted.applet, account, signal()),
     /Tag lost/,
   );
   assert.deepEqual(
@@ -806,5 +777,4 @@ test('OTP delete rejects a changed key reference and stops on an uncertain metad
     [hex(accountIndex)],
   );
   assert.ok(interrupted.items.has(hex(hmacIndex)));
-  assert.equal(mutations, 1);
 });

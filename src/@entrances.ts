@@ -113,7 +113,7 @@ export class Entrances {
 
   @entrance
   get monoidApplet() {
-    return createMonoidApplet();
+    return this.cardStore.observeApplet(createMonoidApplet());
   }
 
   @entrance

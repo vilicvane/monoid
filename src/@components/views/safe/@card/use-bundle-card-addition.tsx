@@ -260,13 +260,13 @@ export function useBundleCardAddition({
               ? 'Checking card, hold tight...'
               : 'Resetting card, hold tight...',
           );
+          const cached = cardStore.get(reset.card);
           let hello = await reset.readOrReset(
             applet,
             current,
             () => pinSession.removePIN(reset.card.id, undefined, signal),
             () =>
               runInAction(() => {
-                const cached = cardStore.get(reset.card);
                 if (cached) {
                   cached.items = [];
                   cached.bundle = false;

@@ -6,7 +6,9 @@ import type {
   ScannedCardItemData,
   ScannedCardKeyData,
 } from '../@components/views/safe/index.js';
+import type {MonoidApplet, MonoidAppletHello} from '../@lib/monoid/index.js';
 import type {AddressType} from '../@lib/wallet-address.js';
+import {uint8ArrayToHex} from '../@utils/index.js';
 
 import {
   type WalletKeyPublicKeyData,
@@ -175,7 +177,72 @@ export class CardStore {
     this.cards.delete(`${identity.id}:${identity.publicKey}`);
   }
 
+  /** Observe each connection's Hello, including a new identity after reset. */
+  observeApplet(
+    applet: MonoidApplet,
+    initialHello?: MonoidAppletHello,
+  ): MonoidApplet {
+    const identities = new WeakMap<MonoidApplet, MonoidAppletHello>();
+    const store = this;
+    const observed: MonoidApplet = Object.create(applet, {
+      hello: {
+        async value(
+          this: MonoidApplet,
+          request: Parameters<MonoidApplet['hello']>[0],
+        ) {
+          const hello = await applet.hello.call(this, request);
+          identities.set(this, hello);
+          return hello;
+        },
+      },
+      // PINs and extension packets do not change cached items or membership.
+      ...Object.fromEntries(
+        (
+          [
+            'create',
+            'set',
+            'remove',
+            'importItem',
+            'createRandomKey',
+            'setAppletGrant',
+            'removeAppletGrant',
+            'createBundle',
+            'joinBundle',
+            'reset',
+          ] as const
+        ).map(name => [
+          name,
+          {
+            async value(this: MonoidApplet, request: never) {
+              // Every writable connection greets the card before authentication.
+              const hello = identities.get(this)!;
+              const identity = {
+                id: uint8ArrayToHex(hello.id),
+                publicKey: uint8ArrayToHex(hello.publicKey),
+              };
+              try {
+                const command: (request: never) => Promise<unknown> =
+                  applet[name];
+                return await command.call(this, request);
+              } finally {
+                // A lost acknowledgement may still have changed the card. Never retry.
+                store.forget(identity);
+              }
+            },
+          },
+        ]),
+      ),
+    });
+    if (initialHello) identities.set(observed, initialHello);
+    return observed;
+  }
+
   set(card: ScannedCardData): CardState {
+    if (card instanceof CardState) {
+      this.cards.set(`${card.id}:${card.publicKey}`, card);
+      return card;
+    }
+
     const existing = this.get(card);
 
     if (existing) {

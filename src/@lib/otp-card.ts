@@ -223,7 +223,6 @@ export async function addOTPAccount(
   applet: MonoidApplet,
   account: OTPImportAccount,
   signal: AbortSignal,
-  onMutation: () => void,
 ): Promise<OTPAccount[]> {
   const metadata = encodeOTPConfiguration(account);
   if (account.secret.length < 1 || account.secret.length > 255)
@@ -266,46 +265,42 @@ export async function addOTPAccount(
   if (existingKey && !existingKey.secret)
     throw new MonoidCardError('Existing OTP key is not protected');
   signal.throwIfAborted();
-  try {
-    if (!existingKey) {
-      const created = await applet.create({
-        type: SafeKnownType.satisfies('hmac'),
-        data: account.secret,
-        secret: true,
-      });
-      if (!equalBytes(created.index, hmacIndex))
-        throw new MonoidCardError('Unexpected OTP key');
-    }
-    signal.throwIfAborted();
-    if (!existing) {
-      await applet.create({
-        index,
-        alias: account.label,
-        metadata,
-        data: hmacIndex,
-        secret: false,
-      });
-    } else if (existing.label !== account.label) {
-      await applet.set({
-        index: SafeIndex.satisfies(hexToUint8Array(existing.index)),
-        alias: account.label,
-      });
-    }
-    signal.throwIfAborted();
-    const added: OTPAccount = {
-      index: existing?.index ?? SafeIndexHex.satisfies(uint8ArrayToHex(index)),
-      keyIndex: SafeIndexHex.satisfies(keyIndex),
-      label: account.label,
-      algorithm: account.algorithm,
-      digits: account.digits,
-      period: account.period,
-    };
-    const next = [...accounts.filter(item => item !== existing), added];
-    await grantOTPAccounts(applet, next, signal);
-    return next;
-  } finally {
-    onMutation();
+  if (!existingKey) {
+    const created = await applet.create({
+      type: SafeKnownType.satisfies('hmac'),
+      data: account.secret,
+      secret: true,
+    });
+    if (!equalBytes(created.index, hmacIndex))
+      throw new MonoidCardError('Unexpected OTP key');
   }
+  signal.throwIfAborted();
+  if (!existing) {
+    await applet.create({
+      index,
+      alias: account.label,
+      metadata,
+      data: hmacIndex,
+      secret: false,
+    });
+  } else if (existing.label !== account.label) {
+    await applet.set({
+      index: SafeIndex.satisfies(hexToUint8Array(existing.index)),
+      alias: account.label,
+    });
+  }
+  signal.throwIfAborted();
+  const added: OTPAccount = {
+    index: existing?.index ?? SafeIndexHex.satisfies(uint8ArrayToHex(index)),
+    keyIndex: SafeIndexHex.satisfies(keyIndex),
+    label: account.label,
+    algorithm: account.algorithm,
+    digits: account.digits,
+    period: account.period,
+  };
+  const next = [...accounts.filter(item => item !== existing), added];
+  await grantOTPAccounts(applet, next, signal);
+  return next;
 }
 
 /** Resolves `undefined` without writing when this card lacks the account. */
@@ -313,7 +308,6 @@ export async function removeOTPAccount(
   applet: MonoidApplet,
   account: OTPAccount,
   signal: AbortSignal,
-  onMutation: () => void,
   installed = true,
 ): Promise<OTPAccount[] | undefined> {
   const {accounts, items: accountItems} = await readOTPInventory(
@@ -346,21 +340,17 @@ export async function removeOTPAccount(
         ),
     );
   signal.throwIfAborted();
-  try {
+  await applet.remove({
+    index: SafeIndex.satisfies(hexToUint8Array(account.index)),
+  });
+  signal.throwIfAborted();
+  // Remove the reference before its secret, preserving keys shared by another client.
+  if (!shared)
     await applet.remove({
-      index: SafeIndex.satisfies(hexToUint8Array(account.index)),
+      index: SafeIndex.satisfies(hexToUint8Array(account.keyIndex)),
     });
-    signal.throwIfAborted();
-    // Remove the reference before its secret, preserving keys shared by another client.
-    if (!shared)
-      await applet.remove({
-        index: SafeIndex.satisfies(hexToUint8Array(account.keyIndex)),
-      });
-    signal.throwIfAborted();
-    const next = accounts.filter(item => item.index !== account.index);
-    if (installed) await grantOTPAccounts(applet, next, signal);
-    return next;
-  } finally {
-    onMutation();
-  }
+  signal.throwIfAborted();
+  const next = accounts.filter(item => item.index !== account.index);
+  if (installed) await grantOTPAccounts(applet, next, signal);
+  return next;
 }

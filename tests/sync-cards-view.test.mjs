@@ -354,8 +354,12 @@ function mount({
       const scan = state.scans.at(-1);
       try {
         scan.validate?.(cardHello);
-        scan.result = await scan.callback(
+        scan.applet = state.entrances.cardStore.observeApplet(
           applet,
+          cardHello,
+        );
+        scan.result = await scan.callback(
+          scan.applet,
           content => state.progress.push(content),
           cardHello,
           scan.controller.signal,
@@ -697,7 +701,7 @@ test('only writing the original Card reloads its addresses and restores the comp
   await state.tap(first.hello, first.applet);
   await state.finishScan();
   assert.equal(state.session.phase, 'complete');
-  assert.deepEqual(state.previewApplets, [first.applet]);
+  assert.deepEqual(state.previewApplets, [state.scans.at(-1).applet]);
   assert.deepEqual(state.previewRecords, [
     state.session.confirmedSnapshot.items,
   ]);

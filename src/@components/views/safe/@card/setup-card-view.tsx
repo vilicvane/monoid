@@ -3,7 +3,7 @@ import {observer} from 'mobx-react-lite';
 import {type ReactNode, useCallback, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
-import {MonoidIdHex, MonoidPIN, PublicKeyHex} from '../../../../@atomics.js';
+import {type MonoidIdHex, MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import type {CardInformation} from '../../../../@lib/global-platform/card-information.js';
 import {
@@ -462,13 +462,13 @@ export const SetupCardView = observer(
                 ? 'Checking card, hold tight...'
                 : 'Resetting card, hold tight...',
             );
+            const cached = cardStore.get(reset.card);
             let hello = await reset.readOrReset(
               applet,
               current,
               () => pinSession.removePIN(reset.card.id, undefined, signal),
               () =>
                 runInAction(() => {
-                  const cached = cardStore.get(reset.card);
                   if (cached) {
                     cached.items = [];
                     cached.bundle = false;
@@ -617,6 +617,10 @@ export const SetupCardView = observer(
                     ? 'Joining bundle, hold tight...'
                     : 'Creating bundle, hold tight...',
                 );
+                const cached = cardStore.get({
+                  id: uint8ArrayToHex(hello.id),
+                  publicKey: uint8ArrayToHex(hello.publicKey),
+                });
                 try {
                   await bundleSession.configureCard(
                     applet,
@@ -628,13 +632,12 @@ export const SetupCardView = observer(
                 } finally {
                   // An ACK remains authoritative even if navigation follows it.
                   runInAction(() => {
-                    for (const member of bundleSession.cards) {
-                      if (member.bundle === undefined) continue;
-                      const cached = cardStore.get({
-                        id: MonoidIdHex.satisfies(member.id),
-                        publicKey: PublicKeyHex.satisfies(member.publicKey),
-                      });
-                      if (cached) cached.bundle = member.bundle;
+                    const confirmed = bundleSession.cards.find(
+                      card => card.publicKey === member.publicKey,
+                    );
+                    if (cached && confirmed?.status === 'complete') {
+                      cached.bundle = confirmed.bundle!;
+                      cardStore.set(cached);
                     }
                   });
                 }

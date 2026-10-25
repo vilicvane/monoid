@@ -12,6 +12,7 @@ import {
   MonoidAppletHello,
   MonoidAppletInvalidPINError,
 } from '../.bld/app/@lib/monoid/monoid-applet.js';
+import {CardStore} from '../.bld/app/@services/card-store.js';
 
 let fixture;
 let rendering;
@@ -755,10 +756,16 @@ function mount(
       async openSession(sessionId) {
         state.events.push('open-session');
         state.openedSessions.push(sessionId);
-        return state.bundleApplet;
+        return CardStore.prototype.observeApplet.call(
+          state.entrances.cardStore,
+          state.bundleApplet,
+        );
       },
     },
     cardStore: {
+      forget(identity) {
+        state.cachedCards.delete(identity.publicKey);
+      },
       set(card) {
         state.cachedCards.set(card.publicKey, card);
         return card;
@@ -2135,8 +2142,8 @@ test('a join error keeps the acknowledged creator and retries only the pending m
   assert.equal(state.cardButton('00000001').props.disabled, true);
   assert.equal(state.card('00000002').props.description, 'interrupted');
   assert.equal(
-    state.cachedCards.get(hex(state.members[1].publicKey)).bundle,
-    false,
+    state.cachedCards.get(hex(state.members[1].publicKey)),
+    undefined,
   );
   state.joinFailure = undefined;
   state.click('Scan next card');
