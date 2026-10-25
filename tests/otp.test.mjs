@@ -32,6 +32,7 @@ const {
   fetchOTPTimeProof,
   parseOTPURI,
   prepareOTP,
+  validateOTPAccountLabel,
 } = await import('../.bld/app/@lib/otp.js');
 const {createMonoidApplet} = await import(
   '../.bld/app/@lib/monoid/monoid-applet.js'
@@ -546,4 +547,14 @@ test('Authority failures and card proof rejection never retry with phone time', 
     );
     assert(commands.every(c => !('time' in c.request)));
   }
+});
+
+test('OTP account names trim and require a name after any provider prefix', () => {
+  assert.equal(validateOTPAccountLabel('  Example: alice '), 'Example: alice');
+  assert.equal(validateOTPAccountLabel('alice'), 'alice');
+  for (const label of ['', '  ', 'Example:', 'Example:  ', 'a\u0007b'])
+    assert.throws(
+      () => validateOTPAccountLabel(label),
+      /Invalid OTP account name/,
+    );
 });

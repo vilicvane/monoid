@@ -1,5 +1,9 @@
 import {App} from '@capacitor/app';
-import {Ellipsis as ellipsis, Trash2 as trash} from 'lucide-react';
+import {
+  Broom as broom,
+  CreditCardMinus as creditCardMinus,
+  Ellipsis as ellipsis,
+} from 'lucide-react';
 import {reaction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {
@@ -474,6 +478,7 @@ export const OTPView = observer(
                           <>
                             <SwipeAction
                               type="button"
+                              $color="var(--ion-color-warning)"
                               disabled={busy}
                               onClick={errorService.catch(async () => {
                                 await otpStore.forget(account.index);
@@ -481,7 +486,7 @@ export const OTPView = observer(
                               })}
                             >
                               <SwipeActionIcon>
-                                <AppIcon icon={trash} />
+                                <AppIcon icon={broom} />
                               </SwipeActionIcon>
                               Forget
                             </SwipeAction>
@@ -492,7 +497,7 @@ export const OTPView = observer(
                               onClick={() => setRemove(account)}
                             >
                               <SwipeActionIcon>
-                                <AppIcon icon={trash} />
+                                <AppIcon icon={creditCardMinus} />
                               </SwipeActionIcon>
                               Delete
                             </SwipeAction>

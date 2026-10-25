@@ -1,3 +1,5 @@
+import {Capacitor} from '@capacitor/core';
+import {Keyboard} from '@capacitor/keyboard';
 import classNames from 'classNames';
 import type {ReactNode} from 'react';
 import {useCallback, useEffect, useId, useRef, useState} from 'react';
@@ -144,6 +146,8 @@ export type InputModalOptions = {
   placeholderContent?: ReactNode;
   description?: ReactNode;
   defaultValue?: string;
+  /** Initial selection within `defaultValue`. */
+  selection?: {start: number; end: number};
   maxLength?: number;
   checkbox?: {
     label: string;
@@ -159,6 +163,35 @@ type InputModalInstance = {
   release: () => void;
   cancelKeyboard?: () => void;
 };
+
+/** Phone WebViews move the caret to the end once focus and the keyboard settle. */
+function selectInitialRange(
+  input: HTMLInputElement,
+  {selection}: InputModalOptions,
+): () => void {
+  if (!selection) return () => {};
+
+  const select = (): void =>
+    input.setSelectionRange(selection.start, selection.end);
+
+  select();
+
+  const timer = setTimeout(select);
+  const listener = Capacitor.isNativePlatform()
+    ? Keyboard.addListener('keyboardDidShow', select)
+    : undefined;
+
+  const cancel = (): void => {
+    clearTimeout(timer);
+    input.removeEventListener('input', cancel);
+    void listener?.then(handle => handle.remove());
+  };
+
+  // Typing ends the initial selection; a later keyboard show keeps the caret.
+  input.addEventListener('input', cancel);
+
+  return cancel;
+}
 
 export function useInputModal(): [
   ReactNode,
@@ -220,9 +253,13 @@ export function useInputModal(): [
       return;
     }
 
-    const cancelKeyboard = showInputKeyboard(inputRef.current);
+    const input = inputRef.current;
+    const cancelSelection = selectInitialRange(input, instance.options);
+
+    const cancelKeyboard = showInputKeyboard(input);
     instance.cancelKeyboard = cancelKeyboard;
     return () => {
+      cancelSelection();
       cancelKeyboard();
       if (instance.cancelKeyboard === cancelKeyboard) {
         instance.cancelKeyboard = undefined;

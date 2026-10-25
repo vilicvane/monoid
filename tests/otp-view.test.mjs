@@ -4,7 +4,9 @@ import {setImmediate} from 'node:timers/promises';
 
 import {observable, runInAction} from 'mobx';
 
-const {parseOTPURI} = await import('../.bld/app/@lib/otp.js');
+const {parseOTPURI, validateOTPAccountLabel} = await import(
+  '../.bld/app/@lib/otp.js'
+);
 
 let fixture;
 let rendering;
@@ -52,7 +54,12 @@ mock.module('mobx-react-lite', {
   namedExports: {observer: component => component},
 });
 mock.module('lucide-react', {
-  namedExports: {Ellipsis: 'Ellipsis', Trash2: 'Trash2', ScanLine: 'ScanLine'},
+  namedExports: {
+    Broom: 'Broom',
+    CreditCardMinus: 'CreditCardMinus',
+    Ellipsis: 'Ellipsis',
+    ScanLine: 'ScanLine',
+  },
 });
 mock.module('@ionic/react', {
   namedExports: {IonFabButton: 'IonFabButton'},
@@ -176,6 +183,7 @@ mock.module('../.bld/app/@lib/otp.js', {
   namedExports: {
     OTP_AID,
     OTP_MAX_ACCOUNTS: 16,
+    validateOTPAccountLabel,
     prepareOTP: async (_applet, indexes, authority, signal, onStage) => {
       fixture.events.push('prepare');
       onStage?.('preparing');
@@ -218,9 +226,10 @@ mock.module('../.bld/app/@components/@ui/use-input-modal.js', {
   namedExports: {
     useInputModal: () => [
       'pin-input',
-      async () => {
+      async options => {
         const owner = fixture;
         owner.events.push('input');
+        owner.inputOptions = options;
         return owner.input?.promise ?? PIN;
       },
     ],
@@ -1078,7 +1087,8 @@ test('Scan again stays visible, changes color with code availability and preserv
     false,
   );
   assert.equal(
-    find(state.tree, node => node.type === 'ViewHeaderTitle').props.children,
+    find(state.tree, node => node.props?.['aria-label'] === 'Edit account name')
+      .props.children,
     card.accounts[0].label,
   );
   assert.ok(
@@ -1252,4 +1262,56 @@ test('an uncached Card Applets context validates its full identity on the first 
   assert.deepEqual(state.events, ['unlock', 'input', 'remember', 'scan']);
   assert.match(state.errors[0].message, /Wrong card/);
   assert.equal(state.entrances.otpStore.accounts.length, 1);
+});
+
+test('account header renames the card alias, then the cached account', async () => {
+  const card = cachedCard(1);
+  card.accounts[0].label = 'Example:  alice';
+  const state = mount([card]);
+  state.openAccount(card);
+  await state.flush();
+  await state.tap(card);
+
+  state.input = {promise: Promise.resolve('  Example: renamed  ')};
+  find(
+    state.render(),
+    node => node.props?.['aria-label'] === 'Edit account name',
+  ).props.onClick();
+  await state.flush();
+  assert.deepEqual(state.inputOptions.selection, {start: 10, end: 15});
+
+  const scan = state.scans.at(-1);
+  assert.equal(scan.content, 'Scan card to save name');
+  assert.equal(scan.authentication, undefined);
+  const writes = [];
+  await scan.callback(
+    {set: async request => writes.push(request)},
+    () => {},
+    undefined,
+    scan.signal,
+  );
+  assert.deepEqual(writes, [
+    {index: bytes(card.accounts[0].index), alias: 'Example: renamed'},
+  ]);
+  assert.equal(state.entrances.otpStore.accounts[0].label, 'Example: renamed');
+});
+
+test('tapping the provider tag selects the provider and cancelling starts no scan', async () => {
+  const card = cachedCard(1);
+  card.accounts[0].label = 'Example:  alice';
+  const state = mount([card]);
+  state.openAccount(card);
+  await state.flush();
+  await state.tap(card);
+  const scans = state.scans.length;
+
+  state.input = {promise: Promise.resolve(undefined)};
+  find(
+    state.render(),
+    node => node.props?.['aria-label'] === 'Edit account provider',
+  ).props.onClick();
+  await state.flush();
+  assert.deepEqual(state.inputOptions.selection, {start: 0, end: 7});
+  assert.equal(state.scans.length, scans);
+  assert.equal(state.entrances.otpStore.accounts[0].label, 'Example:  alice');
 });

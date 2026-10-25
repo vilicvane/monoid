@@ -60,6 +60,20 @@ export function decodeOTPSecret(input: string): Uint8Array {
   return secret;
 }
 
+/** A `provider: name` prefix is optional, but its name must not be empty. */
+export function validateOTPAccountLabel(input: string): string {
+  const label = input.trim();
+  const separator = label.indexOf(':');
+  if (
+    !label ||
+    CONTROL_CHARACTER.test(label) ||
+    (separator >= 0 && !label.slice(separator + 1).trim())
+  )
+    throw new MonoidCardError('Invalid OTP account name');
+
+  return label;
+}
+
 export function parseOTPURI(input: string): OTPImportAccount {
   let uri: URL;
   try {
@@ -86,19 +100,11 @@ export function parseOTPURI(input: string): OTPImportAccount {
   } catch {
     throw new MonoidCardError('Invalid OTP account name');
   }
-  if (!label || CONTROL_CHARACTER.test(label))
-    throw new MonoidCardError('Invalid OTP account name');
   const issuer = uri.searchParams.get('issuer')?.trim();
-  const separator = label.indexOf(':');
-  if (issuer) {
-    // Names are presentation metadata; preserve an explicit prefix even when
-    // the issuer parameter uses a different spelling or service name.
-    if (separator < 0) label = `${issuer}: ${label}`;
-  }
-  if (CONTROL_CHARACTER.test(label))
-    throw new MonoidCardError('Invalid OTP account name');
-  if (separator >= 0 && !label.slice(separator + 1).trim())
-    throw new MonoidCardError('Invalid OTP account name');
+  // Names are presentation metadata; preserve an explicit prefix even when
+  // the issuer parameter uses a different spelling or service name.
+  if (issuer && !label.includes(':')) label = `${issuer}: ${label}`;
+  label = validateOTPAccountLabel(label);
 
   const algorithm = (uri.searchParams.get('algorithm') ?? 'SHA1').toUpperCase();
   if (!algorithms.some(value => value === algorithm))

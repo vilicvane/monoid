@@ -6,6 +6,10 @@ instead of duplicating it, and accounts absent from a scan remain cached.
 Tap an account to open its independent page and start NFC once the route is active.
 An enabled card containing it returns the current and two following codes.
 The header contains the account name and the provider in the shared white tag.
+Tapping the account name or provider tag edits the full `provider: name` label, with that part
+preselected: the same name
+rules as import apply, the tapped card's item alias is updated first, and only an
+acknowledged write updates the cached entry. A missing index reports a wrong card.
 The deep-gray code is the primary content; tapping its digits copies it without a separate
 copy icon, and the shared copy feedback changes its color briefly. Each loaded
 window, including the current one, has a small countdown ring. The active ring
@@ -41,8 +45,8 @@ before an account can be tapped, and tapping a provider tag collapses it again.
 Labels without a provider retain their full name and an OTP tag, and stay
 independent. Collapsed groups do not expose an individual account's swipe actions.
 
-Forget removes only the local entry. Delete from card removes it from the tapped
-card and retains the cache for other backups. Installation/authorization status
+Forget (yellow broom) removes only the local entry. Delete from card (red
+credit-card-minus) removes it from the tapped card and retains the cache for other backups. Installation/authorization status
 belongs only to the current page's scanned card, not to cached accounts. Enable
 OTP on card remains a separate menu action and is never performed by code retrieval.
 

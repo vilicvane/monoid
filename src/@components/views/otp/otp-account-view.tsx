@@ -6,7 +6,9 @@ import type {RouteComponentProps} from 'routra-react';
 import {keyframes, styled} from 'styled-components';
 import {UnmountAnimationClone} from 'unmount-animation-clone';
 
+import {SafeIndex} from '../../../@atomics.js';
 import {useEntrances} from '../../../@entrances.js';
+import {CBORAppletError} from '../../../@lib/cbor-applet.js';
 import {MonoidCardError} from '../../../@lib/monoid/index.js';
 import {
   OTPAuthorityWarmup,
@@ -21,6 +23,7 @@ import {
   currentOTPCode,
   otpCodeState,
   prepareOTP,
+  validateOTPAccountLabel,
 } from '../../../@lib/otp.js';
 import type {Router} from '../../../@routes.js';
 import {isCredentialRequestCancelled} from '../../../@services/index.js';
@@ -33,6 +36,7 @@ import {
 import {Button, Buttons} from '../../@ui/button.js';
 import {CopyButton} from '../../@ui/copy-button.js';
 import {WhiteTag} from '../../@ui/tag.js';
+import {useInputModal} from '../../@ui/use-input-modal.js';
 import {
   View,
   ViewContent,
@@ -44,7 +48,10 @@ import {
   viewHeaderTagCSS,
 } from '../../@view/index.js';
 
-import {splitOTPAccountLabel} from './otp-account-label.js';
+import {
+  getOTPAccountLabelRange,
+  splitOTPAccountLabel,
+} from './otp-account-label.js';
 
 const AccountHeader = styled(ViewHeader)`
   grid-template-columns: minmax(0, auto) minmax(0, 1fr);
@@ -55,6 +62,24 @@ const AccountTitle = styled(ViewHeaderTitle)`
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+`;
+const AccountName = styled.button`
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+
+  &:disabled {
+    cursor: default;
+  }
 `;
 const Provider = styled(WhiteTag)`
   ${viewHeaderTagCSS}
@@ -191,6 +216,7 @@ export const OTPAccountView = observer(
       ensureSetup: false,
       pinSession,
     });
+    const [nameInput, showNameInput] = useInputModal();
     const controller = useRef<AbortController | undefined>(undefined);
     const scanning = useRef(false);
     const mounted = useRef(true);
@@ -351,16 +377,112 @@ export const OTPAccountView = observer(
       }
     }
 
+    async function rename(part: 'provider' | 'name'): Promise<void> {
+      if (!account || controller.current || !active()) return;
+
+      const value = await showNameInput({
+        placeholder: 'Enter account name',
+        defaultValue: account.label,
+        selection: getOTPAccountLabelRange(account.label, part),
+        center: true,
+      });
+      if (value === undefined || value.trim() === account.label) return;
+
+      const label = validateOTPAccountLabel(value);
+      if (controller.current || !active()) return;
+
+      const task = new AbortController();
+      controller.current = task;
+      setBusy(true);
+      try {
+        try {
+          await pinSession.getPINs(task.signal);
+        } catch (error) {
+          pinSession.clear();
+          throw error;
+        }
+        task.signal.throwIfAborted();
+        if (!active()) return;
+
+        scanning.current = true;
+        await scan(
+          'Scan card to save name',
+          async (applet, setState) => {
+            setState('Saving name, hold tight...');
+            await applet
+              .set({
+                index: SafeIndex.satisfies(hexToUint8Array(account.index)),
+                alias: label,
+              })
+              .catch(error => {
+                if (
+                  error instanceof CBORAppletError &&
+                  error.source.code === 'NOT_FOUND'
+                )
+                  throw new MonoidCardError('Account not found, wrong card?', {
+                    cause: error,
+                  });
+                throw error;
+              });
+            // An acknowledged write is kept even if the page closes meanwhile.
+            await otpStore.save([{...account, label}]);
+          },
+          hello => {
+            task.signal.throwIfAborted();
+            if (!active()) throw new MonoidScanRedirectError();
+            if (hello.pins.access === false || hello.pins.secret === false)
+              throw new MonoidCardError('Set up card PINs first');
+            if (hello.pins.access === 0)
+              throw new MonoidCardError('Access PIN blocked');
+          },
+          task.signal,
+        );
+      } catch (error) {
+        if (
+          !task.signal.aborted &&
+          !isCredentialRequestCancelled(error) &&
+          !(error instanceof Error && error.name === 'AbortError')
+        )
+          throw error;
+      } finally {
+        scanning.current = false;
+        if (controller.current === task) controller.current = undefined;
+        if (mounted.current) setBusy(false);
+      }
+    }
+
     const item = batch?.items.find(item => item.index === index);
     const state = batch && item ? otpCodeState(batch, item, clock) : undefined;
     const {provider, name} = splitOTPAccountLabel(account?.label ?? '');
     return (
       <View>
         <AccountHeader>
-          <AccountTitle title={name}>{name || 'OTP'}</AccountTitle>
+          <AccountTitle title={name}>
+            {account ? (
+              <AccountName
+                type="button"
+                aria-label="Edit account name"
+                disabled={busy}
+                onClick={() => errorService.catch(rename('name'))}
+              >
+                {name || 'OTP'}
+              </AccountName>
+            ) : (
+              name || 'OTP'
+            )}
+          </AccountTitle>
           {provider && (
             <ViewHeaderTags>
-              <Provider title={provider}>{provider}</Provider>
+              <Provider
+                as="button"
+                type="button"
+                title={provider}
+                aria-label="Edit account provider"
+                disabled={busy}
+                onClick={() => errorService.catch(rename('provider'))}
+              >
+                {provider}
+              </Provider>
             </ViewHeaderTags>
           )}
         </AccountHeader>
@@ -451,6 +573,7 @@ export const OTPAccountView = observer(
             )}
           </CodeStage>
         </ViewContent>
+        {nameInput}
         {scanInput}
       </View>
     );
