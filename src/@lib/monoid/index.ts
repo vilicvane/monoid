@@ -1,4 +1,5 @@
 export * from './applet-install-progress.js';
+export * from './card-contents.js';
 export * from './card-error.js';
 export * from './card-identity.js';
 export * from './card-pins.js';
@@ -7,6 +8,7 @@ export * from './initialize-card.js';
 export * from './install.js';
 export * from './item-operations.js';
 export * from './monoid-applet.js';
+export * from './multi-card-series.js';
 export * from './sign-bitcoin-transaction.js';
 export * from './sign-evm-digest.js';
 export * from './sign-evm-message.js';

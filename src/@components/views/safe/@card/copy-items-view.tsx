@@ -276,7 +276,7 @@ export const CopyItemsView = observer(
     const transfers = targets.flatMap(target => target.items);
     const exported = transfers.filter(item => item.exported).length;
     const conflicts = transfers.filter(item => item.conflict).length;
-    const completedCards = targets.filter(target => target.complete).length;
+    const completedCards = session.series.completedCount;
     const sourceId = backup?.source.id;
     const nextStep = backup?.complete
       ? 5
@@ -657,9 +657,10 @@ export const CopyItemsView = observer(
                       'Scan one of the added destination cards.',
                     );
                   }
-                  if (matched.complete) {
-                    throw new MonoidCardError('Already copied to this card');
-                  }
+                  session.series.assertPending(
+                    matched.publicKey,
+                    'Already copied to this card',
+                  );
                   target = matched;
                 },
               );

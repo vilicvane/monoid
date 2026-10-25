@@ -11,13 +11,13 @@ import type {OTPAccount, OTPCard} from '../@services/index.js';
 import {uint8ArrayToHex} from '../@utils/index.js';
 
 import {AppletISOError, probeApplet} from './applet.js';
-import {InvalidCardItemError} from './card-item-error.js';
 import {equalBytes} from './global-platform/commands.js';
 import {
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidCardError,
   acceptMatchingItem,
+  readCardContents,
   removeItems,
 } from './monoid/index.js';
 import {createOTPApplet} from './otp-applet.js';
@@ -25,7 +25,7 @@ import {
   type OTPImportAccount,
   OTP_AID,
   OTP_ITEM_TYPE,
-  decodeOTPConfiguration,
+  decodeOTPAccount,
   encodeOTPConfiguration,
 } from './otp.js';
 
@@ -52,33 +52,11 @@ export async function readOTPAccounts(
   applet: MonoidApplet,
   signal: AbortSignal,
 ): Promise<OTPAccount[]> {
-  signal.throwIfAborted();
-  const {items} = await applet.list({type: accountType});
-  signal.throwIfAborted();
-  const accounts: OTPAccount[] = [];
-  for (const item of items) {
-    if (
-      !item.secret ||
-      !item.metadata ||
-      item.index.length !== 10 ||
-      item.index[0] !== 0xf2 ||
-      item.index[1] !== 1
-    )
-      continue;
-    let configuration;
-    try {
-      configuration = decodeOTPConfiguration(item.metadata);
-    } catch (error) {
-      if (!(error instanceof InvalidCardItemError)) throw error;
-      continue;
-    }
-    accounts.push({
-      index: SafeIndexHex.satisfies(uint8ArrayToHex(item.index)),
-      label: item.alias || 'OTP account',
-      ...configuration,
-    });
-  }
-  return accounts;
+  const {items} = await readCardContents(applet, decodeOTPAccount, {
+    filter: {type: accountType},
+    check: () => signal.throwIfAborted(),
+  });
+  return items;
 }
 
 /** Access authentication is already active. The final SELECT leaves OTP selected. */

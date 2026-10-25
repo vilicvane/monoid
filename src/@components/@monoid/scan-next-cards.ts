@@ -1,4 +1,4 @@
-import {MonoidCardError} from '../../@lib/monoid/index.js';
+import {MultiCardSeries} from '../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../@lib/operation-cancelled.js';
 import {uint8ArrayToHex} from '../../@utils/index.js';
 
@@ -31,23 +31,18 @@ export async function scanNextCards({
   signal?: AbortSignal;
   authentication?: MonoidScanAuthentication;
 }): Promise<void> {
+  const series = new MultiCardSeries(scanned);
+
   while (!signal?.aborted) {
     try {
       await scan(
         content,
-        async (applet, setStateContent, hello, scanSignal) => {
-          const result = await callback(
-            applet,
-            setStateContent,
-            hello,
-            scanSignal,
-          );
-          scanned.add(uint8ArrayToHex(hello.publicKey));
-          return result;
-        },
+        (applet, setStateContent, hello, scanSignal) =>
+          series.run(uint8ArrayToHex(hello.publicKey), () =>
+            callback(applet, setStateContent, hello, scanSignal),
+          ),
         hello => {
-          if (scanned.has(uint8ArrayToHex(hello.publicKey)))
-            throw new MonoidCardError('Card already done, scan another card');
+          series.assertPending(uint8ArrayToHex(hello.publicKey));
           validate?.(hello);
         },
         signal,

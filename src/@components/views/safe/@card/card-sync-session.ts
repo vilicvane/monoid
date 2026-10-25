@@ -5,9 +5,7 @@ import {
   MonoidIdHex,
   MonoidPIN,
   PublicKeyHex,
-  SafeIndexHex,
 } from '../../../../@atomics.js';
-import {InvalidCardItemError} from '../../../../@lib/card-item-error.js';
 import {
   CBORAppletError,
   CardItemNotFoundError,
@@ -17,12 +15,14 @@ import {
   type MonoidAppletHello,
   MonoidAppletInvalidPINError,
   MonoidCardError,
+  MultiCardSeries,
   acceptMatchingItem,
   assertCardPINNotBlocked,
   assertSameCardWithBundle,
   hasMatchingItem,
   monoidCommandDefinitions,
   readBackupCardIdentity,
+  readCardContents,
 } from '../../../../@lib/monoid/index.js';
 import {
   type CardMaintenanceBundleRecovery,
@@ -30,14 +30,8 @@ import {
 } from '../../../../@services/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 import {xCBOR} from '../../../../@x-value/index.js';
-import {
-  decodeCardDerivationRecord,
-  filterCardDerivationAssociations,
-  getCardDerivationItemIndex,
-  isCardDerivationItem,
-} from '../card-derivations.js';
-import {validateCardImmutableItem} from '../card-item-merge.js';
-import {isCardOTPItem} from '../card-otp.js';
+import {decodeCardRecord} from '../card-contents.js';
+import {filterCardDerivationAssociations} from '../card-derivations.js';
 import type {ScannedCardData} from '../common.js';
 
 import {
@@ -304,6 +298,11 @@ export class CardSyncSession {
   get cards(): readonly CardSyncCard[] {
     return this.current.get().cards;
   }
+
+  get series(): MultiCardSeries {
+    return MultiCardSeries.from(this.cards);
+  }
+
   get phase(): 'collect' | 'write' | 'complete' {
     return this.current.get().phase;
   }
@@ -335,7 +334,7 @@ export class CardSyncSession {
   }
 
   private finish(cards: CardSyncCard[]): void {
-    if (cards.every(card => card.complete)) {
+    if (MultiCardSeries.from(cards).completedCount === cards.length) {
       this.executions.clear();
       this.update({
         phase: 'complete',
@@ -365,63 +364,21 @@ export class CardSyncSession {
     callback?: ProgressCallback,
     listed?: Awaited<ReturnType<MonoidApplet['list']>>,
   ): Promise<CardSyncSnapshot> {
-    cancelled(signal);
-    const {items: entries} = listed ?? (await applet.list({}));
-    const items: CardSyncItem[] = [];
-    const skippedIndexes: string[] = [];
-    this.report({stage, current: 0, total: entries.length}, callback);
+    const {items, skippedIndexes} = await readCardContents(
+      applet,
+      async entry => {
+        const item: CardSyncItem = await decodeCardRecord(applet, entry, true);
+        if (item.secret) item.fingerprint = await readFingerprint(applet, item);
+        return item;
+      },
+      {
+        listed,
+        check: () => cancelled(signal),
+        onProgress: (current, total) =>
+          this.report({stage, current, total}, callback),
+      },
+    );
 
-    for (const [position, entry] of entries.entries()) {
-      cancelled(signal);
-      const item: CardSyncItem = {
-        index: SafeIndexHex.satisfies(uint8ArrayToHex(entry.index)),
-        type: entry.type,
-        alias: entry.alias,
-        metadata:
-          entry.metadata === undefined
-            ? undefined
-            : uint8ArrayToHex(entry.metadata),
-        secret: entry.secret,
-      };
-
-      try {
-        if (item.secret || isCardOTPItem(item)) {
-          // Validate public configuration before exporting Secret items.
-          validateCardImmutableItem(item);
-          item.fingerprint = await readFingerprint(applet, item);
-        } else {
-          const {data} = await applet.get({index: entry.index});
-          item.data = uint8ArrayToHex(data);
-          validateCardImmutableItem(item);
-
-          if (isCardDerivationItem(item)) {
-            const record = decodeCardDerivationRecord(data);
-            if (
-              item.metadata !== record.index ||
-              item.index !== getCardDerivationItemIndex(record.index)
-            ) {
-              throw new InvalidCardItemError('Invalid address records');
-            }
-            item.derivationRecord = record;
-          }
-        }
-
-        if (isCardDerivationItem(item) && !item.derivationRecord) {
-          throw new InvalidCardItemError('Invalid address records');
-        }
-
-        items.push(item);
-      } catch (error) {
-        if (!(error instanceof InvalidCardItemError)) throw error;
-        skippedIndexes.push(item.index);
-      }
-      this.report(
-        {stage, current: position + 1, total: entries.length},
-        callback,
-      );
-    }
-
-    cancelled(signal);
     const compatible =
       stage === 'reading' ? filterCardDerivationAssociations(items) : items;
     for (const item of items) {
@@ -453,14 +410,12 @@ export class CardSyncSession {
         signal,
         onAuthenticated,
       );
-      const listed = await applet.list({});
       const read = await this.read(
         applet,
         identity,
         signal,
         'reading',
         onProgress,
-        listed,
       );
       const secrets =
         identity.bundle === false ? [] : read.items.filter(item => item.secret);
@@ -670,7 +625,7 @@ export class CardSyncSession {
       );
       if (!card) throw new MonoidCardError('Scan a card in this sync');
       assertSameCardWithBundle(hello, card, 'Card changed, start sync again');
-      if (card.complete) return card;
+      if (this.series.hasFinished(identity.publicKey)) return card;
 
       const execution = this.executions.get(identity.publicKey)!;
       await authenticateCardSync(

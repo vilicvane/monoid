@@ -19,19 +19,18 @@ import {
   type MonoidAppletHello,
   MonoidAppletInvalidPINError,
   MonoidCardError,
+  MultiCardSeries,
   acceptMatchingItem,
   assertCardPINsNotBlocked,
   assertSameCardWithBundle,
   hasMatchingItem,
   initializeMonoidCard,
   readBackupCardIdentity,
+  readCardContents,
 } from '../../../../@lib/monoid/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
-import {
-  encodeCardDerivationRecord,
-  isCardDerivationItem,
-  readCardDerivationRecord,
-} from '../card-derivations.js';
+import {decodeCardRecord, isCardRecord} from '../card-contents.js';
+import {encodeCardDerivationRecord} from '../card-derivations.js';
 import {
   CardItemMergeConflict,
   isCardCredentialItem,
@@ -39,7 +38,7 @@ import {
   mergeCardItemData,
   validateCardImmutableItem,
 } from '../card-item-merge.js';
-import {isCardOTPItem, validateCardOTPItem} from '../card-otp.js';
+import {isCardOTPItem} from '../card-otp.js';
 import {getCardResourceGroups} from '../card-resource-groups.js';
 import type {ScannedCardData, ScannedCardItemData} from '../common.js';
 
@@ -342,6 +341,10 @@ export class CardBackupSession {
     return this.current.get();
   }
 
+  get series(): MultiCardSeries {
+    return MultiCardSeries.from(this.backup?.targets ?? []);
+  }
+
   get busy(): boolean {
     return this.running.get();
   }
@@ -414,7 +417,7 @@ export class CardBackupSession {
       complete:
         backup.targetsConfirmed &&
         targets.length > 0 &&
-        targets.every(current => current.complete),
+        MultiCardSeries.from(targets).completedCount === targets.length,
     });
   }
 
@@ -449,62 +452,24 @@ export class CardBackupSession {
 
       const source = getBackupCardIdentity(hello);
       const indexes = sourceIndexes && [...sourceIndexes];
-      throwIfCancelled(signal);
-      const {items} = await applet.list({});
-      throwIfCancelled(signal);
-      const scannedItems: ScannedCardItemData[] = items.map(
-        ({index, type, alias, secret, metadata}) => ({
-          index: uint8ArrayToHex(index),
-          ...(type !== undefined && {type}),
-          ...(alias !== undefined && {alias}),
-          ...(metadata !== undefined && {metadata: uint8ArrayToHex(metadata)}),
-          secret,
-        }),
-      );
-      const records = scannedItems.filter(
-        item => isCardDerivationItem(item) || isCardImmutableItem(item),
-      );
-      const skippedIndexes = new Set<string>();
-
-      if (records.length > 0) {
-        onProgress?.(0, records.length);
-      }
-
-      for (const [index, item] of records.entries()) {
-        throwIfCancelled(signal);
-        try {
-          if (isCardOTPItem(item)) {
-            validateCardOTPItem(item);
-          } else if (isCardDerivationItem(item)) {
-            item.derivationRecord = await readCardDerivationRecord(
-              applet,
-              item,
-            );
-          } else {
-            if (item.secret) validateCardImmutableItem(item);
-            const {data} = await applet.get({
-              index: hexToUint8Array(item.index),
-            });
-            throwIfCancelled(signal);
-            validateCardImmutableItem({...item, data: uint8ArrayToHex(data)});
-          }
-        } catch (error) {
-          if (!(error instanceof InvalidCardItemError)) throw error;
-          skippedIndexes.add(item.index);
-        }
-        throwIfCancelled(signal);
-        onProgress?.(index + 1, records.length);
-      }
-
-      throwIfCancelled(signal);
-      const compatible = scannedItems.filter(
-        item => !skippedIndexes.has(item.index),
+      const {items: compatible, skippedIndexes} = await readCardContents(
+        applet,
+        item => decodeCardRecord(applet, item),
+        {
+          check: () => throwIfCancelled(signal),
+          progressFilter: isCardRecord,
+          onProgress: (current, total) => {
+            if (total > 0) onProgress?.(current, total);
+          },
+        },
       );
       this.setBackup(
         createBackup(
           source,
           compatible,
-          indexes?.filter(index => !skippedIndexes.has(index)),
+          indexes?.filter(
+            index => !skippedIndexes.some(skipped => skipped === index),
+          ),
         ),
       );
     });

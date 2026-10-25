@@ -14,6 +14,7 @@ import {
   removeItems,
   setItemAlias,
 } from '../.bld/app/@lib/monoid/item-operations.js';
+import {MultiCardSeries} from '../.bld/app/@lib/monoid/multi-card-series.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
 import {
   WalletStorageService,
@@ -97,6 +98,7 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
     getAppletKey,
     MonoidCardError,
     MonoidWrongCardError,
+    MultiCardSeries,
     removeItems,
     setItemAlias,
     acceptMatchingItem,

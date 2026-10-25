@@ -292,7 +292,11 @@ export const SyncCardsView = observer(
               const scanned = session.cards.find(
                 card => card.publicKey === identity.publicKey,
               );
-              if (!collecting && scanned?.complete && !needsRecoveryExport) {
+              if (
+                !collecting &&
+                session.series.hasFinished(identity.publicKey) &&
+                !needsRecoveryExport
+              ) {
                 return {message: 'Already synced'};
               }
               const {pin, onAuthenticated} = credentials(identity);

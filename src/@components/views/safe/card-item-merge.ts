@@ -2,9 +2,9 @@ import {InvalidCardItemError} from '../../../@lib/card-item-error.js';
 import {MonoidCardError} from '../../../@lib/monoid/index.js';
 import {
   SECURITY_KEY_ITEM_TYPE,
-  decodeSecurityKeyCredential,
+  decodeSecurityKeyCredentialItem,
 } from '../../../@lib/security-key.js';
-import {hexToUint8Array, uint8ArrayToHex} from '../../../@utils/index.js';
+import {uint8ArrayToHex} from '../../../@utils/index.js';
 
 import {
   type CardDerivationRecord,
@@ -44,20 +44,7 @@ export function isCardCredentialItem(item: {index: string}): boolean {
 export function validateCardCredentialItem(item: CardItemMergeData): void {
   if (!isCardCredentialItem(item)) return;
   try {
-    if (
-      item.secret ||
-      item.metadata === undefined ||
-      item.data === undefined ||
-      ![item.index, item.metadata, item.data].every(value =>
-        /^(?:[0-9a-f]{2})+$/i.test(value),
-      )
-    )
-      throw new InvalidCardItemError('Invalid Security Key credential');
-    decodeSecurityKeyCredential(
-      hexToUint8Array(item.data),
-      hexToUint8Array(item.index),
-      hexToUint8Array(item.metadata),
-    );
+    decodeSecurityKeyCredentialItem(item);
   } catch (error) {
     if (!(error instanceof InvalidCardItemError)) throw error;
     throw new InvalidCardItemError(

@@ -2,8 +2,9 @@ import {p256} from '@noble/curves/nist';
 import {base32, base32nopad, base64urlnopad} from '@scure/base';
 import {getBytes, sha256, toUtf8Bytes} from 'ethers';
 
-import {SafeIndex, type SafeIndexHex} from '../@atomics.js';
-import {uint8ArrayToHex} from '../@utils/index.js';
+import {SafeIndex, SafeIndexHex} from '../@atomics.js';
+import type {OTPAccount} from '../@services/index.js';
+import {hexToUint8Array, uint8ArrayToHex} from '../@utils/index.js';
 
 import {authorityApiUrl} from './authority-url.js';
 import {InvalidCardItemError} from './card-item-error.js';
@@ -31,6 +32,28 @@ export type OTPImportAccount = OTPAccountConfiguration & {
   label: string;
   secret: Uint8Array;
 };
+
+/** Public account fields only; the mapped F201 secret is never read. */
+export function decodeOTPAccount(item: {
+  index: string;
+  secret: boolean;
+  metadata?: string;
+  alias?: string;
+}): OTPAccount {
+  if (
+    !/^f201[0-9a-f]{16}$/i.test(item.index) ||
+    !item.secret ||
+    !item.metadata ||
+    !/^(?:[0-9a-f]{2})+$/i.test(item.metadata)
+  )
+    throw new InvalidCardItemError('Invalid OTP account');
+
+  return {
+    index: SafeIndexHex.satisfies(item.index),
+    label: item.alias || 'OTP account',
+    ...decodeOTPConfiguration(hexToUint8Array(item.metadata)),
+  };
+}
 
 /** Shared secrets stay in the import flow and are never part of cached accounts. */
 export function decodeOTPSecret(input: string): Uint8Array {

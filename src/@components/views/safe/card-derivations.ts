@@ -15,6 +15,7 @@ import {
   type MonoidApplet,
   acceptMatchingItem,
   monoidCommandDefinitions,
+  readCardContents,
 } from '../../../@lib/monoid/index.js';
 import {
   ADDRESS_TYPES,
@@ -275,10 +276,12 @@ export function encodeCardDerivationRecord({
   ]);
 }
 
-export async function readCardDerivationRecord(
+export async function readCardDerivationItem(
   applet: MonoidApplet,
   item: ScannedCardItemData,
-): Promise<CardDerivationRecord> {
+): Promise<
+  ScannedCardItemData & {data: string; derivationRecord: CardDerivationRecord}
+> {
   try {
     if (
       !isCardDerivationItem(item) ||
@@ -306,7 +309,7 @@ export async function readCardDerivationRecord(
     throw new InvalidCardItemError('Derivation source does not match');
   }
 
-  return record;
+  return {...item, data: uint8ArrayToHex(data), derivationRecord: record};
 }
 
 function throwIfCancelled(signal: AbortSignal): void {
@@ -430,32 +433,26 @@ async function updateCardDerivationRecord(
   throwIfCancelled(signal);
 
   // Re-read on each attempt: a failed response can follow a committed create/set.
-  const {items} = await applet.list({
-    type: SafeUnknownType.satisfies(CARD_DERIVATIONS_TYPE),
-    metadataPrefix: sourceIndex,
+  const {items} = await readCardContents(applet, item => item, {
+    filter: {
+      type: SafeUnknownType.satisfies(CARD_DERIVATIONS_TYPE),
+      metadataPrefix: sourceIndex,
+    },
+    check: () => throwIfCancelled(signal),
   });
-  throwIfCancelled(signal);
 
   if (items.length > 1) {
     throw new Error('Duplicate derivation records');
   }
 
-  const source = items[0];
-  const existing: ScannedCardItemData | undefined = source && {
-    ...source,
-    index: uint8ArrayToHex(source.index),
-    metadata:
-      source.metadata !== undefined
-        ? uint8ArrayToHex(source.metadata)
-        : undefined,
-  };
+  const existing = items[0];
 
   if (existing && existing.metadata !== root.index) {
     throw new Error('Derivation source does not match');
   }
 
   const previous = existing
-    ? await readCardDerivationRecord(applet, existing)
+    ? (await readCardDerivationItem(applet, existing)).derivationRecord
     : undefined;
   throwIfCancelled(signal);
 

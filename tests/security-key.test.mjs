@@ -83,10 +83,21 @@ function card(state = {}) {
       commands.push(['grants']);
       return {grants: state.grants ?? []};
     },
-    list: async () => {
-      commands.push(['list']);
+    list: async request => {
+      commands.push(['list', request]);
+      const items = state.items ?? [
+        {index: seedIndex, secret: true, type: 'seed'},
+      ];
       return {
-        items: state.items ?? [{index: seedIndex, secret: true, type: 'seed'}],
+        items: items.filter(
+          item =>
+            request.type === undefined ||
+            (request.type === 'seed'
+              ? item.index[0] === 2
+              : request.type === -3839 &&
+                item.index[0] === 0xf1 &&
+                item.index[1] === 1),
+        ),
       };
     },
     createRandomKey: async request => {
@@ -302,6 +313,11 @@ test('snapshot lists only 64-byte secret Seeds and never reads their contents', 
     ]),
   });
   const result = await readSecurityKeySnapshot(applet, hello, signal());
+  // One List serves both Seeds and credentials.
+  assert.deepEqual(
+    commands.filter(([name]) => name === 'list'),
+    [['list', {}]],
+  );
   assert.deepEqual(result.seeds, [{index: hex(seedIndex), alias: 'Primary'}]);
   assert.equal(result.installed, true);
   assert.deepEqual(result.scope, scope);

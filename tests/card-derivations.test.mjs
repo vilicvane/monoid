@@ -11,7 +11,7 @@ import {
   getCardDerivationItemIndex,
   isCardDerivationItem,
   mergeCardDerivationWallets,
-  readCardDerivationRecord,
+  readCardDerivationItem,
   writeCardDerivationRecord,
   writeCardDerivations,
 } from '../.bld/app/@components/views/safe/card-derivations.js';
@@ -397,10 +397,13 @@ test('read validates the payload, immutable metadata and stable index together',
   const item = recordItem();
   const applet = createApplet([item]);
 
-  assert.deepEqual(await readCardDerivationRecord(applet, item), {
-    index: SEED.index,
-    wallets: [wallet()],
-  });
+  assert.deepEqual(
+    (await readCardDerivationItem(applet, item)).derivationRecord,
+    {
+      index: SEED.index,
+      wallets: [wallet()],
+    },
+  );
 
   for (const invalid of [
     {...item, secret: true},
@@ -409,15 +412,12 @@ test('read validates the payload, immutable metadata and stable index together',
     {...item, index: '0f010000000000000000'},
   ]) {
     applet.calls.length = 0;
-    await assert.rejects(readCardDerivationRecord(applet, invalid));
+    await assert.rejects(readCardDerivationItem(applet, invalid));
     assert.equal(applet.calls.length, 0);
   }
 
   applet.items.get(item.index).data = recordItem(OTHER_SEED).data;
-  await assert.rejects(
-    readCardDerivationRecord(applet, item),
-    /does not match/,
-  );
+  await assert.rejects(readCardDerivationItem(applet, item), /does not match/);
 });
 
 test('write creates an explicitly indexed non-secret item with the source metadata', async () => {

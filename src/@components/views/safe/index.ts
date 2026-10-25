@@ -14,6 +14,7 @@ export {
 export * from './card-address-progress.js';
 export * from './card-address.js';
 export * from './card-alias-update.js';
+export * from './card-contents.js';
 export * from './card-derivations.js';
 export * from './card-item-merge.js';
 export * from './card-key-create.js';

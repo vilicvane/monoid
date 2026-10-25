@@ -1378,6 +1378,8 @@ test('lost Import acknowledgement reconciles stored fields without re-export or 
   );
   assert.equal(session.backup.targets[0].items[0].imported, true);
   assert.equal(session.backup.targets[0].items[1].imported, false);
+  assert.equal(session.series.completedCount, 0);
+  assert.equal(session.series.hasFinished(hex(target.hello.publicKey)), false);
   const firstAttempt = target.calls.find(
     ([method, request]) =>
       method === 'importItem' && hex(request.index) === hex(index(2)),
@@ -1398,6 +1400,11 @@ test('lost Import acknowledgement reconciles stored fields without re-export or 
   );
   assert.equal(target.records.size, 3);
   assert.equal(session.backup.complete, true);
+  assert.equal(session.series.completedCount, 1);
+  assert.throws(
+    () => session.series.assertPending(hex(target.hello.publicKey)),
+    /Card already done/,
+  );
 });
 
 test('conflicts preserve target data and allow independent remaining items to finish', async () => {

@@ -2,7 +2,7 @@ import {p256} from '@noble/curves/nist';
 import {Tag, decode} from 'cbor2';
 import {getBytes, sha256, toUtf8Bytes} from 'ethers';
 
-import {SafeIndex, type SafeIndexHex} from '../@atomics.js';
+import {SafeIndex, SafeIndexHex} from '../@atomics.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../@utils/index.js';
 
 import {probeApplet} from './applet.js';
@@ -14,6 +14,7 @@ import {
   type MonoidAppletHello,
   MonoidCardError,
   assertSameCard,
+  readCardContents,
 } from './monoid/index.js';
 
 export const SECURITY_KEY_AID = hexToUint8Array('a0000006472f0001');
@@ -117,6 +118,30 @@ export function decodeSecurityKeyCredential(
   };
 }
 
+export function decodeSecurityKeyCredentialItem(item: {
+  index: string;
+  secret: boolean;
+  metadata?: string;
+  data?: string;
+}): SecurityKeyCredentialItem {
+  if (
+    item.secret ||
+    item.metadata === undefined ||
+    item.data === undefined ||
+    ![item.index, item.metadata, item.data].every(value =>
+      /^(?:[0-9a-f]{2})+$/i.test(value),
+    )
+  )
+    throw new InvalidCardItemError('Invalid Security Key credential');
+
+  const credential = decodeSecurityKeyCredential(
+    hexToUint8Array(item.data),
+    hexToUint8Array(item.index),
+    hexToUint8Array(item.metadata),
+  );
+  return {index: SafeIndexHex.satisfies(item.index), credential};
+}
+
 export type SecurityKeyGrant = Awaited<
   ReturnType<MonoidApplet['listAppletGrants']>
 >['grants'][number];
@@ -190,39 +215,32 @@ export async function readSecurityKeySnapshot(
   signal.throwIfAborted();
   const {grants} = await applet.listAppletGrants({});
   signal.throwIfAborted();
-  const {items} = await applet.list({});
-  const seeds: SecurityKeySeed[] = [];
-  const credentials: SecurityKeyCredentialItem[] = [];
-  let skippedCredentials = 0;
-  for (const item of items) {
-    signal.throwIfAborted();
-    if (
-      item.index.length === 10 &&
-      item.index[0] === 2 &&
-      item.index[1] === 64 &&
-      item.secret
-    )
-      seeds.push({index: uint8ArrayToHex(item.index), alias: item.alias});
-    if (item.index[0] !== 0xf1 || item.index[1] !== 1) continue;
-    const record: SecurityKeyCredentialItem = {
-      index: uint8ArrayToHex(item.index),
-    };
-    // Ignore incompatible records without reading protected data.
-    if (!item.secret && item.metadata) {
-      const {data} = await applet.get({index: item.index});
-      try {
-        record.credential = decodeSecurityKeyCredential(
-          data,
-          item.index,
-          item.metadata,
-        );
-      } catch (error) {
-        if (!(error instanceof InvalidCardItemError)) throw error;
-      }
-    }
-    if (record.credential) credentials.push(record);
-    else skippedCredentials++;
-  }
+  // Seeds and credentials come from one List: one round trip, not two.
+  const listed = await applet.list({});
+  const {items: seeds} = await readCardContents(
+    applet,
+    item =>
+      /^0240[0-9a-f]{16}$/.test(item.index) && item.secret
+        ? {index: item.index, alias: item.alias}
+        : undefined,
+    {listed, check: () => signal.throwIfAborted()},
+  );
+  const {items: credentials, skippedIndexes} = await readCardContents(
+    applet,
+    async item => {
+      if (!item.index.startsWith('f101')) return undefined;
+      // Ignore incompatible records without reading protected data.
+      if (item.secret || !item.metadata)
+        throw new InvalidCardItemError('Invalid Security Key credential');
+      const {data} = await applet.get({index: hexToUint8Array(item.index)});
+      return decodeSecurityKeyCredentialItem({
+        ...item,
+        data: uint8ArrayToHex(data),
+      });
+    },
+    {listed, check: () => signal.throwIfAborted()},
+  );
+  const skippedCredentials = skippedIndexes.length;
   const grant = findSecurityKeyGrant(grants);
   const scope =
     grant?.seed &&

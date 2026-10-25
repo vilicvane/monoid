@@ -614,11 +614,21 @@ for (const kind of ['create', 'data', 'alias']) {
       };
       await assert.rejects(write(session, target), /TAG_LOST/);
       assert.equal(session.cards[1].completed, 0);
+      assert.equal(session.series.completedCount, 1);
+      assert.equal(
+        session.series.hasFinished(hex(target.hello.publicKey)),
+        false,
+      );
       target.calls.length = 0;
       await write(session, target);
       assert.equal(target.records.get(publicIndex).alias, 'Named');
       assert.equal(target.records.get(publicIndex).data, 'aa');
       assert.equal(session.phase, 'complete');
+      assert.equal(session.series.completedCount, 2);
+      assert.equal(
+        session.series.hasFinished(hex(target.hello.publicKey)),
+        true,
+      );
       assert.equal(mutationCalls(target).length, committed ? 0 : 1);
       assert.deepEqual(
         target.calls.filter(([call]) => call === 'view'),
