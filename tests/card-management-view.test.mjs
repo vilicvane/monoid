@@ -497,6 +497,7 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     restore: async () => {
       state.events.push({type: 'restore'});
       state.pending = undefined;
+      return [];
     },
   };
   const safe = {

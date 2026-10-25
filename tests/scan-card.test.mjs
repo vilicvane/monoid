@@ -600,15 +600,14 @@ test('an explicit empty card record stays empty while Safe can supply a display 
   assert.deepEqual(hydrated[1].derivationRecord.wallets, []);
 });
 
-test('hydration requires parsed address metadata before starting any default reads', async () => {
+test('hydration skips unreadable address metadata and still reads other previews', async () => {
   const items = confirmedItems(ROOT, []);
   delete items[1].derivationRecord;
   const {applet, calls} = createApplet([]);
-  await assert.rejects(
-    readCardAddressPreviews(applet, items, () => {}),
-    /Address records were not read/,
-  );
-  assert.deepEqual(calls.viewKey, []);
+  const hydrated = await readCardAddressPreviews(applet, items, () => {});
+  assert.equal(hydrated.length, 1);
+  assert.equal(hydrated[0].index, ROOT);
+  assert.equal(calls.viewKey.length, 1);
 });
 
 test('local native previews keep optional derivation fields omitted', async () => {

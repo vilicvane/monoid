@@ -188,7 +188,7 @@ function mixedCard() {
   };
 }
 
-test('scan, Copy and Sync share decoding while preserving payload reads, associations and skip counts', async () => {
+test('feature scanning decodes records while Copy and Sync retain every opaque item', async () => {
   for (const flow of ['scan', 'copy', 'sync']) {
     const applet = mixedCard();
     const progress = [];
@@ -219,24 +219,22 @@ test('scan, Copy and Sync share decoding while preserving payload reads, associa
         value => progress.push(value),
       );
       items = card.items;
-      assert.deepEqual(
-        card.skippedIndexes,
-        [3, 5, 8, 6].map(index => applet.records[index].index),
-      );
+      assert.deepEqual(card.issues, []);
     }
     assert.deepEqual(applet.lists, [{}]);
-    const expected = [0, 1, 2, 4, ...(flow === 'copy' ? [6] : []), 7];
+    const expected =
+      flow === 'scan' ? [0, 1, 2, 4, 7] : [0, 1, 2, 3, 4, 5, 6, 7, 8];
     assert.deepEqual(
       items.map(item => item.index),
       expected.map(index => applet.records[index].index),
     );
     assert.deepEqual(
       applet.gets,
-      [1, 4, 6, ...(flow === 'sync' ? [7] : [])].map(
+      (flow === 'scan' ? [1, 4, 6] : [1, 4, 6, 7, 8]).map(
         index => applet.records[index].index,
       ),
     );
-    const total = flow === 'sync' ? 9 : 7;
+    const total = flow === 'scan' ? 7 : 9;
     assert.deepEqual(
       progress,
       Array.from({length: total + 1}, (_, current) =>

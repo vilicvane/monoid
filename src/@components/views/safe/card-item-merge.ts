@@ -1,9 +1,4 @@
-import {InvalidCardItemError} from '../../../@lib/card-item-error.js';
-import {MonoidCardError} from '../../../@lib/monoid/index.js';
-import {
-  SECURITY_KEY_ITEM_TYPE,
-  decodeSecurityKeyCredentialItem,
-} from '../../../@lib/security-key.js';
+import {CardItemConflictError} from '../../../@lib/monoid/index.js';
 import {uint8ArrayToHex} from '../../../@utils/index.js';
 
 import {
@@ -11,72 +6,38 @@ import {
   encodeCardDerivationRecord,
   mergeCardDerivationWallets,
 } from './card-derivations.js';
-import {isCardOTPItem, validateCardOTPItem} from './card-otp.js';
 
 export type CardItemMergeData = {
   index: string;
+  type?: string | number;
   secret: boolean;
   metadata?: string;
   data?: string;
   derivationRecord?: CardDerivationRecord;
 };
 
-export class CardItemMergeConflict extends MonoidCardError {
-  constructor(index: string, kind = 'credential') {
-    super(`Item ${index}: conflicting ${kind} data`);
-  }
-}
-
-export function isCardImmutableItem(item: {index: string}): boolean {
-  return isCardCredentialItem(item) || isCardOTPItem(item);
-}
-
-export function validateCardImmutableItem(item: CardItemMergeData): void {
-  if (isCardOTPItem(item)) validateCardOTPItem(item);
-  else validateCardCredentialItem(item);
-}
-
-export function isCardCredentialItem(item: {index: string}): boolean {
-  return Number.parseInt(item.index.slice(0, 4), 16) === SECURITY_KEY_ITEM_TYPE;
-}
-
-/** Scope-bound public records travel intact; older records are never claimed. */
-export function validateCardCredentialItem(item: CardItemMergeData): void {
-  if (!isCardCredentialItem(item)) return;
-  try {
-    decodeSecurityKeyCredentialItem(item);
-  } catch (error) {
-    if (!(error instanceof InvalidCardItemError)) throw error;
-    throw new InvalidCardItemError(
-      `Item ${item.index}: invalid Security Key credential`,
-      {cause: error},
-    );
-  }
-}
-
 /** Merge one shared index; separate credential indices remain separate items. */
 export function mergeCardItemData<T extends CardItemMergeData>(
   first: T,
   next: CardItemMergeData,
 ): T {
-  if (isCardOTPItem(first)) {
-    validateCardOTPItem(first);
-    validateCardOTPItem(next);
-    if (first.metadata !== next.metadata)
-      throw new CardItemMergeConflict(first.index, 'OTP');
-    return first;
+  if (
+    first.index !== next.index ||
+    first.type !== next.type ||
+    first.secret !== next.secret ||
+    first.metadata !== next.metadata
+  ) {
+    throw new CardItemConflictError(first.index);
   }
 
-  if (isCardCredentialItem(first)) {
-    validateCardCredentialItem(first);
-    validateCardCredentialItem(next);
-    if (first.metadata !== next.metadata || first.data !== next.data) {
-      throw new CardItemMergeConflict(first.index);
-    }
-    return first;
-  }
+  if (first.data === next.data) return first;
 
-  if (first.derivationRecord && next.derivationRecord) {
+  if (
+    !first.secret &&
+    first.derivationRecord &&
+    next.derivationRecord &&
+    first.derivationRecord.index === next.derivationRecord.index
+  ) {
     const derivationRecord = {
       index: first.derivationRecord.index,
       wallets: mergeCardDerivationWallets(
@@ -91,5 +52,5 @@ export function mergeCardItemData<T extends CardItemMergeData>(
     };
   }
 
-  return first;
+  throw new CardItemConflictError(first.index);
 }

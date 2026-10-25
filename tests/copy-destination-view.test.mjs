@@ -15,6 +15,10 @@ import {
   getCardDerivationItemIndex,
 } from '../.bld/app/@components/views/safe/card-derivations.js';
 import {
+  CBORAppletError,
+  CardItemNotFoundError,
+} from '../.bld/app/@lib/cbor-applet.js';
+import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
@@ -691,6 +695,7 @@ test('an installed destination continues its PIN initialization on the same Copy
   await session.exportItems(
     {
       authenticate: async () => {},
+      get: async () => ({data: Uint8Array.of(1)}),
       exportItem: async () => ({data: Uint8Array.of(1)}),
     },
     hello(1),
@@ -711,6 +716,9 @@ test('an installed destination continues its PIN initialization on the same Copy
   await importing.callback(
     {
       authenticate: async request => authentication.push(request),
+      view: async () => {
+        throw new CardItemNotFoundError({code: 'NOT_FOUND'});
+      },
       importItem: async () => {},
       list: async () => ({
         items: [
@@ -772,6 +780,7 @@ for (const phase of ['PIN input', 'initialization']) {
     await session.exportItems(
       {
         authenticate: async () => {},
+        get: async () => ({data: Uint8Array.of(1)}),
         exportItem: async () => ({data: Uint8Array.of(1)}),
       },
       hello(1),
@@ -924,6 +933,7 @@ test('multi-card export advances for every transferred item and keeps the source
   await scan.callback(
     {
       authenticate: async () => {},
+      get: async () => ({data: Uint8Array.of(1)}),
       exportItem: async () => ({data: Uint8Array.of(1)}),
     },
     content => {
@@ -1053,6 +1063,7 @@ for (const {canBackToCard, canBackToSafe, backLabel, backRoute} of [
     await session.exportItems(
       {
         authenticate: async () => {},
+        get: async () => ({data: Uint8Array.of(1)}),
         exportItem: async () => ({data: Uint8Array.of(1)}),
       },
       hello(1),
@@ -1072,6 +1083,9 @@ for (const {canBackToCard, canBackToSafe, backLabel, backRoute} of [
     await scan.callback(
       {
         authenticate: async request => authentication.push(request),
+        view: async () => {
+          throw new CardItemNotFoundError({code: 'NOT_FOUND'});
+        },
         importItem: async () => {},
         list: async () => {
           assert.equal(progress.at(-1), 'Checking card, hold tight...');
@@ -1167,7 +1181,7 @@ for (const {canBackToCard, canBackToSafe, backLabel, backRoute} of [
 }
 
 for (const hasRecord of [true, false]) {
-  test(`reading a Copy source ${hasRecord ? 'shows a single record count' : 'keeps the listing message without a count'}`, async () => {
+  test(`reading a Copy source ${hasRecord ? 'counts every opaque item' : 'counts opaque items without address records'}`, async () => {
     const state = mount({source: false});
     state.click('Scan source card');
     const scan = state.monoidScans[0];
@@ -1213,12 +1227,83 @@ for (const hasRecord of [true, false]) {
       hasRecord
         ? [
             'Reading items, hold tight...',
-            ['Reading address records', '0/1'],
-            ['Reading address records', '1/1'],
+            ['Reading items', '0/2'],
+            ['Reading items', '1/2'],
+            ['Reading items', '2/2'],
           ]
-        : ['Reading items, hold tight...'],
+        : [
+            'Reading items, hold tight...',
+            ['Reading items', '0/1'],
+            ['Reading items', '1/1'],
+          ],
     );
     assert.ok(state.sessions[0].backup);
     assert.deepEqual(state.errors, []);
   });
 }
+
+test('a rejected Copy item stays visible after the other items complete', async () => {
+  const state = mount(),
+    session = state.sessions[0];
+  await session.addTarget(hello(2));
+  await session.confirmTargets();
+  await session.exportItems(
+    {
+      authenticate: async () => {},
+      exportItem: async () => ({data: Uint8Array.of(1)}),
+    },
+    hello(1),
+    PIN,
+    new AbortController().signal,
+    () => {},
+  );
+  state.click('Scan a destination card');
+  state.inputs.at(-1).finished.resolve(PIN);
+  await state.flush();
+  const scan = state.monoidScans[0];
+  scan.validate(hello(2));
+  await scan.callback(
+    {
+      authenticate: async () => {},
+      view: async () => {
+        throw new CardItemNotFoundError({code: 'NOT_FOUND'});
+      },
+      importItem: async () => {
+        throw new CBORAppletError({code: 'INVALID_PARAMETER'});
+      },
+    },
+    () => {},
+    hello(2),
+    new AbortController().signal,
+  );
+  scan.finished.resolve();
+  await state.flush();
+  assert.equal(session.backup.complete, true);
+  assert.equal(
+    find(state.tree, node => node.type === 'OperationComplete'),
+    undefined,
+  );
+  const steps = find(state.tree, node => node.type === 'OperationSteps');
+  assert.equal(steps.props.$exiting, false);
+  const tile = find(
+    state.tree,
+    node => node.props?.['aria-label'] === 'Destination card 00000002',
+  );
+  assert.ok(tile);
+  assert.equal(tile.props.disabled, false);
+  tile.props.onClick();
+  state.render();
+  const cards = find(
+    state.tree,
+    node =>
+      typeof node.type === 'function' && node.type.name === 'DestinationCards',
+  );
+  assert.ok(cards);
+  assert.ok(
+    find(
+      cards.type(cards.props),
+      node => typeof node === 'string' && node.includes('INVALID_PARAMETER'),
+    ),
+  );
+  assert.deepEqual(state.errors, []);
+});

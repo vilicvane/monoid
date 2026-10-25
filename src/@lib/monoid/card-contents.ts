@@ -28,12 +28,14 @@ export async function readCardContents<T>(
     check = () => {},
     onProgress,
     progressFilter = () => true,
+    onItemError,
   }: {
     filter?: Parameters<MonoidApplet['list']>[0];
     listed?: Awaited<ReturnType<MonoidApplet['list']>>;
     check?: () => void;
     onProgress?: (current: number, total: number) => void;
     progressFilter?: (item: CardItem) => boolean;
+    onItemError?: (item: CardItem, error: unknown) => T;
   } = {},
 ): Promise<CardContents<T>> {
   check();
@@ -60,8 +62,11 @@ export async function readCardContents<T>(
       const decoded = await decode(item);
       if (decoded !== undefined) items.push(decoded);
     } catch (error) {
-      if (!(error instanceof InvalidCardItemError)) throw error;
-      skippedIndexes.push(item.index);
+      if (onItemError) items.push(onItemError(item, error));
+      else {
+        if (!(error instanceof InvalidCardItemError)) throw error;
+        skippedIndexes.push(item.index);
+      }
     }
     check();
     if (progressFilter(item)) onProgress?.(++current, total);

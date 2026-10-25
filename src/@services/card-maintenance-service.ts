@@ -16,12 +16,14 @@ import {
   type AppletReplacementCheckpoint,
   type AppletReplacementProgress,
   type AppletStage,
+  type CardItemIssue,
   type IdentityInstallationOptions,
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidCardError,
   acceptMatchingItem,
   assertSameCardWithBundle,
+  cardItemIssue,
   createMonoidApplet,
   getAppletCatalog,
   getAppletDependents,
@@ -33,6 +35,7 @@ import {
   monoidCommandDefinitions,
   replaceMonoidApplets,
 } from '../@lib/monoid/index.js';
+import {isOperationCancelled} from '../@lib/operation-cancelled.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../@utils/index.js';
 import {xCBOR} from '../@x-value/index.js';
 
@@ -57,7 +60,7 @@ export type CardMaintenanceItem = {
 
 export type CardMaintenanceArchive = {
   source?: CardMaintenanceBundleRecovery['source'];
-  items: (CardMaintenanceItem & {data: string})[];
+  items: (CardMaintenanceItem & {data: string; plaintext?: string})[];
   checksum: string;
 };
 
@@ -261,34 +264,68 @@ export class CardMaintenanceService {
           [];
         onProgress({stage: 'backup', completed: 0, total: manifest.length});
 
+        const issues: CardItemIssue[] = [];
+        let completed = 0;
         for (const item of manifest) {
           signal?.throwIfAborted();
-          const exported = await monoid.exportItem({
-            index: SafeIndex.satisfies(hexToUint8Array(item.index)),
-            recipientPublicKey: hello.publicKey,
-          });
-          signal?.throwIfAborted();
-          const archived = {
-            ...item,
-            key: exported.metadata && uint8ArrayToHex(exported.metadata),
-            alias: exported.alias,
-            data: uint8ArrayToHex(exported.data),
-          };
-          if (
-            archived.key !== item.key ||
-            archived.alias !== item.alias ||
-            exported.data[0] !== 1
-          ) {
-            throw new Error('Card changed while creating the backup');
+          try {
+            const plaintext = item.secret
+              ? undefined
+              : uint8ArrayToHex(
+                  (
+                    await monoid.get({
+                      index: SafeIndex.satisfies(hexToUint8Array(item.index)),
+                    })
+                  ).data,
+                );
+            signal?.throwIfAborted();
+            const exported = await monoid.exportItem({
+              index: SafeIndex.satisfies(hexToUint8Array(item.index)),
+              recipientPublicKey: hello.publicKey,
+            });
+            signal?.throwIfAborted();
+            const archived = {
+              ...item,
+              key: exported.metadata && uint8ArrayToHex(exported.metadata),
+              alias: exported.alias,
+              data: uint8ArrayToHex(exported.data),
+              ...(plaintext !== undefined && {plaintext}),
+            };
+            if (
+              archived.key !== item.key ||
+              archived.alias !== item.alias ||
+              exported.data[0] !== 1
+            ) {
+              throw new Error('Card changed while creating the backup');
+            }
+            assertImportSize(operation, archived);
+            items.push(archived);
+          } catch (cause) {
+            if (isOperationCancelled(cause, signal)) throw cause;
+            const issue = cardItemIssue(item.index, cause);
+            if (!issue)
+              throw new MonoidCardError(
+                `Item ${item.index}: ${cause instanceof Error ? cause.message : 'Recovery export failed'}`,
+                {cause},
+              );
+            issues.push(issue);
           }
-          assertImportSize(operation, archived);
-          items.push(archived);
+          signal?.throwIfAborted();
           onProgress({
             stage: 'backup',
-            completed: items.length,
+            completed: ++completed,
             total: manifest.length,
           });
         }
+        if (issues.length)
+          throw new MonoidCardError(
+            issues
+              .map(
+                issue =>
+                  `Item ${issue.index}: cannot export recovery (${issue.reason})`,
+              )
+              .join('; '),
+          );
 
         onProgress({stage: 'verifying-backup'});
         assertManifest(manifest, normalizeItems((await monoid.list({})).items));
@@ -342,12 +379,13 @@ export class CardMaintenanceService {
         bundle: recovery.source.bundle.toLowerCase(),
       };
       const items = recovery.items
-        .map(({index, key, alias, secret, data}) => ({
+        .map(({index, key, alias, secret, data, plaintext}) => ({
           index: index.toLowerCase(),
           key: key?.toLowerCase(),
           alias,
           secret,
           data: data.toLowerCase(),
+          ...(plaintext !== undefined && {plaintext: plaintext.toLowerCase()}),
         }))
         .sort((left, right) => left.index.localeCompare(right.index));
       const next: CardMaintenanceOperation = {
@@ -523,7 +561,7 @@ export class CardMaintenanceService {
     onProgress: (progress: CardMaintenanceProgress) => void = () => {},
     signal?: AbortSignal,
     installedAppletAids?: readonly string[],
-  ): Promise<void> {
+  ): Promise<CardItemIssue[]> {
     return this.exclusive(async () => {
       const operation = this.require(id);
       if (
@@ -544,6 +582,8 @@ export class CardMaintenanceService {
       if (operation.archive)
         onProgress({stage: 'restore', completed: 0, total: items.length});
 
+      const issues: CardItemIssue[] = [];
+
       // Explicit retries read actual state, including imports whose ACK was lost.
       for (let index = 0; index < items.length; index++) {
         signal?.throwIfAborted();
@@ -554,14 +594,25 @@ export class CardMaintenanceService {
           metadata: request.metadata,
           alias: request.alias,
           secret: item.secret,
+          data:
+            item.plaintext === undefined
+              ? undefined
+              : hexToUint8Array(item.plaintext),
         };
-        if (!(await hasMatchingItem(monoid, expected, signal))) {
-          try {
-            await monoid.importItem(request);
-          } catch (error) {
-            await acceptMatchingItem(monoid, expected, error, signal);
+        try {
+          if (!(await hasMatchingItem(monoid, expected, signal))) {
+            try {
+              await monoid.importItem(request);
+            } catch (error) {
+              await acceptMatchingItem(monoid, expected, error, signal);
+            }
           }
+        } catch (error) {
+          const issue = cardItemIssue(item.index, error);
+          if (!issue) throw error;
+          issues.push(issue);
         }
+        signal?.throwIfAborted();
         onProgress({
           stage: 'restore',
           completed: index + 1,
@@ -570,6 +621,8 @@ export class CardMaintenanceService {
       }
 
       signal?.throwIfAborted();
+      // Retain the complete archive and grants until every item is restored.
+      if (issues.length) return issues;
       onProgress({stage: 'verifying-restore'});
       assertIdentity(operation, await monoid.hello({}), monoid);
       const manifest =
@@ -616,6 +669,7 @@ export class CardMaintenanceService {
       } else {
         await this.remove(id);
       }
+      return [];
     });
   }
 
@@ -1114,6 +1168,8 @@ export function assertCardMaintenanceBundleRecovery(
       typeof item.secret !== 'boolean' ||
       (item.key !== undefined && !isHex(item.key)) ||
       (item.alias !== undefined && typeof item.alias !== 'string') ||
+      (item.plaintext !== undefined &&
+        (item.secret || !isHex(item.plaintext))) ||
       !isHex(item.data) ||
       item.data.length < 320 ||
       !item.data.startsWith('02') ||

@@ -75,20 +75,20 @@ test('OTP sync uses a single secret item scoped to its Bundle', () => {
     card(2, false, []),
   ]);
   assert.deepEqual(isolated[1].items, []);
-  assert.throws(
-    () =>
-      createCardSyncPlans([
-        card(1, 'A', [{...account, secret: false, data: 'aa'}]),
-      ]),
-    /invalid OTP account/,
-  );
-  assert.throws(
-    () =>
-      createCardSyncPlans([
-        card(1, 'A', [account]),
-        card(2, 'A', [{...account, metadata: '010108001e'}]),
-      ]),
-    /conflicting item metadata/,
+  const opaque = createCardSyncPlans([
+    card(1, 'A', [{...account, secret: false, data: 'aa'}]),
+    card(2, 'A', []),
+  ]);
+  assert.equal(opaque[1].operations[0].after.data, 'aa');
+  const conflicts = createCardSyncPlans([
+    card(1, 'A', [account]),
+    card(2, 'A', [{...account, metadata: 'ff'}]),
+  ]);
+  assert.ok(
+    conflicts.every(
+      plan =>
+        plan.issues[0].reason === 'Conflict' && plan.operations.length === 0,
+    ),
   );
 });
 
@@ -168,26 +168,35 @@ test('public data crosses groups while Secret and address unions stay inside eac
   );
 });
 
-test('first opaque data wins, first nonempty alias wins, and absent items do not delete', () => {
+test('different opaque data conflicts only on its index; equal data merges aliases', () => {
   const first = {index: publicIndex, secret: false, data: 'aa', alias: '  '};
-  const second = {...first, data: 'bb', alias: 'Named'};
-  const third = {...first, data: 'cc', alias: 'Later'};
+  const second = {...first, alias: 'Named'};
+  const third = {...first, alias: 'Later'};
   const plans = createCardSyncPlans([
     card(1, false, [first]),
     card(2, false, [second]),
     card(3, false, [third]),
   ]);
-  assert.equal(plans[0].items[0].data, 'aa');
   assert.equal(plans[0].items[0].alias, 'Named');
   assert.deepEqual(
-    plans[0].operations.map(item => item.kind),
+    plans[2].operations.map(item => item.kind),
     ['alias'],
   );
-  assert.deepEqual(
-    plans[2].operations.map(item => item.kind),
-    ['data', 'alias'],
+  assert.equal(first.alias, '  ');
+  const conflicts = createCardSyncPlans([
+    card(1, false, [first, credential(1)]),
+    card(2, false, [{...second, data: 'bb'}]),
+    card(3, false, []),
+  ]);
+  assert.ok(
+    conflicts.every(plan =>
+      plan.issues.some(issue => issue.index === publicIndex),
+    ),
   );
-  assert.equal(first.alias, '  ', 'planning must not mutate observations');
+  assert.deepEqual(
+    conflicts[2].operations.map(op => op.after.index),
+    [credential(1).index],
+  );
 });
 
 test('Secret import retains authenticated metadata and applies merged alias afterwards', () => {
@@ -210,53 +219,37 @@ test('Secret import retains authenticated metadata and applies merged alias afte
   assert.equal(ops[2].after.derivationRecord.wallets.length, 2);
 });
 
-test('opaque Secret verification reads exposed fields, while differing aliases or fingerprints stop planning', () => {
-  const pair = (a, b) => [card(1, 'A', [a]), card(2, 'A', [b])];
-  const plans = createCardSyncPlans(
-    pair(
-      secret({fingerprint: undefined, exported: {data: 'aa'}}),
-      secret({fingerprint: undefined, exported: {data: 'bb'}}),
-    ),
-  );
+test('opaque Secret equality ignores ciphertext and merges aliases using exposed fields', () => {
+  const first = secret({alias: 'A', exported: {data: 'aa'}});
+  const second = secret({alias: 'B', exported: {data: 'bb'}});
+  const plans = createCardSyncPlans([
+    card(1, 'A', [first]),
+    card(2, 'A', [second]),
+  ]);
+  assert.deepEqual(plans[0].operations, []);
   assert.deepEqual(
-    plans.map(plan => plan.operations[0].kind),
-    ['verify', 'verify'],
+    plans[1].operations.map(op => op.kind),
+    ['alias'],
   );
-  assert.ok(plans.every(plan => plan.operations[0].exported === undefined));
-  assert.throws(
-    () =>
-      createCardSyncPlans(
-        pair(
-          secret({fingerprint: undefined, alias: 'A'}),
-          secret({fingerprint: undefined, alias: 'B'}),
-        ),
-      ),
-    /cannot compare Secret/,
-  );
-  assert.throws(
-    () => createCardSyncPlans(pair(secret(), secret({fingerprint: 'other'}))),
-    /conflicting Secret/,
-  );
-  assert.throws(
-    () => createCardSyncPlans(pair(secret(), secret({metadata: ''}))),
-    /conflicting item metadata/,
-  );
+  const conflicts = createCardSyncPlans([
+    card(1, 'A', [first]),
+    card(2, 'A', [{...second, metadata: ''}]),
+  ]);
+  assert.ok(conflicts.every(plan => plan.issues[0].reason === 'Conflict'));
 });
 
-test('orphan records and a public/private index collision are not silently globalized', () => {
-  assert.throws(
-    () =>
-      createCardSyncPlans([card(1, 'A', [records(['evm'])]), card(2, 'A', [])]),
-    /associated key is missing/,
-  );
-  assert.throws(
-    () =>
-      createCardSyncPlans([
-        card(1, 'A', [secret()]),
-        card(2, false, [{index: keyIndex, secret: false, data: 'aa'}]),
-      ]),
-    /conflicting sync scopes/,
-  );
+test('orphan records remain opaque while scope collisions are per-item conflicts', () => {
+  const orphan = createCardSyncPlans([
+    card(1, 'A', [records(['evm'])]),
+    card(2, 'A', []),
+  ]);
+  assert.equal(orphan[1].operations[0].kind, 'create');
+  const plans = createCardSyncPlans([
+    card(1, 'A', [secret()]),
+    card(2, false, [{index: keyIndex, secret: false, data: 'aa'}]),
+  ]);
+  assert.equal(plans[0].issues[0].reason, 'Conflict');
+  assert.deepEqual(plans[0].operations, []);
 });
 
 test('non-bundle Secrets with the same index remain separate and are never exported to peers', () => {
@@ -295,15 +288,18 @@ test('credential records keep independent indices and skip identical shared item
   );
 });
 
-test('credential payload conflicts stop planning instead of replacing the later card data', () => {
-  const first = credential(1);
-  const second = credential(1, {fields: [[6, 'other name']]});
-  const data = second.data;
-  assert.throws(
-    () => createCardSyncPlans([card(1, 'A', [first]), card(2, 'A', [second])]),
-    /conflicting credential data/,
+test('credential conflicts preserve both copies and allow unrelated creates', () => {
+  const first = credential(1),
+    second = credential(1, {fields: [[6, 'other name']]});
+  const plans = createCardSyncPlans([
+    card(1, 'A', [first, credential(2)]),
+    card(2, 'A', [second]),
+  ]);
+  assert.ok(plans.every(plan => plan.issues[0].index === first.index));
+  assert.deepEqual(
+    plans[1].operations.map(op => op.after.index),
+    [credential(2).index],
   );
-  assert.equal(second.data, data);
 });
 
 test('different credential scopes coexist across Bundles without moving their Secret seeds', () => {
@@ -341,27 +337,26 @@ test('different credential scopes coexist across Bundles without moving their Se
   );
 });
 
-test('same-index valid credentials with a different scope conflict rather than being grouped', () => {
-  assert.throws(
-    () =>
-      createCardSyncPlans([
-        card(1, 'A', [credential(1)]),
-        card(2, 'B', [credential(1, {scope: 2})]),
-      ]),
-    /conflicting item metadata/,
+test('same-index credential metadata conflicts across Bundles', () => {
+  const plans = createCardSyncPlans([
+    card(1, 'A', [credential(1)]),
+    card(2, 'B', [credential(1, {scope: 2})]),
+  ]);
+  assert.ok(
+    plans.every(
+      plan => plan.issues[0].reason === 'Conflict' && !plan.operations.length,
+    ),
   );
 });
 
-test('a lone old or malformed credential is rejected before creating a transfer plan', () => {
+test('old and undecodable public credentials produce opaque transfer plans', () => {
   for (const item of [
     credential(1, {fields: [[10, undefined]]}),
-    credential(1, {fields: [[10, new Uint8Array(31)]]}),
-    credential(1, {metadata: '00'.repeat(64)}),
-    credential(1, {secret: true}),
+    credential(1, {data: 'ff'}),
+    credential(1, {metadata: 'ff'}),
   ]) {
-    assert.throws(
-      () => createCardSyncPlans([card(1, 'A', [item]), card(2, 'B', [])]),
-      /invalid Security Key credential/,
-    );
+    const plans = createCardSyncPlans([card(1, 'A', [item]), card(2, 'B', [])]);
+    assert.deepEqual(plans[1].operations[0].after, item);
+    assert.deepEqual(plans[1].issues, []);
   }
 });

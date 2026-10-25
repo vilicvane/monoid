@@ -128,8 +128,8 @@ test('Copy preserves a conflicting credential while copying independent records'
   const second = credential(2);
   const {session, target} = await ready([first, second], [conflicting]);
   await session.importItems(target, target.hello, PIN, signal(), progress);
-  assert.equal(session.backup.complete, false);
-  assert.equal(session.backup.targets[0].items[0].conflict, true);
+  assert.equal(session.backup.complete, true);
+  assert.equal(session.backup.targets[0].items[0].issue?.reason, 'Conflict');
   assert.equal(session.backup.targets[0].items[0].imported, false);
   assert.equal(session.backup.targets[0].items[1].imported, true);
   assert.deepEqual([...target.records.values()], [conflicting, second]);
@@ -156,7 +156,7 @@ test('Copy refuses a Secret credential index without reading its body', async ()
   const first = credential(1);
   const {session, target} = await ready([first], [{...first, secret: true}]);
   await session.importItems(target, target.hello, PIN, signal(), progress);
-  assert.deepEqual(session.backup.targets[0].items, []);
+  assert.equal(session.backup.targets[0].items[0].issue?.reason, 'Conflict');
   assert.equal(session.backup.complete, true);
   assert.equal(session.backup.importStarted, false);
   assert.deepEqual(
@@ -225,28 +225,22 @@ test('Copy keeps same-RP same-user registrations from different scopes as indepe
   );
 });
 
-test('Copy skips old and malformed source records before exporting them', async () => {
+test('Copy carries old and malformed source records unchanged', async () => {
   for (const item of [
     credential(1, {fields: [[10, undefined]]}),
-    credential(1, {fields: [[10, new Uint8Array(31)]]}),
     credential(1, {metadata: '11'.repeat(32)}),
+    credential(1, {data: 'ff'}),
     credential(1, {secret: true}),
   ]) {
-    const source = card(1, [item]);
-    const session = new CardBackupSession();
-    await session.readSource(source, source.hello, signal());
-    assert.deepEqual(session.backup.items, []);
-    assert.equal(
-      source.calls.some(([name]) => name === 'export'),
-      false,
-    );
+    const {source, target, session} = await ready([item], []);
+    await session.importItems(target, target.hello, PIN, signal(), progress);
+    assert.deepEqual(target.records.get(item.index), item);
+    assert.equal(session.backup.complete, true);
     if (item.secret)
       assert.equal(
         source.calls.some(([name]) => name === 'get'),
         false,
       );
-    assert.equal(session.backup.complete, false);
-    assert.equal(session.backup.importStarted, false);
   }
 });
 
@@ -255,7 +249,7 @@ test('Copy skips malformed destination data without replacing or marking it impo
   const existing = credential(1, {fields: [[10, undefined]]});
   const {session, target} = await ready([first], [existing]);
   await session.importItems(target, target.hello, PIN, signal(), progress);
-  assert.deepEqual(session.backup.targets[0].items, []);
+  assert.equal(session.backup.targets[0].items[0].issue?.reason, 'Conflict');
   assert.equal(session.backup.complete, true);
   assert.deepEqual(target.records.get(first.index), existing);
   assert.equal(
@@ -278,9 +272,12 @@ test('Copy finishes independent items after skipping an incompatible destination
   assert.equal(session.backup.complete, true);
   assert.deepEqual(
     session.backup.targets[0].items.map(item => [item.index, item.imported]),
-    [[second.index, true]],
+    [
+      [first.index, false],
+      [second.index, true],
+    ],
   );
-  assert.deepEqual(updates.at(-1), [1, 1]);
+  assert.deepEqual(updates.at(-1), [2, 2]);
 });
 
 test('an incompatible source record does not block exporting a valid credential', async () => {
@@ -294,19 +291,19 @@ test('an incompatible source record does not block exporting a valid credential'
   await session.confirmTargets();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
   assert.ok(session.backup.targets[0].items[0].exported);
-  assert.equal(session.backup.targets[0].items.length, 1);
+  assert.equal(session.backup.targets[0].items.length, 2);
   await session.importItems(target, target.hello, PIN, signal(), progress);
   assert.equal(session.backup.complete, true);
-  assert.deepEqual([...target.records.values()], [first]);
+  assert.deepEqual([...target.records.values()], [first, second]);
   assert.deepEqual(
     source.calls
       .filter(([name]) => name === 'export')
       .map(([, index]) => index),
-    [first.index],
+    [first.index, second.index],
   );
 });
 
-test('Copy validates export metadata as well as the plaintext observation', async () => {
+test('Copy preserves opaque export metadata without feature validation', async () => {
   const first = credential(1);
   const source = card(1, [first]);
   const target = card(2, []);
@@ -321,9 +318,28 @@ test('Copy validates export metadata as well as the plaintext observation', asyn
       metadata: new Uint8Array(64),
     };
   };
-  await assert.rejects(
-    session.exportItems(source, source.hello, PIN, signal(), progress),
-    /invalid Security Key credential/,
+  await session.exportItems(source, source.hello, PIN, signal(), progress);
+  assert.equal(
+    session.backup.targets[0].items[0].exported.metadata,
+    '00'.repeat(64),
   );
-  assert.equal(session.backup.targets[0].items[0].exported, undefined);
+});
+
+test('Copy carries a legacy OTP pair and undecodable Security Key bytes intact', async () => {
+  const records = [
+    {index: '05010000000000000001', secret: true, metadata: '', data: '1234'},
+    {
+      index: 'f2010000000000000001',
+      secret: false,
+      metadata: '05010000000000000001',
+      data: 'ff',
+      alias: 'Old OTP',
+    },
+    credential(1, {data: 'ff'}),
+  ];
+  const {session, target} = await ready(records, []);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
+  assert.deepEqual([...target.records.values()], records);
+  assert.equal(session.backup.complete, true);
+  assert.ok(session.backup.targets[0].items.every(item => !item.issue));
 });

@@ -16,6 +16,7 @@ import {getCardInstallationChecks} from '../../../@lib/global-platform/installat
 import {
   APPLET_NAMES,
   type AppletStage,
+  type CardItemIssue,
   type IdentityInstallationOptions,
   type MonoidApplet,
   type MonoidAppletHello,
@@ -360,6 +361,7 @@ export const CardManagementView = observer(
       let accessPINId: MonoidIdHex | undefined;
       let appletsChanged = false;
       let syncId: string | undefined;
+      const restoreIssues: CardItemIssue[] = [];
       let result:
         | {hello: MonoidAppletHello; snapshot: CardAppletSnapshot}
         | undefined;
@@ -654,12 +656,14 @@ export const CardManagementView = observer(
             setState('Authenticating, hold tight...');
             await applet.authenticate({secret: true, pin: pin!});
             signal.throwIfAborted();
-            await maintenance.restore(
-              applet,
-              saved.id,
-              progress,
-              signal,
-              installedAppletAids,
+            restoreIssues.push(
+              ...(await maintenance.restore(
+                applet,
+                saved.id,
+                progress,
+                signal,
+                installedAppletAids,
+              )),
             );
           }
           if (action !== 'setup' || saved) setState('Reading card...');
@@ -699,7 +703,15 @@ export const CardManagementView = observer(
         // already verified as complete must still reach its originating flow.
         if (result) {
           try {
-            await finishSetup(result.hello, result.snapshot);
+            if (restoreIssues?.length) {
+              setCard(result.snapshot);
+              toast({
+                message: `Skipped: ${restoreIssues
+                  .map(issue => `${issue.index} (${issue.reason})`)
+                  .join(', ')}`,
+                color: 'warning',
+              });
+            } else await finishSetup(result.hello, result.snapshot);
           } catch (error) {
             errorService.catch(Promise.reject(error));
           }

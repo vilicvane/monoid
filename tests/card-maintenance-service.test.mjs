@@ -5,6 +5,7 @@ import {beforeEach, mock, test} from 'node:test';
 import {encode} from 'cbor2';
 
 import {
+  CBORAppletError,
   CardItemExistsError,
   CardItemNotFoundError,
 } from '../.bld/app/@lib/cbor-applet.js';
@@ -167,6 +168,9 @@ function cardFixture() {
         ...this.grants.filter(grant => hex(grant.aid) !== hex(request.aid)),
         {...structuredClone(request), tokenHash: new Uint8Array(32).fill(0x55)},
       ];
+    },
+    async get({index}) {
+      return {data: this.restored.get(hex(index))?.data ?? bytes('abcd')};
     },
     async exportItem(request) {
       assert.equal(hex(request.recipientPublicKey), hex(this.state.publicKey));
@@ -2370,4 +2374,85 @@ test('discard holds the maintenance mutex until persistence finishes and cannot 
   const writes = storage.writes.length;
   await service.discardPrepared(operation.id);
   assert.equal(storage.writes.length, writes);
+});
+
+test('recovery import reports each rejection or conflict, restores others and retains the complete archive', async () => {
+  const service = await CardMaintenanceService.create(storageFixture()),
+    card = cardFixture();
+  const operation = await service.prepare(card, {
+    mode: 'reinstall',
+    cardInformation: information,
+    appletAid: hex(aid),
+  });
+  await service.replace('session', operation.id);
+  const original = JSON.parse(
+    JSON.stringify(service.get(operation.id).archive),
+  );
+  const first = card.items[0],
+    second = card.items[1],
+    third = card.items[2];
+  card.restored.set(hex(first.index), {...first, alias: 'Different'});
+  const importItem = card.importItem.bind(card);
+  card.importItem = request =>
+    hex(request.index) === hex(second.index)
+      ? Promise.reject(new CBORAppletError({code: 'INVALID_PARAMETER'}))
+      : importItem(request);
+  const issues = await service.restore(card, operation.id);
+  assert.deepEqual(issues, [
+    {index: hex(first.index), reason: 'Conflict'},
+    {index: hex(second.index), reason: 'INVALID_PARAMETER'},
+  ]);
+  assert.ok(card.restored.has(hex(third.index)));
+  assert.deepEqual(service.get(operation.id).archive, original);
+  assert.equal(service.get(operation.id).phase, 'restore');
+  card.restored.set(hex(first.index), first);
+  card.importItem = importItem;
+  assert.deepEqual(await service.restore(card, operation.id), []);
+  assert.equal(service.get(operation.id), undefined);
+  assert.equal(
+    card.imports.filter(request => hex(request.index) === hex(third.index))
+      .length,
+    1,
+  );
+});
+
+test('recovery compares readable opaque data and keeps conflicting contents', async () => {
+  const service = await CardMaintenanceService.create(storageFixture()),
+    card = cardFixture();
+  const operation = await service.prepare(card, {
+    mode: 'reinstall',
+    cardInformation: information,
+    appletAid: hex(aid),
+  });
+  await service.replace('session', operation.id);
+  const item = card.items[1];
+  card.restored.set(hex(item.index), {...item, data: bytes('ffff')});
+  const issues = await service.restore(card, operation.id);
+  assert.deepEqual(issues, [{index: hex(item.index), reason: 'Conflict'}]);
+  assert.equal(hex(card.restored.get(hex(item.index)).data), 'ffff');
+  assert.equal(card.restored.size, 3);
+  assert.ok(service.get(operation.id).archive);
+});
+
+test('an item-local backup rejection still exports later items but never saves a partial archive', async () => {
+  const service = await CardMaintenanceService.create(storageFixture()),
+    card = cardFixture();
+  const exportItem = card.exportItem.bind(card);
+  card.exportItem = request =>
+    hex(request.index) === hex(card.items[1].index)
+      ? Promise.reject(new CBORAppletError({code: 'INVALID_PARAMETER'}))
+      : exportItem(request);
+  await assert.rejects(
+    service.prepare(card, {
+      mode: 'reinstall',
+      cardInformation: information,
+      appletAid: hex(aid),
+    }),
+    new RegExp(`${hex(card.items[1].index)}: cannot export recovery`),
+  );
+  assert.deepEqual(
+    card.exports.map(request => hex(request.index)),
+    [hex(card.items[0].index), hex(card.items[2].index)],
+  );
+  assert.deepEqual(service.operations, []);
 });

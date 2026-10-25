@@ -164,7 +164,7 @@ for (const [path, names] of [
     ['DetailsPopup', 'DetailsPopupDivider', 'DetailsPopupTitle'],
   ],
   ['@ui/step', ['Step', 'OperationSteps']],
-  ['@ui/message-content', ['InfoMessage']],
+  ['@ui/message-content', ['InfoMessage', 'WarningMessage']],
   ['@ui/operation-complete', ['OperationComplete']],
   [
     '@view/index',
@@ -1058,7 +1058,7 @@ test('adding and removing cards updates no-op navigation without freezing the co
   assert.equal(state.session.phase, 'collect');
 });
 
-test('opaque Secret copies keep Continue because their contents still require card verification', async () => {
+test('identical opaque Secret copies can return without another scan', async () => {
   const state = mount();
   const opaqueCard = {
     ...emptyCard,
@@ -1073,12 +1073,9 @@ test('opaque Secret copies keep Continue because their contents still require ca
   await state.session.add(opaqueCard, hello(1, bundle), signal(), PIN);
   await state.session.add(opaqueCard, hello(2, bundle), signal(), PIN);
 
-  assert.equal(state.button('Back to Safe'), undefined);
-  assert.ok(state.button('Continue'));
-  state.click('Continue');
-  await state.flush();
-  assert.equal(state.session.phase, 'write');
-  assert.ok(state.button('Scan a pending card'));
+  assert.ok(state.button('Back to Safe'));
+  assert.equal(state.button('Continue'), undefined);
+  assert.equal(state.session.phase, 'collect');
 });
 
 test('a conflicting collection stays actionable and reports the conflict through Continue', async () => {
@@ -1100,10 +1097,20 @@ test('a conflicting collection stays actionable and reports the conflict through
   assert.deepEqual(state.errors, []);
   state.click('Continue');
   await state.flush();
-  assert.equal(state.session.phase, 'collect');
-  assert.equal(state.errors.length, 1);
-  assert.match(state.errors[0].message, /conflicting sync scopes/);
-  assert.ok(state.button('Add another card'));
+  assert.equal(state.session.phase, 'complete');
+  assert.deepEqual(state.errors, []);
+  assert.ok(state.session.cards.some(card => card.issues?.length));
+  assert.ok(state.button('Back to Safe'));
+  assert.ok(find(state.tree, node => node.type === 'WarningMessage'));
+  assert.equal(
+    find(state.tree, node => node.type === 'Step' && node.props.numero === 2)
+      .props.activeNumero,
+    2,
+  );
+  assert.equal(
+    find(state.tree, node => node.type === 'OperationComplete'),
+    undefined,
+  );
 });
 
 test('no-op collection has no Continue or return button without matching route history', async () => {
@@ -1520,7 +1527,7 @@ test('a failed last-peer export can retry from a different completed peer withou
   };
   await state.startMaintenanceScan();
   const failed = await state.tap(last.hello, last.applet);
-  assert.equal(failed.error, failure);
+  assert.equal(failed.error.cause, failure);
   assert.ok(
     state.session.cards
       .filter(card => card.publicKey !== state.draft.card.publicKey)

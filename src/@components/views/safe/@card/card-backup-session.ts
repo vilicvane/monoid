@@ -7,7 +7,6 @@ import {
   PublicKeyHex,
   SafeIndex,
 } from '../../../../@atomics.js';
-import {InvalidCardItemError} from '../../../../@lib/card-item-error.js';
 import {
   CBORAppletError,
   CardItemNotFoundError,
@@ -15,6 +14,7 @@ import {
 import {
   type CardBackupIdentity,
   CardItemConflictError,
+  type CardItemIssue,
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidAppletInvalidPINError,
@@ -23,22 +23,17 @@ import {
   acceptMatchingItem,
   assertCardPINsNotBlocked,
   assertSameCardWithBundle,
-  hasMatchingItem,
+  cardItemIssue,
   initializeMonoidCard,
   readBackupCardIdentity,
   readCardContents,
 } from '../../../../@lib/monoid/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
-import {decodeCardRecord, isCardRecord} from '../card-contents.js';
-import {encodeCardDerivationRecord} from '../card-derivations.js';
 import {
-  CardItemMergeConflict,
-  isCardCredentialItem,
-  isCardImmutableItem,
-  mergeCardItemData,
-  validateCardImmutableItem,
-} from '../card-item-merge.js';
-import {isCardOTPItem} from '../card-otp.js';
+  readOpaqueCardItem,
+  withCardDerivationRecord,
+} from '../card-contents.js';
+import {mergeCardItemData} from '../card-item-merge.js';
 import {getCardResourceGroups} from '../card-resource-groups.js';
 import type {ScannedCardData, ScannedCardItemData} from '../common.js';
 
@@ -47,6 +42,7 @@ export type CardBackupItem = Pick<
   'index' | 'type' | 'alias' | 'secret' | 'metadata' | 'derivationRecord'
 > & {
   selected: boolean;
+  issue?: CardItemIssue;
 };
 
 export type CardBackupTransfer = {
@@ -55,13 +51,11 @@ export type CardBackupTransfer = {
     metadata?: string;
     alias?: string;
     data: string;
-    /** Public immutable records are retained for destination comparison. */
+    /** Readable plaintext is retained for generic destination comparison. */
     plaintext?: string;
   };
   imported: boolean;
-  /** Reconcile a lost Import response by reading, before another write. */
-  pending?: boolean;
-  conflict?: boolean;
+  issue?: CardItemIssue;
 };
 
 export type CardBackupTarget = CardBackupIdentity & {
@@ -94,7 +88,7 @@ function createBackup(
   const selectedIndexes =
     sourceIndexes === undefined ? undefined : new Set(sourceIndexes);
   const backupItems = items.map(
-    ({index, type, alias, secret, metadata, derivationRecord}) => {
+    ({index, type, alias, secret, metadata, derivationRecord, issue}) => {
       if (!/^[0-9a-f]{20}$/i.test(index)) {
         throw new MonoidCardError('The card returned an invalid item index.');
       }
@@ -111,6 +105,7 @@ function createBackup(
           },
         }),
         secret,
+        ...(issue && {issue}),
         selected: selectedIndexes?.has(index) ?? true,
       };
     },
@@ -221,50 +216,6 @@ async function authenticateSecretPIN(
 
   throwIfCancelled(signal);
   onAuthenticated?.();
-}
-
-async function hasMatchingImmutableItem(
-  applet: MonoidApplet,
-  item: CardBackupTransfer,
-  signal: AbortSignal,
-): Promise<boolean> {
-  const index = SafeIndex.satisfies(hexToUint8Array(item.index));
-  const exported = item.exported!;
-  const source = {
-    index: item.index,
-    secret: isCardOTPItem(item),
-    metadata: exported.metadata,
-    data: exported.plaintext,
-  };
-  validateCardImmutableItem(source);
-  let metadata: Awaited<ReturnType<MonoidApplet['view']>>;
-  try {
-    metadata = await applet.view({index});
-  } catch (error) {
-    if (error instanceof CardItemNotFoundError) {
-      throwIfCancelled(signal);
-      return false;
-    }
-    throw error;
-  }
-  throwIfCancelled(signal);
-  const current = {
-    index: item.index,
-    secret: metadata.secret,
-    metadata: metadata.metadata && uint8ArrayToHex(metadata.metadata),
-    data: undefined as string | undefined,
-  };
-  if (isCardOTPItem(item) || metadata.secret)
-    validateCardImmutableItem(current);
-  if (!metadata.secret) {
-    const {data} = await applet.get({index});
-    throwIfCancelled(signal);
-    current.data = uint8ArrayToHex(data);
-  }
-  mergeCardItemData(current, source);
-
-  // Alias is display metadata; identical records keep the destination name.
-  return true;
 }
 
 export async function initializeBackupTarget(
@@ -434,7 +385,8 @@ export class CardBackupSession {
     this.updateTarget({
       ...target,
       items,
-      complete: items.length > 0 && items.every(item => item.imported),
+      complete:
+        items.length > 0 && items.every(item => item.imported || item.issue),
     });
   }
 
@@ -452,26 +404,20 @@ export class CardBackupSession {
 
       const source = getBackupCardIdentity(hello);
       const indexes = sourceIndexes && [...sourceIndexes];
-      const {items: compatible, skippedIndexes} = await readCardContents(
+      const {items} = await readCardContents(
         applet,
-        item => decodeCardRecord(applet, item),
+        item => readOpaqueCardItem(applet, item),
         {
           check: () => throwIfCancelled(signal),
-          progressFilter: isCardRecord,
-          onProgress: (current, total) => {
-            if (total > 0) onProgress?.(current, total);
+          onProgress,
+          onItemError: (item, error) => {
+            const issue = cardItemIssue(item.index, error);
+            if (!issue) throw error;
+            return {...item, issue};
           },
         },
       );
-      this.setBackup(
-        createBackup(
-          source,
-          compatible,
-          indexes?.filter(
-            index => !skippedIndexes.some(skipped => skipped === index),
-          ),
-        ),
-      );
+      this.setBackup(createBackup(source, items, indexes));
     });
   }
 
@@ -539,7 +485,11 @@ export class CardBackupSession {
         ...backup,
         targets: backup.targets.map(target => ({
           ...target,
-          items: selected.map(({index}) => ({index, imported: false})),
+          items: selected.map(({index, issue}) => ({
+            index,
+            imported: false,
+            issue,
+          })),
           complete: false,
         })),
         targetsConfirmed: true,
@@ -575,7 +525,9 @@ export class CardBackupSession {
                 item.exported ? [[item.index, item.exported] as const] : [],
               ),
             );
-      let completed = transfers.filter(item => item.exported).length;
+      let completed = transfers.filter(
+        item => item.exported || item.issue,
+      ).length;
       throwIfCancelled(signal);
       onProgress(completed, transfers.length);
 
@@ -585,63 +537,42 @@ export class CardBackupSession {
         );
 
         for (const item of target.items) {
-          if (item.exported) {
+          if (item.exported || item.issue) {
             continue;
           }
 
           throwIfCancelled(signal);
-          let exported = bundleExports?.get(item.index);
-          if (!exported) {
-            let plaintext: string | undefined;
-            if (isCardCredentialItem(item)) {
+          try {
+            let exported = bundleExports?.get(item.index);
+            if (!exported) {
+              const source = backup.items.find(
+                source => source.index === item.index,
+              )!;
               const index = SafeIndex.satisfies(hexToUint8Array(item.index));
-              const metadata = await applet.view({index});
+              const plaintext = source.secret
+                ? undefined
+                : uint8ArrayToHex((await applet.get({index})).data);
               throwIfCancelled(signal);
-              if (metadata.secret) {
-                validateCardImmutableItem({index: item.index, secret: true});
-              }
-              const {data} = await applet.get({
+              const result = await applet.exportItem({
                 index,
+                ...(backup.source.bundle === false && {recipientPublicKey}),
               });
-              throwIfCancelled(signal);
-              plaintext = uint8ArrayToHex(data);
-              validateCardImmutableItem({
-                index: item.index,
-                secret: metadata.secret,
-                metadata:
-                  metadata.metadata && uint8ArrayToHex(metadata.metadata),
-                data: plaintext,
-              });
+              exported = {
+                ...(result.metadata !== undefined && {
+                  metadata: uint8ArrayToHex(result.metadata),
+                }),
+                ...(result.alias !== undefined && {alias: result.alias}),
+                data: uint8ArrayToHex(result.data),
+                ...(plaintext !== undefined && {plaintext}),
+              };
+              bundleExports?.set(item.index, exported);
             }
-            const result = await applet.exportItem({
-              index: SafeIndex.satisfies(hexToUint8Array(item.index)),
-              ...(backup.source.bundle === false && {recipientPublicKey}),
-            });
-
-            // Bundle envelopes are shared by every other member; asymmetric
-            // envelopes remain specific to their recipient. Preserve metadata.
-            exported = {
-              ...(result.metadata !== undefined && {
-                metadata: uint8ArrayToHex(result.metadata),
-              }),
-              ...(result.alias !== undefined && {alias: result.alias}),
-              data: uint8ArrayToHex(result.data),
-              ...(plaintext !== undefined && {plaintext}),
-            };
-            const source = backup.items.find(
-              source => source.index === item.index,
-            )!;
-            const current = {
-              index: item.index,
-              secret: source.secret,
-              metadata: exported.metadata,
-              data: plaintext,
-            };
-            validateCardImmutableItem(current);
-            if (isCardOTPItem(item)) mergeCardItemData(source, current);
-            bundleExports?.set(item.index, exported);
+            this.updateTransfer(target.publicKey, {...item, exported});
+          } catch (error) {
+            const issue = cardItemIssue(item.index, error);
+            if (!issue) throw error;
+            this.updateTransfer(target.publicKey, {...item, issue});
           }
-          this.updateTransfer(target.publicKey, {...item, exported});
           throwIfCancelled(signal);
           onProgress(++completed, transfers.length);
         }
@@ -681,7 +612,10 @@ export class CardBackupSession {
       assertBackupBundle(backup.source, identity);
       const selected = target.items;
 
-      if (!selected.length || selected.some(item => !item.exported)) {
+      if (
+        !selected.length ||
+        selected.some(item => !item.exported && !item.issue)
+      ) {
         throw new MonoidCardError(
           'Export all selected items for this destination from the source first.',
         );
@@ -694,13 +628,15 @@ export class CardBackupSession {
       const senderPublicKey = PublicKey.satisfies(
         hexToUint8Array(backup.source.publicKey),
       );
-      let completed = selected.filter(item => item.imported).length;
-      let total = selected.length;
+      let completed = selected.filter(
+        item => item.imported || item.issue,
+      ).length;
+      const total = selected.length;
       throwIfCancelled(signal);
       onProgress(completed, total);
 
       for (const item of selected) {
-        if (item.imported) {
+        if (item.imported || item.issue) {
           continue;
         }
 
@@ -724,24 +660,58 @@ export class CardBackupSession {
           data:
             exported.plaintext !== undefined
               ? hexToUint8Array(exported.plaintext)
-              : sourceItem.derivationRecord &&
-                encodeCardDerivationRecord(sourceItem.derivationRecord),
+              : undefined,
         };
 
+        // Read before every attempt, including an explicit continuation after
+        // a lost response. Never replay an import or merge without this check.
         try {
-          if (
-            !(
-              item.pending && (await hasMatchingItem(applet, expected, signal))
-            ) &&
-            (!isCardImmutableItem(item) ||
-              !(await hasMatchingImmutableItem(applet, item, signal)))
-          ) {
-            const current = this.requireBackup();
-            if (!current.importStarted) {
-              // A lost response may still mean the card committed the import.
-              this.setBackup({...current, importStarted: true});
+          let existing: Awaited<ReturnType<MonoidApplet['view']>> | undefined;
+          try {
+            existing = await applet.view({index: request.index});
+          } catch (error) {
+            if (!(error instanceof CardItemNotFoundError)) throw error;
+          }
+          throwIfCancelled(signal);
+          if (existing) {
+            if (
+              existing.secret !== sourceItem.secret ||
+              (existing.metadata === undefined
+                ? undefined
+                : uint8ArrayToHex(existing.metadata)) !== exported.metadata
+            )
+              throw new CardItemConflictError(item.index);
+            const current = await readOpaqueCardItem(applet, {
+              index: sourceItem.index,
+              type: sourceItem.type,
+              secret: existing.secret,
+              alias: existing.alias,
+              metadata:
+                existing.metadata === undefined
+                  ? undefined
+                  : uint8ArrayToHex(existing.metadata),
+            });
+            throwIfCancelled(signal);
+            const incoming = withCardDerivationRecord({
+              index: sourceItem.index,
+              type: sourceItem.type,
+              secret: sourceItem.secret,
+              alias: exported.alias,
+              metadata: exported.metadata,
+              data: exported.plaintext,
+            });
+            const merged = mergeCardItemData(current, incoming);
+            if (merged.data !== current.data) {
+              this.setBackup({...this.requireBackup(), importStarted: true});
+              await applet.set({
+                index: request.index,
+                data: hexToUint8Array(merged.data!),
+              });
             }
-            this.updateTransfer(target.publicKey, {...item, pending: true});
+          } else {
+            const current = this.requireBackup();
+            if (!current.importStarted)
+              this.setBackup({...current, importStarted: true});
             try {
               await applet.importItem(request);
             } catch (error) {
@@ -749,34 +719,15 @@ export class CardBackupSession {
             }
           }
         } catch (error) {
-          if (error instanceof InvalidCardItemError) {
-            const current = this.requireBackup().targets.find(
-              current => current.publicKey === target.publicKey,
-            )!;
-            const items = current.items.filter(
-              current => current.index !== item.index,
-            );
-            this.updateTarget({
-              ...current,
-              items,
-              complete: items.every(current => current.imported),
-            });
-            total--;
-            throwIfCancelled(signal);
-            onProgress(completed, total);
-            continue;
-          }
-          if (
-            error instanceof CardItemMergeConflict ||
-            error instanceof CardItemConflictError
-          ) {
-            this.updateTransfer(target.publicKey, {...item, conflict: true});
-            throwIfCancelled(signal);
-            onProgress(completed, total);
-            continue;
-          }
-
-          throw error;
+          const issue = cardItemIssue(item.index, error);
+          if (!issue) throw error;
+          this.updateTransfer(target.publicKey, {
+            ...item,
+            issue,
+          });
+          throwIfCancelled(signal);
+          onProgress(++completed, total);
+          continue;
         }
 
         // Acknowledged writes remain committed when the user cancels. Record
@@ -784,12 +735,18 @@ export class CardBackupSession {
         this.updateTransfer(target.publicKey, {
           ...item,
           imported: true,
-          pending: false,
-          conflict: false,
+          issue: undefined,
         });
         throwIfCancelled(signal);
         onProgress(++completed, total);
       }
+      const finished = this.requireBackup().targets.find(
+        current => current.publicKey === target.publicKey,
+      )!;
+      this.updateTarget({
+        ...finished,
+        complete: finished.items.every(item => item.imported || item.issue),
+      });
     });
   }
 

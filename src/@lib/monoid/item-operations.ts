@@ -1,10 +1,42 @@
 import type {SafeIndex, SafeIndexHex} from '../../@atomics.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../@utils/index.js';
-import {CardItemExistsError, CardItemNotFoundError} from '../cbor-applet.js';
+import {InvalidCardItemError} from '../card-item-error.js';
+import {
+  CBORAppletError,
+  CardItemExistsError,
+  CardItemNotFoundError,
+} from '../cbor-applet.js';
 import {equalBytes} from '../global-platform/commands.js';
 
 import {MonoidCardError} from './card-error.js';
 import type {MonoidApplet} from './monoid-applet.js';
+
+export type CardItemIssue = {index: string; reason: string};
+
+/** Only definite, item-local failures may be skipped; never transport or PIN errors. */
+export function cardItemIssue(
+  index: string,
+  error: unknown,
+): CardItemIssue | undefined {
+  if (
+    error instanceof CardItemConflictError ||
+    error instanceof CardItemExistsError
+  )
+    return {index, reason: 'Conflict'};
+  if (error instanceof InvalidCardItemError)
+    return {index, reason: 'Unreadable'};
+  if (
+    error instanceof CBORAppletError &&
+    [
+      'INVALID_PARAMETER',
+      'NOT_FOUND',
+      'UNSUPPORTED_CURVE',
+      'UNSUPPORTED_SEED_LENGTH',
+    ].includes(error.source.code)
+  )
+    return {index, reason: error.source.code};
+  return undefined;
+}
 
 /** Each acknowledged result, including an absent item, completes one index. */
 export async function removeItems(
@@ -48,8 +80,10 @@ export type CardItemExpectation = {
 };
 
 export class CardItemConflictError extends MonoidCardError {
-  constructor(index: SafeIndex) {
-    super(`Item ${uint8ArrayToHex(index)}: conflicting item data`);
+  constructor(index: SafeIndex | string) {
+    super(
+      `Item ${typeof index === 'string' ? index : uint8ArrayToHex(index)}: conflicting item data`,
+    );
   }
 }
 

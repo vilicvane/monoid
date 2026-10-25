@@ -36,7 +36,7 @@ import {
   DetailsPopupDivider,
   DetailsPopupTitle,
 } from '../../../@ui/details-popup.js';
-import {InfoMessage} from '../../../@ui/message-content.js';
+import {InfoMessage, WarningMessage} from '../../../@ui/message-content.js';
 import {OperationComplete} from '../../../@ui/operation-complete.js';
 import {OperationSteps, Step} from '../../../@ui/step.js';
 import {useToast} from '../../../@ui/toast.js';
@@ -149,7 +149,9 @@ export const SyncCardsView = observer(
     const complete =
       (maintenance ? flow.maintenanceSaved : session.phase === 'complete') &&
       !busy;
-    const activeStep = complete && !maintenance ? 3 : collecting ? 1 : 2;
+    const hasIssues = session.cards.some(card => card.issues?.length);
+    const activeStep =
+      complete && !maintenance && !hasIssues ? 3 : collecting ? 1 : 2;
     const source = !flow.sourceConsumed ? flow.sourceCard : undefined;
     const bundles = [
       ...new Set(
@@ -517,11 +519,16 @@ export const SyncCardsView = observer(
                     : needsRecoveryExport
                       ? 'scan to export'
                       : card.complete
-                        ? 'synced'
+                        ? card.issues?.length
+                          ? `skipped ${card.issues.length}`
+                          : 'synced'
                         : `items ${card.completed}/${card.total}`
               }
               $pending={!collecting && !card.completed && !card.complete}
-              $interrupted={flow.interruptedCards.has(card.publicKey)}
+              $interrupted={
+                flow.interruptedCards.has(card.publicKey) ||
+                !!card.issues?.length
+              }
             />
           </CardPreviewButton>
         ))}
@@ -612,10 +619,11 @@ export const SyncCardsView = observer(
               <OperationComplete />
             ) : (
               <OperationSteps
-                $exiting={complete && !maintenance}
+                $exiting={complete && !maintenance && !hasIssues}
                 onAnimationEnd={event => {
                   if (
                     complete &&
+                    !hasIssues &&
                     !maintenance &&
                     event.target === event.currentTarget
                   )
@@ -650,6 +658,11 @@ export const SyncCardsView = observer(
                   processing={busy && !collecting}
                 >
                   {cards}
+                  {hasIssues && (
+                    <WarningMessage>
+                      Some items were skipped. View card details.
+                    </WarningMessage>
+                  )}
                 </Step>
               </OperationSteps>
             )}
@@ -669,6 +682,13 @@ export const SyncCardsView = observer(
                 ? `Bundle · ${selectedCard.bundle.slice(0, 8)}`
                 : 'Not in a bundle'}
             </Description>
+            {!!selectedCard.issues?.length && (
+              <WarningMessage>
+                {selectedCard.issues
+                  .map(issue => `${issue.index} (${issue.reason})`)
+                  .join(', ')}
+              </WarningMessage>
+            )}
             <CardResourceList $contained data-popup-animation-group>
               {getCardResourceGroups(selectedCard.items).map(({item}) => (
                 <CardResourceItem

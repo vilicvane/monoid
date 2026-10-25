@@ -8,6 +8,7 @@ import {
   getCardDerivationItemIndex,
 } from '../.bld/app/@components/views/safe/card-derivations.js';
 import {
+  CBORAppletError,
   CardItemExistsError,
   CardItemNotFoundError,
 } from '../.bld/app/@lib/cbor-applet.js';
@@ -229,7 +230,7 @@ test('OTP sync imports one secret item and reconciles a lost response without re
   );
 });
 
-test('OTP sync skips incompatible list entries without Get or overwriting their indices', async () => {
+test('OTP sync retains old public entries and reports secret-flag conflicts', async () => {
   const account = {
     index: 'f2010000000000000001',
     type: -3583,
@@ -244,9 +245,9 @@ test('OTP sync skips incompatible list entries without Get or overwriting their 
   await add(session, target);
   assert.equal(
     target.calls.some(([kind]) => ['get', 'viewKey'].includes(kind)),
-    false,
+    true,
   );
-  assert.deepEqual(session.cards[1].skippedIndexes, [account.index]);
+  assert.deepEqual(session.cards[1].issues, []);
   session.prepare();
   assert.deepEqual(mutationCalls(target), []);
   assert.equal(target.records.get(account.index).secret, false);
@@ -279,7 +280,7 @@ test('public credential scopes coexist across Bundles without grant or Seed migr
   assert.equal(third.records.has(keyIndex), false);
 });
 
-test('Sync skips incompatible credentials and retains independent items', async () => {
+test('Sync retains undecodable credentials and independent items', async () => {
   for (const item of [
     credential(1, {fields: [[10, undefined]]}),
     credential(1, {fields: [[10, new Uint8Array(31)]]}),
@@ -291,12 +292,12 @@ test('Sync skips incompatible credentials and retains independent items', async 
     await add(session, card);
     assert.deepEqual(
       session.cards[0].items.map(item => item.index),
-      [publicIndex],
+      [publicIndex, item.index],
     );
-    assert.deepEqual(session.cards[0].skippedIndexes, [item.index]);
+    assert.deepEqual(session.cards[0].issues, []);
     assert.deepEqual(
       session.confirmedSnapshot.items.map(item => item.index),
-      [publicIndex],
+      [publicIndex, item.index],
     );
     assert.deepEqual(mutationCalls(card), []);
     if (item.secret)
@@ -308,7 +309,7 @@ test('Sync skips incompatible credentials and retains independent items', async 
       );
     assert.equal(
       card.calls.some(([name]) => name === 'export'),
-      false,
+      item.secret,
     );
   }
 });
@@ -401,7 +402,7 @@ test('collection never reads after authentication fails or is cancelled', async 
   assert.equal(session.cards.length, 0);
 });
 
-test('refresh preserves first-card priority and no-op completion clears temporary payloads', async () => {
+test('refresh preserves first-card priority and no-op completion retains opaque observations for recovery', async () => {
   const session = new CardSyncSession();
   const first = mockCard(1, false, [plain({alias: 'First'})]);
   const second = mockCard(2, false, [plain({alias: 'First'})]);
@@ -417,7 +418,7 @@ test('refresh preserves first-card priority and no-op completion clears temporar
   assert.equal(session.cards[0].items[0].data, 'aa');
   session.prepare();
   assert.equal(session.phase, 'complete');
-  assert.equal(session.cards[0].items[0].data, undefined);
+  assert.equal(session.cards[0].items[0].data, 'aa');
 });
 
 test('normal writes use the collected snapshot and complete without rereading the card', async () => {
@@ -523,12 +524,7 @@ test('mixed cards sync public data globally, write roots before records, and pre
   }
   assert.ok(
     session.cards.every(card =>
-      card.items.every(
-        item =>
-          !('data' in item) &&
-          !('exported' in item) &&
-          !('fingerprint' in item),
-      ),
+      card.items.every(item => !('exported' in item)),
     ),
   );
 });
@@ -555,8 +551,8 @@ test('lost create response is reconciled from the card and never blindly replaye
 
 test('an uncertain operation which did not commit can continue after its old value is reread', async () => {
   const session = new CardSyncSession();
-  const first = mockCard(1, false, [plain()]);
-  const target = mockCard(2, false, [plain({data: 'bb'})]);
+  const first = mockCard(1, false, [plain({alias: 'Source'})]);
+  const target = mockCard(2, false, [plain({alias: 'Destination'})]);
   await add(session, first);
   await add(session, target);
   session.prepare();
@@ -566,7 +562,7 @@ test('an uncertain operation which did not commit can continue after its old val
   };
   await assert.rejects(write(session, target), /TAG_LOST/);
   await write(session, target);
-  assert.equal(target.records.get(publicIndex).data, 'aa');
+  assert.equal(target.records.get(publicIndex).alias, 'Source');
   assert.equal(mutationCalls(target).length, 2);
 });
 
@@ -597,11 +593,20 @@ for (const kind of ['create', 'data', 'alias']) {
   for (const committed of [false, true]) {
     test(`${kind} with ${committed ? 'lost ACK' : 'no commit'} resumes from only that item's result`, async () => {
       const session = new CardSyncSession();
-      const source = plain({alias: 'Named'});
+      const walletRecord = wallets => ({
+        index: getCardDerivationItemIndex(keyIndex),
+        type: 0x0f01,
+        metadata: keyIndex,
+        secret: false,
+        alias: 'Named',
+        data: hex(encodeCardDerivationRecord({index: keyIndex, wallets})),
+      });
+      const source =
+        kind === 'data'
+          ? walletRecord([{addressType: 'evm'}])
+          : plain({alias: 'Named'});
       const initial =
-        kind === 'create'
-          ? []
-          : [plain(kind === 'data' ? {alias: 'Named', data: 'bb'} : {})];
+        kind === 'create' ? [] : [kind === 'data' ? walletRecord([]) : plain()];
       const first = mockCard(1, false, [source]);
       const target = mockCard(2, false, initial);
       await add(session, first);
@@ -621,8 +626,8 @@ for (const kind of ['create', 'data', 'alias']) {
       );
       target.calls.length = 0;
       await write(session, target);
-      assert.equal(target.records.get(publicIndex).alias, 'Named');
-      assert.equal(target.records.get(publicIndex).data, 'aa');
+      assert.equal(target.records.get(source.index).alias, 'Named');
+      assert.equal(target.records.get(source.index).data, source.data);
       assert.equal(session.phase, 'complete');
       assert.equal(session.series.completedCount, 2);
       assert.equal(
@@ -632,11 +637,11 @@ for (const kind of ['create', 'data', 'alias']) {
       assert.equal(mutationCalls(target).length, committed ? 0 : 1);
       assert.deepEqual(
         target.calls.filter(([call]) => call === 'view'),
-        [['view', publicIndex]],
+        [['view', source.index]],
       );
       assert.ok(
         target.calls.every(([call, index]) =>
-          call === 'authenticate' ? true : index === publicIndex,
+          call === 'authenticate' ? true : index === source.index,
         ),
       );
     });
@@ -713,11 +718,7 @@ for (const opaque of [false, true]) {
       assert.deepEqual(target.calls, [
         ['authenticate', {secret: true, pin: PIN}],
         ['view', item.index],
-        ...(committed
-          ? !opaque
-            ? [['viewKey', item.index]]
-            : []
-          : [['import', item.index]]),
+        ...(committed ? [] : [['import', item.index]]),
       ]);
       assert.deepEqual(target.records.get(item.index), item);
       assert.equal(session.phase, 'complete');
@@ -725,58 +726,40 @@ for (const opaque of [false, true]) {
   }
 }
 
-test('identical opaque Secret copies verify exposed fields without Import and can sync repeatedly', async () => {
-  const session = new CardSyncSession();
-  const secret = root({index: unknownIndex, type: 0x1000});
-  const first = mockCard(1, 1, [secret]);
-  const second = mockCard(2, 1, [secret]);
-  await add(session, first, PIN);
-  await add(session, second, PIN);
-  assert.equal(session.noSyncRequired, false);
+test('identical opaque Secret copies need no reads or writes after collection', async () => {
+  const entries = [root({index: unknownIndex, type: 0x1000})];
+  const first = mockCard(1, 1, entries),
+    second = mockCard(2, 1, entries),
+    session = new CardSyncSession();
+  await add(session, first);
+  await add(session, second);
+  assert.equal(session.noSyncRequired, true);
   session.prepare();
-  assert.equal(session.phase, 'write');
-  assert.deepEqual(
-    session.cards.map(card => card.total),
-    [1, 1],
-  );
-  await write(session, second, PIN);
-  await write(session, first, PIN);
-  assert.equal(session.phase, 'complete');
-  assert.deepEqual(first.records.get(unknownIndex), secret);
-  assert.deepEqual(second.records.get(unknownIndex), secret);
-  session.reset();
-  await add(session, first, PIN);
-  await add(session, second, PIN);
-  session.prepare();
-  await write(session, first, PIN);
-  await write(session, second, PIN);
-  assert.equal(session.phase, 'complete');
+  first.calls.length = 0;
+  second.calls.length = 0;
+  await write(session, first);
+  await write(session, second);
+  assert.deepEqual(first.calls, []);
+  assert.deepEqual(second.calls, []);
 });
 
-test('changed opaque Secret metadata stops verification before unrelated writes', async () => {
-  const session = new CardSyncSession();
+test('opaque metadata conflicts are reported while unrelated items finish', async () => {
   const first = mockCard(1, 1, [
+    root({index: unknownIndex, type: 0x1000, metadata: 'aa'}),
     plain(),
-    root({index: unknownIndex, type: 0x1000}),
   ]);
   const second = mockCard(2, 1, [
-    plain({data: 'bb'}),
-    root({index: unknownIndex, type: 0x1000, data: '99'}),
+    root({index: unknownIndex, type: 0x1000, metadata: 'bb'}),
   ]);
-  await add(session, first, PIN);
-  await add(session, second, PIN);
+  const session = new CardSyncSession();
+  await add(session, first);
+  await add(session, second);
   session.prepare();
-  second.records.get(unknownIndex).alias = 'Changed';
-  await assert.rejects(write(session, second, PIN), /conflicting item data/);
-  assert.equal(session.cards[1].completed, 0);
-  assert.equal(second.records.get(unknownIndex).data, '99');
-  assert.equal(first.records.get(unknownIndex).data, '12');
-  assert.equal(second.records.get(publicIndex).data, 'bb');
-  assert.deepEqual(
-    mutationCalls(second).map(([kind]) => kind),
-    [],
-    'Secret verification must finish before unrelated plaintext writes',
-  );
+  await write(session, second);
+  assert.equal(session.phase, 'complete');
+  assert.equal(session.cards[1].issues[0].index, unknownIndex);
+  assert.equal(second.records.get(unknownIndex).metadata, 'bb');
+  assert.equal(second.records.get(publicIndex).data, 'aa');
 });
 
 test('card identity and bundle are still checked before authentication or writes', async () => {
@@ -797,27 +780,23 @@ test('card identity and bundle are still checked before authentication or writes
   assert.deepEqual(target.calls, []);
 });
 
-test('seed chain code participates in equality and oversized merged data fails before write', async () => {
-  const session = new CardSyncSession();
-  const seed = {
-    index: '02200000000000000001',
-    type: 'seed',
-    secret: true,
-    data: '12',
-  };
-  const first = mockCard(1, 1, [seed]);
-  const second = mockCard(2, 1, [{...seed, chainCode: '22'.repeat(32)}]);
-  await add(session, first, PIN);
-  await add(session, second, PIN);
-  assert.equal(session.noSyncRequired, false);
-  assert.throws(() => session.prepare(), /conflicting Secret data/);
-  session.reset();
-  const large = mockCard(1, false, [plain({data: 'aa'.repeat(8200)})]);
-  const empty = mockCard(2, false);
-  await add(session, large);
+test('opaque keys require no ViewKey and oversized items do not block other writes', async () => {
+  const first = mockCard(1, 1, [
+    root(),
+    plain({data: 'aa'.repeat(8200)}),
+    plain({index: unknownIndex}),
+  ]);
+  first.viewKey = () => assert.fail('Opaque sync must not inspect keys');
+  const empty = mockCard(2, 1),
+    session = new CardSyncSession();
+  await add(session, first);
   await add(session, empty);
-  assert.throws(() => session.prepare(), /card limits/);
-  assert.equal(mutationCalls(empty).length, 0);
+  session.prepare();
+  await write(session, empty);
+  assert.equal(session.cards[1].issues[0].reason, 'Too large');
+  assert.equal(empty.records.has(keyIndex), true);
+  assert.equal(empty.records.has(unknownIndex), true);
+  assert.equal(empty.records.has(publicIndex), false);
 });
 
 // Header fields model Bundle envelopes; the fixture payload remains readable
@@ -1048,7 +1027,7 @@ test('three-card recovery merges every Secret and derivation before exporting th
   assert.deepEqual(mutationCalls(target), []);
 });
 
-test('the last of multiple peers can export recovery after completion releases every cached payload', async () => {
+test('the last of multiple peers can export recovery after completion releases cached envelopes', async () => {
   const session = new CardSyncSession();
   const entries = [
     root({metadata: '', alias: ''}),
@@ -1070,12 +1049,7 @@ test('the last of multiple peers can export recovery after completion releases e
   assert.equal(session.phase, 'complete');
   assert.ok(
     session.cards.every(card =>
-      card.items.every(
-        item =>
-          !('data' in item) &&
-          !('fingerprint' in item) &&
-          !('exported' in item),
-      ),
+      card.items.every(item => !('exported' in item)),
     ),
   );
   second.calls.length = 0;
@@ -1148,23 +1122,48 @@ test('recovery refuses an unfinished peer before issuing any export', async () =
   assert.deepEqual(peer.calls, []);
 });
 
-test('recovery refuses a partial snapshot even though ordinary sync skipped unsupported records', async () => {
-  const session = new CardSyncSession();
-  const first = recoveryCard(1, 1, [
+test('recovery exports old OTP and undecodable credentials intact', async () => {
+  const oldOTP = {
+    index: 'f2010000000000000001',
+    secret: false,
+    metadata: '05010000000000000001',
+    data: 'ff',
+    alias: 'Old OTP',
+  };
+  const items = [
     plain(),
-    credential(1, {fields: [[1, 2]]}),
-  ]);
-  const peer = recoveryCard(2, 1, [plain()]);
+    oldOTP,
+    credential(1, {data: 'ff'}),
+    root({index: '05010000000000000001', type: 'hmac'}),
+  ];
+  const first = recoveryCard(1, 1, items),
+    peer = recoveryCard(2, 1),
+    session = new CardSyncSession();
   await add(session, first);
   await add(session, peer);
   session.prepare();
-  assert.equal(session.phase, 'complete');
-  peer.calls.length = 0;
-  await assert.rejects(
-    session.exportRecovery(peer, peer.hello, identity(first), signal()),
-    /Cannot back up unsupported items/,
+  await write(session, peer);
+  const recovery = await session.exportRecovery(
+    peer,
+    peer.hello,
+    identity(first),
+    signal(),
   );
-  assert.deepEqual(peer.calls, []);
+  assert.equal(recovery.items.length, items.length);
+  const restored = recoveryCard(1, 1);
+  for (const item of recovery.items)
+    await restored.importItem({
+      index: bytes(item.index),
+      metadata: item.key === undefined ? undefined : bytes(item.key),
+      alias: item.alias,
+      data: bytes(item.data),
+    });
+  assert.deepEqual(
+    [...restored.records.values()].sort((a, b) =>
+      a.index.localeCompare(b.index),
+    ),
+    [...items].sort((a, b) => a.index.localeCompare(b.index)),
+  );
 });
 
 for (const changedIdentity of [
@@ -1319,7 +1318,7 @@ test('interrupted recovery export retains peer write ACKs and only returns a com
       signal(),
       update => progress.push(update),
     ),
-    error => error === failure,
+    error => error.cause === failure && error.message.includes(publicIndex),
   );
   assert.deepEqual(
     progress.map(({current}) => current),
@@ -1375,4 +1374,121 @@ test('cancellation after a recovery export ACK counts that item but returns no p
   assert.deepEqual(peer.calls, [['export', keyIndex]]);
   assert.equal(session.cards[1].complete, true);
   assert.equal(session.busy, false);
+});
+
+test('Sync isolates conflicts and destination rejections while completing remaining items', async () => {
+  const first = mockCard(1, 1, [plain(), root(), plain({index: unknownIndex})]);
+  const target = mockCard(2, 1, [plain({data: 'bb'})]);
+  const session = new CardSyncSession();
+  await add(session, first);
+  await add(session, target);
+  session.prepare();
+  target.beforeMutation = (kind, item) => {
+    if (kind === 'import' && item.index === keyIndex)
+      throw new CBORAppletError({code: 'INVALID_PARAMETER'});
+  };
+  await write(session, target);
+  assert.equal(session.phase, 'complete');
+  assert.deepEqual(session.cards[1].issues, [
+    {index: publicIndex, reason: 'Conflict'},
+    {index: keyIndex, reason: 'INVALID_PARAMETER'},
+  ]);
+  assert.equal(target.records.get(publicIndex).data, 'bb');
+  assert.equal(target.records.get(unknownIndex).data, 'aa');
+  assert.equal(target.records.has(keyIndex), false);
+  const count = mutationCalls(target).length;
+  await write(session, target);
+  assert.equal(mutationCalls(target).length, count);
+});
+
+for (const matching of [true, false])
+  test(`Sync settles per-item EXISTS without replay: ${matching}`, async () => {
+    const first = mockCard(1, false, [plain(), plain({index: unknownIndex})]),
+      target = mockCard(2, false),
+      session = new CardSyncSession();
+    await add(session, first);
+    await add(session, target);
+    session.prepare();
+    target.beforeMutation = (kind, item) => {
+      if (item.index === publicIndex) {
+        target.records.set(item.index, {
+          ...item,
+          data: matching ? item.data : 'bb',
+        });
+        throw new CardItemExistsError({code: 'EXISTS'});
+      }
+    };
+    await write(session, target);
+    assert.equal(target.records.get(publicIndex).data, matching ? 'aa' : 'bb');
+    assert.equal(target.records.get(unknownIndex).data, 'aa');
+    assert.equal(session.cards[1].issues.length, matching ? 0 : 1);
+    assert.equal(
+      mutationCalls(target).filter(([, index]) => index === publicIndex).length,
+      1,
+    );
+  });
+
+test('a failed opaque read retains its index, reports it, and reads subsequent items', async () => {
+  const first = mockCard(1, false, [plain(), plain({index: unknownIndex})]),
+    session = new CardSyncSession();
+  const get = first.get;
+  first.get = request =>
+    hex(request.index) === publicIndex
+      ? Promise.reject(new CBORAppletError({code: 'INVALID_PARAMETER'}))
+      : get(request);
+  await add(session, first);
+  assert.deepEqual(
+    session.cards[0].items.map(item => item.index),
+    [publicIndex, unknownIndex],
+  );
+  assert.equal(session.cards[0].issues[0].index, publicIndex);
+  assert.equal(session.cards[0].items[1].data, 'aa');
+});
+
+test('a rejected peer import cannot produce an incomplete destructive recovery archive', async () => {
+  const target = recoveryCard(1, 1, [root(), plain()]),
+    peer = recoveryCard(2, 1),
+    session = new CardSyncSession();
+  await add(session, target);
+  await add(session, peer);
+  session.prepare();
+  peer.beforeMutation = (kind, item) => {
+    if (item.index === keyIndex)
+      throw new CBORAppletError({code: 'INVALID_PARAMETER'});
+  };
+  await write(session, peer);
+  peer.calls.length = 0;
+  await assert.rejects(
+    session.exportRecovery(peer, peer.hello, identity(target), signal()),
+    new RegExp(`${keyIndex}: incomplete recovery`),
+  );
+  assert.deepEqual(peer.calls, []);
+  assert.equal(peer.records.get(publicIndex).data, 'aa');
+});
+
+test('recovery export names the unexportable item and never returns a partial archive', async () => {
+  const target = recoveryCard(1, 1, [
+      plain(),
+      plain({index: unknownIndex}),
+      plain({index: '10000000000000000003'}),
+    ]),
+    peer = recoveryCard(2, 1, [
+      plain(),
+      plain({index: unknownIndex}),
+      plain({index: '10000000000000000003'}),
+    ]),
+    session = new CardSyncSession();
+  await add(session, target);
+  await add(session, peer);
+  session.prepare();
+  const exportItem = peer.exportItem;
+  peer.exportItem = request =>
+    hex(request.index) === unknownIndex
+      ? Promise.reject(new CBORAppletError({code: 'INVALID_PARAMETER'}))
+      : exportItem(request);
+  await assert.rejects(
+    session.exportRecovery(peer, peer.hello, identity(target), signal()),
+    new RegExp(`${unknownIndex}: cannot export recovery`),
+  );
+  assert.equal(peer.calls.filter(([kind]) => kind === 'export').length, 2);
 });

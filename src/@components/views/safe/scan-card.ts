@@ -85,7 +85,9 @@ export async function readCardAddressPreviews(
   };
 
   assertActive();
-  const scannedItems = items.map(item => ({...item}));
+  const scannedItems = filterCardDerivationAssociations(items).map(item => ({
+    ...item,
+  }));
   const keys = scannedItems.filter(
     item =>
       typeof item.type === 'string' &&

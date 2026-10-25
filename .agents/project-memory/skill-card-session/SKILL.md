@@ -84,8 +84,9 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   `Applet` transport sends 255-byte multipart frames (CLA 00/90/B0/A0), supports
   1–8192-byte encoded requests, and reads `61xx` with GET RESPONSE. Schemas are in
   `src/@lib/monoid/monoid-applet.ts`; inspect current firmware for changes.
-- Skip incompatible application records individually when reading lists or
-  preparing Copy/Sync; keep compatible records usable. Only local format errors
+- Feature pages skip incompatible records individually; Copy, Sync and backup
+  treat items as opaque and report undecodable records, conflicts and import
+  rejections per item while the rest finish (record 71). Only local format errors
   qualify, not NFC, PIN, cancellation or uncertain mutations. Do not delete the
   skipped on-card items or overwrite them as if absent. Destructive maintenance
   still requires complete recovery data. The temporary old `key`/`keyPrefix`

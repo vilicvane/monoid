@@ -161,7 +161,7 @@ const DestinationCards = ({
       const conflicts = groups.filter(group =>
         group.items.some(item =>
           target.items.some(
-            transfer => transfer.index === item.index && transfer.conflict,
+            transfer => transfer.index === item.index && transfer.issue,
           ),
         ),
       );
@@ -181,11 +181,10 @@ const DestinationCards = ({
             </ListItemDescription>
             {conflicts.length > 0 && (
               <ConflictDescription>
-                Conflicts:{' '}
-                {conflicts
-                  .map(
-                    ({item}) => item.alias || `Item ${item.index.slice(4, 12)}`,
-                  )
+                Skipped:{' '}
+                {target.items
+                  .filter(item => item.issue)
+                  .map(item => `${item.index} (${item.issue!.reason})`)
                   .join(', ')}
               </ConflictDescription>
             )}
@@ -274,8 +273,10 @@ export const CopyItemsView = observer(
     const itemCountLabel = `items ${formatCardResourceCount(selectedGroups)}`;
     const targets = backup?.targets ?? [];
     const transfers = targets.flatMap(target => target.items);
-    const exported = transfers.filter(item => item.exported).length;
-    const conflicts = transfers.filter(item => item.conflict).length;
+    const exported = transfers.filter(
+      item => item.exported || item.issue,
+    ).length;
+    const conflicts = transfers.filter(item => item.issue).length;
     const completedCards = session.series.completedCount;
     const sourceId = backup?.source.id;
     const nextStep = backup?.complete
@@ -290,7 +291,7 @@ export const CopyItemsView = observer(
     const step = workingStep ?? nextStep;
     const activeStep = Math.min(step, 4);
     const busy = working || session.busy;
-    const complete = backup?.complete && !busy && !failed;
+    const complete = backup?.complete && !busy && !failed && conflicts === 0;
     const destinationsEditable = !!backup && !backup.importStarted;
 
     useEffect(() => {
@@ -511,7 +512,7 @@ export const CopyItemsView = observer(
               (current, total) => {
                 setState(
                   <CopyProgress value={`${current}/${total}`}>
-                    Reading address records
+                    Reading items
                   </CopyProgress>,
                 );
               },
@@ -587,7 +588,7 @@ export const CopyItemsView = observer(
         } catch (error) {
           if (
             session.backup!.targets.some(target =>
-              target.items.some(item => !item.exported),
+              target.items.some(item => !item.exported && !item.issue),
             )
           ) {
             copyState.markInterrupted(backup.source.publicKey, true);
@@ -721,9 +722,9 @@ export const CopyItemsView = observer(
           <CardPreviewButton
             key={target.publicKey}
             aria-label={`Destination card ${target.id}`}
-            disabled={busy || (step !== 4 && !destinationsEditable)}
+            disabled={busy || (step < 4 && !destinationsEditable)}
             onClick={() =>
-              step === 4 ? setDetails(target) : setDestination(target)
+              step >= 4 ? setDetails(target) : setDestination(target)
             }
           >
             <CardPreview
@@ -733,7 +734,10 @@ export const CopyItemsView = observer(
                   ? `items ${getCopyProgress([target], 'imported')}`
                   : undefined
               }
-              $interrupted={interruptedCards.has(target.publicKey)}
+              $interrupted={
+                interruptedCards.has(target.publicKey) ||
+                target.items.some(item => !!item.issue)
+              }
               $pending={
                 activeStep === 4 && !startedImports.has(target.publicKey)
               }
@@ -839,9 +843,7 @@ export const CopyItemsView = observer(
                   {destinationCards}
                   {conflicts > 0 && (
                     <WarningMessage>
-                      Some items conflict with existing contents. Existing
-                      contents were not overwritten. View card details, then
-                      retry or start over to choose other cards.
+                      Some items were skipped. View card details.
                     </WarningMessage>
                   )}
                 </Step>

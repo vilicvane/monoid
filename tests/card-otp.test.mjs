@@ -77,14 +77,13 @@ test('same OTP index pins its secret and conflicts only on configuration when me
     mergeCardItemData(account, {...account, alias: 'Other'}),
     account,
   );
-  assert.equal(
-    mergeCardItemData({...account, data: 'aa'}, {...account, data: 'bb'}).data,
-    'aa',
-    'ciphertexts do not compare plaintext secrets',
+  assert.throws(
+    () => mergeCardItemData({...account, data: 'aa'}, {...account, data: 'bb'}),
+    /conflicting item data/,
   );
   assert.throws(
     () => mergeCardItemData(account, {...account, metadata: '010108001e'}),
-    /conflicting OTP data/,
+    /conflicting item data/,
   );
 });
 
@@ -250,23 +249,23 @@ test('Copy preserves conflicting OTP configurations and unprotected legacy items
     await importCopy(session, target);
     assert.deepEqual(target.calls, []);
     assert.equal(target.records.get(ACCOUNT_INDEX), existing);
-    if (override.secret === false) {
-      assert.deepEqual(session.backup.targets[0].items, []);
-    } else {
-      assert.equal(session.backup.complete, false);
-      assert.equal(session.backup.targets[0].items[0].conflict, true);
-    }
+    assert.equal(session.backup.complete, true);
+    assert.equal(session.backup.targets[0].items[0].issue?.reason, 'Conflict');
   }
 });
 
-test('Copy catches configuration changes between listing and encrypted export', async () => {
+test('Copy retains the encrypted export metadata without OTP validation', async () => {
   const {source, target} = copyFixture();
   const exportItem = source.exportItem;
   source.exportItem = async request => ({
     ...(await exportItem(request)),
     metadata: bytes('010108001e'),
   });
-  await assert.rejects(prepareCopy(source, target), /conflicting OTP data/);
+  const session = await prepareCopy(source, target);
+  assert.equal(
+    session.backup.targets[0].items[0].exported.metadata,
+    '010108001e',
+  );
   assert.deepEqual(target.calls, []);
 });
 
