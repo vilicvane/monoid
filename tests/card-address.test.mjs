@@ -17,7 +17,10 @@ import {
 import {isCardKeyItem} from '../.bld/app/@components/views/safe/common.js';
 import {scanCardItems} from '../.bld/app/@components/views/safe/scan-card.js';
 import {parseDerivationPath} from '../.bld/app/@lib/bip39.js';
-import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {
+  CBORAppletError,
+  CardItemNotFoundError,
+} from '../.bld/app/@lib/cbor-applet.js';
 import {createMonoidApplet} from '../.bld/app/@lib/monoid/monoid-applet.js';
 import {WalletKeyKnownType} from '../.bld/app/@services/wallet-storage-service.js';
 
@@ -362,7 +365,7 @@ test('initial scans retain unsupported wallet keys without an address but propag
   ]);
 
   for (const failure of [
-    new CBORAppletError({code: 'NOT_FOUND'}),
+    new CardItemNotFoundError({code: 'NOT_FOUND'}),
     new Error('Card disconnected'),
   ]) {
     applet.viewKey = async () => {

@@ -1,19 +1,25 @@
 import {observable, runInAction} from 'mobx';
 
 import {MonoidPIN, PublicKey, SafeIndex} from '../../../../@atomics.js';
-import {AppletISOError} from '../../../../@lib/applet.js';
 import {InvalidCardItemError} from '../../../../@lib/card-item-error.js';
-import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {
+  CBORAppletError,
+  CardItemNotFoundError,
+} from '../../../../@lib/cbor-applet.js';
+import {
+  CardItemConflictError,
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidAppletInvalidPINError,
   MonoidCardError,
   MonoidWrongCardError,
+  acceptMatchingItem,
+  hasMatchingItem,
   initializeMonoidCard,
 } from '../../../../@lib/monoid/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 import {
+  encodeCardDerivationRecord,
   isCardDerivationItem,
   readCardDerivationRecord,
 } from '../card-derivations.js';
@@ -61,6 +67,8 @@ export type CardBackupTransfer = {
     plaintext?: string;
   };
   imported: boolean;
+  /** Reconcile a lost Import response by reading, before another write. */
+  pending?: boolean;
   conflict?: boolean;
 };
 
@@ -274,7 +282,7 @@ async function hasMatchingImmutableItem(
   try {
     metadata = await applet.view({index});
   } catch (error) {
-    if (error instanceof CBORAppletError && error.source.code === 'NOT_FOUND') {
+    if (error instanceof CardItemNotFoundError) {
       throwIfCancelled(signal);
       return false;
     }
@@ -791,9 +799,10 @@ export class CardBackupSession {
           continue;
         }
 
-        const sourceIndex = backup.items.find(
+        const sourceItem = backup.items.find(
           source => source.index === item.index,
-        )?.otpKeyIndex;
+        )!;
+        const sourceIndex = sourceItem.otpKeyIndex;
         if (
           sourceIndex &&
           !this.requireBackup()
@@ -815,18 +824,35 @@ export class CardBackupSession {
           ...(exported.alias !== undefined && {alias: exported.alias}),
           data: hexToUint8Array(exported.data),
         };
+        const expected = {
+          ...request,
+          secret: sourceItem.secret,
+          data:
+            exported.plaintext !== undefined
+              ? hexToUint8Array(exported.plaintext)
+              : sourceItem.derivationRecord &&
+                encodeCardDerivationRecord(sourceItem.derivationRecord),
+        };
 
         try {
           if (
-            !isCardImmutableItem(item) ||
-            !(await hasMatchingImmutableItem(applet, item, signal))
+            !(
+              item.pending && (await hasMatchingItem(applet, expected, signal))
+            ) &&
+            (!isCardImmutableItem(item) ||
+              !(await hasMatchingImmutableItem(applet, item, signal)))
           ) {
             const current = this.requireBackup();
             if (!current.importStarted) {
               // A lost response may still mean the card committed the import.
               this.setBackup({...current, importStarted: true});
             }
-            await applet.importItem(request);
+            this.updateTransfer(target.publicKey, {...item, pending: true});
+            try {
+              await applet.importItem(request);
+            } catch (error) {
+              await acceptMatchingItem(applet, expected, error, signal);
+            }
           }
         } catch (error) {
           if (error instanceof InvalidCardItemError) {
@@ -848,7 +874,7 @@ export class CardBackupSession {
           }
           if (
             error instanceof CardItemMergeConflict ||
-            (error instanceof AppletISOError && error.sw === 0x6985)
+            error instanceof CardItemConflictError
           ) {
             this.updateTransfer(target.publicKey, {...item, conflict: true});
             throwIfCancelled(signal);
@@ -864,6 +890,7 @@ export class CardBackupSession {
         this.updateTransfer(target.publicKey, {
           ...item,
           imported: true,
+          pending: false,
           conflict: false,
         });
         throwIfCancelled(signal);

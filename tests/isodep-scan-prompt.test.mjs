@@ -64,9 +64,7 @@ mock.module('../.bld/app/@lib/isodep.js', {
   },
 });
 mock.module('../.bld/app/@services/index.js', {
-  namedExports: {
-    isCredentialRequestCancelled: error => error?.code === 'CANCELLED',
-  },
+  namedExports: {},
 });
 
 mock.module('../.bld/app/@lib/monoid/index.js', {

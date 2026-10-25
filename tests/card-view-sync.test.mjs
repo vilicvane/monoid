@@ -8,6 +8,11 @@ import {
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
 import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
+import {
+  acceptMatchingItem,
+  removeItems,
+  setItemAlias,
+} from '../.bld/app/@lib/monoid/item-operations.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
 import {
   WalletStorageService,
@@ -82,12 +87,18 @@ mock.module('../.bld/app/@services/index.js', {
     assertWalletPublicKeys,
     getWalletData,
     getWalletReference,
-    isCredentialRequestCancelled: error => error?.code === 'CANCELLED',
     matchesWalletReference,
   },
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
-  namedExports: {getAppletKey, MonoidCardError, MonoidWrongCardError},
+  namedExports: {
+    getAppletKey,
+    MonoidCardError,
+    MonoidWrongCardError,
+    removeItems,
+    setItemAlias,
+    acceptMatchingItem,
+  },
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
@@ -442,6 +453,7 @@ function mount({items, keys = []}) {
     },
     async remove({index}) {
       state.removals.push(Buffer.from(index).toString('hex'));
+      return {removed: true};
     },
   };
   state.scan = (label, callback, validate, options) => {
@@ -687,11 +699,12 @@ test('an acknowledged companion deletion survives a failed root deletion and reo
   const remove = state.applet.remove;
   let failed = false;
   state.applet.remove = async request => {
-    await remove(request);
+    const result = await remove(request);
     if (Buffer.from(request.index).toString('hex') === INDEX && !failed) {
       failed = true;
       throw new Error('Card removed');
     }
+    return result;
   };
   state.select(INDEX);
   state.confirmDelete()();
@@ -747,15 +760,16 @@ test('dismissing an in-flight delete keeps actions blocked until its ACK is publ
   const release = deferred();
   const remove = state.applet.remove;
   state.applet.remove = async request => {
-    await remove(request);
+    const result = await remove(request);
     await release.promise;
+    return result;
   };
   state.select(INDEX);
   const clickDelete = state.confirmDelete();
   clickDelete();
   const rejected = assert.rejects(
     state.tap(),
-    error => error.code === 'CANCELLED',
+    error => error.name === 'AbortError' || error.code === 'CANCELLED',
   );
   assert.equal(state.removals.length, 1);
   assert.equal(state.progressUpdates.length, 1);
@@ -804,8 +818,9 @@ for (const cancellation of ['route leave', 'scan cancellation']) {
     const release = deferred();
     const remove = state.applet.remove;
     state.applet.remove = async request => {
-      await remove(request);
+      const result = await remove(request);
       await release.promise;
+      return result;
     };
     state.select(INDEX);
     state.select(SECOND_INDEX);
@@ -813,7 +828,7 @@ for (const cancellation of ['route leave', 'scan cancellation']) {
     const tapping = state.tap();
     const rejected = assert.rejects(
       tapping,
-      error => error.code === 'CANCELLED',
+      error => error.name === 'AbortError' || error.code === 'CANCELLED',
     );
     assert.equal(state.removals.length, 1);
 
@@ -2190,7 +2205,7 @@ test('cancelling during Create retains its eventual acknowledgement and skips fu
   state.createKey();
   const cancelled = assert.rejects(
     state.tap(),
-    error => error.code === 'CANCELLED',
+    error => error.name === 'AbortError' || error.code === 'CANCELLED',
   );
   const dismissed = state.dismiss();
   response.resolve({index: bytes(CREATED_INDEX)});

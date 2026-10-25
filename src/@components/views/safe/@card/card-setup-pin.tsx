@@ -8,10 +8,8 @@ import {
   MonoidWrongCardError,
   initializeMonoidCard,
 } from '../../../../@lib/monoid/index.js';
-import {
-  type MonoidPINSession,
-  isCredentialRequestCancelled,
-} from '../../../../@services/index.js';
+import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
+import {type MonoidPINSession} from '../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {
   MonoidScanStatePromptContentHighlight,
@@ -236,11 +234,7 @@ export function CardSetupPIN({
           }
         }
       } catch (error) {
-        if (
-          !disposed &&
-          !signal.aborted &&
-          !isCredentialRequestCancelled(error)
-        ) {
+        if (!disposed && !isOperationCancelled(error, signal)) {
           errorService.catch(Promise.reject(error));
         }
       } finally {

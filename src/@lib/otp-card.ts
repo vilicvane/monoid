@@ -11,13 +11,15 @@ import {
 import type {OTPAccount, OTPCard} from '../@services/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../@utils/index.js';
 
-import {AppletISOError, AppletNotFoundError} from './applet.js';
+import {AppletISOError, probeApplet} from './applet.js';
 import {InvalidCardItemError} from './card-item-error.js';
 import {equalBytes} from './global-platform/commands.js';
 import {
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidCardError,
+  acceptMatchingItem,
+  removeItems,
 } from './monoid/index.js';
 import {createOTPApplet} from './otp-applet.js';
 import {
@@ -37,16 +39,14 @@ export async function isOTPInstalled(
   signal: AbortSignal,
 ): Promise<boolean> {
   signal.throwIfAborted();
-  try {
-    const otp = await createOTPApplet().useSession(applet);
-    signal.throwIfAborted();
+  const otp = createOTPApplet().attachSession(applet);
+  const installed = await probeApplet(otp, OTP_AID);
+  signal.throwIfAborted();
+  if (installed) {
     await otp.hello({});
     signal.throwIfAborted();
-    return true;
-  } catch (error) {
-    if (error instanceof AppletNotFoundError) return false;
-    throw error;
   }
+  return installed;
 }
 
 /** Check cached accounts' key references without rereading their metadata. */
@@ -151,8 +151,8 @@ export async function readOTPCard(
   const accounts = await readOTPAccounts(applet, signal);
   signal.throwIfAborted();
   const {grants} = await applet.listAppletGrants({});
+  signal.throwIfAborted();
   const grant = grants.find(grant => equalBytes(grant.aid, OTP_AID));
-  let installed = false;
   let authorized =
     !!grant?.types?.some(([type]) => type === accountType) &&
     accounts.every(account =>
@@ -162,11 +162,12 @@ export async function readOTPCard(
           uint8ArrayToHex(key.index) === account.keyIndex,
       ),
     );
-  try {
-    const otp = await createOTPApplet().useSession(applet);
-    signal.throwIfAborted();
+  const otp = createOTPApplet().attachSession(applet);
+  const installed = await probeApplet(otp, OTP_AID);
+  signal.throwIfAborted();
+  if (installed) {
     await otp.hello({});
-    installed = true;
+    signal.throwIfAborted();
     if (authorized) {
       try {
         // Hello does not check the grant's installation token. Challenge does.
@@ -177,8 +178,6 @@ export async function readOTPCard(
         authorized = false;
       }
     }
-  } catch (error) {
-    if (!(error instanceof AppletNotFoundError)) throw error;
   }
   signal.throwIfAborted();
   return {
@@ -266,23 +265,37 @@ export async function addOTPAccount(
     throw new MonoidCardError('Existing OTP key is not protected');
   signal.throwIfAborted();
   if (!existingKey) {
-    const created = await applet.create({
-      type: SafeKnownType.satisfies('hmac'),
-      data: account.secret,
-      secret: true,
-    });
-    if (!equalBytes(created.index, hmacIndex))
-      throw new MonoidCardError('Unexpected OTP key');
+    try {
+      const created = await applet.create({
+        type: SafeKnownType.satisfies('hmac'),
+        data: account.secret,
+        secret: true,
+      });
+      if (!equalBytes(created.index, hmacIndex))
+        throw new MonoidCardError('Unexpected OTP key');
+    } catch (error) {
+      await acceptMatchingItem(
+        applet,
+        {index: hmacIndex, secret: true},
+        error,
+        signal,
+      );
+    }
   }
   signal.throwIfAborted();
   if (!existing) {
-    await applet.create({
+    const request = {
       index,
       alias: account.label,
       metadata,
       data: hmacIndex,
       secret: false,
-    });
+    };
+    try {
+      await applet.create(request);
+    } catch (error) {
+      await acceptMatchingItem(applet, request, error, signal);
+    }
   } else if (existing.label !== account.label) {
     await applet.set({
       index: SafeIndex.satisfies(hexToUint8Array(existing.index)),
@@ -340,16 +353,12 @@ export async function removeOTPAccount(
         ),
     );
   signal.throwIfAborted();
-  await applet.remove({
-    index: SafeIndex.satisfies(hexToUint8Array(account.index)),
-  });
-  signal.throwIfAborted();
   // Remove the reference before its secret, preserving keys shared by another client.
-  if (!shared)
-    await applet.remove({
-      index: SafeIndex.satisfies(hexToUint8Array(account.keyIndex)),
-    });
-  signal.throwIfAborted();
+  await removeItems(
+    applet,
+    new Set([account.index, ...(!shared ? [account.keyIndex] : [])]),
+    signal,
+  );
   const next = accounts.filter(item => item.index !== account.index);
   if (installed) await grantOTPAccounts(applet, next, signal);
   return next;

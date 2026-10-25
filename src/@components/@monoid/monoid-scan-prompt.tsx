@@ -19,11 +19,9 @@ import {
   MonoidWrongCardError,
   initializeMonoidCard,
 } from '../../@lib/monoid/index.js';
+import {isOperationCancelled} from '../../@lib/operation-cancelled.js';
 import {renderIcon} from '../../@lib/render-icon.js';
-import {
-  type MonoidPINSession,
-  isCredentialRequestCancelled,
-} from '../../@services/index.js';
+import {type MonoidPINSession} from '../../@services/index.js';
 import {uint8ArrayToHex} from '../../@utils/index.js';
 import {useToast} from '../@ui/toast.js';
 import {useInputModal} from '../@ui/use-input-modal.js';
@@ -690,7 +688,7 @@ export function useMonoidScanPrompt({
               Capacitor.getPlatform() !== 'ios' &&
               !tagLost &&
               !(error instanceof IsoDepScanError) &&
-              !isCredentialRequestCancelled(error),
+              !isOperationCancelled(error),
           };
         },
         () => {
@@ -726,7 +724,7 @@ export function useMonoidScanPrompt({
             if (
               result.type === 'error' &&
               !(result.error instanceof IsoDepScanError) &&
-              !isCredentialRequestCancelled(result.error)
+              !isOperationCancelled(result.error)
             ) {
               const {error} = result;
               let errorMessage = 'Card operation failed.';
@@ -763,7 +761,7 @@ export function useMonoidScanPrompt({
             result.type === 'redirect' ||
             (result.type === 'error' &&
               (result.error instanceof IsoDepScanError ||
-                isCredentialRequestCancelled(result.error)))
+                isOperationCancelled(result.error)))
           ) {
             return {};
           }

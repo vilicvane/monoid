@@ -191,16 +191,10 @@ export function createCardSyncPlans(
       let current = card.items.find(item => item.index === desired.index);
 
       if (current?.secret && !current.fingerprint && sources.length > 1) {
-        const other = sources.find(
-          source => source.publicKey !== card.publicKey,
-        );
-        if (!other?.item.exported)
-          fail(desired.index, 'Secret data was not exported');
         operations.push({
           kind: 'verify',
           before: current,
           after: current,
-          exported: other.item.exported,
         });
       }
 

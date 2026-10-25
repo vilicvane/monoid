@@ -12,8 +12,8 @@ import {
   MonoidWrongCardError,
   initializeMonoidCard,
 } from '../../../../@lib/monoid/index.js';
+import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
-import {isCredentialRequestCancelled} from '../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {
   CardGrid,
@@ -387,8 +387,7 @@ export const SetupCardView = observer(
         if (result.type === 'setup') openMaintenance(result.cardInformation);
         else if (!completed) await acceptScan(result.hello);
       } catch (error) {
-        if (!operation.signal.aborted && !isCredentialRequestCancelled(error))
-          throw error;
+        if (!isOperationCancelled(error, operation.signal)) throw error;
       } finally {
         try {
           // Keep a verified member when a queued signing request navigates away
@@ -523,8 +522,7 @@ export const SetupCardView = observer(
           flow.pendingReset = undefined;
         });
       } catch (error) {
-        if (!operation.signal.aborted && !isCredentialRequestCancelled(error))
-          throw error;
+        if (!isOperationCancelled(error, operation.signal)) throw error;
       } finally {
         pin = undefined;
         accessPIN = undefined;
@@ -652,8 +650,7 @@ export const SetupCardView = observer(
             ?.status !== 'complete'
         )
           setInterruptedCard(scannedPublicKey);
-        if (!operation.signal.aborted && !isCredentialRequestCancelled(error))
-          throw error;
+        if (!isOperationCancelled(error, operation.signal)) throw error;
       } finally {
         if (bundleSession.configuredCount === bundleSession.cards.length)
           secretPINSession.clear();

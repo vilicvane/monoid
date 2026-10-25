@@ -3,6 +3,7 @@ export * from './card-error.js';
 export * from './get-applet-key.js';
 export * from './initialize-card.js';
 export * from './install.js';
+export * from './item-operations.js';
 export * from './monoid-applet.js';
 export * from './sign-bitcoin-transaction.js';
 export * from './sign-evm-digest.js';

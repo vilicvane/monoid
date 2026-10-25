@@ -104,9 +104,7 @@ mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => fixture.entrances},
 });
 mock.module('../.bld/app/@services/index.js', {
-  namedExports: {
-    isCredentialRequestCancelled: error => error?.code === 'CANCELLED',
-  },
+  namedExports: {},
 });
 mock.module('../.bld/app/@lib/otp-card.js', {
   namedExports: {

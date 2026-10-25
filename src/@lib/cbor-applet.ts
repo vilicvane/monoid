@@ -29,7 +29,9 @@ export class CBORApplet<
     const decoded = xCBOR.unpack(data);
 
     if (XCBORErrorResponse.is(decoded)) {
-      throw new CBORAppletError(decoded.error);
+      const ErrorClass =
+        CARD_ERROR_CLASSES.get(decoded.error.code) ?? CBORAppletError;
+      throw new ErrorClass(decoded.error);
     }
 
     return decoded;
@@ -104,3 +106,12 @@ export class CBORAppletError extends Error {
     this.name = new.target.name;
   }
 }
+
+export class CardItemNotFoundError extends CBORAppletError {}
+
+export class CardItemExistsError extends CBORAppletError {}
+
+const CARD_ERROR_CLASSES = new Map([
+  ['NOT_FOUND', CardItemNotFoundError],
+  ['EXISTS', CardItemExistsError],
+]);

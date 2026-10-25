@@ -6,7 +6,6 @@ import {p256} from '@noble/curves/nist';
 import {observable, runInAction} from 'mobx';
 
 import {readBackupCardIdentity} from '../.bld/app/@components/views/safe/@card/card-backup-session.js';
-import {deleteCardResources} from '../.bld/app/@components/views/safe/card-resource-delete.js';
 import {AppletNotFoundError} from '../.bld/app/@lib/applet.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
@@ -77,9 +76,7 @@ mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => fixture.entrances},
 });
 mock.module('../.bld/app/@services/index.js', {
-  namedExports: {
-    isCredentialRequestCancelled: error => error?.code === 'CANCELLED',
-  },
+  namedExports: {},
 });
 mock.module('../.bld/app/@components/@ui/use-input-modal.js', {
   namedExports: {
@@ -170,9 +167,7 @@ for (const [path, names] of [
     namedExports: {
       ...Object.fromEntries(names.map(name => [name, name])),
       ...(path === '@view/index' ? {useViewActive} : {}),
-      ...(path === 'views/safe/index'
-        ? {deleteCardResources, readBackupCardIdentity}
-        : {}),
+      ...(path === 'views/safe/index' ? {readBackupCardIdentity} : {}),
     },
   });
 }
@@ -225,7 +220,7 @@ function card(number) {
     listAppletGrants: async () => ({grants: state.grants}),
     list: async () => ({items: state.items}),
     viewKey: async () => ({publicKey: p256.getPublicKey(1n, true)}),
-    sendRawCommand: async () => new TextEncoder().encode('FIDO_2_0'),
+    select: async () => new TextEncoder().encode('FIDO_2_0'),
     createRandomKey: async () => {
       state.writes.push('create');
       if (state.createFailure) throw new Error('Unknown create result');
@@ -564,6 +559,7 @@ test('deleting a credential removes it from this card, then further cards until 
     current.applet.get = async () => ({data: bytes(record.data)});
     current.applet.remove = async ({index}) => {
       current.removals.push(Buffer.from(index).toString('hex'));
+      return {removed: true};
     };
     return current;
   };

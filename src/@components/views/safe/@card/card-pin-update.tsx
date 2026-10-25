@@ -5,11 +5,9 @@ import type {RouteComponentProps} from 'routra-react';
 
 import {type MonoidIdHex, MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
+import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
-import {
-  type MonoidPINSession,
-  isCredentialRequestCancelled,
-} from '../../../../@services/index.js';
+import {type MonoidPINSession} from '../../../../@services/index.js';
 import {useMonoidScanPrompt} from '../../../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
 import {useToast} from '../../../@ui/toast.js';
@@ -191,11 +189,7 @@ export const CardPINUpdate = observer(
             }
           }
         } catch (error) {
-          if (
-            active() &&
-            !signal.aborted &&
-            !isCredentialRequestCancelled(error)
-          )
+          if (active() && !isOperationCancelled(error, signal))
             errorService.catch(Promise.reject(error));
         } finally {
           currentPIN = undefined;

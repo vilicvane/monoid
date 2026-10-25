@@ -8,7 +8,6 @@ import {MonoidWrongCardError} from '../.bld/app/@lib/monoid/card-error.js';
 import {
   MonoidCredentialsStore,
   MonoidPINSession,
-  isCredentialRequestCancelled,
 } from '../.bld/app/@services/monoid-credentials-store.js';
 
 let fixture;
@@ -36,7 +35,7 @@ mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => fixture.entrances},
 });
 mock.module('../.bld/app/@services/index.js', {
-  namedExports: {isCredentialRequestCancelled},
+  namedExports: {},
 });
 mock.module('../.bld/app/@components/@ui/toast.js', {
   namedExports: {useToast: () => fixture.toast},

@@ -4,7 +4,10 @@ import {test} from 'node:test';
 
 import {base58} from '@scure/base';
 
-import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {
+  CBORAppletError,
+  CardItemNotFoundError,
+} from '../.bld/app/@lib/cbor-applet.js';
 import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
 import {signSolanaMessage} from '../.bld/app/@lib/monoid/sign-solana-message.js';
 import {verifySolanaSignature} from '../.bld/app/@lib/solana-signature.js';
@@ -214,7 +217,7 @@ test('rejects card responses that are not 64-byte Ed25519 signatures', async () 
 test('maps missing-key errors to the short card prompt and preserves other errors', async () => {
   for (const operation of ['viewKey', 'sign']) {
     const applet = createApplet();
-    const missing = new CBORAppletError({code: 'NOT_FOUND'});
+    const missing = new CardItemNotFoundError({code: 'NOT_FOUND'});
     applet[operation] = async () => {
       throw missing;
     };

@@ -7,8 +7,10 @@ import {
   encodeCardDerivationRecord,
   getCardDerivationItemIndex,
 } from '../.bld/app/@components/views/safe/card-derivations.js';
-import {AppletISOError} from '../.bld/app/@lib/applet.js';
-import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {
+  CardItemExistsError,
+  CardItemNotFoundError,
+} from '../.bld/app/@lib/cbor-applet.js';
 
 import {credential} from './helpers/security-key-credential.mjs';
 
@@ -59,7 +61,7 @@ function mockCard(id, bundle = false, entries = []) {
       const value = hex(index);
       calls.push(['view', value]);
       const item = records.get(value);
-      if (!item) throw new CBORAppletError({code: 'NOT_FOUND'});
+      if (!item) throw new CardItemNotFoundError({code: 'NOT_FOUND'});
       return {
         metadata:
           item.metadata === undefined ? undefined : bytes(item.metadata),
@@ -121,15 +123,7 @@ function mockCard(id, bundle = false, entries = []) {
       );
       const existing = records.get(incoming.index);
       if (existing) {
-        try {
-          assert.deepEqual(existing, incoming);
-        } catch {
-          throw new AppletISOError(
-            'Conflicting data',
-            0x6985,
-            new Uint8Array(),
-          );
-        }
+        throw new CardItemExistsError({code: 'EXISTS'});
       } else {
         await card.beforeMutation?.('import', incoming);
         records.set(incoming.index, incoming);
@@ -686,7 +680,7 @@ test('a final ACK completes the card even when cancellation arrives at the same 
 
 for (const opaque of [false, true]) {
   for (const committed of [false, true]) {
-    test(`${opaque ? 'opaque Secret' : 'Key'} import with ${committed ? 'lost ACK' : 'no commit'} resumes idempotently without reading`, async () => {
+    test(`${opaque ? 'opaque Secret' : 'Key'} import with ${committed ? 'lost ACK' : 'no commit'} reconciles the pending item before writing`, async () => {
       const session = new CardSyncSession();
       const item = root(opaque ? {index: unknownIndex, type: 0x1000} : {});
       const first = mockCard(1, 1, [item]);
@@ -705,7 +699,12 @@ for (const opaque of [false, true]) {
       await write(session, target, PIN);
       assert.deepEqual(target.calls, [
         ['authenticate', {secret: true, pin: PIN}],
-        ['import', item.index],
+        ['view', item.index],
+        ...(committed
+          ? !opaque
+            ? [['viewKey', item.index]]
+            : []
+          : [['import', item.index]]),
       ]);
       assert.deepEqual(target.records.get(item.index), item);
       assert.equal(session.phase, 'complete');
@@ -713,7 +712,7 @@ for (const opaque of [false, true]) {
   }
 }
 
-test('identical opaque Secret copies require non-self verification and can sync repeatedly', async () => {
+test('identical opaque Secret copies verify exposed fields without Import and can sync repeatedly', async () => {
   const session = new CardSyncSession();
   const secret = root({index: unknownIndex, type: 0x1000});
   const first = mockCard(1, 1, [secret]);
@@ -741,7 +740,7 @@ test('identical opaque Secret copies require non-self verification and can sync 
   assert.equal(session.phase, 'complete');
 });
 
-test('opaque Secret body conflicts stop verification without replacing either copy', async () => {
+test('changed opaque Secret metadata stops verification before unrelated writes', async () => {
   const session = new CardSyncSession();
   const first = mockCard(1, 1, [
     plain(),
@@ -754,14 +753,15 @@ test('opaque Secret body conflicts stop verification without replacing either co
   await add(session, first, PIN);
   await add(session, second, PIN);
   session.prepare();
-  await assert.rejects(write(session, second, PIN), /conflicting Secret data/);
+  second.records.get(unknownIndex).alias = 'Changed';
+  await assert.rejects(write(session, second, PIN), /conflicting item data/);
   assert.equal(session.cards[1].completed, 0);
   assert.equal(second.records.get(unknownIndex).data, '99');
   assert.equal(first.records.get(unknownIndex).data, '12');
   assert.equal(second.records.get(publicIndex).data, 'bb');
   assert.deepEqual(
     mutationCalls(second).map(([kind]) => kind),
-    ['import'],
+    [],
     'Secret verification must finish before unrelated plaintext writes',
   );
 });

@@ -31,7 +31,7 @@ mock.module('../.bld/app/@lib/isodep.js', {
   },
 });
 
-const {Applet, AppletISOError, AppletNotFoundError} = await import(
+const {Applet, AppletISOError, AppletNotFoundError, probeApplet} = await import(
   '../.bld/app/@lib/applet.js'
 );
 
@@ -163,9 +163,15 @@ test('standby awaits missing-SELECT preflight on the same open connection before
   assert.deepEqual(state.failures, []);
 });
 
-test('a SELECT forwarded to the selected applet as an unsupported instruction is a missing applet', async () => {
+test('an unsupported SELECT instruction remains an ISO error', async () => {
   respond = () => [0x6d, 0x00];
-  await assert.rejects(openApplet(), AppletNotFoundError);
+  await assert.rejects(
+    openApplet(),
+    error =>
+      error instanceof AppletISOError &&
+      !(error instanceof AppletNotFoundError) &&
+      error.sw === 0x6d00,
+  );
 });
 
 test('standby forwards a missing SELECT when no preflight handler was supplied', async () => {
@@ -376,4 +382,56 @@ test('an error retrieving a response never decodes a partial result', async () =
   );
   assert.equal(exchanges.length, 2);
   assert.deepEqual(applet.decoded, []);
+});
+
+test('probe selects once, follows response continuation and leaves the target selected', async () => {
+  const applet = new TestApplet(Uint8Array.of(1)).attachSession('probe');
+  respond = ({data}) => (data[1] === 0xa4 ? [1, 0x61, 1] : [2, 0x90, 0]);
+  assert.equal(
+    await probeApplet(applet, Uint8Array.of(2), response =>
+      assert.deepEqual(response, Uint8Array.of(1, 2)),
+    ),
+    true,
+  );
+  assert.deepEqual(
+    exchanges.map(({data}) => data),
+    [
+      [0, 0xa4, 4, 0, 1, 2],
+      [0, 0xc0, 0, 0, 1],
+    ],
+  );
+});
+
+for (const sw of [0x6a82, 0x6d00, 0x6982, 0x6999]) {
+  test(`probe handles SELECT status ${sw.toString(16)}`, async () => {
+    const applet = new TestApplet(Uint8Array.of(1)).attachSession('probe');
+    respond = () => [sw >> 8, sw & 255];
+    if (sw === 0x6a82)
+      assert.equal(await probeApplet(applet, applet.aid), false);
+    else
+      await assert.rejects(
+        probeApplet(applet, applet.aid),
+        error => error instanceof AppletISOError && error.sw === sw,
+      );
+    assert.equal(exchanges.length, 1);
+  });
+}
+
+test('probe never mistakes GET RESPONSE absence or transport failure for a missing applet', async () => {
+  const applet = new TestApplet(Uint8Array.of(1)).attachSession('probe');
+  respond = ({data}) => (data[1] === 0xa4 ? [0x61, 1] : [0x6a, 0x82]);
+  await assert.rejects(
+    probeApplet(applet, applet.aid),
+    error =>
+      error instanceof AppletISOError &&
+      !(error instanceof AppletNotFoundError),
+  );
+  const failure = new Error('Tag lost');
+  respond = () => {
+    throw failure;
+  };
+  await assert.rejects(
+    probeApplet(applet, applet.aid),
+    error => error === failure,
+  );
 });

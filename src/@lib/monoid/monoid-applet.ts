@@ -279,7 +279,7 @@ export const monoidCommandDefinitions = {
   remove: {
     ins: 0x35,
     request: x.object({index: SafeIndex}),
-    response: x.object({}),
+    response: x.object({removed: x.boolean}),
   },
 
   // Secret PIN authentication is required. Enrolled cards export for their Bundle;

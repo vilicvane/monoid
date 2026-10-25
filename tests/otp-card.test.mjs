@@ -4,12 +4,17 @@ import {mock, test} from 'node:test';
 import {p256} from '@noble/curves/nist';
 import {getBytes, sha256, toUtf8Bytes} from 'ethers';
 
+import {
+  CardItemExistsError,
+  CardItemNotFoundError,
+} from '../.bld/app/@lib/cbor-applet.js';
+
 let otp;
 const OTP_AID = Uint8Array.from(Buffer.from('f06d6f6e6f69640501', 'hex'));
 mock.module('../.bld/app/@lib/otp-applet.js', {
   namedExports: {
     OTP_AID,
-    createOTPApplet: () => ({useSession: async () => otp}),
+    createOTPApplet: () => ({attachSession: () => otp}),
   },
 });
 const {AppletISOError, AppletNotFoundError} = await import(
@@ -69,9 +74,11 @@ function card(options = {}) {
   );
   let grants = options.grants ?? [];
   otp = {
+    async select() {
+      if (options.notInstalled) throw new AppletNotFoundError(new Uint8Array());
+    },
     async hello() {
       commands.push(['otp.hello']);
-      if (options.notInstalled) throw new AppletNotFoundError(new Uint8Array());
       if (options.helloError) throw options.helloError;
       return {version: new Uint8Array([0, 0]), batchSize: 3};
     },
@@ -85,7 +92,7 @@ function card(options = {}) {
     async view({index}) {
       commands.push(['view', hex(index)]);
       const item = items.get(hex(index));
-      if (!item) throw new Error('NOT_FOUND');
+      if (!item) throw new CardItemNotFoundError({code: 'NOT_FOUND'});
       const {data: _data, ...metadata} = item;
       return metadata;
     },
@@ -106,7 +113,7 @@ function card(options = {}) {
     async get({index}) {
       commands.push(['get', hex(index)]);
       const item = items.get(hex(index));
-      if (!item) throw new Error('NOT_FOUND');
+      if (!item) throw new CardItemNotFoundError({code: 'NOT_FOUND'});
       if (item.secret) throw new Error('ACCESS_DENIED');
       return {data: item.data};
     },
@@ -139,10 +146,8 @@ function card(options = {}) {
           request.data.length,
           ...getBytes(sha256(request.data)).subarray(0, 8),
         ]);
-      assert.ok(
-        !items.has(hex(index)),
-        'firmware rejects duplicate create rather than returning the old HMAC key',
-      );
+      if (items.has(hex(index)))
+        throw new CardItemExistsError({code: 'EXISTS'});
       items.set(hex(index), {...request, index});
       await options.onCreate?.(request, index);
       return {index};
@@ -156,9 +161,9 @@ function card(options = {}) {
     },
     async remove({index}) {
       commands.push(['remove', hex(index)]);
-      assert.ok(items.delete(hex(index)));
+      const removed = items.delete(hex(index));
       await options.onRemove?.(index);
-      return {};
+      return {removed};
     },
   };
   return {applet, commands, items};
@@ -168,7 +173,7 @@ test('OTP preflight only probes Hello and distinguishes absence from failures', 
   for (const notInstalled of [false, true]) {
     const {applet, commands} = card({notInstalled});
     assert.equal(await isOTPInstalled(applet, signal()), !notInstalled);
-    assert.deepEqual(commands, [['otp.hello']]);
+    assert.deepEqual(commands, notInstalled ? [] : [['otp.hello']]);
   }
   for (const helloError of [
     new AppletISOError('OTP Hello', 0x6982, new Uint8Array()),
@@ -778,3 +783,35 @@ test('OTP delete rejects a changed key reference and stops on an uncertain metad
   );
   assert.ok(interrupted.items.has(hex(hmacIndex)));
 });
+
+for (const conflicting of [false, true]) {
+  test(`OTP Create EXISTS ${
+    conflicting
+      ? 'rejects different public metadata'
+      : 'accepts only matching key and account'
+  }`, async () => {
+    const state = card({
+      onCreate(request, index) {
+        if (conflicting && request.index)
+          state.items.get(hex(index)).alias = 'Different';
+        throw new CardItemExistsError({code: 'EXISTS'});
+      },
+    });
+    const adding = addOTPAccount(
+      state.applet,
+      {...configuration, label: 'Example: alice', secret},
+      signal(),
+    );
+    if (conflicting) await assert.rejects(adding, /conflicting item data/);
+    else assert.equal((await adding).length, 1);
+    assert.equal(
+      state.commands.filter(([name]) => name === 'create').length,
+      2,
+    );
+    assert.equal(state.commands.filter(([name]) => name === 'view').length, 2);
+    assert.equal(
+      state.commands.filter(([name]) => name === 'grant').length,
+      conflicting ? 0 : 1,
+    );
+  });
+}

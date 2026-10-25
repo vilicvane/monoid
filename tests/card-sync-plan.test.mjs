@@ -198,7 +198,7 @@ test('Secret import retains authenticated metadata and applies merged alias afte
   assert.equal(ops[2].after.derivationRecord.wallets.length, 2);
 });
 
-test('opaque Secret verification uses another member, while differing aliases or fingerprints stop planning', () => {
+test('opaque Secret verification reads exposed fields, while differing aliases or fingerprints stop planning', () => {
   const pair = (a, b) => [card(1, 'A', [a]), card(2, 'A', [b])];
   const plans = createCardSyncPlans(
     pair(
@@ -210,10 +210,7 @@ test('opaque Secret verification uses another member, while differing aliases or
     plans.map(plan => plan.operations[0].kind),
     ['verify', 'verify'],
   );
-  assert.deepEqual(
-    plans.map(plan => plan.operations[0].exported.data),
-    ['bb', 'aa'],
-  );
+  assert.ok(plans.every(plan => plan.operations[0].exported === undefined));
   assert.throws(
     () =>
       createCardSyncPlans(

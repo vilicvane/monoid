@@ -31,12 +31,12 @@ import {
   readMonoidAppletInstallation,
   resolveMonoidAppletMaintenanceAid,
 } from '../../../@lib/monoid/index.js';
+import {isOperationCancelled} from '../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../@routes.js';
 import {
   type CardMaintenanceMode,
   type CardMaintenanceProgress,
   cardFingerprint,
-  isCredentialRequestCancelled,
 } from '../../../@services/index.js';
 import {
   createFlowId,
@@ -305,7 +305,7 @@ export const CardManagementView = observer(
           }
         });
       } catch (error) {
-        if (!isCredentialRequestCancelled(error)) {
+        if (!isOperationCancelled(error)) {
           errorService.catch(Promise.reject(error));
         }
       } finally {
@@ -692,7 +692,7 @@ export const CardManagementView = observer(
           }
         }
       } catch (error) {
-        if (!operation.signal.aborted && !isCredentialRequestCancelled(error)) {
+        if (!isOperationCancelled(error, operation.signal)) {
           errorService.catch(Promise.reject(error));
         }
       } finally {

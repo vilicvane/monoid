@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-import {deleteCardResources} from '../.bld/app/@components/views/safe/card-resource-delete.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {removeItems} from '../.bld/app/@lib/monoid/item-operations.js';
 
 const ATTACHED_INDEX = '0f010000000000000001';
 const ROOT_INDEX = '02400000000000000001';
@@ -15,8 +15,7 @@ function createApplet(onRemove = async () => {}) {
     requests,
     async remove(request) {
       requests.push(request);
-      await onRemove(request);
-      return {};
+      return (await onRemove(request)) ?? {removed: true};
     },
   };
 }
@@ -28,15 +27,10 @@ test('deletes companions before their root and records each ACK before the next 
     assert.equal(applet.requests.length, deleted.length + 1);
   });
 
-  await deleteCardResources(
-    applet,
-    pending,
-    new AbortController().signal,
-    index => {
-      assert.equal(pending.has(index), false);
-      deleted.push(index);
-    },
-  );
+  await removeItems(applet, pending, new AbortController().signal, index => {
+    assert.equal(pending.has(index), false);
+    deleted.push(index);
+  });
 
   assert.deepEqual(applet.requests, [
     {index: bytes(ATTACHED_INDEX)},
@@ -60,14 +54,14 @@ test('retry resumes after a partial failure without deleting acknowledged resour
   const onDeleted = index => deleted.push(index);
 
   await assert.rejects(
-    deleteCardResources(applet, pending, controller.signal, onDeleted),
+    removeItems(applet, pending, controller.signal, onDeleted),
     error => error === failure,
   );
   assert.deepEqual(deleted, [ATTACHED_INDEX]);
   assert.deepEqual([...pending], [ROOT_INDEX]);
 
   failRoot = false;
-  await deleteCardResources(applet, pending, controller.signal, onDeleted);
+  await removeItems(applet, pending, controller.signal, onDeleted);
 
   assert.deepEqual(applet.requests, [
     {index: bytes(ATTACHED_INDEX)},
@@ -78,7 +72,7 @@ test('retry resumes after a partial failure without deleting acknowledged resour
   assert.equal(pending.size, 0);
 });
 
-test('a lost deletion response is recovered when retry reports NOT_FOUND', async () => {
+test('a lost deletion response is recovered when retry reports removed: false', async () => {
   const pending = new Set([ATTACHED_INDEX, ROOT_INDEX]);
   const deleted = [];
   const controller = new AbortController();
@@ -89,7 +83,7 @@ test('a lost deletion response is recovered when retry reports NOT_FOUND', async
     const key = Buffer.from(index).toString('hex');
 
     if (!remainingOnCard.delete(key)) {
-      throw new CBORAppletError({code: 'NOT_FOUND'});
+      return {removed: false};
     }
 
     if (loseResponse) {
@@ -100,13 +94,13 @@ test('a lost deletion response is recovered when retry reports NOT_FOUND', async
   const onDeleted = index => deleted.push(index);
 
   await assert.rejects(
-    deleteCardResources(applet, pending, controller.signal, onDeleted),
+    removeItems(applet, pending, controller.signal, onDeleted),
     error => error === failure,
   );
   assert.deepEqual([...pending], [ATTACHED_INDEX, ROOT_INDEX]);
   assert.deepEqual(deleted, []);
 
-  await deleteCardResources(applet, pending, controller.signal, onDeleted);
+  await removeItems(applet, pending, controller.signal, onDeleted);
 
   assert.deepEqual(deleted, [ATTACHED_INDEX, ROOT_INDEX]);
   assert.equal(pending.size, 0);
@@ -133,11 +127,8 @@ for (const [name, failure] of [
     });
 
     await assert.rejects(
-      deleteCardResources(
-        applet,
-        pending,
-        new AbortController().signal,
-        index => deleted.push(index),
+      removeItems(applet, pending, new AbortController().signal, index =>
+        deleted.push(index),
       ),
       error => error === failure,
     );
@@ -156,10 +147,10 @@ test('cancellation before deletion leaves all resources pending', async () => {
   controller.abort();
 
   await assert.rejects(
-    deleteCardResources(applet, pending, controller.signal, index =>
+    removeItems(applet, pending, controller.signal, index =>
       deleted.push(index),
     ),
-    {code: 'CANCELLED'},
+    {name: 'AbortError'},
   );
 
   assert.deepEqual(applet.requests, []);
@@ -167,7 +158,7 @@ test('cancellation before deletion leaves all resources pending', async () => {
   assert.deepEqual(deleted, []);
 });
 
-for (const response of ['ACK', 'NOT_FOUND']) {
+for (const response of ['removed', 'absent']) {
   test(`cancellation during ${response} records the deletion before stopping`, async () => {
     const pending = new Set([ATTACHED_INDEX, ROOT_INDEX]);
     const deleted = [];
@@ -175,16 +166,16 @@ for (const response of ['ACK', 'NOT_FOUND']) {
     const applet = createApplet(async () => {
       controller.abort();
 
-      if (response === 'NOT_FOUND') {
-        throw new CBORAppletError({code: 'NOT_FOUND'});
+      if (response === 'absent') {
+        return {removed: false};
       }
     });
 
     await assert.rejects(
-      deleteCardResources(applet, pending, controller.signal, index =>
+      removeItems(applet, pending, controller.signal, index =>
         deleted.push(index),
       ),
-      {code: 'CANCELLED'},
+      {name: 'AbortError'},
     );
 
     assert.deepEqual(applet.requests, [{index: bytes(ATTACHED_INDEX)}]);
@@ -204,7 +195,7 @@ test('an unacknowledged deletion remains pending when cancellation also occurs',
   });
 
   await assert.rejects(
-    deleteCardResources(applet, pending, controller.signal, index =>
+    removeItems(applet, pending, controller.signal, index =>
       deleted.push(index),
     ),
     error => error === failure,

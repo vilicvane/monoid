@@ -1,5 +1,5 @@
 import {MonoidCardError} from '../../@lib/monoid/index.js';
-import {isCredentialRequestCancelled} from '../../@services/index.js';
+import {isOperationCancelled} from '../../@lib/operation-cancelled.js';
 import {uint8ArrayToHex} from '../../@utils/index.js';
 
 import type {
@@ -54,7 +54,7 @@ export async function scanNextCards({
         authentication,
       );
     } catch (error) {
-      if (signal?.aborted || isCredentialRequestCancelled(error)) return;
+      if (isOperationCancelled(error, signal)) return;
       throw error;
     }
   }

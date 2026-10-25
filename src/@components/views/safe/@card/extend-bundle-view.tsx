@@ -7,8 +7,8 @@ import {MonoidPIN} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import type {CardInformation} from '../../../../@lib/global-platform/card-information.js';
 import {MonoidAppletHello} from '../../../../@lib/monoid/index.js';
+import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
-import {isCredentialRequestCancelled} from '../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {
   CardGrid,
@@ -260,8 +260,7 @@ export const ExtendBundleView = observer(
             ),
         );
       } catch (error) {
-        if (!controller.signal.aborted && !isCredentialRequestCancelled(error))
-          throw error;
+        if (!isOperationCancelled(error, controller.signal)) throw error;
       } finally {
         if (session.phase === 'complete') secretPINSession.clear();
         if (operation.current === controller) operation.current = undefined;

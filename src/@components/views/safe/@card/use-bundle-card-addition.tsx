@@ -9,7 +9,7 @@ import {
   MonoidCardError,
   initializeMonoidCard,
 } from '../../../../@lib/monoid/index.js';
-import {isCredentialRequestCancelled} from '../../../../@services/index.js';
+import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {MonoidScanStatePromptContentHighlight} from '../../../@monoid/monoid-scan-prompt.js';
 import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
@@ -194,8 +194,7 @@ export function useBundleCardAddition({
       if (result.type === 'setup') onNeedsInstall(result.cardInformation);
       else if (!completed) await acceptScan(result.hello);
     } catch (error) {
-      if (!operation.signal.aborted && !isCredentialRequestCancelled(error))
-        throw error;
+      if (!isOperationCancelled(error, operation.signal)) throw error;
     } finally {
       try {
         // Acknowledged reads survive navigation during native-sheet cleanup.
@@ -320,8 +319,7 @@ export function useBundleCardAddition({
       if (!completed) await acceptScan(initialized);
       setPendingReset(undefined);
     } catch (error) {
-      if (!operation.signal.aborted && !isCredentialRequestCancelled(error))
-        throw error;
+      if (!isOperationCancelled(error, operation.signal)) throw error;
     } finally {
       pin = undefined;
       accessPIN = undefined;

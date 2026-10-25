@@ -21,7 +21,6 @@ export * from './card-key-create.js';
 export * from './card-key-import.js';
 export * from './card-otp.js';
 export * from './card-pin-update.js';
-export * from './card-resource-delete.js';
 export * from './card-resource-groups.js';
 export * from './common.js';
 export * from './safe-match.js';

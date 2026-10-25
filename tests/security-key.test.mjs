@@ -5,8 +5,8 @@ import {p256} from '@noble/curves/nist';
 import {Tag, encode} from 'cbor2';
 import {getBytes, sha256, toUtf8Bytes} from 'ethers';
 
-import {AppletISOError} from '../.bld/app/@lib/applet.js';
-import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {AppletISOError, AppletNotFoundError} from '../.bld/app/@lib/applet.js';
+import {CardItemNotFoundError} from '../.bld/app/@lib/cbor-applet.js';
 import {
   SECURITY_KEY_AID,
   SECURITY_KEY_DOMAIN,
@@ -115,7 +115,7 @@ function card(state = {}) {
         }
       );
     },
-    sendRawCommand: async request => {
+    select: async request => {
       commands.push(['raw', request]);
       return (await state.onSelect?.()) ?? toUtf8Bytes('FIDO_2_0');
     },
@@ -315,10 +315,7 @@ test('snapshot lists only 64-byte secret Seeds and never reads their contents', 
       .map(([, request]) => hex(request.index)),
     [hex(record.index), hex(malformed.index)],
   );
-  assert.deepEqual(
-    commands.at(-1)[1],
-    Uint8Array.from([0, 0xa4, 4, 0, 8, ...SECURITY_KEY_AID]),
-  );
+  assert.deepEqual(commands.at(-1)[1], SECURITY_KEY_AID);
   assert.equal(commands.filter(([name]) => name === 'viewKey').length, 1);
 });
 
@@ -370,11 +367,10 @@ test('missing granted Seed leaves scope unavailable without deriving or reading 
 });
 
 test('only explicit FIDO SELECT not-found is reported as missing', async () => {
-  // 6D00 is the selected Monoid applet rejecting a SELECT with no matching AID.
-  for (const sw of [0x6a82, 0x6d00]) {
+  {
     const missing = card({
       onSelect: async () => {
-        throw new AppletISOError('not found', sw, new Uint8Array());
+        throw new AppletNotFoundError(new Uint8Array());
       },
     });
     assert.equal(
@@ -538,7 +534,7 @@ for (const stage of ['Create', 'Grant']) {
 test('known card rejection does not turn into an unknown write result', async () => {
   const {applet} = card({
     onGrant: async () => {
-      throw new CBORAppletError({code: 'NOT_FOUND'});
+      throw new CardItemNotFoundError({code: 'NOT_FOUND'});
     },
   });
   const configuration = new SecurityKeyConfiguration(

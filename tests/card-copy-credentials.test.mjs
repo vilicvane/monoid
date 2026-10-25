@@ -3,7 +3,7 @@ import {test} from 'node:test';
 
 import {CardBackupSession} from '../.bld/app/@components/views/safe/@card/card-backup-session.js';
 import {AppletISOError} from '../.bld/app/@lib/applet.js';
-import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {CardItemNotFoundError} from '../.bld/app/@lib/cbor-applet.js';
 
 import {credential} from './helpers/security-key-credential.mjs';
 
@@ -48,7 +48,7 @@ function card(id, entries) {
     async view({index}) {
       calls.push(['view', hex(index)]);
       const item = records.get(hex(index));
-      if (!item) throw new CBORAppletError({code: 'NOT_FOUND'});
+      if (!item) throw new CardItemNotFoundError({code: 'NOT_FOUND'});
       return {
         metadata: bytes(item.metadata),
         alias: item.alias,

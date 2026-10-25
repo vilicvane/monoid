@@ -13,6 +13,7 @@ import {parseDerivationPath} from '../../../@lib/bip39.js';
 import {InvalidCardItemError} from '../../../@lib/card-item-error.js';
 import {
   type MonoidApplet,
+  acceptMatchingItem,
   monoidCommandDefinitions,
 } from '../../../@lib/monoid/index.js';
 import {
@@ -526,7 +527,11 @@ async function updateCardDerivationRecord(
   if (existing) {
     await applet.set(request);
   } else {
-    await applet.create(createRequest);
+    try {
+      await applet.create(createRequest);
+    } catch (error) {
+      await acceptMatchingItem(applet, createRequest, error, signal);
+    }
   }
 
   // Return acknowledged writes even if cancellation arrived during the command.

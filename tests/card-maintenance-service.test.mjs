@@ -4,6 +4,11 @@ import {beforeEach, mock, test} from 'node:test';
 
 import {encode} from 'cbor2';
 
+import {
+  CardItemExistsError,
+  CardItemNotFoundError,
+} from '../.bld/app/@lib/cbor-applet.js';
+
 let replacement;
 let scannedHello;
 const bundleHashes = ['identity-image', 'library-image', 'monoid-image'];
@@ -136,6 +141,7 @@ function cardFixture() {
     listCalls: [],
     exports: [],
     imports: [],
+    restored: new Map(),
     failExport: -1,
     failImport: -1,
     mismatchList: false,
@@ -178,8 +184,21 @@ function cardFixture() {
       data[1] = this.exports.length;
       return {metadata: item.metadata, alias: item.alias, data};
     },
+    async view({index}) {
+      const item = this.restored.get(hex(index));
+      if (!item) throw new CardItemNotFoundError({code: 'NOT_FOUND'});
+      return item;
+    },
     async importItem(request) {
       this.imports.push(request);
+      if (this.restored.has(hex(request.index)))
+        throw new CardItemExistsError({code: 'EXISTS'});
+      this.restored.set(
+        hex(request.index),
+        structuredClone(
+          this.items.find(item => hex(item.index) === hex(request.index)),
+        ),
+      );
       if (this.imports.length === this.failImport) throw new Error('Tag lost');
     },
   };
@@ -1135,7 +1154,7 @@ test('restore verifies the full Identity, caller AID and unchanged Bundle before
   }
 });
 
-test('an uncertain Import keeps the archive and explicit retry reimports the complete batch', async () => {
+test('an uncertain Import keeps the archive and explicit retry reads committed items before continuing', async () => {
   const storage = storageFixture();
   const service = await CardMaintenanceService.create(storage);
   const card = cardFixture();
@@ -1165,17 +1184,13 @@ test('an uncertain Import keeps the archive and explicit retry reimports the com
   await service.restore(card, operation.id);
   assert.deepEqual(
     card.imports.map(item => hex(item.index)),
-    [
-      hex(sourceItems[0].index),
-      hex(sourceItems[1].index),
-      ...sourceItems.map(item => hex(item.index)),
-    ],
+    sourceItems.map(item => hex(item.index)),
   );
-  assert.equal(card.imports[2].metadata, undefined);
-  assert.deepEqual(card.imports[3].metadata, bytes(''));
-  assert.deepEqual(card.imports[4].metadata, bytes('aa'));
+  assert.equal(card.imports[0].metadata, undefined);
+  assert.deepEqual(card.imports[1].metadata, bytes(''));
+  assert.deepEqual(card.imports[2].metadata, bytes('aa'));
   assert.ok(card.imports.every(item => !('key' in item)));
-  assert.equal(card.imports[3].alias, '');
+  assert.equal(card.imports[1].alias, '');
   assert.equal(service.get(operation.id), undefined);
   assert.deepEqual((await storage.get()).operations, []);
   assert.equal(storage.writes.length, writes + 1);

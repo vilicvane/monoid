@@ -14,7 +14,9 @@ import {
 const {signEvmDigest} = await import(
   '../.bld/app/@lib/monoid/sign-evm-digest.js'
 );
-const {CBORAppletError} = await import('../.bld/app/@lib/cbor-applet.js');
+const {CBORAppletError, CardItemNotFoundError} = await import(
+  '../.bld/app/@lib/cbor-applet.js'
+);
 const {AppletNotFoundError} = await import('../.bld/app/@lib/applet.js');
 
 // Public fixture: secp256k1 scalar 1, also used by the message signing tests.
@@ -147,7 +149,7 @@ test('explains a missing card key during lookup or signing and allows another ca
   for (const operation of ['viewKey', 'sign']) {
     const applet = createApplet(digest);
     const original = applet[operation];
-    const cause = new CBORAppletError({code: 'NOT_FOUND'});
+    const cause = new CardItemNotFoundError({code: 'NOT_FOUND'});
     applet[operation] = async () => {
       throw cause;
     };

@@ -11,8 +11,8 @@ import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../../../../@lib/monoid/index.js';
+import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
-import {isCredentialRequestCancelled} from '../../../../@services/index.js';
 import {KeyListItem, KeyListPlaceholder} from '../../../@key/key-list.js';
 import {
   CardGrid,
@@ -231,9 +231,7 @@ export const SyncCardsView = observer(
         await callback(controller.signal);
       } catch (error) {
         if (mounted.current && isViewActive()) {
-          const cancelled =
-            isCredentialRequestCancelled(error) ||
-            (error instanceof Error && error.name === 'AbortError');
+          const cancelled = isOperationCancelled(error);
           if (!cancelled) {
             errorService.catch(Promise.reject(error));
           }

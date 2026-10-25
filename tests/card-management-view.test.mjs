@@ -67,7 +67,6 @@ mock.module('../.bld/app/@entrances.js', {
 mock.module('../.bld/app/@services/index.js', {
   namedExports: {
     cardFingerprint: info => info.cplc.icSerialNumber,
-    isCredentialRequestCancelled: error => error?.code === 'CANCELLED',
   },
 });
 class CardManagerNotFoundError extends Error {}

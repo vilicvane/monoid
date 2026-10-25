@@ -7,7 +7,7 @@ import {styled} from 'styled-components';
 
 import {type SafeIndexHex, SafeKnownType} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
-import type {MonoidApplet} from '../../../../@lib/monoid/index.js';
+import {type MonoidApplet, removeItems} from '../../../../@lib/monoid/index.js';
 import {
   ADDRESS_TYPES,
   type AddressChain,
@@ -76,7 +76,6 @@ import {
   isWalletKeyUpToDate,
 } from '../card-key-import.js';
 import type {CardPINKind} from '../card-pin-update.js';
-import {deleteCardResources} from '../card-resource-delete.js';
 import {getCardResourceGroups} from '../card-resource-groups.js';
 import {type ScannedCardKeyData, isCardKeyItem} from '../common.js';
 
@@ -1002,7 +1001,7 @@ const CardContent = observer(
 
         try {
           showProgress();
-          deletingItems = deleteCardResources(
+          deletingItems = removeItems(
             applet,
             remaining,
             operation.signal,

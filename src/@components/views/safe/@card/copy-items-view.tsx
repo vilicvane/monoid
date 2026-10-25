@@ -19,8 +19,8 @@ import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../../../../@lib/monoid/index.js';
+import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
-import {isCredentialRequestCancelled} from '../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {
   CardGrid,
@@ -315,9 +315,7 @@ export const CopyItemsView = observer(
         await operation();
       } catch (error) {
         if (mounted.current) {
-          const cancelled =
-            isCredentialRequestCancelled(error) ||
-            (error instanceof Error && error.name === 'AbortError');
+          const cancelled = isOperationCancelled(error);
           copyState.setFailed(!cancelled);
           if (!cancelled) errorService.catch(Promise.reject(error));
         }
@@ -331,11 +329,7 @@ export const CopyItemsView = observer(
       try {
         await scanDestination();
       } catch (error) {
-        if (
-          error instanceof MonoidCardError ||
-          isCredentialRequestCancelled(error) ||
-          (error instanceof Error && error.name === 'AbortError')
-        )
+        if (error instanceof MonoidCardError || isOperationCancelled(error))
           return;
 
         errorService.catch(Promise.reject(error));

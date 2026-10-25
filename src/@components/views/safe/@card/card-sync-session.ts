@@ -7,14 +7,18 @@ import {
   PublicKeyHex,
   SafeIndexHex,
 } from '../../../../@atomics.js';
-import {AppletISOError} from '../../../../@lib/applet.js';
 import {InvalidCardItemError} from '../../../../@lib/card-item-error.js';
-import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
+import {
+  CBORAppletError,
+  CardItemNotFoundError,
+} from '../../../../@lib/cbor-applet.js';
 import {
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidAppletInvalidPINError,
   MonoidCardError,
+  acceptMatchingItem,
+  hasMatchingItem,
   monoidCommandDefinitions,
 } from '../../../../@lib/monoid/index.js';
 import {
@@ -197,8 +201,9 @@ function operationRequest(operation: CardSyncOperation): {
   const index = hexToUint8Array(after.index);
 
   switch (operation.kind) {
-    case 'import':
-    case 'verify': {
+    case 'verify':
+      return {index};
+    case 'import': {
       const exported = operation.exported!;
       return {
         index,
@@ -229,37 +234,51 @@ function operationRequest(operation: CardSyncOperation): {
 async function execute(
   applet: MonoidApplet,
   operation: CardSyncOperation,
+  signal: AbortSignal,
 ): Promise<void> {
-  // Use each command's schema to retain the original omitted/empty metadata.
   const request = operationRequest(operation);
+  const expected = {
+    ...operation.after,
+    index: hexToUint8Array(operation.after.index),
+    metadata:
+      operation.after.metadata === undefined
+        ? undefined
+        : hexToUint8Array(operation.after.metadata),
+    data:
+      operation.after.data === undefined
+        ? undefined
+        : hexToUint8Array(operation.after.data),
+  };
 
-  switch (operation.kind) {
-    case 'import':
-    case 'verify':
-      try {
+  if (operation.kind === 'verify') {
+    if (!(await hasMatchingItem(applet, expected, signal))) changed();
+    return;
+  }
+
+  try {
+    switch (operation.kind) {
+      case 'import':
         await applet.importItem(
           monoidCommandDefinitions.importItem.request.satisfies(request),
         );
-      } catch (error) {
-        if (error instanceof AppletISOError && error.sw === 0x6985) {
-          throw new MonoidCardError(
-            `Item ${operation.after.index}: conflicting Secret data`,
-          );
-        }
-        throw error;
+        break;
+      case 'create': {
+        const result = await applet.create(
+          monoidCommandDefinitions.create.request.satisfies(request),
+        );
+        if (uint8ArrayToHex(result.index) !== operation.after.index) changed();
+        break;
       }
-      break;
-    case 'create': {
-      const result = await applet.create(
-        monoidCommandDefinitions.create.request.satisfies(request),
-      );
-      if (uint8ArrayToHex(result.index) !== operation.after.index) changed();
-      break;
+      case 'data':
+      case 'alias':
+        await applet.set(
+          monoidCommandDefinitions.set.request.satisfies(request),
+        );
+        break;
     }
-    case 'data':
-    case 'alias':
-      await applet.set(monoidCommandDefinitions.set.request.satisfies(request));
-      break;
+  } catch (error) {
+    if (operation.kind !== 'import' && operation.kind !== 'create') throw error;
+    await acceptMatchingItem(applet, expected, error, signal);
   }
 }
 
@@ -522,9 +541,10 @@ export class CardSyncSession {
 
     for (const plan of plans) {
       for (const operation of plan.operations) {
+        if (operation.kind === 'verify') continue;
         const request = operationRequest(operation);
         const length =
-          operation.kind === 'import' || operation.kind === 'verify'
+          operation.kind === 'import'
             ? monoidCommandDefinitions.importItem.request.encode(
                 xCBOR,
                 monoidCommandDefinitions.importItem.request.satisfies(request),
@@ -604,46 +624,36 @@ export class CardSyncSession {
     cancelled(signal);
     this.report({stage: 'checking', current: 0, total: 1}, onProgress);
 
-    if (pending.kind === 'import' || pending.kind === 'verify') {
-      // Import is idempotent: it checks the original authenticated contents if
-      // already present, or finishes the interrupted import if still absent.
-      await execute(applet, pending);
-      this.acknowledge(execution, pending);
-    } else {
-      const index = hexToUint8Array(pending.after.index);
-      let entry: Awaited<ReturnType<MonoidApplet['view']>> | undefined;
+    const index = hexToUint8Array(pending.after.index);
+    let entry: Awaited<ReturnType<MonoidApplet['view']>> | undefined;
 
-      try {
-        entry = await applet.view({index});
-      } catch (error) {
-        if (
-          !(error instanceof CBORAppletError) ||
-          error.source.code !== 'NOT_FOUND'
-        ) {
-          throw error;
-        }
+    try {
+      entry = await applet.view({index});
+    } catch (error) {
+      if (!(error instanceof CardItemNotFoundError)) {
+        throw error;
       }
-
-      cancelled(signal);
-      const found = entry
-        ? (
-            await this.read(
-              applet,
-              execution.expected,
-              signal,
-              'checking',
-              onProgress,
-              {items: [{index, ...entry}]},
-            )
-          ).items[0]
-        : undefined;
-
-      if (sameCardSyncItem(found, pending.after))
-        this.acknowledge(execution, pending);
-      else if (sameCardSyncItem(found, pending.before))
-        execution.pending = undefined;
-      else changed();
     }
+
+    cancelled(signal);
+    const found = entry
+      ? (
+          await this.read(
+            applet,
+            execution.expected,
+            signal,
+            'checking',
+            onProgress,
+            {items: [{index, ...entry}]},
+          )
+        ).items[0]
+      : undefined;
+
+    if (sameCardSyncItem(found, pending.after))
+      this.acknowledge(execution, pending);
+    else if (sameCardSyncItem(found, pending.before))
+      execution.pending = undefined;
+    else changed();
 
     this.report({stage: 'checking', current: 1, total: 1}, onProgress);
   }
@@ -688,7 +698,7 @@ export class CardSyncSession {
           onProgress,
         );
         execution.pending = operation;
-        await execute(applet, operation);
+        await execute(applet, operation, signal);
         // Save the ACK before checking cancellation or issuing another APDU.
         this.acknowledge(execution, operation);
       }

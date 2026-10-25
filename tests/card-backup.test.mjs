@@ -11,8 +11,11 @@ import {
   encodeCardDerivationRecord,
   getCardDerivationItemIndex,
 } from '../.bld/app/@components/views/safe/card-derivations.js';
-import {AppletISOError} from '../.bld/app/@lib/applet.js';
-import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {
+  CBORAppletError,
+  CardItemExistsError,
+  CardItemNotFoundError,
+} from '../.bld/app/@lib/cbor-applet.js';
 import {initializeMonoidCard} from '../.bld/app/@lib/monoid/initialize-card.js';
 import {ADDRESS_TYPES} from '../.bld/app/@lib/wallet-address.js';
 
@@ -59,19 +62,27 @@ function destination(identity) {
       const key = hex(request.index);
       const existing = this.records.get(key);
       if (existing) {
-        try {
-          assert.deepEqual(request, existing);
-        } catch {
-          throw new AppletISOError(
-            'Conflicting item',
-            0x6985,
-            new Uint8Array(),
-          );
-        }
+        throw new CardItemExistsError({code: 'EXISTS'});
       } else {
         this.records.set(key, structuredClone(request));
       }
       await this.afterImport?.(request);
+    },
+    async view({index: itemIndex}) {
+      this.calls.push(['view', {index: itemIndex}]);
+      const record = this.records.get(hex(itemIndex));
+      if (!record) throw new CardItemNotFoundError({code: 'NOT_FOUND'});
+      return {
+        metadata: record.metadata,
+        alias: record.alias,
+        secret:
+          !hex(itemIndex).startsWith('0f01') &&
+          hex(itemIndex) !== hex(index(2)),
+      };
+    },
+    async get({index}) {
+      this.calls.push(['get', {index}]);
+      return {data: this.records.get(hex(index)).data.subarray(1)};
     },
     async list(request) {
       this.calls.push(['list', request]);
@@ -359,9 +370,8 @@ function groupedFixture({type = 'seed', wallets} = {}) {
     const item = state.items.find(
       item => hex(item.index) === hex(request.index),
     );
-    const data = new Uint8Array(160);
-    data[0] = request.recipientPublicKey[1];
-    data.set(item.index, 1);
+    const payload = records.get(hex(item.index)) ?? item.index;
+    const data = Uint8Array.from([request.recipientPublicKey[1], ...payload]);
     return {
       ...(item.metadata !== undefined && {metadata: item.metadata}),
       data,
@@ -651,7 +661,7 @@ test('invalid companion linkage skips that record while retaining other Copy ite
   );
 });
 
-test('a companion import with a lost response retries only that physical record and retains the acknowledged root', async () => {
+test('a companion import with a lost response reads that record and retains the acknowledged root', async () => {
   const {source, target, root, companion} = groupedFixture();
   const session = new CardBackupSession();
   await session.readSource(source, source.hello, signal(), [hex(root.index)]);
@@ -683,7 +693,7 @@ test('a companion import with a lost response retries only that physical record 
     target.calls
       .filter(([method]) => method === 'importItem')
       .map(([, request]) => hex(request.index)),
-    [hex(root.index), hex(companion.index), hex(companion.index)],
+    [hex(root.index), hex(companion.index)],
   );
   assert.equal(session.backup.complete, true);
 });
@@ -1333,7 +1343,7 @@ test('an interrupted export retries only remaining items within the same session
   );
 });
 
-test('lost Import acknowledgement retries the same artifact without re-export or overwrite', async () => {
+test('lost Import acknowledgement reconciles stored fields without re-export or another Import', async () => {
   const {session, source, target} = await ready();
   await session.exportItems(source, source.hello, PIN, signal(), progress);
   target.afterImport = request => {
@@ -1352,7 +1362,17 @@ test('lost Import acknowledgement retries the same artifact without re-export or
   target.afterImport = undefined;
   const start = target.calls.length;
   await session.importItems(target, target.hello, PIN, signal(), progress);
-  assert.deepEqual(target.calls[start], ['importItem', firstAttempt]);
+  assert.deepEqual(target.calls[start], ['view', {index: firstAttempt.index}]);
+  assert.equal(
+    target.calls
+      .slice(start)
+      .some(
+        ([method, request]) =>
+          method === 'importItem' &&
+          hex(request.index) === hex(firstAttempt.index),
+      ),
+    false,
+  );
   assert.equal(target.records.size, 3);
   assert.equal(session.backup.complete, true);
 });
@@ -1502,34 +1522,54 @@ test('cancellation with the final Import ACK preserves completion without a late
   assert.equal(session.backup.complete, true);
 });
 
-test('a new page session starts fresh and repeated identical imports preserve existing target items', async () => {
-  const {session, source, target} = await ready();
-  await session.exportItems(source, source.hello, PIN, signal(), progress);
-  await session.importItems(target, target.hello, PIN, signal(), progress);
-  const existing = structuredClone(target.records);
+for (const lostAck of [false, true]) {
+  test(`a new Copy page confirms EXISTS after ${lostAck ? 'an uncertain Import' : 'completed imports'}`, async () => {
+    const {session, source, target} = await ready();
+    await session.exportItems(source, source.hello, PIN, signal(), progress);
+    if (lostAck) {
+      target.afterImport = request => {
+        if (hex(request.index) === hex(index(3)))
+          throw new Error('Lost acknowledgement');
+      };
+      await assert.rejects(
+        session.importItems(target, target.hello, PIN, signal(), progress),
+        /Lost acknowledgement/,
+      );
+      assert.equal(session.backup.complete, false);
+      assert.equal(
+        target.calls.filter(([method]) => method === 'importItem').length,
+        3,
+        'no automatic replay',
+      );
+      target.afterImport = undefined;
+    } else {
+      await session.importItems(target, target.hello, PIN, signal(), progress);
+    }
+    const existing = structuredClone(target.records);
 
-  const next = new CardBackupSession();
-  assert.equal(next.backup, undefined);
-  assert.equal(next.busy, false);
-  await session.reset();
-  assert.equal(session.backup, undefined);
-  assert.deepEqual(target.records, existing);
+    const next = new CardBackupSession();
+    assert.equal(next.backup, undefined);
+    assert.equal(next.busy, false);
+    await session.reset();
+    assert.equal(session.backup, undefined);
+    assert.deepEqual(target.records, existing);
 
-  await next.readSource(source, source.hello, signal());
-  assert.equal(next.backup.targets.length, 0);
-  assert.equal(next.backup.targetsConfirmed, false);
-  await next.addTarget(target.hello);
-  await next.confirmTargets();
-  await next.exportItems(source, source.hello, PIN, signal(), progress);
-  await next.importItems(target, target.hello, PIN, signal(), progress);
+    await next.readSource(source, source.hello, signal());
+    assert.equal(next.backup.targets.length, 0);
+    assert.equal(next.backup.targetsConfirmed, false);
+    await next.addTarget(target.hello);
+    await next.confirmTargets();
+    await next.exportItems(source, source.hello, PIN, signal(), progress);
+    await next.importItems(target, target.hello, PIN, signal(), progress);
 
-  assert.equal(next.backup.complete, true);
-  assert.deepEqual(target.records, existing);
-  assert.equal(
-    target.calls.filter(([method]) => method === 'importItem').length,
-    6,
-  );
-});
+    assert.equal(next.backup.complete, true);
+    assert.deepEqual(target.records, existing);
+    assert.equal(
+      target.calls.filter(([method]) => method === 'importItem').length,
+      6,
+    );
+  });
+}
 
 test('no state mutation is allowed while an operation is waiting for the card', async () => {
   const {session, source, target, secondTarget, items} = await ready();
@@ -2084,7 +2124,14 @@ for (const failure of ['before-acknowledgement', 'after-card-commit']) {
     target.beforeImport = undefined;
     target.afterImport = undefined;
     await session.importItems(target, target.hello, PIN, signal(), progress);
-    assert.deepEqual(target.calls[1], ['importItem', firstArtifact]);
+    assert.deepEqual(target.calls[1], ['view', {index: firstArtifact.index}]);
+    const attempts = target.calls.filter(
+      ([method, request]) =>
+        method === 'importItem' &&
+        hex(request.index) === hex(firstArtifact.index),
+    );
+    assert.equal(attempts.length, failure === 'before-acknowledgement' ? 2 : 1);
+    assert.deepEqual(attempts.at(-1)[1], firstArtifact);
     assert.equal(source.calls.length, sourceCalls);
     assert.equal(target.records.size, 3);
     assert.equal(session.backup.complete, true);

@@ -15,6 +15,7 @@ import {
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidCardError,
+  acceptMatchingItem,
   createMonoidApplet,
   getAppletCatalog,
   getAppletDependents,
@@ -22,6 +23,7 @@ import {
   getCardMaintenanceFingerprint,
   getMonoidAppletBundleHash,
   getMonoidAppletBundleHashes,
+  hasMatchingItem,
   monoidCommandDefinitions,
   replaceMonoidApplets,
 } from '../@lib/monoid/index.js';
@@ -508,7 +510,7 @@ export class CardMaintenanceService {
     });
   }
 
-  /** Reimports are idempotent; final verification must succeed before deletion. */
+  /** Reconcile restored items before writing; verify before discarding the archive. */
   async restore(
     monoid: MonoidApplet,
     id: string,
@@ -536,10 +538,24 @@ export class CardMaintenanceService {
       if (operation.archive)
         onProgress({stage: 'restore', completed: 0, total: items.length});
 
-      // Replay the whole archive on explicit retry; imports are idempotent.
+      // Explicit retries read actual state, including imports whose ACK was lost.
       for (let index = 0; index < items.length; index++) {
         signal?.throwIfAborted();
-        await monoid.importItem(importRequest(operation, items[index]));
+        const item = items[index];
+        const request = importRequest(operation, item);
+        const expected = {
+          index: request.index,
+          metadata: request.metadata,
+          alias: request.alias,
+          secret: item.secret,
+        };
+        if (!(await hasMatchingItem(monoid, expected, signal))) {
+          try {
+            await monoid.importItem(request);
+          } catch (error) {
+            await acceptMatchingItem(monoid, expected, error, signal);
+          }
+        }
         onProgress({
           stage: 'restore',
           completed: index + 1,

@@ -3,16 +3,12 @@ import {IsoDepNfc} from 'capacitor-isodep-nfc';
 import {sha256, toUtf8Bytes} from 'ethers';
 
 import {hexToUint8Array, uint8ArrayToHex} from '../../@utils/index.js';
-import {AppletISOError, AppletNotFoundError} from '../applet.js';
+import {AppletISOError, AppletNotFoundError, probeApplet} from '../applet.js';
 import {
   type CardInformation,
   readCardInformation,
 } from '../global-platform/card-information.js';
-import {
-  exchange,
-  parseResponse,
-  shortCommand,
-} from '../global-platform/commands.js';
+import {exchange} from '../global-platform/commands.js';
 import {
   type AppletPackage,
   type GlobalPlatformInstallProgress,
@@ -343,19 +339,27 @@ export async function readMonoidAppletInstallation(
     result.registryError = error;
   }
 
+  signal?.throwIfAborted();
   if (result.identity.installed === undefined) {
-    const response = await transceive(
-      shortCommand(0xa4, 4, 0, aids[0].appletAid, 0),
-    );
-    const {sw} = parseResponse(response);
-    if (sw === 0x9000) result.identity.installed = true;
-    if (sw === 0x6a82) result.identity.installed = false;
+    try {
+      result.identity.installed = await probeApplet(
+        createMonoidApplet().attachSession(sessionId),
+        aids[0].appletAid,
+      );
+    } catch (error) {
+      // Other SELECT statuses leave presence unknown; Hello may still work.
+      if (!(error instanceof AppletISOError)) throw error;
+    }
   }
 
+  signal?.throwIfAborted();
   try {
-    const monoid = await createMonoidApplet(aids[1].appletAid).openSession(
+    const monoid = createMonoidApplet(aids[1].appletAid).attachSession(
       sessionId,
     );
+    if (!(await probeApplet(monoid, monoid.aid))) {
+      throw new AppletNotFoundError(new Uint8Array());
+    }
     signal?.throwIfAborted();
     result.monoid.installed = true;
     result.hello = await monoid.hello({});
@@ -685,10 +689,12 @@ export async function replaceMonoidApplets(
   // If an acknowledged/uncertain previous DELETE removed it, only the saved
   // continuation can proceed without Hello; restoration checks Identity again.
   if (!fresh && position === 0) {
-    try {
-      const applet = await createMonoidApplet(monoid.appletAid!).openSession(
-        sessionId,
-      );
+    const applet = createMonoidApplet(monoid.appletAid!).attachSession(
+      sessionId,
+    );
+    const installed = await probeApplet(applet, applet.aid);
+    signal?.throwIfAborted();
+    if (installed) {
       const hello = await applet.hello({});
       if (
         !expectedPublicKey ||
@@ -702,8 +708,8 @@ export async function replaceMonoidApplets(
       ) {
         throw new Error('The card Bundle changed during maintenance');
       }
-    } catch (error) {
-      if (!(checkpoint && error instanceof AppletNotFoundError)) throw error;
+    } else if (!checkpoint) {
+      throw new AppletNotFoundError(new Uint8Array());
     }
   }
   signal?.throwIfAborted();

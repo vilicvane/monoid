@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {beforeEach, mock, test} from 'node:test';
+import {setImmediate} from 'node:timers/promises';
 
 import {AppletISOError, AppletNotFoundError} from '../.bld/app/@lib/applet.js';
 
@@ -47,11 +48,13 @@ beforeEach(() => {
       pins: {access: false, secret: false},
     },
     applet: {
-      async openSession(sessionId) {
+      attachSession(sessionId) {
         fixture.sessions.push(sessionId);
-        if (fixture.selectPending) await fixture.selectPending.promise;
-        if (fixture.selectError) throw fixture.selectError;
         return {
+          async select() {
+            if (fixture.selectPending) await fixture.selectPending.promise;
+            if (fixture.selectError) throw fixture.selectError;
+          },
           async hello(request) {
             fixture.hellos.push(request);
             if (fixture.helloPending) await fixture.helloPending.promise;
@@ -244,7 +247,7 @@ test('a hello returning after cancellation cannot report a destination', async (
     () => {},
     fixture.controller.signal,
   );
-  await Promise.resolve();
+  await setImmediate();
   assert.deepEqual(fixture.hellos, [{}]);
   const reason = cancel();
   fixture.helloPending.resolve();
@@ -281,7 +284,7 @@ test('GP information returning after cancellation cannot request setup', async (
     () => {},
     fixture.controller.signal,
   );
-  await Promise.resolve();
+  await setImmediate();
   assert.deepEqual(fixture.informationReads, ['destination']);
   const reason = cancel();
   fixture.informationPending.resolve();
@@ -299,7 +302,7 @@ test('a late GP read failure cannot request setup or retry the read', async () =
     () => {},
     fixture.controller.signal,
   );
-  await Promise.resolve();
+  await setImmediate();
   cancel();
   const error = Object.assign(new Error('Card lost'), {code: 'TAG_LOST'});
   fixture.informationPending.reject(error);

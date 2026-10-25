@@ -6,6 +6,7 @@ import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
+import {isOperationCancelled} from '../.bld/app/@lib/operation-cancelled.js';
 
 // Exercise the built hooks with effect cleanup and state-driven rerenders, without a DOM or sensor.
 let rendering;
@@ -178,11 +179,11 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
     MonoidAppletHello,
   },
 });
-const {MonoidPINSession, isCredentialRequestCancelled} = await import(
+const {MonoidPINSession} = await import(
   '../.bld/app/@services/monoid-credentials-store.js'
 );
 mock.module('../.bld/app/@services/index.js', {
-  namedExports: {isCredentialRequestCancelled},
+  namedExports: {},
 });
 
 const {MonoidScanPromptPresenter} = await import(
@@ -1351,7 +1352,7 @@ for (const order of ['stop-first', 'animation-first']) {
     assert.equal(state.outcome, 'rejected');
     assert.equal(state.errors.length, 1);
     assert.ok(state.errors[0] instanceof MonoidScanRedirectError);
-    assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
+    assert.equal(isOperationCancelled(state.errors[0]), true);
     assert.equal(state.presenter.current, undefined);
     assert.equal(state.scans.length, 1);
     assert.equal(state.businessCalls, 0);
@@ -1420,7 +1421,7 @@ for (const allowInstallRedirect of [undefined, false]) {
     assert.deepEqual(state.cardInformationReads, []);
     assert.equal(state.businessCalls, 0);
     assert.equal(state.outcome, 'rejected');
-    assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
+    assert.equal(isOperationCancelled(state.errors[0]), true);
     assert.deepEqual(state.notifications, []);
     assert.equal(state.scans.length, 1);
   });
@@ -1876,7 +1877,7 @@ for (const [missing, overrides] of [
     await state.finishStop();
 
     assert.equal(state.outcome, 'rejected');
-    assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
+    assert.equal(isOperationCancelled(state.errors[0]), true);
     assert.equal(
       state.notifications.at(-1).message,
       'Initialize card from Safe',
@@ -1914,7 +1915,7 @@ for (const [missing, overrides] of [
     assert.deepEqual(state.navigations, []);
     assert.deepEqual(state.retryErrors, []);
     assert.equal(state.outcome, 'rejected');
-    assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
+    assert.equal(isOperationCancelled(state.errors[0]), true);
     assert.deepEqual(state.notifications, []);
   });
 }
@@ -1956,7 +1957,7 @@ for (const [phase, callback] of [
     assert.equal(state.outcome, 'rejected');
     assert.equal(state.errors.length, 1);
     assert.equal(state.errors[0].code, 'CANCELLED');
-    assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
+    assert.equal(isOperationCancelled(state.errors[0]), true);
     assert.equal(state.scans.length, 1);
     assert.equal(state.businessCompleted, 0);
     assert.equal(state.businessCalls, phase === 'business' ? 1 : 0);
@@ -2005,7 +2006,7 @@ test('prompt: native stop failure takes priority over tag-lost cancellation', as
   await state.flush();
 
   assert.deepEqual(state.errors, [failure]);
-  assert.equal(isCredentialRequestCancelled(state.errors[0]), false);
+  assert.equal(isOperationCancelled(state.errors[0]), false);
   assert.equal(state.outcome, 'rejected');
   assert.equal(state.scans.length, 1);
   assert.deepEqual(state.notifications, []);
@@ -2046,7 +2047,7 @@ test('prompt: a lifecycle error with tag-lost cause is not silently cancelled', 
   await state.finishExit();
 
   assert.deepEqual(state.errors, [failure]);
-  assert.equal(isCredentialRequestCancelled(failure), false);
+  assert.equal(isOperationCancelled(failure), false);
   assert.equal(state.outcome, 'rejected');
   assert.equal(state.scans.length, 1);
   assert.equal(state.businessCalls, 0);

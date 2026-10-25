@@ -1,4 +1,4 @@
-import {AppletNotFoundError} from '../../../../@lib/applet.js';
+import {probeApplet} from '../../../../@lib/applet.js';
 import {
   type CardInformation,
   readCardInformation,
@@ -20,16 +20,10 @@ export async function readCardForSetup(
   signal: AbortSignal,
 ): Promise<CardSetupScan> {
   signal.throwIfAborted();
-  let applet: MonoidApplet;
-
-  try {
-    applet = await monoidApplet.openSession(sessionId);
-  } catch (error) {
-    signal.throwIfAborted();
-    if (!(error instanceof AppletNotFoundError)) {
-      throw error;
-    }
-
+  const applet = monoidApplet.attachSession(sessionId);
+  const installed = await probeApplet(applet, applet.aid);
+  signal.throwIfAborted();
+  if (!installed) {
     onStatus('Reading card information, hold tight...');
     signal.throwIfAborted();
     const cardInformation = await readCardInformation(sessionId, signal);

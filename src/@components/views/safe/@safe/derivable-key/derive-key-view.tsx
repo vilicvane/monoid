@@ -5,7 +5,7 @@ import type {RouteComponentProps} from 'routra-react';
 
 import {BIP39PathString} from '../../../../../@atomics.js';
 import {useEntrances} from '../../../../../@entrances.js';
-import {CBORAppletError} from '../../../../../@lib/cbor-applet.js';
+import {CardItemNotFoundError} from '../../../../../@lib/cbor-applet.js';
 import {getAppletKey} from '../../../../../@lib/monoid/index.js';
 import type {AddressType} from '../../../../../@lib/wallet-address.js';
 import {
@@ -179,10 +179,7 @@ export const DeriveKeyView = observer(
                 ...(options.taproot && {taproot: true}),
               })
               .catch(error => {
-                if (
-                  error instanceof CBORAppletError &&
-                  error.source.code === 'NOT_FOUND'
-                ) {
+                if (error instanceof CardItemNotFoundError) {
                   throw new Error('Key not found, wrong card?', {cause: error});
                 }
 

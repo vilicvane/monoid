@@ -23,7 +23,8 @@ mock.module('capacitor-isodep-nfc', {
 const {createMonoidApplet, MonoidAppletHello} = await import(
   '../.bld/app/@lib/monoid/monoid-applet.js'
 );
-const {CBORAppletError} = await import('../.bld/app/@lib/cbor-applet.js');
+const {CBORAppletError, CardItemNotFoundError, CardItemExistsError} =
+  await import('../.bld/app/@lib/cbor-applet.js');
 const {AppletISOError} = await import('../.bld/app/@lib/applet.js');
 const {getAppletKey} = await import(
   '../.bld/app/@lib/monoid/get-applet-key.js'
@@ -635,9 +636,9 @@ test('Create supports generated and explicit indexes with data before metadata',
 });
 
 test('Remove selects an item by its original index', async () => {
-  const {applet, commands} = await createSession({});
+  const {applet, commands} = await createSession({removed: true});
 
-  assert.deepEqual(await applet.remove({index}), {});
+  assert.deepEqual(await applet.remove({index}), {removed: true});
   assertRequest(commands, 0x35, {index});
 });
 
@@ -842,4 +843,33 @@ test('wallet key selection, wire commands and EVM signature recovery use the sam
       digest,
     });
   }
+});
+
+for (const [code, ErrorClass] of [
+  ['NOT_FOUND', CardItemNotFoundError],
+  ['EXISTS', CardItemExistsError],
+  ['INVALID_PIN', CBORAppletError],
+  ['FUTURE_ERROR', CBORAppletError],
+]) {
+  test(`CBOR decoding maps ${code} without losing source fields`, async () => {
+    const error = {code, tries: 3};
+    const {applet} = await createSession({error});
+    await assert.rejects(
+      applet.view({index}),
+      value =>
+        value instanceof ErrorClass &&
+        value.name === ErrorClass.name &&
+        value.source.code === code &&
+        value.source.tries === 3,
+    );
+  });
+}
+
+test('Remove requires the new removed boolean, including false', async () => {
+  for (const removed of [true, false]) {
+    const {applet} = await createSession({removed});
+    assert.deepEqual(await applet.remove({index}), {removed});
+  }
+  const {applet} = await createSession({});
+  await assert.rejects(applet.remove({index}), /removed/);
 });

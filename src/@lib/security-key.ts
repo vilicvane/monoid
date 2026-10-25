@@ -6,9 +6,9 @@ import type {SafeIndexHex} from '../@atomics.js';
 import {SafeIndex} from '../@atomics.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../@utils/index.js';
 
-import {AppletISOError, isAppletNotFoundStatus} from './applet.js';
+import {probeApplet} from './applet.js';
 import {InvalidCardItemError} from './card-item-error.js';
-import {CBORAppletError} from './cbor-applet.js';
+import {CBORAppletError, CardItemExistsError} from './cbor-applet.js';
 import {equalBytes} from './global-platform/commands.js';
 import type {MonoidApplet, MonoidAppletHello} from './monoid/index.js';
 import {MonoidCardError, MonoidWrongCardError} from './monoid/index.js';
@@ -238,25 +238,10 @@ export async function readSecurityKeySnapshot(
       ? await readSecurityKeyScope(applet, grant.seed, signal)
       : undefined;
   signal.throwIfAborted();
-  let installed = false;
-  try {
-    const response = await applet.sendRawCommand(
-      new Uint8Array([
-        0,
-        0xa4,
-        4,
-        0,
-        SECURITY_KEY_AID.length,
-        ...SECURITY_KEY_AID,
-      ]),
-    );
-    installed = equalBytes(response, toUtf8Bytes('FIDO_2_0'));
-    if (!installed)
+  const installed = await probeApplet(applet, SECURITY_KEY_AID, response => {
+    if (!equalBytes(response, toUtf8Bytes('FIDO_2_0')))
       throw new MonoidCardError('Could not identify Security Key Applet');
-  } catch (error) {
-    if (!(error instanceof AppletISOError && isAppletNotFoundStatus(error.sw)))
-      throw error;
-  }
+  });
   signal.throwIfAborted();
   return {
     hello,
@@ -350,6 +335,12 @@ export class SecurityKeyConfiguration {
             }));
           } catch (error) {
             if (error instanceof CBORAppletError) this.uncertain = false;
+            if (error instanceof CardItemExistsError) {
+              throw new MonoidCardError(
+                'Key already exists, rescan card to check',
+                {cause: error},
+              );
+            }
             throw error;
           }
           this.createdIndex = index;

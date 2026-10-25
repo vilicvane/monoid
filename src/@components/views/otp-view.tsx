@@ -23,6 +23,7 @@ import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../../@lib/monoid/index.js';
+import {isOperationCancelled} from '../../@lib/operation-cancelled.js';
 import {
   addOTPAccount,
   authorizeOTPAccounts,
@@ -33,7 +34,6 @@ import {
 import type {OTPAlgorithm, OTPImportAccount} from '../../@lib/otp.js';
 import type {Router} from '../../@routes.js';
 import type {OTPAccount, OTPCard} from '../../@services/index.js';
-import {isCredentialRequestCancelled} from '../../@services/index.js';
 import {uint8ArrayToHex} from '../../@utils/index.js';
 import {
   ExpandableKeyGroup,
@@ -405,11 +405,7 @@ export const OTPView = observer(
             authentication,
           });
       } catch (error) {
-        if (
-          !task.signal.aborted &&
-          !isCredentialRequestCancelled(error) &&
-          !(error instanceof Error && error.name === 'AbortError')
-        ) {
+        if (!isOperationCancelled(error, task.signal)) {
           throw error;
         }
       } finally {

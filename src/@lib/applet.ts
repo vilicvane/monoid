@@ -21,11 +21,20 @@ export abstract class Applet<TCommandDefinitions> {
 
   /** Select another applet without closing the caller's NFC connection. */
   async useSession(source: Applet<unknown>): Promise<this> {
-    if (source.sessionId === undefined) {
+    const applet = this.attachSession(source);
+    await applet.select();
+    return applet;
+  }
+
+  /** Bind an existing connection without SELECT; its owner still closes it. */
+  attachSession(source: string | Applet<unknown>): this {
+    const sessionId = typeof source === 'string' ? source : source.sessionId;
+    if (sessionId === undefined) {
       throw new Error('Applet commands require an open NFC session.');
     }
-
-    return this.openSession(source.sessionId);
+    const applet = Object.create(this) as this;
+    applet.sessionId = sessionId;
+    return applet;
   }
 
   standby(
@@ -66,8 +75,7 @@ export abstract class Applet<TCommandDefinitions> {
 
   /** Select on an existing connection; the caller retains ownership of its lifetime. */
   async openSession(sessionId: string): Promise<this> {
-    const applet = Object.create(this) as this;
-    applet.sessionId = sessionId;
+    const applet = this.attachSession(sessionId);
 
     await applet.select();
 
@@ -108,15 +116,15 @@ export abstract class Applet<TCommandDefinitions> {
     }
   }
 
-  private async select(): Promise<void> {
+  async select(aid = this.aid): Promise<Uint8Array> {
     let response: AppletResponse;
 
     try {
       response = await this.transceive(
-        new Uint8Array([0x00, 0xa4, 0x04, 0x00, this.aid.length, ...this.aid]),
+        new Uint8Array([0x00, 0xa4, 0x04, 0x00, aid.length, ...aid]),
       );
     } catch (error) {
-      if (error instanceof AppletISOError && isAppletNotFoundStatus(error.sw)) {
+      if (error instanceof AppletISOError && error.sw === 0x6a82) {
         throw new AppletNotFoundError(error.data);
       }
 
@@ -124,7 +132,7 @@ export abstract class Applet<TCommandDefinitions> {
     }
 
     // A failure fetching SELECT's remaining data does not mean it is absent.
-    await this.readResponse(response);
+    return this.readResponse(response);
   }
 
   public async sendRawCommand(command: Uint8Array): Promise<Uint8Array> {
@@ -223,13 +231,21 @@ export class AppletISOError extends Error {
   }
 }
 
-/**
- * Whether a SELECT status word means no applet has the AID. Java Card passes a
- * SELECT without a matching applet to the currently selected one, which rejects
- * the instruction as unsupported; a selected target never answers that way.
- */
-export function isAppletNotFoundStatus(sw: number): boolean {
-  return sw === 0x6a82 || sw === 0x6d00;
+/** SELECT leaves the target active. Only an absent AID counts as not installed. */
+export async function probeApplet(
+  applet: Applet<unknown>,
+  aid: Uint8Array,
+  validate?: (response: Uint8Array) => void,
+): Promise<boolean> {
+  let response: Uint8Array;
+  try {
+    response = await applet.select(aid);
+  } catch (error) {
+    if (error instanceof AppletNotFoundError) return false;
+    throw error;
+  }
+  validate?.(response);
+  return true;
 }
 
 export class AppletNotFoundError extends AppletISOError {

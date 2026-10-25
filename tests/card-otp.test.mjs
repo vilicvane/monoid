@@ -9,15 +9,17 @@ import {
   readCardOTPKeyIndex,
   validateCardOTPItem,
 } from '../.bld/app/@components/views/safe/card-otp.js';
-import {deleteCardResources} from '../.bld/app/@components/views/safe/card-resource-delete.js';
 import {
   formatCardResourceCount,
   getCardResourceGroups,
 } from '../.bld/app/@components/views/safe/card-resource-groups.js';
 import {isCardKeyItem} from '../.bld/app/@components/views/safe/common.js';
 import {scanCardItems} from '../.bld/app/@components/views/safe/scan-card.js';
-import {AppletISOError} from '../.bld/app/@lib/applet.js';
-import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {
+  CardItemExistsError,
+  CardItemNotFoundError,
+} from '../.bld/app/@lib/cbor-applet.js';
+import {removeItems} from '../.bld/app/@lib/monoid/item-operations.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
 
 const KEY_INDEX = '05140000000000000001';
@@ -171,8 +173,13 @@ test('accounts sharing a secret form one selection group and delete before the s
   const pending = new Set(
     groups.flatMap(group => [...group.items].reverse().map(item => item.index)),
   );
-  await deleteCardResources(
-    {remove: async ({index}) => deleted.push(hex(index))},
+  await removeItems(
+    {
+      remove: async ({index}) => {
+        deleted.push(hex(index));
+        return {removed: true};
+      },
+    },
     pending,
     new AbortController().signal,
     () => {},
@@ -290,7 +297,7 @@ function copyFixture() {
     authenticate: async () => {},
     async view({index}) {
       const item = this.records.get(hex(index));
-      if (!item) throw new CBORAppletError({code: 'NOT_FOUND'});
+      if (!item) throw new CardItemNotFoundError({code: 'NOT_FOUND'});
       return {
         secret: item.secret,
         metadata: item.metadata && bytes(item.metadata),
@@ -302,8 +309,7 @@ function copyFixture() {
     async importItem({index}) {
       const id = hex(index);
       this.calls.push(id);
-      if (id === KEY_INDEX && this.conflictingKey)
-        throw new AppletISOError('Conflicting data', 0x6985, new Uint8Array());
+      if (this.records.has(id)) throw new CardItemExistsError({code: 'EXISTS'});
       this.records.set(
         id,
         structuredClone(entries.find(item => item.index === id)),
@@ -348,7 +354,7 @@ test('Copy selecting an OTP account or its HMAC expands the pair and writes the 
 
 test('Copy does not write an OTP account after its HMAC import conflicts', async () => {
   const {source, target} = copyFixture();
-  target.conflictingKey = true;
+  target.records.set(KEY_INDEX, {...key, secret: false});
   const session = new CardBackupSession();
   const signal = new AbortController().signal;
   await session.readSource(source, source.hello, signal);
@@ -369,7 +375,7 @@ test('Copy does not write an OTP account after its HMAC import conflicts', async
     () => {},
   );
   assert.deepEqual(target.calls, [KEY_INDEX]);
-  assert.equal(target.records.size, 0);
+  assert.deepEqual([...target.records.values()], [{...key, secret: false}]);
   assert.equal(session.backup.complete, false);
   assert.ok(session.backup.targets[0].items.every(item => item.conflict));
 });

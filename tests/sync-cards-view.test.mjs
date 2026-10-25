@@ -71,7 +71,6 @@ mock.module('../.bld/app/@entrances.js', {
 mock.module('../.bld/app/@services/index.js', {
   namedExports: {
     assertCardMaintenanceBundleRecovery,
-    isCredentialRequestCancelled: error => error?.code === 'CANCELLED',
   },
 });
 mock.module('../.bld/app/@components/@animations.js', {

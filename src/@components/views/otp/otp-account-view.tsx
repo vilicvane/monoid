@@ -6,10 +6,9 @@ import type {RouteComponentProps} from 'routra-react';
 import {keyframes, styled} from 'styled-components';
 import {UnmountAnimationClone} from 'unmount-animation-clone';
 
-import {SafeIndex} from '../../../@atomics.js';
 import {useEntrances} from '../../../@entrances.js';
-import {CBORAppletError} from '../../../@lib/cbor-applet.js';
-import {MonoidCardError} from '../../../@lib/monoid/index.js';
+import {MonoidCardError, setItemAlias} from '../../../@lib/monoid/index.js';
+import {isOperationCancelled} from '../../../@lib/operation-cancelled.js';
 import {
   OTPAuthorityWarmup,
   getDefaultOTPAuthorityUrl,
@@ -26,7 +25,6 @@ import {
   validateOTPAccountLabel,
 } from '../../../@lib/otp.js';
 import type {Router} from '../../../@routes.js';
-import {isCredentialRequestCancelled} from '../../../@services/index.js';
 import {hexToUint8Array} from '../../../@utils/index.js';
 import {fadeInAnimationCSS, popOutAnimationCSS} from '../../@animations.js';
 import {
@@ -363,12 +361,7 @@ export const OTPAccountView = observer(
           },
         );
       } catch (error) {
-        if (
-          !task.signal.aborted &&
-          !isCredentialRequestCancelled(error) &&
-          !(error instanceof Error && error.name === 'AbortError')
-        )
-          throw error;
+        if (!isOperationCancelled(error, task.signal)) throw error;
       } finally {
         warmup.stop();
         scanning.current = false;
@@ -409,21 +402,13 @@ export const OTPAccountView = observer(
           'Scan card to save name',
           async (applet, setState) => {
             setState('Saving name, hold tight...');
-            await applet
-              .set({
-                index: SafeIndex.satisfies(hexToUint8Array(account.index)),
-                alias: label,
-              })
-              .catch(error => {
-                if (
-                  error instanceof CBORAppletError &&
-                  error.source.code === 'NOT_FOUND'
-                )
-                  throw new MonoidCardError('Account not found, wrong card?', {
-                    cause: error,
-                  });
-                throw error;
-              });
+            await setItemAlias(
+              applet,
+              account.index,
+              label,
+              cause =>
+                new MonoidCardError('Account not found, wrong card?', {cause}),
+            );
             // An acknowledged write is kept even if the page closes meanwhile.
             await otpStore.save([{...account, label}]);
           },
@@ -438,12 +423,7 @@ export const OTPAccountView = observer(
           task.signal,
         );
       } catch (error) {
-        if (
-          !task.signal.aborted &&
-          !isCredentialRequestCancelled(error) &&
-          !(error instanceof Error && error.name === 'AbortError')
-        )
-          throw error;
+        if (!isOperationCancelled(error, task.signal)) throw error;
       } finally {
         scanning.current = false;
         if (controller.current === task) controller.current = undefined;

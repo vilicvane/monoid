@@ -147,9 +147,7 @@ mock.module('../.bld/app/@components/views/safe/@card/card-backup-session.js', {
   },
 });
 mock.module('../.bld/app/@services/index.js', {
-  namedExports: {
-    isCredentialRequestCancelled: error => error?.code === 'CANCELLED',
-  },
+  namedExports: {},
 });
 mock.module('../.bld/app/@components/@monoid/use-isodep-scan-prompt.js', {
   namedExports: {

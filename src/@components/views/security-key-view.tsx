@@ -15,7 +15,9 @@ import {AppletNotFoundError} from '../../@lib/applet.js';
 import {
   MonoidCardError,
   MonoidWrongCardError,
+  removeItems,
 } from '../../@lib/monoid/index.js';
+import {isOperationCancelled} from '../../@lib/operation-cancelled.js';
 import {
   SecurityKeyConfiguration,
   type SecurityKeyCredentialItem,
@@ -25,7 +27,6 @@ import {
   securityKeySeedChangeNeedsConfirmation,
 } from '../../@lib/security-key.js';
 import type {Router} from '../../@routes.js';
-import {isCredentialRequestCancelled} from '../../@services/index.js';
 import {uint8ArrayToHex} from '../../@utils/index.js';
 import {KeyAliasTag} from '../@key/key-tags.js';
 import {
@@ -82,7 +83,6 @@ import {CardScanPlaceholder} from './card/card-management-content.js';
 import {
   CardResourceItem,
   CardResourceList,
-  deleteCardResources,
   readBackupCardIdentity,
 } from './safe/index.js';
 
@@ -256,12 +256,7 @@ export const SecurityKeyView = observer(
       ) => {
         const signal = AbortSignal.any([operation.signal, scanSignal]);
         setState('Deleting credential, hold tight...');
-        await deleteCardResources(
-          applet,
-          new Set([item.index]),
-          signal,
-          () => {},
-        );
+        await removeItems(applet, new Set([item.index]), signal, () => {});
       };
 
       try {
@@ -297,12 +292,7 @@ export const SecurityKeyView = observer(
           signal: operation.signal,
         });
       } catch (error) {
-        if (
-          !operation.signal.aborted &&
-          !isCredentialRequestCancelled(error) &&
-          !(error instanceof Error && error.name === 'AbortError')
-        )
-          throw error;
+        if (!isOperationCancelled(error, operation.signal)) throw error;
       } finally {
         if (controller.current === operation) controller.current = undefined;
         if (mounted.current) setBusy(false);
@@ -386,12 +376,7 @@ export const SecurityKeyView = observer(
           setConfiguration(undefined);
           return;
         }
-        if (
-          !operation.signal.aborted &&
-          !isCredentialRequestCancelled(error) &&
-          !(error instanceof Error && error.name === 'AbortError')
-        )
-          throw error;
+        if (!isOperationCancelled(error, operation.signal)) throw error;
       } finally {
         if (config?.complete) pinSession.clear();
         if (controller.current === operation) controller.current = undefined;

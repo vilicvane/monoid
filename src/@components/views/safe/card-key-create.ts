@@ -1,5 +1,8 @@
 import {SafeKnownType} from '../../../@atomics.js';
-import {CBORAppletError} from '../../../@lib/cbor-applet.js';
+import {
+  CBORAppletError,
+  CardItemExistsError,
+} from '../../../@lib/cbor-applet.js';
 import {
   type MonoidApplet,
   MonoidCardError,
@@ -43,6 +46,12 @@ export async function createCardKey(
       ...(type === 'seed' && {length: 64}),
     })
     .catch(error => {
+      if (error instanceof CardItemExistsError) {
+        // The failed random-key response supplies no index to reconcile.
+        throw new MonoidCardError('Key already exists, rescan card to check', {
+          cause: error,
+        });
+      }
       if (error instanceof CBORAppletError) throw error;
       throw new MonoidCardError(
         'Creation not confirmed, rescan card to check',

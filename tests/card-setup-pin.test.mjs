@@ -57,10 +57,7 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
   },
 });
 mock.module('../.bld/app/@services/index.js', {
-  namedExports: {
-    isCredentialRequestCancelled: error =>
-      error?.code === 'CANCELLED' || error?.code === 'APP_INACTIVE',
-  },
+  namedExports: {},
 });
 mock.module('../.bld/app/@components/@ui/toast.js', {
   namedExports: {useToast: () => fixture.toast},

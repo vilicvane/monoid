@@ -69,15 +69,6 @@ function credentialError(
   return Object.assign(new Error(ERROR_MESSAGES[knownCode]), {code: knownCode});
 }
 
-export function isCredentialRequestCancelled(error: unknown): boolean {
-  return (
-    error !== null &&
-    typeof error === 'object' &&
-    'code' in error &&
-    (error.code === 'CANCELLED' || error.code === 'APP_INACTIVE')
-  );
-}
-
 const ENTRY_ID = 'monoid.access-pins';
 // Backend calls are atomic individually; serialize the application's entire read-modify-write.
 let pending = Promise.resolve();

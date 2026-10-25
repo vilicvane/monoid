@@ -1,6 +1,6 @@
 import {base58} from '@scure/base';
 
-import {CBORAppletError} from '../cbor-applet.js';
+import {CardItemNotFoundError} from '../cbor-applet.js';
 import {verifySolanaSignature} from '../solana-signature.js';
 
 import {MonoidCardError} from './card-error.js';
@@ -50,7 +50,7 @@ export async function signSolanaMessage(
 }
 
 function handleSigningError(error: unknown): never {
-  if (error instanceof CBORAppletError && error.source.code === 'NOT_FOUND') {
+  if (error instanceof CardItemNotFoundError) {
     throw new MonoidCardError(ACCOUNT_NOT_FOUND_MESSAGE, {cause: error});
   }
 

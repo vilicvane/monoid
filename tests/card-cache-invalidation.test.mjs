@@ -12,8 +12,8 @@ mock.module('capacitor-isodep-nfc', {
 const {createMonoidApplet} = await import(
   '../.bld/app/@lib/monoid/monoid-applet.js'
 );
-const {deleteCardResources} = await import(
-  '../.bld/app/@components/views/safe/card-resource-delete.js'
+const {removeItems} = await import(
+  '../.bld/app/@lib/monoid/item-operations.js'
 );
 
 const bytes = hex => Uint8Array.from(Buffer.from(hex, 'hex'));
@@ -38,7 +38,7 @@ const snapshot = card => ({
 const commands = [
   ['create', 0x34, {index, data: Uint8Array.of(1)}, {index}],
   ['set', 0x33, {index, alias: 'Updated'}, {}],
-  ['remove', 0x35, {index}, {}],
+  ['remove', 0x35, {index}, {removed: true}],
   ['importItem', 0x37, {index, data: Uint8Array.of(1)}, {}],
   ['createRandomKey', 0x38, {type: 'seed', length: 64}, {index}],
   [
@@ -144,19 +144,14 @@ test('missing deletes remain skips, and cancellation before a write leaves the c
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(
-    deleteCardResources(applet, pending, controller.signal, () => {}),
-    {code: 'CANCELLED'},
+    removeItems(applet, pending, controller.signal, () => {}),
+    {name: 'AbortError'},
   );
   assert.equal(state.store.get(identity), state.current);
   assert.equal(state.sent.length, 1);
 
-  state.respond = () => ({error: {code: 'NOT_FOUND'}});
-  await deleteCardResources(
-    applet,
-    pending,
-    new AbortController().signal,
-    () => {},
-  );
+  state.respond = () => ({removed: false});
+  await removeItems(applet, pending, new AbortController().signal, () => {});
   assert.equal(pending.size, 0);
   assert.equal(state.store.get(identity), undefined);
 });
