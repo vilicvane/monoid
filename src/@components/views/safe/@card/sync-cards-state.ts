@@ -62,9 +62,7 @@ export class SyncCardsState {
     this.maintenanceCards.set(key, {
       operation,
       updateAvailable,
-      target:
-        previous?.target ??
-        (this.maintenance?.mode === 'update' && updateAvailable === true),
+      target: previous?.target ?? false,
     });
   }
 

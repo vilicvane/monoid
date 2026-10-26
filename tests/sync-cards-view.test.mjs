@@ -440,7 +440,8 @@ function mount({
     cardStore,
     syncCardsStore: store,
     cardMaintenanceService: {
-      isUpdateAvailable: () => false,
+      isUpdateAvailable: () =>
+        'updateAvailable' in state ? state.updateAvailable : false,
       prepare: async (_applet, options) => ({
         selectedOptionalStages: options.selectedOptionalStages,
         id: hex(state.scannedHello.id),
@@ -1835,7 +1836,7 @@ for (const count of [2, 3]) {
   });
 }
 
-test('maintenance Update defaults only known outdated peers on, and target choices lock at Continue', async () => {
+test('maintenance Update selects no peer by default, and target choices lock at Continue', async () => {
   const state = await mountMaintenance({peerCount: 2});
   state.draft.mode = 'update';
   for (const [index, peer] of state.peers.entries()) {
@@ -1849,6 +1850,11 @@ test('maintenance Update defaults only known outdated peers on, and target choic
       index === 0 ? true : undefined,
     );
   }
+  assert.deepEqual(
+    state.flow.maintenanceTargets.map(target => target.id),
+    [state.draft.id],
+  );
+  state.flow.selectMaintenanceCard(hex(state.peers[0].hello.publicKey), true);
   assert.deepEqual(
     state.flow.maintenanceTargets.map(target => target.id),
     [state.draft.id, hex(state.peers[0].hello.id)],
@@ -1907,29 +1913,35 @@ test('a no-op target can replace a failed exporter without writing or replaying 
   );
 });
 
-for (const accept of [true, false]) {
-  test(`reinstall collection asks to reinstall each added peer (${accept ? 'accept' : 'sync only'})`, async () => {
-    const state = await mountMaintenance({addPeer: false});
-    await state.startScan('Add another card');
-    const scan = await state.tap(state.peer.hello, state.peer.applet);
-    assert.equal(scan.error, undefined);
-    await state.finishScan();
-    const popup = find(
-      state.render(),
-      node =>
-        node.type === 'ConfirmPopup' &&
-        node.props.title === 'Reinstall card 00000002 too?',
-    );
-    assert.ok(popup);
-    if (accept) popup.props.onConfirm();
-    else popup.props.onCancel();
-    assert.equal(
-      find(state.render(), node => node.type === 'ConfirmPopup'),
-      undefined,
-    );
-    assert.equal(
-      state.flow.maintenanceCards.get(hex(state.peer.hello.publicKey)).target,
-      accept,
-    );
-  });
+for (const [mode, updateAvailable, title] of [
+  ['reinstall', false, 'Reinstall card 00000002 too?'],
+  ['update', true, 'Update card 00000002 too?'],
+  ['update', undefined, 'Update card 00000002 too?'],
+  ['update', false, undefined],
+]) {
+  for (const accept of title ? [true, false] : [false]) {
+    test(`${mode} collection ${title ? 'asks about' : 'does not ask about'} an added peer (update ${updateAvailable}, ${accept ? 'accept' : 'decline'})`, async () => {
+      const state = await mountMaintenance({addPeer: false});
+      state.draft.mode = mode;
+      state.updateAvailable = updateAvailable;
+      await state.startScan('Add another card');
+      const scan = await state.tap(state.peer.hello, state.peer.applet);
+      assert.equal(scan.error, undefined);
+      await state.finishScan();
+      const popup = find(state.render(), node => node.type === 'ConfirmPopup');
+      assert.equal(popup?.props.title, title);
+      if (popup) {
+        if (accept) popup.props.onConfirm();
+        else popup.props.onCancel();
+        assert.equal(
+          find(state.render(), node => node.type === 'ConfirmPopup'),
+          undefined,
+        );
+      }
+      assert.equal(
+        state.flow.maintenanceCards.get(hex(state.peer.hello.publicKey)).target,
+        accept,
+      );
+    });
+  }
 }

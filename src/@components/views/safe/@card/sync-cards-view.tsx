@@ -148,7 +148,7 @@ export const SyncCardsView = observer(
     const [working, setWorking] = useState(false);
     const [details, setDetails] = useState<string>();
     const [confirmRestart, setConfirmRestart] = useState(false);
-    const [reinstallProposal, setReinstallProposal] =
+    const [maintenanceProposal, setMaintenanceProposal] =
       useState<CardBackupIdentity>();
     const mounted = useRef(true);
     const operation = useRef<AbortController | undefined>(undefined);
@@ -402,16 +402,18 @@ export const SyncCardsView = observer(
                         signal: activeSignal,
                       },
                     );
-                    flow.addMaintenanceCard(
-                      candidate,
-                      cardMaintenanceService.isUpdateAvailable(hello),
-                    );
+                    const updateAvailable =
+                      cardMaintenanceService.isUpdateAvailable(hello);
+                    flow.addMaintenanceCard(candidate, updateAvailable);
+                    // Ask while the card is fresh in mind; an up-to-date card
+                    // has nothing to update.
                     if (
-                      maintenance.mode === 'reinstall' &&
+                      (maintenance.mode !== 'update' ||
+                        updateAvailable !== false) &&
                       identity.publicKey !== maintenance.card.publicKey &&
                       !flow.maintenanceCards.get(identity.publicKey)?.target
                     )
-                      setReinstallProposal(identity);
+                      setMaintenanceProposal(identity);
                   }
                   flow.consumeSource();
                 } else {
@@ -918,19 +920,23 @@ export const SyncCardsView = observer(
             Changes already written to cards will remain.
           </ConfirmPopup>
         )}
-        {reinstallProposal && !busy && isViewActive() && (
+        {maintenanceProposal && !busy && isViewActive() && (
           <ConfirmPopup
-            title={`Reinstall card ${reinstallProposal.id} too?`}
-            confirmText="Reinstall too"
+            title={`${maintenance?.mode === 'update' ? 'Update' : 'Reinstall'} card ${maintenanceProposal.id} too?`}
+            confirmText={
+              maintenance?.mode === 'update' ? 'Update too' : 'Reinstall too'
+            }
             cancelText="Sync only"
-            onCancel={() => setReinstallProposal(undefined)}
+            onCancel={() => setMaintenanceProposal(undefined)}
             onConfirm={() => {
-              flow.selectMaintenanceCard(reinstallProposal.publicKey!, true);
-              setReinstallProposal(undefined);
+              flow.selectMaintenanceCard(maintenanceProposal.publicKey!, true);
+              setMaintenanceProposal(undefined);
             }}
           >
             Its items are saved to a recovery archive with the others, and its
-            applets are reinstalled one card at a time afterwards.
+            applets are{' '}
+            {maintenance?.mode === 'update' ? 'updated' : 'reinstalled'} one
+            card at a time afterwards.
           </ConfirmPopup>
         )}
       </>
