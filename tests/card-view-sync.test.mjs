@@ -2370,15 +2370,11 @@ for (const alias of ['Travel 😀', '']) {
     const state = mount({});
     state.card.alias = state.hello.alias = alias ? false : 'Old';
     state.answers.push(alias, 'Secret-42');
-    if (state.card.alias)
-      find(
-        state.render(),
-        node => node.props?.['aria-label'] === 'Edit card alias',
-      ).props.onClick();
-    else {
-      state.menuButton().props.onClick();
-      state.popupButton('Add alias').props.onClick();
-    }
+    // The ID tag edits the alias whether or not one is set.
+    find(
+      state.render(),
+      node => node.props?.['aria-label'] === 'Edit card alias',
+    ).props.onClick();
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(state.inputs[0].options.maxLength, undefined);
     assert.equal(
@@ -2410,8 +2406,10 @@ for (const alias of ['Travel 😀', '']) {
 test('an oversized UTF-8 alias stops before Secret PIN input or NFC', async () => {
   const state = mount({});
   state.answers.push('😀'.repeat(17));
-  state.menuButton().props.onClick();
-  state.popupButton('Add alias').props.onClick();
+  find(
+    state.render(),
+    node => node.props?.['aria-label'] === 'Edit card alias',
+  ).props.onClick();
   await state.finished;
   assert.equal(state.inputs.length, 1);
   assert.equal(state.scans.length, 0);
@@ -2425,7 +2423,6 @@ test('Extend bundle follows the cached peer extension policy and alias follows t
   state.card.allowPeerExtension = false;
   state.menuButton().props.onClick();
   assert.equal(state.popupButton('Extend bundle'), undefined);
-  assert.equal(state.popupButton('Add alias'), undefined);
   state.card.allowPeerExtension = true;
   assert.ok(state.popupButton('Extend bundle'));
   const tags = find(state.render(), node => node.type === 'header-tags').props

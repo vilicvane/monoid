@@ -60,7 +60,10 @@ export const CardPreview = styled(MonoidCard)<{
 
   ${props =>
     props.$scan === 'next' &&
-    'box-shadow: 0 0 0 2px var(--monoid-card-logo-background);'}
+    `
+      border-color: var(--monoid-card-logo-background);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--monoid-card-logo-background) 35%, transparent);
+    `}
 `;
 
 export const CardPlaceholder = styled(MonoidCardFrame)`

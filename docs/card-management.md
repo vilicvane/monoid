@@ -50,9 +50,8 @@ Hello exposes the Identity alias as text or `false` when empty, and the flat
 Bundle hash. Scanned card snapshots cache these fields. Card previews show the
 alias on the second line, replacing the Bundle label when present, with long
 aliases ellipsized. The status line stays unchanged below it. The Card header
-shows the ID, editable alias, then Bundle tag. **Add alias** is in the actions
-menu when no alias exists, and **Extend bundle** is available only when peer
-extension is allowed.
+shows the ID, the alias, then the Bundle tag; tapping the ID or the alias edits
+it. **Extend bundle** is available only when peer extension is allowed.
 
 Card aliases use `0x27 Set Alias {alias: string}` with Secret PIN authentication.
 The shared validator counts UTF-8 bytes (at most 64), without trimming or a

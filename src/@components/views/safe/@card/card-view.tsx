@@ -1152,7 +1152,11 @@ const CardContent = observer(
         <ViewHeader>
           <ViewHeaderTitle>Card</ViewHeaderTitle>
           <ViewHeaderTags>
-            <ViewHeaderIdentifier identifier={{type: 'card', id: card.id}} />
+            <ViewHeaderIdentifier
+              identifier={{type: 'card', id: card.id}}
+              aria-label="Edit card alias"
+              onClick={editAlias}
+            />
             {card.alias && (
               <KeyAliasTag
                 as={AliasTag}
@@ -1517,11 +1521,6 @@ const CardContent = observer(
                       }}
                     >
                       Create bundle
-                    </Button>
-                  )}
-                  {!card.alias && (
-                    <Button color="neutral" onClick={editAlias}>
-                      Add alias
                     </Button>
                   )}
                   {!canDelete &&
