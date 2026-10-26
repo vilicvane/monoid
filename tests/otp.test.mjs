@@ -229,10 +229,7 @@ test('time fetch posts only a fresh challenge and preserves aborts and failures'
   const proof = await fetchOTPTimeProof(challenge, authority, signal());
   assert.equal(proof.time, 59n);
   assert.ok(proof.receivedAt >= proof.requestedAt);
-  assert.equal(
-    requests[0].url,
-    'https://authority.example/api/authority/v1/time',
-  );
+  assert.equal(requests[0].url, 'https://authority.example/v1/time');
   assert.deepEqual(JSON.parse(requests[0].options.body), {
     challenge: base64urlnopad.encode(challenge),
   });
@@ -502,7 +499,7 @@ test('Authority failures and card proof rejection never retry with phone time', 
   let failure;
   const commands = [];
   t.mock.method(globalThis, 'fetch', async url => {
-    assert.equal(url, 'https://card-authority.example/api/authority/v1/time');
+    assert.equal(url, 'https://card-authority.example/v1/time');
     if (failure === 'network') throw new Error('Offline');
     if (failure === 'http') return new Response('', {status: 503});
     const response = timeResponse(challenge, 62n, 10n);

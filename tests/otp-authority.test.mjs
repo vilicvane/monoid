@@ -27,10 +27,7 @@ test('Authority warm-up is nonblocking, consumes the public response and dedupli
   assert.equal(warmup.start('https://authority.example'), undefined);
   warmup.start('https://authority.example/');
   assert.equal(requests.length, 1);
-  assert.equal(
-    requests[0].url,
-    'https://authority.example/api/authority/v1/metadata',
-  );
+  assert.equal(requests[0].url, 'https://authority.example/v1/metadata');
   assert.equal(requests[0].options.credentials, 'omit');
   assert.equal(requests[0].options.cache, 'no-store');
   assert.equal(requests[0].options.body, undefined);
@@ -81,17 +78,20 @@ test('a failed or invalid hint does not block warming the actual card service', 
   warmup.start('invalid hint');
   warmup.start('https://old.example');
   warmup.start('https://actual.example');
+  // A local worker keeps its base path; the API lives beneath it.
+  warmup.start('http://localhost:8787/api/authority');
   await setImmediate();
   assert.deepEqual(requests, [
-    'https://old.example/api/authority/v1/metadata',
-    'https://actual.example/api/authority/v1/metadata',
+    'https://old.example/v1/metadata',
+    'https://actual.example/v1/metadata',
+    'http://localhost:8787/api/authority/v1/metadata',
   ]);
   warmup.stop();
 });
 
 test('installation resolves the selected Authority and normalizes its URL', async t => {
   t.mock.method(globalThis, 'fetch', async (url, options) => {
-    assert.equal(url, 'http://100.64.0.1:8787/api/authority/v1/metadata');
+    assert.equal(url, 'http://100.64.0.1:8787/v1/metadata');
     assert.ok(options.signal instanceof AbortSignal);
     return Response.json({publicKey: base64urlnopad.encode(key)});
   });

@@ -18,7 +18,7 @@ export function normalizeAuthorityUrl(value: string): string {
   return url.href;
 }
 
+/** The Authority URL is the worker's base; its API and login live beneath it. */
 export function authorityApiUrl(authorityUrl: string, path: string): string {
-  return new URL(`api/authority/${path}`, normalizeAuthorityUrl(authorityUrl))
-    .href;
+  return new URL(path, normalizeAuthorityUrl(authorityUrl)).href;
 }

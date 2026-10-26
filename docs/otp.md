@@ -115,14 +115,15 @@ installing Identity for the first time or through Fresh install. Defaults come
 from public build configuration:
 
 ```dotenv
-VITE_AUTHORITY_URL=https://www.monoid.app/
+VITE_AUTHORITY_URL=https://authority.monoid.app/
 # Optional pin for the configured default site:
 VITE_AUTHORITY_PUBLIC_KEY=<65-byte uncompressed P-256 public key in hex>
 ```
 
-The URL identifies the Authority site, including its login UI, not an API base.
-The app adds `api/authority/v1/metadata` or `api/authority/v1/time` internally.
-Development defaults to `http://100.69.178.77:8787/` in `.env.development`.
+The URL is the Authority worker's base (its `AUTHORITY_URL`); the API and login
+UI live beneath it. The app adds `v1/metadata` or `v1/time`. The hosted
+Authority is `https://authority.monoid.app/` (development default in
+`.env.development`); a local worker is `http://<host>:8787/api/authority`.
 Users can change that URL or disable Authority before installation. Unless the
 unchanged default has a pinned build key, fetch and validate its public P-256 key
 before prompting for PINs or opening NFC. Dismissing the popup cancels that request;
