@@ -947,9 +947,7 @@ export const CardManagementView = observer(
       <>
         <View>
           <ViewHeader>
-            <ViewHeaderTitle>
-              {appletsPage ? 'Card applets' : 'Card information'}
-            </ViewHeaderTitle>
+            <ViewHeaderTitle>Card applets</ViewHeaderTitle>
             <HeaderActions>
               {card.information && (
                 <ViewHeaderButton
