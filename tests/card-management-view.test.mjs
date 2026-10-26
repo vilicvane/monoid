@@ -913,7 +913,9 @@ test('bundle replacement collects its target and opens Sync only after NFC close
   const confirm = state.node('ConfirmPopup');
   assert.ok(confirm);
   assert.equal(confirm.props.confirmColor, 'warning');
-  assert.match(text(confirm), /another bundle card/);
+  assert.match(text(confirm), /cannot be used until its items are restored/);
+  // Other bundle cards still hold the items, so the app is not the only copy.
+  assert.doesNotMatch(text(confirm), /only copy/);
   assert.equal(state.inputs.length, 0);
   confirm.props.onConfirm();
   await state.answer();
@@ -1284,14 +1286,8 @@ for (const mode of ['update', 'reinstall']) {
     const confirmation = state.node('ConfirmPopup');
     assert.equal(confirmation.props.confirmColor, 'warning');
     assert.deepEqual(confirmation.props.confirmText, ['Continue', 'Confirm']);
-    assert.match(
-      text(confirmation),
-      /Items and applet access will be backed up and restored/,
-    );
-    assert.match(
-      text(confirmation),
-      /Monoid Security Key Applet will be reinstalled/,
-    );
+    assert.match(text(confirmation), /only copy of its items/);
+    assert.match(text(confirmation), /FIDO PIN/);
     assert.match(text(confirmation), /FIDO PIN will be reset/);
     assert.equal(state.inputs.length, 0);
     assert.equal(
@@ -1329,8 +1325,7 @@ test('a Security Key-only update preserves Monoid items and selects only its own
   await state.tap();
   state.click('Update applets');
   const confirmation = state.node('ConfirmPopup');
-  assert.match(text(confirmation), /Items and applet access will be preserved/);
-  assert.doesNotMatch(text(confirmation), /backed up/);
+  assert.doesNotMatch(text(confirmation), /cannot be used|only copy/);
   assert.match(text(confirmation), /FIDO PIN will be reset/);
   assert.equal(state.inputs.length, 0);
   confirmation.props.onConfirm();
@@ -1390,7 +1385,7 @@ test('optional installation updates known outdated dependencies after confirmati
   state.node('AppletSelectionPopup').props.onInstall();
   const confirmation = state.node('ConfirmPopup');
   assert.equal(confirmation.props.title, 'Update applets');
-  assert.match(text(confirmation), /backed up and restored/);
+  assert.match(text(confirmation), /only copy of its items/);
   assert.equal(state.inputs.length, 0);
   confirmation.props.onConfirm();
   await state.answer();
@@ -1411,7 +1406,7 @@ test('Security Key maintenance includes known outdated required applets', async 
   state.node('CardAppletsContent').props.onSelectApplet('security-key');
   state.click('Reinstall applet');
   const confirmation = state.node('ConfirmPopup');
-  assert.match(text(confirmation), /backed up and restored/);
+  assert.match(text(confirmation), /only copy of its items/);
   assert.match(text(confirmation), /FIDO PIN will be reset/);
   confirmation.props.onConfirm();
   await state.answer();
@@ -1523,10 +1518,7 @@ for (const [mode, label] of [
       confirmation.props.confirmColor,
       mode === 'fresh' ? 'danger' : 'warning',
     );
-    assert.match(
-      text(confirmation),
-      /Monoid Security Key Applet will be reinstalled/,
-    );
+    assert.match(text(confirmation), /FIDO PIN/);
     assert.equal(state.inputs.length, 0);
     assert.equal(state.scans.length, 1);
     confirmation.props.onCancel();

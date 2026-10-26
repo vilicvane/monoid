@@ -1361,37 +1361,35 @@ export const CardManagementView = observer(
             }
           >
             <ConfirmNotices
-              notices={[
-                ...(confirm.mode === 'fresh'
+              notices={
+                confirm.mode === 'fresh'
                   ? [
-                      'All items, PINs and bundle membership will be erased.',
+                      'All items, PINs and bundle membership will be erased. They cannot be restored.',
                       'Card keys will be regenerated.',
+                      affectsSecurityKey &&
+                        !selectedOptional.includes('security-key') &&
+                        'Monoid Security Key Applet will be removed. Websites can no longer sign in with this card.',
+                      affectsSecurityKey &&
+                        selectedOptional.includes('security-key') &&
+                        'Websites can no longer sign in with this card. Its FIDO PIN must be set again from a FIDO client.',
+                      affectsOTP && 'OTP accounts will be removed.',
                       !!(hello || pending?.card.id) && 'Card ID will be kept.',
                     ]
-                  : replacesStorage &&
-                      (hello?.bundle || confirmationOperation?.card.bundle)
-                    ? [
-                        !confirmationOperation?.archive &&
-                          'Sync items with another bundle card first.',
-                        'Items and applet access will be restored after installation.',
-                      ]
-                    : [
-                        replacesStorage
-                          ? confirm.operationId
-                            ? 'Items and applet access will be restored after installation.'
-                            : 'Items and applet access will be backed up and restored.'
-                          : 'Items and applet access will be preserved.',
-                      ]),
-                affectsSecurityKey &&
-                  (confirm.mode === 'fresh' &&
-                  !selectedOptional.includes('security-key')
-                    ? 'Monoid Security Key Applet and its FIDO PIN will be removed.'
-                    : 'Monoid Security Key Applet will be reinstalled. Its FIDO PIN will be reset. Set it again from a FIDO client.'),
-                affectsOTP &&
-                  (confirm.mode === 'fresh'
-                    ? 'OTP accounts and access will be removed.'
-                    : 'Monoid OTP Applet and its access will be restored.'),
-              ]}
+                  : [
+                      replacesStorage &&
+                        'This card cannot be used until its items are restored in the final scan.',
+                      replacesStorage &&
+                        !(
+                          hello?.bundle || confirmationOperation?.card.bundle
+                        ) &&
+                        'Until then, the recovery saved in this app is the only copy of its items. Do not uninstall the app or clear its data.',
+                      affectsSecurityKey &&
+                        'The FIDO PIN will be reset. Set it again from a FIDO client.',
+                      !replacesStorage &&
+                        !affectsSecurityKey &&
+                        'Items and applet access are kept.',
+                    ]
+              }
             />
           </ConfirmPopup>
         )}
