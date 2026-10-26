@@ -7,6 +7,7 @@ import {
   type IdentityInstallationOptions,
   type MonoidAppletInstallation,
   getAppletCatalog,
+  validateCardAlias,
 } from '../../../@lib/monoid/index.js';
 import {
   getDefaultOTPAuthorityUrl,
@@ -40,13 +41,17 @@ export function AppletSelectionPopup({
   selected: readonly AppletStage[];
   fresh?: boolean;
   onChange: (stages: AppletStage[]) => void;
-  onInstall: (identityOptions: IdentityInstallationOptions) => void;
+  onInstall: (
+    identityOptions: IdentityInstallationOptions,
+    alias?: string,
+  ) => void;
   onDismiss: () => void;
 }): ReactNode {
   const [authorityUrl, setAuthorityUrl] = useState(getDefaultOTPAuthorityUrl);
   const [authorityEnabled, setAuthorityEnabled] = useState(!!authorityUrl);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string>();
+  const [alias, setAlias] = useState('');
   const controller = useRef<AbortController | undefined>(undefined);
   const installsIdentity = fresh || installation?.identity.installed !== true;
   useEffect(() => () => controller.current?.abort(), []);
@@ -63,6 +68,7 @@ export function AppletSelectionPopup({
     setError(undefined);
     setConnecting(true);
     try {
+      if (installsIdentity && !fresh) validateCardAlias(alias);
       const options =
         installsIdentity && authorityEnabled
           ? await resolveOTPAuthorityInstallationOptions(
@@ -71,7 +77,7 @@ export function AppletSelectionPopup({
             )
           : {};
       task.signal.throwIfAborted();
-      onInstall(options);
+      onInstall(options, installsIdentity && !fresh ? alias : undefined);
     } catch (error) {
       if (!task.signal.aborted)
         setError(
@@ -122,6 +128,17 @@ export function AppletSelectionPopup({
       </DetailsPopupSection>
       {installsIdentity && (
         <DetailsPopupSection>
+          {!fresh && (
+            <InfoSectionItem as="label">
+              <InfoSectionItemLabel>Alias (optional)</InfoSectionItemLabel>
+              <PopupInput
+                aria-label="Alias"
+                value={alias}
+                disabled={connecting}
+                onChange={event => setAlias(event.target.value)}
+              />
+            </InfoSectionItem>
+          )}
           <AppletToggle
             checked={authorityEnabled}
             disabled={connecting}

@@ -134,6 +134,8 @@ function createBackup(
       id: MonoidIdHex.satisfies(source.id.toLowerCase()),
       publicKey: PublicKeyHex.satisfies(source.publicKey.toLowerCase()),
       bundle: source.bundle === false ? false : source.bundle.toLowerCase(),
+      alias: source.alias,
+      allowPeerExtension: source.allowPeerExtension,
     },
     items: groupedItems,
     targets: [],

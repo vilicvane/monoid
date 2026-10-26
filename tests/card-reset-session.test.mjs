@@ -14,6 +14,8 @@ function fixture() {
     publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(5)),
     bundle: new Uint8Array(32).fill(6),
     authority: false,
+    alias: false,
+    allowPeerExtension: false,
     pins: {access: 5, secret: 5},
   };
   const resetHello = {
@@ -22,6 +24,8 @@ function fixture() {
     publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(9)),
     bundle: false,
     authority: false,
+    alias: false,
+    allowPeerExtension: false,
     pins: {access: false, secret: false},
   };
   const session = new CardResetSession({

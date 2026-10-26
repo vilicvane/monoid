@@ -34,6 +34,7 @@ import {
   readCardIdentity,
   readMonoidAppletInstallation,
   resolveMonoidAppletMaintenanceAid,
+  setCardAlias,
 } from '../../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../@routes.js';
@@ -190,6 +191,7 @@ export const CardManagementView = observer(
       | AppletStage
     >();
     const [selectedOptional, setSelectedOptional] = useState<AppletStage[]>([]);
+    const [installationAlias, setInstallationAlias] = useState<string>();
     const [confirm, setConfirm] = useState<{
       mode: CardMaintenanceMode;
       replaceStages?: AppletStage[];
@@ -411,6 +413,7 @@ export const CardManagementView = observer(
         replaceStages?: readonly AppletStage[];
         operationId?: string;
         identityOptions?: IdentityInstallationOptions;
+        alias?: string;
         batchOperation?: CardMaintenanceOperation;
         finishWithout?: readonly string[];
       } = {},
@@ -732,6 +735,22 @@ export const CardManagementView = observer(
             next,
           );
           next = await setupPINs(applet, next);
+          const alias =
+            saved?.mode === 'fresh'
+              ? saved.card.alias
+              : (options.alias ?? installationAlias);
+          if (typeof alias === 'string') {
+            if ((next.alias || '') !== alias) {
+              setState('Saving alias, hold tight...');
+              await applet
+                .authenticate({secret: true, pin: pin!})
+                .catch(rejectSecretPIN);
+              next = await setCardAlias(applet, next, alias, signal);
+            }
+            if (saved?.mode === 'fresh' && maintenance.get(saved.id))
+              await maintenance.finishFreshAlias(saved.id, next, signal);
+            setInstallationAlias(undefined);
+          }
           if (saved && maintenance.get(saved.id)?.phase === 'restore') {
             let installedAppletAids: string[] | undefined;
             if (saved.grants?.length) {
@@ -1148,6 +1167,7 @@ export const CardManagementView = observer(
                       return {
                         publicKey: target.card.publicKey!,
                         id: target.card.id,
+                        alias: target.card.alias,
                         complete: target.complete,
                         scan: target.complete
                           ? 'ready'
@@ -1186,6 +1206,7 @@ export const CardManagementView = observer(
             ) : appletsPage ? (
               <CardAppletsContent
                 id={hello ? uint8ArrayToHex(hello.id) : pending?.card.id}
+                alias={hello?.alias ?? pending?.card.alias}
                 bundled={!!(hello?.bundle || pending?.card.bundle)}
                 recovery={recovery}
                 applets={[
@@ -1325,7 +1346,7 @@ export const CardManagementView = observer(
             fresh={popup === 'fresh'}
             onChange={setSelectedOptional}
             onDismiss={() => setPopup(undefined)}
-            onInstall={(identityOptions = {}) => {
+            onInstall={(identityOptions = {}, alias) => {
               if (popup === 'fresh') {
                 setPopup(undefined);
                 setConfirm({mode: 'fresh', identityOptions});
@@ -1335,11 +1356,14 @@ export const CardManagementView = observer(
                   mode: 'update',
                   replaceStages: ['library', 'monoid'],
                 });
-              } else
+              } else {
+                setInstallationAlias(alias);
                 void perform('install', {
                   selectedOptionalStages: selectedOptional,
                   identityOptions,
+                  alias,
                 });
+              }
             }}
           />
         )}

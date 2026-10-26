@@ -123,10 +123,12 @@ const Hero = styled.div`
 
 function CardAppletHero({
   id,
+  alias,
   bundled,
   recovery,
 }: {
   id?: string;
+  alias?: string | false;
   bundled?: boolean;
   recovery?: boolean;
 }): ReactNode {
@@ -134,7 +136,8 @@ function CardAppletHero({
     <Hero>
       <CardPreview
         id={id}
-        description={bundled ? 'bundle' : undefined}
+        alias={alias}
+        subtitle={bundled ? 'bundle' : undefined}
         $interrupted={recovery}
       />
     </Hero>
@@ -203,6 +206,7 @@ export function CardMaintenanceContent({
     <>
       <CardAppletHero
         id={operation.card.id}
+        alias={operation.card.alias}
         bundled={!!operation.card.bundle}
         recovery={!!operation.archive}
       />
@@ -311,6 +315,7 @@ export function CardMaintenanceCards({
   cards: readonly {
     publicKey: string;
     id?: string;
+    alias?: string | false;
     complete: boolean;
     scan: CardScanState;
     status: string;
@@ -330,6 +335,7 @@ export function CardMaintenanceCards({
         >
           <CardPreview
             id={card.id}
+            alias={card.alias}
             description={card.status}
             $scan={card.scan}
             $interrupted={card.interrupted}
@@ -395,12 +401,14 @@ export function CardMaintenanceBatchContent({
 
 export function CardAppletsContent({
   id,
+  alias,
   bundled,
   recovery,
   applets,
   onSelectApplet,
 }: {
   id?: string;
+  alias?: string | false;
   bundled?: boolean;
   recovery?: boolean;
   applets: AppletDisplay[];
@@ -408,7 +416,12 @@ export function CardAppletsContent({
 }): ReactNode {
   return (
     <>
-      <CardAppletHero id={id} bundled={bundled} recovery={recovery} />
+      <CardAppletHero
+        id={id}
+        alias={alias}
+        bundled={bundled}
+        recovery={recovery}
+      />
       <Applets>
         {applets.map(applet => {
           const status = applet.unknown

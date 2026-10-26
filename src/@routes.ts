@@ -151,7 +151,10 @@ export const ROUTE_SCHEMA = {
     },
     extendBundle: {
       $state: (state: {
-        card: Pick<ScannedCardData, 'id' | 'publicKey' | 'bundle'>;
+        card: Pick<
+          ScannedCardData,
+          'id' | 'publicKey' | 'bundle' | 'alias' | 'allowPeerExtension'
+        >;
         extensionId?: string;
       }) => ({...state, extensionId: state.extensionId ?? createFlowId()}),
     },

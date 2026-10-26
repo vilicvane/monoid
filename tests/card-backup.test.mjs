@@ -34,6 +34,8 @@ function hello(identity, {accessPIN = 5, secretPIN = 5, ...overrides} = {}) {
     publicKey: Uint8Array.from([4, ...new Array(64).fill(identity)]),
     bundle: false,
     authority: false,
+    alias: false,
+    allowPeerExtension: false,
     pins: {access: accessPIN, secret: secretPIN},
     ...overrides,
   };

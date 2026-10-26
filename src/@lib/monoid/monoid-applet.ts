@@ -37,9 +37,11 @@ const Features = x.object({
 export const MonoidAppletHello = x.object({
   version: x.number,
   id: MonoidId,
+  alias: x.union([x.string, x.literal(false)]),
   publicKey: PublicKey,
   authority: x.union([x.string, x.literal(false)]),
   bundle: x.union([XUint8Array, x.literal(false)]),
+  allowPeerExtension: x.boolean,
   pins: x.object({
     access: x.union([x.number, x.literal(false)]),
     secret: x.union([x.number, x.literal(false)]),
@@ -191,6 +193,12 @@ export const monoidCommandDefinitions = {
     ins: 0x26,
     request: x.object({data: XUint8Array}),
     response: x.object({publicKey: PublicKey, data: XUint8Array}),
+  },
+
+  setAlias: {
+    ins: 0x27,
+    request: x.object({alias: x.string}),
+    response: x.object({}),
   },
 
   reset: {

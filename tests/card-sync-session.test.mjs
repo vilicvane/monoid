@@ -38,6 +38,8 @@ function mockCard(id, bundle = false, entries = []) {
       publicKey: Uint8Array.from([4, ...new Array(64).fill(id)]),
       bundle: bundle === false ? false : new Uint8Array(32).fill(bundle),
       authority: false,
+      alias: false,
+      allowPeerExtension: false,
       pins: {access: 5, secret: 5},
     },
     async authenticate({secret, pin}) {

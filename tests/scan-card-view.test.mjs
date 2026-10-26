@@ -193,6 +193,8 @@ test('a completed scan stores every resource and routes to Card with only its id
     id: new Uint8Array([1, 2, 3, 4]),
     publicKey,
     bundle: new Uint8Array(32).fill(0x42),
+    alias: 'Travel',
+    allowPeerExtension: false,
   });
   state.resolveScan();
   await state.finished;
@@ -204,6 +206,8 @@ test('a completed scan stores every resource and routes to Card with only its id
       id: '01020304',
       publicKey: Buffer.from(publicKey).toString('hex'),
       bundle: '42'.repeat(32),
+      alias: 'Travel',
+      allowPeerExtension: false,
       items: state.scannedItems,
     },
   ]);

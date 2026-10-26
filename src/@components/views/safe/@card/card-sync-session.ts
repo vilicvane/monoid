@@ -81,6 +81,8 @@ function snapshot(card: CardSyncSnapshot): ScannedCardData {
     id: MonoidIdHex.satisfies(card.id),
     publicKey: PublicKeyHex.satisfies(card.publicKey),
     bundle: card.bundle,
+    alias: card.alias ?? false,
+    allowPeerExtension: card.allowPeerExtension ?? false,
     items: card.items.map(
       ({data: _data, exported: _exported, ...item}) => item,
     ),
@@ -740,7 +742,11 @@ export class CardSyncSession {
       }
 
       const recovery: CardMaintenanceBundleRecovery = {
-        source: {...identity, bundle: identity.bundle},
+        source: {
+          id: identity.id,
+          publicKey: identity.publicKey,
+          bundle: identity.bundle,
+        },
         items: [],
       };
       assertCardMaintenanceBundleRecovery(target, recovery);

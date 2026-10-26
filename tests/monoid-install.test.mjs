@@ -87,6 +87,8 @@ beforeEach(() => {
       publicKey: Uint8Array.from([4, ...new Uint8Array(64)]),
       bundle: false,
       authority: false,
+      alias: false,
+      allowPeerExtension: false,
       pins: {access: false, secret: false},
     },
   };

@@ -1,4 +1,5 @@
 export * from './applet-install-progress.js';
+export * from './card-alias.js';
 export * from './card-contents.js';
 export * from './card-error.js';
 export * from './card-identity.js';

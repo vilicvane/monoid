@@ -5,7 +5,10 @@ import type {
   SafeIndexHex,
   SafeKnownType,
 } from '../../../@atomics.js';
-import type {CardIdentity} from '../../../@lib/monoid/index.js';
+import type {
+  CardDisplayData,
+  CardIdentity,
+} from '../../../@lib/monoid/index.js';
 import type {AddressType} from '../../../@lib/wallet-address.js';
 import type {WalletKeyPublicKeyData} from '../../../@services/index.js';
 
@@ -25,10 +28,11 @@ export type ScannedCardKeyData = {
   };
 };
 
-export type ScannedCardData = CardIdentity & {
-  bundle: string | false;
-  items: ScannedCardItemData[];
-};
+export type ScannedCardData = CardIdentity &
+  CardDisplayData & {
+    bundle: string | false;
+    items: ScannedCardItemData[];
+  };
 
 export type ScannedCardItemData = {
   index: SafeIndexHex;

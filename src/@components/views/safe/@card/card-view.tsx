@@ -11,7 +11,10 @@ import {
   type MonoidApplet,
   assertSameCard,
   removeItems,
+  setCardAlias,
+  validateCardAlias,
 } from '../../../../@lib/monoid/index.js';
+import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import {
   ADDRESS_TYPES,
   type AddressChain,
@@ -31,7 +34,7 @@ import {
 import {createFlowId} from '../../../../@utils/index.js';
 import {ADDRESS_CHAIN_OPTIONS} from '../../../@key/address-type-selector.js';
 import {KeyListPlaceholder} from '../../../@key/key-list.js';
-import {keyTypeColorsCSS} from '../../../@key/key-tags.js';
+import {KeyAliasTag, keyTypeColorsCSS} from '../../../@key/key-tags.js';
 import {
   type MonoidScanPromptSetStateContentCallback,
   MonoidScanStatePromptProgress,
@@ -39,6 +42,7 @@ import {
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
 import {PINKind} from '../../../@monoid/pin-input-placeholder.js';
+import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
 import {scanNextCards} from '../../../@monoid/scan-next-cards.js';
 import {AppIcon} from '../../../@ui/app-icon.js';
 import {Button, Buttons} from '../../../@ui/button.js';
@@ -48,6 +52,7 @@ import {
   DetailsPopupTitle,
 } from '../../../@ui/details-popup.js';
 import {SegmentedControl} from '../../../@ui/segmented-control.js';
+import {useInputModal} from '../../../@ui/use-input-modal.js';
 import {
   View,
   ViewActionButton,
@@ -59,6 +64,7 @@ import {
   ViewHeaderTitle,
   ViewPlaceholder,
   useViewActive,
+  viewHeaderTagCSS,
 } from '../../../@view/index.js';
 import {CardAddressProgress} from '../card-address-progress.js';
 import {
@@ -98,6 +104,10 @@ const Description = styled.p`
   font-size: 14px;
   line-height: 21px;
   color: var(--color-text-secondary);
+`;
+
+const AliasTag = styled.button`
+  ${viewHeaderTagCSS}
 `;
 
 const CreateKeyButton = styled(Button)`
@@ -226,6 +236,14 @@ const CardContent = observer(
       retryOnError: false,
       pinSession,
     });
+    const [aliasInput, showAliasInput] = useInputModal();
+    const [aliasScanContent, aliasScan] = useMonoidScanPrompt({
+      auth: false,
+      ensureSetup: false,
+      retryOnError: false,
+    });
+    const [renaming, setRenaming] = useState(false);
+    const aliasOperation = useRef<AbortController | undefined>(undefined);
     const items = card.items.flatMap(item => {
       const selection = getCardKeySelection(item);
       return selection ? [selection] : [];
@@ -261,6 +279,7 @@ const CardContent = observer(
       importing ||
       deleting ||
       creating ||
+      renaming ||
       !!updatingPIN;
     const mounted = useRef(true);
 
@@ -271,6 +290,7 @@ const CardContent = observer(
         mounted.current = false;
         deletion.current?.abort();
         creation.current?.abort();
+        aliasOperation.current?.abort();
         pinSession.clear();
       };
     }, [pinSession]);
@@ -281,6 +301,7 @@ const CardContent = observer(
           () => !isViewActive(),
           leaving => {
             if (leaving) {
+              aliasOperation.current?.abort();
               pinSession.clear();
               setMenu(undefined);
             }
@@ -302,6 +323,68 @@ const CardContent = observer(
     );
 
     const {indexToKeyMap} = walletStorageService;
+
+    const editAlias = (): void => {
+      if (busy || operationActive.current || !isViewActive()) return;
+      const operation = new AbortController();
+      const {signal} = operation;
+      aliasOperation.current = operation;
+      operationActive.current = true;
+      setMenu(undefined);
+      setRenaming(true);
+      errorService.catch(
+        (async () => {
+          try {
+            const alias = await showAliasInput(
+              {
+                placeholder: 'Enter card alias',
+                defaultValue: card.alias || '',
+                center: true,
+              },
+              signal,
+            );
+            signal.throwIfAborted();
+            if (alias === undefined || alias === (card.alias || '')) return;
+            validateCardAlias(alias);
+            const pins = await requestCardPINs(
+              showAliasInput,
+              {secretSet: true, accessSet: true},
+              signal,
+            );
+            if (!pins) return;
+            await aliasScan(
+              scanCardPrompt(card.id, 'to save alias'),
+              async (applet, setState, hello, scanSignal) => {
+                const activeSignal = AbortSignal.any([signal, scanSignal]);
+                activeSignal.throwIfAborted();
+                assertSameCard(hello, card);
+                await applet.authenticate({secret: true, pin: pins.secret});
+                setState('Saving alias, hold tight...');
+                const verified = await setCardAlias(
+                  applet,
+                  hello,
+                  alias,
+                  activeSignal,
+                );
+                runInAction(() => {
+                  card.alias = verified.alias;
+                  card.allowPeerExtension = verified.allowPeerExtension;
+                  cardStore.set(card);
+                });
+              },
+              hello => assertSameCard(hello, card),
+              signal,
+            );
+          } catch (error) {
+            if (!isOperationCancelled(error, signal)) throw error;
+          } finally {
+            aliasOperation.current = undefined;
+            operationActive.current = false;
+            if (mounted.current) setRenaming(false);
+          }
+        })(),
+      );
+    };
 
     const getSafeAddress = (
       key: CardKeySelection['key'],
@@ -1070,6 +1153,17 @@ const CardContent = observer(
           <ViewHeaderTitle>Card</ViewHeaderTitle>
           <ViewHeaderTags>
             <ViewHeaderIdentifier identifier={{type: 'card', id: card.id}} />
+            {card.alias && (
+              <KeyAliasTag
+                as={AliasTag}
+                type="button"
+                aria-label="Edit card alias"
+                disabled={busy}
+                onClick={editAlias}
+              >
+                {card.alias}
+              </KeyAliasTag>
+            )}
             {card.bundle !== false && (
               <ViewHeaderIdentifier
                 identifier={{type: 'bundle', id: card.bundle}}
@@ -1425,25 +1519,34 @@ const CardContent = observer(
                       Create bundle
                     </Button>
                   )}
-                  {!canDelete && card.bundle !== false && (
-                    <Button
-                      color="neutral"
-                      onClick={() => {
-                        setMenu(undefined);
-                        router.safe
-                          .extendBundle({
-                            card: {
-                              id: card.id,
-                              publicKey: card.publicKey,
-                              bundle: card.bundle,
-                            },
-                          })
-                          .$push();
-                      }}
-                    >
-                      Extend bundle
+                  {!card.alias && (
+                    <Button color="neutral" onClick={editAlias}>
+                      Add alias
                     </Button>
                   )}
+                  {!canDelete &&
+                    card.bundle !== false &&
+                    card.allowPeerExtension && (
+                      <Button
+                        color="neutral"
+                        onClick={() => {
+                          setMenu(undefined);
+                          router.safe
+                            .extendBundle({
+                              card: {
+                                id: card.id,
+                                publicKey: card.publicKey,
+                                bundle: card.bundle,
+                                alias: card.alias,
+                                allowPeerExtension: card.allowPeerExtension,
+                              },
+                            })
+                            .$push();
+                        }}
+                      >
+                        Extend bundle
+                      </Button>
+                    )}
                   {canDelete ? (
                     <Button color="danger" onClick={() => setMenu('delete')}>
                       Delete
@@ -1487,6 +1590,8 @@ const CardContent = observer(
         )}
         {scanPromptContent}
         {createScanContent}
+        {aliasInput}
+        {aliasScanContent}
       </>
     );
   },

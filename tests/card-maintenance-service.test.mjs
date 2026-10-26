@@ -96,6 +96,8 @@ const hello = {
   publicKey: identity,
   bundle: false,
   authority: false,
+  alias: false,
+  allowPeerExtension: false,
   pins: {access: 5, secret: 5},
 };
 const sourceItems = [
@@ -1333,6 +1335,42 @@ test('discarding one card preparation does not remove another card recovery arch
   assert.deepEqual(await storage.get(), original);
   assert.deepEqual(service.get(first.id).archive, first.archive);
 });
+
+for (const fromRecord of [false, true]) {
+  test(`Fresh retains the exact alias from ${fromRecord ? 'previous maintenance' : 'Hello'} until verified after installation`, async () => {
+    const storage = storageFixture();
+    let service = await CardMaintenanceService.create(storage);
+    const card = cardFixture();
+    card.state.alias = ' 旅行卡 😀 ';
+    if (fromRecord)
+      await service.prepare(card, {
+        mode: 'reinstall',
+        cardInformation: information,
+        appletAid: hex(aid),
+      });
+    const operation = await service.prepareFresh(
+      information,
+      fromRecord ? undefined : card.state,
+    );
+    assert.equal(operation.card.alias, card.state.alias);
+    assert.equal(operation.card.id, hex(card.state.id));
+    await service.replace('session', operation.id);
+    assert.equal(
+      service.get(operation.id).card.alias,
+      card.state.alias,
+      'replacement does not discard the alias',
+    );
+    service = await CardMaintenanceService.create(storage);
+    assert.equal(service.get(operation.id).card.alias, card.state.alias);
+    await assert.rejects(
+      service.finishFreshAlias(operation.id, {...card.state, alias: false}),
+      /verify.*alias/,
+    );
+    assert.ok(service.get(operation.id));
+    await service.finishFreshAlias(operation.id, card.state);
+    assert.equal(service.get(operation.id), undefined);
+  });
+}
 
 test('fresh reinstall works without Hello and clears only its own completed operation', async () => {
   const storage = storageFixture();

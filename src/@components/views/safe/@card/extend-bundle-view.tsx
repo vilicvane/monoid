@@ -254,6 +254,7 @@ export const ExtendBundleView = observer(
                   if (session.phase === 'complete' && cached) {
                     runInAction(() => {
                       cached.bundle = session.bundle;
+                      cached.allowPeerExtension = true;
                       cardStore.set(cached);
                     });
                   }
@@ -327,7 +328,11 @@ export const ExtendBundleView = observer(
               >
                 <CardGrid>
                   {session.target ? (
-                    <CardPreview id={session.target.id} description="ready" />
+                    <CardPreview
+                      id={session.target.id}
+                      alias={session.target.alias}
+                      description="ready"
+                    />
                   ) : (
                     <CardPreviewButton
                       aria-label="Scan new card"
@@ -350,6 +355,7 @@ export const ExtendBundleView = observer(
                   {session.requester ? (
                     <CardPreview
                       id={session.requester.id}
+                      alias={session.requester.alias}
                       description={
                         session.phase === 'requesting' ? 'pending' : 'complete'
                       }
@@ -367,6 +373,7 @@ export const ExtendBundleView = observer(
                   {session.approver ? (
                     <CardPreview
                       id={session.approver.id}
+                      alias={session.approver.alias}
                       description="complete"
                       $scan="ready"
                     />
@@ -399,6 +406,7 @@ export const ExtendBundleView = observer(
                   {session.target && (
                     <CardPreview
                       id={session.target.id}
+                      alias={session.target.alias}
                       description={activeNumero === 3 ? 'pending' : 'complete'}
                       $scan={
                         activeNumero === 3

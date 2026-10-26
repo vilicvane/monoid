@@ -4,6 +4,10 @@ import {afterEach, mock, test} from 'node:test';
 import {observable, runInAction, toJS} from 'mobx';
 
 import {
+  setCardAlias,
+  validateCardAlias,
+} from '../.bld/app/@lib/monoid/card-alias.js';
+import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
@@ -78,6 +82,7 @@ mock.module('styled-components', {
   namedExports: {
     styled: Object.assign(component => () => component, {
       p: () => 'description',
+      button: () => 'alias-button',
     }),
   },
 });
@@ -102,6 +107,8 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
     removeItems,
     setItemAlias,
     acceptMatchingItem,
+    setCardAlias,
+    validateCardAlias,
   },
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
@@ -140,8 +147,35 @@ for (const [path, exports] of [
     },
   ],
   ['@key/key-list', {KeyListPlaceholder: 'placeholder'}],
-  ['@key/key-tags', {KeyTypeTag: 'key-type-tag', keyTypeColorsCSS: ''}],
-  ['@monoid/pin-input-placeholder', {PINKind: 'pin-kind'}],
+  [
+    '@key/key-tags',
+    {
+      KeyTypeTag: 'key-type-tag',
+      KeyAliasTag: 'alias-tag',
+      keyTypeColorsCSS: '',
+    },
+  ],
+  [
+    '@monoid/pin-input-placeholder',
+    {
+      PINKind: 'pin-kind',
+      getPINInputPlaceholder: (kind, prefix) => ({
+        placeholder: `${prefix} ${kind} PIN`,
+      }),
+    },
+  ],
+  [
+    '@ui/use-input-modal',
+    {
+      useInputModal: () => [
+        null,
+        async (options, signal) => {
+          fixture.inputs.push({options, signal});
+          return fixture.answers.shift();
+        },
+      ],
+    },
+  ],
   ['@ui/app-icon', {AppIcon: 'icon'}],
   ['@ui/button', {Button: 'popup-button', Buttons: 'buttons'}],
   ['@ui/centered-popup', {CenteredPopup: 'popup'}],
@@ -158,6 +192,7 @@ for (const [path, exports] of [
     '@view/index',
     {
       useViewActive,
+      viewHeaderTagCSS: '',
       View: 'view',
       ViewActionButton: 'button',
       ViewContent: 'content',
@@ -275,12 +310,16 @@ function sparseCardItems(index, wallets, known = [], preview) {
   ];
 }
 
-function mount({items, keys = []}) {
+function mount({items = [], keys = []}) {
   const storage = new WalletStorageService({async set() {}}, keys);
   const state = {
     slots: [],
     index: 0,
     scans: [],
+    inputs: [],
+    answers: [],
+    cardAliasWrites: [],
+    authentications: [],
     scanOptions: [],
     writes: [],
     aliasWrites: [],
@@ -439,9 +478,22 @@ function mount({items, keys = []}) {
     publicKey: bytes(state.view.card.publicKey),
     bundle: false,
     authority: false,
+    alias: false,
+    allowPeerExtension: false,
     pins: {access: 5, secret: 5},
   };
   state.applet = {
+    async authenticate(request) {
+      state.authentications.push(request);
+    },
+    async hello() {
+      return state.hello;
+    },
+    async setAlias({alias}) {
+      state.cardAliasWrites.push(alias);
+      state.hello = {...state.hello, alias: alias || false};
+      if (state.aliasError) throw state.aliasError;
+    },
     async createRandomKey(request) {
       state.creations.push(request);
       return {index: bytes(CREATED_INDEX)};
@@ -508,10 +560,14 @@ function mount({items, keys = []}) {
       $backTo: () => () => state.routes.push('safe'),
     },
     errorService: {
-      catch: callback => () => {
-        state.finished = Promise.resolve(callback()).catch(error =>
-          state.errors.push(error),
-        );
+      catch: task => {
+        const capture = promise =>
+          (state.finished = Promise.resolve(promise).catch(error =>
+            state.errors.push(error),
+          ));
+        return typeof task === 'function'
+          ? () => capture(task())
+          : capture(task);
       },
     },
   };
@@ -1789,9 +1845,12 @@ test('an acknowledged first import remains saved and the second can retry after 
   );
   assert.equal(state.visible('Back to Safe'), true);
   assert.ok(
-    state.scanOptions.every(
-      options => options.allowSetup && options.pinSession === state.pinSession,
-    ),
+    state.scanOptions
+      .filter(options => options.auth !== false)
+      .every(
+        options =>
+          options.allowSetup && options.pinSession === state.pinSession,
+      ),
   );
 });
 
@@ -2304,4 +2363,74 @@ test('an unacknowledged creation stops without inventing an item or resending th
   });
   assert.equal(state.menuButton(), undefined);
   assert.ok(find(state.render(), node => node.type === 'placeholder'));
+});
+
+for (const alias of ['Travel 😀', '']) {
+  test(`card alias editing authenticates Secret and verifies ${alias || 'clearing'}`, async () => {
+    const state = mount({});
+    state.card.alias = state.hello.alias = alias ? false : 'Old';
+    state.answers.push(alias, 'Secret-42');
+    if (state.card.alias)
+      find(
+        state.render(),
+        node => node.props?.['aria-label'] === 'Edit card alias',
+      ).props.onClick();
+    else {
+      state.menuButton().props.onClick();
+      state.popupButton('Add alias').props.onClick();
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(state.inputs[0].options.maxLength, undefined);
+    assert.equal(
+      state.inputs[1].options.placeholder,
+      'Enter existing Secret PIN',
+    );
+    const scan = state.scans.at(-1);
+    assert.equal(scan.label, 'Scan card aabbccdd to save alias');
+    assert.equal(scan.options.auth, false);
+    assert.equal(scan.options.retryOnError, false);
+    assert.throws(
+      () =>
+        scan.validate({
+          ...state.hello,
+          publicKey: bytes(`04${'33'.repeat(64)}`),
+        }),
+      MonoidWrongCardError,
+    );
+    await state.tap();
+    await state.finish();
+    assert.deepEqual(state.authentications, [{secret: true, pin: 'Secret-42'}]);
+    assert.deepEqual(state.cardAliasWrites, [alias]);
+    assert.equal(state.card.alias, alias || false);
+    assert.equal(state.cardStore.get(state.view.card).alias, alias || false);
+    assert.deepEqual(state.errors, []);
+  });
+}
+
+test('an oversized UTF-8 alias stops before Secret PIN input or NFC', async () => {
+  const state = mount({});
+  state.answers.push('😀'.repeat(17));
+  state.menuButton().props.onClick();
+  state.popupButton('Add alias').props.onClick();
+  await state.finished;
+  assert.equal(state.inputs.length, 1);
+  assert.equal(state.scans.length, 0);
+  assert.match(state.errors[0].message, /64 UTF-8 bytes/);
+});
+
+test('Extend bundle follows the cached peer extension policy and alias follows the ID tag', () => {
+  const state = mount({});
+  state.card.bundle = '42'.repeat(32);
+  state.card.alias = 'Travel';
+  state.card.allowPeerExtension = false;
+  state.menuButton().props.onClick();
+  assert.equal(state.popupButton('Extend bundle'), undefined);
+  assert.equal(state.popupButton('Add alias'), undefined);
+  state.card.allowPeerExtension = true;
+  assert.ok(state.popupButton('Extend bundle'));
+  const tags = find(state.render(), node => node.type === 'header-tags').props
+    .children;
+  assert.equal(tags[0].props.identifier.type, 'card');
+  assert.equal(tags[1].props.children, 'Travel');
+  assert.equal(tags[2].props.identifier.type, 'bundle');
 });

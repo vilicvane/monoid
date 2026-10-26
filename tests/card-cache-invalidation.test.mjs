@@ -25,6 +25,8 @@ const hello = card => ({
   id: bytes(card.id),
   publicKey: bytes(card.publicKey),
   authority: false,
+  alias: false,
+  allowPeerExtension: false,
   bundle: false,
   pins: {access: 5, secret: 5},
 });
@@ -36,6 +38,7 @@ const snapshot = card => ({
   ],
 });
 const commands = [
+  ['setAlias', 0x27, {alias: 'Travel'}, {}],
   ['create', 0x34, {index, data: Uint8Array.of(1)}, {index}],
   ['set', 0x33, {index, alias: 'Updated'}, {}],
   ['remove', 0x35, {index}, {removed: true}],

@@ -5,7 +5,13 @@ import {MonoidCardError, MonoidWrongCardError} from './card-error.js';
 import type {MonoidAppletHello} from './monoid-applet.js';
 
 export type CardIdentity = {id: MonoidIdHex; publicKey: PublicKeyHex};
-export type CardBackupIdentity = CardIdentity & {bundle: string | false};
+export type CardDisplayData = Pick<
+  MonoidAppletHello,
+  'alias' | 'allowPeerExtension'
+>;
+export type CardBackupIdentity = CardIdentity & {
+  bundle: string | false;
+} & Partial<CardDisplayData>;
 
 type CardIdentitySource =
   | Pick<MonoidAppletHello, 'id' | 'publicKey'>
@@ -26,7 +32,7 @@ export function readCardIdentity(card: CardIdentitySource): CardIdentity {
 
 export function readBackupCardIdentity(
   hello: MonoidAppletHello,
-): CardBackupIdentity {
+): CardBackupIdentity & CardDisplayData {
   const {id, publicKey, bundle} = hello;
 
   if (
@@ -40,6 +46,8 @@ export function readBackupCardIdentity(
 
   return {
     ...readCardIdentity(hello),
+    alias: hello.alias,
+    allowPeerExtension: hello.allowPeerExtension,
     bundle: bundle === false ? false : uint8ArrayToHex(bundle),
   };
 }

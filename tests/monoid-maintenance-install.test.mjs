@@ -169,6 +169,8 @@ beforeEach(() => {
       publicKey: bytes(publicKey),
       bundle: false,
       authority: false,
+      alias: false,
+      allowPeerExtension: false,
       pins: {access: 5, secret: 5},
     },
   };

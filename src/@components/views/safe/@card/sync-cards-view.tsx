@@ -646,78 +646,89 @@ export const SyncCardsView = observer(
           <CardPreviewButton disabled={busy} onClick={() => readCard(source)}>
             <CardPreview
               id={source.id}
+              alias={source.alias}
               subtitle={bundleLabel(source.bundle)}
               description="scan to read"
               $scan="next"
             />
           </CardPreviewButton>
         )}
-        {session.cards.map(card => (
-          <CardPreviewButton
-            key={card.publicKey}
-            disabled={busy}
-            aria-label={`Card ${card.id}`}
-            onClick={() => setDetails(card.publicKey)}
-          >
-            <CardPreview
-              id={card.id}
-              subtitle={
-                collecting &&
-                maintenance &&
-                flow.maintenanceCards.get(card.publicKey)?.target
-                  ? maintenance.mode === 'update'
-                    ? 'update'
-                    : 'reinstall'
-                  : bundleLabel(card.bundle)
-              }
-              description={
-                collecting
-                  ? maintenance?.mode === 'update' && card !== maintenanceTarget
-                    ? flow.maintenanceCards.get(card.publicKey)
-                        ?.updateAvailable === true
-                      ? 'update available'
-                      : flow.maintenanceCards.get(card.publicKey)
-                            ?.updateAvailable === false
-                        ? 'up to date'
-                        : 'installed version unknown'
-                    : `items ${formatCardResourceCount(getCardResourceGroups(card.items))}`
-                  : flow.savingRecovery
+        {session.cards.map(card => {
+          const target =
+            collecting &&
+            maintenance &&
+            flow.maintenanceCards.get(card.publicKey)?.target;
+
+          return (
+            <CardPreviewButton
+              key={card.publicKey}
+              disabled={busy}
+              aria-label={`Card ${card.id}`}
+              onClick={() => setDetails(card.publicKey)}
+            >
+              <CardPreview
+                id={card.id}
+                alias={target ? undefined : card.alias}
+                subtitle={
+                  target
+                    ? [
+                        card.alias,
+                        maintenance.mode === 'update' ? 'update' : 'reinstall',
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')
+                    : bundleLabel(card.bundle)
+                }
+                description={
+                  collecting
+                    ? maintenance?.mode === 'update' &&
+                      card !== maintenanceTarget
+                      ? flow.maintenanceCards.get(card.publicKey)
+                          ?.updateAvailable === true
+                        ? 'update available'
+                        : flow.maintenanceCards.get(card.publicKey)
+                              ?.updateAvailable === false
+                          ? 'up to date'
+                          : 'installed version unknown'
+                      : `items ${formatCardResourceCount(getCardResourceGroups(card.items))}`
+                    : flow.savingRecovery
+                      ? card === flow.nextRecoveryCard
+                        ? 'scan to export'
+                        : flow.recoveries.has(
+                              flow.maintenanceCards.get(card.publicKey)!
+                                .operation.id,
+                            )
+                          ? 'recovery saved'
+                          : 'recovery pending'
+                      : maintenance && flow.deferredCards.has(card.publicKey)
+                        ? 'restore later'
+                        : card.complete
+                          ? card.issues?.length
+                            ? `skipped ${card.issues.length}`
+                            : 'synced'
+                          : `items ${card.completed}/${card.total}`
+                }
+                $scan={
+                  flow.savingRecovery
                     ? card === flow.nextRecoveryCard
-                      ? 'scan to export'
-                      : flow.recoveries.has(
-                            flow.maintenanceCards.get(card.publicKey)!.operation
-                              .id,
-                          )
-                        ? 'recovery saved'
-                        : 'recovery pending'
-                    : maintenance && flow.deferredCards.has(card.publicKey)
-                      ? 'restore later'
-                      : card.complete
-                        ? card.issues?.length
-                          ? `skipped ${card.issues.length}`
-                          : 'synced'
-                        : `items ${card.completed}/${card.total}`
-              }
-              $scan={
-                flow.savingRecovery
-                  ? card === flow.nextRecoveryCard
-                    ? 'next'
-                    : flow.needsExport(card.publicKey)
-                      ? 'pending'
-                      : 'ready'
-                  : collecting
-                    ? undefined
-                    : card.complete && !flow.deferredCards.has(card.publicKey)
-                      ? 'ready'
-                      : 'pending'
-              }
-              $interrupted={
-                flow.interruptedCards.has(card.publicKey) ||
-                !!card.issues?.length
-              }
-            />
-          </CardPreviewButton>
-        ))}
+                      ? 'next'
+                      : flow.needsExport(card.publicKey)
+                        ? 'pending'
+                        : 'ready'
+                    : collecting
+                      ? undefined
+                      : card.complete && !flow.deferredCards.has(card.publicKey)
+                        ? 'ready'
+                        : 'pending'
+                }
+                $interrupted={
+                  flow.interruptedCards.has(card.publicKey) ||
+                  !!card.issues?.length
+                }
+              />
+            </CardPreviewButton>
+          );
+        })}
         {Array.from({length: placeholders}, (_, index) => (
           <CardPreviewButton
             key={index}

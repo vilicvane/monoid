@@ -110,6 +110,8 @@ export function useBundleCardAddition({
         (emptyCard
           ? cardStore.set({
               ...identity,
+              alias: hello.alias,
+              allowPeerExtension: hello.allowPeerExtension,
               bundle:
                 hello.bundle === false ? false : uint8ArrayToHex(hello.bundle),
               items: [],

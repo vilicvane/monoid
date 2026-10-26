@@ -418,6 +418,8 @@ function bundleCard(identity, overrides = {}) {
     publicKey: Uint8Array.from([4, ...new Array(64).fill(identity)]),
     bundle: false,
     authority: false,
+    alias: false,
+    allowPeerExtension: false,
     pins: {access: 5, secret: 5},
     ...overrides,
   };
@@ -514,6 +516,8 @@ function mount(
       publicKey: new Uint8Array([4, ...new Uint8Array(64).fill(5)]),
       bundle: false,
       authority: false,
+      alias: false,
+      allowPeerExtension: false,
       pins: {access: 5, secret: 5},
     },
     view: {
@@ -972,6 +976,7 @@ test('an existing Bundle is reset and initialized during Add with one tap before
   );
   assert.deepEqual(state.replacementSource.items, []);
   assert.equal(state.replacementSource.requiresPINSetup, true);
+  assert.equal(state.replacementSource.allowPeerExtension, false);
   state.bundleScans.at(-1).resolve();
   await adding;
   assert.equal(state.card('00000009').props.description, 'ready');

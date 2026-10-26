@@ -21,6 +21,8 @@ function hello(identity, overrides = {}) {
     publicKey: Uint8Array.from([4, ...new Array(64).fill(identity)]),
     bundle: bundle.slice(),
     authority: false,
+    alias: false,
+    allowPeerExtension: false,
     pins: {access: 5, secret: 5},
     ...overrides,
   };
@@ -30,6 +32,8 @@ function prepared(card) {
   return {
     id: hex(card.id),
     publicKey: hex(card.publicKey),
+    alias: card.alias,
+    allowPeerExtension: card.allowPeerExtension,
     bundle: card.bundle === false ? false : hex(card.bundle),
   };
 }
@@ -123,6 +127,8 @@ test('entry requires a full identity in an existing Bundle', () => {
   assert.deepEqual(session.source, {
     id: source.id,
     publicKey: source.publicKey,
+    alias: source.alias,
+    allowPeerExtension: source.allowPeerExtension,
   });
   assert.equal(session.bundle, source.bundle);
   assert.equal(session.phase, 'collecting');
@@ -232,6 +238,8 @@ test('only one initialized new card is added and it remains editable until the r
   assert.deepEqual(session.target, {
     id: snapshot.id,
     publicKey: snapshot.publicKey,
+    alias: snapshot.alias,
+    allowPeerExtension: snapshot.allowPeerExtension,
   });
   await session.configureCard(sourceApplet, source, PIN, signal());
   await assert.rejects(session.removeTarget(), /already confirmed/);
@@ -301,10 +309,14 @@ test('the three taps authenticate separately and forward both opaque packets wit
     assert.deepEqual(session.approver, {
       id: hex(approver.id),
       publicKey: hex(approver.publicKey),
+      alias: approver.alias,
+      allowPeerExtension: approver.allowPeerExtension,
     });
     assert.deepEqual(session.requester, {
       id: hex(source.id),
       publicKey: hex(source.publicKey),
+      alias: source.alias,
+      allowPeerExtension: source.allowPeerExtension,
     });
     assert.equal(session.bundle, hex(bundle));
     assert.equal(session.busy, false);
@@ -330,10 +342,14 @@ test('any existing member may request and the entry card may approve', async () 
   assert.deepEqual(session.requester, {
     id: hex(requester.id),
     publicKey: hex(requester.publicKey),
+    alias: requester.alias,
+    allowPeerExtension: requester.allowPeerExtension,
   });
   assert.deepEqual(session.source, {
     id: hex(source.id),
     publicKey: hex(source.publicKey),
+    alias: source.alias,
+    allowPeerExtension: source.allowPeerExtension,
   });
   for (const card of [requester, {...requester, id: source.id}]) {
     await assert.rejects(
@@ -386,6 +402,8 @@ test('a lost extension response fixes the full requester identity before the com
     assert.deepEqual(session.requester, {
       id: hex(requester.id),
       publicKey: hex(requester.publicKey),
+      alias: requester.alias,
+      allowPeerExtension: requester.allowPeerExtension,
     });
     throw new Error('NFC disconnected');
   };
@@ -634,6 +652,8 @@ test('empty extension data does not freeze target editing', async () => {
   assert.deepEqual(session.requester, {
     id: hex(source.id),
     publicKey: hex(source.publicKey),
+    alias: source.alias,
+    allowPeerExtension: source.allowPeerExtension,
   });
   await session.removeTarget();
   assert.equal(session.phase, 'collecting');

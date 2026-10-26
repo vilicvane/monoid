@@ -38,6 +38,7 @@ const keyFamilies = [
 ];
 
 const fixtures = {
+  setAlias: [{alias: '旅行卡'}, {alias: ''}],
   hello: [{}],
   authenticate: [
     {pin: '123456'},

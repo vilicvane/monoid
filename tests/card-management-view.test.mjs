@@ -303,6 +303,8 @@ function hello(initialized = true, bundle = false) {
     version: 1,
     bundle,
     authority: false,
+    alias: false,
+    allowPeerExtension: false,
     pins: {access: initialized ? 5 : false, secret: initialized ? 5 : false},
   };
 }
@@ -423,6 +425,13 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
   });
   state.view.$match.$view = () => ({$entries: [state.view]});
   state.applet = {
+    setAlias: async ({alias}) => {
+      state.events.push({type: 'set-card-alias', alias});
+      if (state.aliasError) throw state.aliasError;
+      state.initialized = {...state.initialized, alias: alias || false};
+      state.installation = {...state.installation, hello: state.initialized};
+    },
+    hello: async () => state.initialized,
     authenticate: async request =>
       state.events.push({type: 'auth', ...request}),
     list: async () => {
@@ -442,6 +451,11 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     clear: () => state.events.push({type: 'clear'}),
   };
   state.maintenance = {
+    finishFreshAlias: async (id, hello) => {
+      assert.equal(hello.alias, state.pending.card.alias);
+      state.events.push({type: 'finish-fresh-alias', id});
+      state.pending = undefined;
+    },
     secretPIN: card => state.heldPINs.get(card.publicKey),
     holdSecretPIN: (card, pin) => state.heldPINs.set(card.publicKey, pin),
     dropSecretPIN: card => state.heldPINs.delete(card.publicKey),
@@ -2647,3 +2661,64 @@ for (const phase of ['ready', 'replacing', 'restore']) {
     assert.equal(state.node('OperationComplete'), undefined);
   });
 }
+
+test('first installation sets an optional alias with Secret authentication after PIN setup', async () => {
+  const state = mount({returnTo: 'copy'});
+  state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall({}, '旅行卡');
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, []);
+  const saved = state.events.findIndex(
+    event => event.type === 'set-card-alias',
+  );
+  assert.ok(
+    saved > state.events.findIndex(event => event.type === 'initialize'),
+  );
+  assert.deepEqual(state.events[saved - 1], {
+    type: 'auth',
+    secret: true,
+    pin: PIN,
+  });
+  assert.equal(state.initialized.alias, '旅行卡');
+  assert.equal(state.targets[0].alias, '旅行卡');
+});
+
+test('a failed fresh alias restoration keeps the record and an explicit retry restores it', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.pending = {
+    id: 'fresh-alias',
+    mode: 'fresh',
+    phase: 'replacing',
+    checkpoint: 'verify',
+    card: {
+      ...readCardIdentity(state.initialized),
+      publicKey: `04${'22'.repeat(64)}`,
+      appletAid: AID,
+      alias: '旅行卡',
+      bundle: false,
+    },
+  };
+  state.maintenance.replace = async () => state.initialized;
+  state.aliasError = new Error('Alias write interrupted');
+  state.click('Resume fresh install');
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.answer();
+  await state.tap();
+  assert.equal(state.pending.card.alias, '旅行卡');
+  assert.deepEqual(state.errors, [state.aliasError]);
+  state.aliasError = undefined;
+  state.click('Resume fresh install');
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.answer();
+  await state.tap();
+  assert.equal(state.initialized.alias, '旅行卡');
+  assert.equal(state.pending, undefined);
+  assert.equal(
+    state.events.filter(event => event.type === 'finish-fresh-alias').length,
+    1,
+  );
+});

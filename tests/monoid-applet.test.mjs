@@ -125,24 +125,34 @@ function assertRequest(commands, ins, expected) {
   return decoded;
 }
 
-test('Hello includes the installed Authority mode, stable Identity, Bundle and both PIN states', async () => {
+test('Hello includes Identity alias, peer-extension policy, Authority, Bundle and PIN states', async () => {
   for (const authority of [false, 'https://authority.example']) {
     for (const bundle of [false, new Uint8Array(32).fill(0x42)]) {
-      const response = {
-        version: 1,
-        id: bytes('01020304'),
-        publicKey: identityPublicKey,
-        bundle,
-        authority,
-        pins: {access: false, secret: 0},
-      };
-      const {applet, commands} = await createSession(response);
+      for (const [alias, allowPeerExtension] of [
+        [false, false],
+        ['旅行卡 😀', bundle !== false],
+      ]) {
+        const response = {
+          version: 1,
+          id: bytes('01020304'),
+          publicKey: identityPublicKey,
+          bundle,
+          authority,
+          alias,
+          allowPeerExtension,
+          pins: {access: false, secret: 0},
+        };
+        const {applet, commands} = await createSession(response);
 
-      assert.deepEqual(await applet.hello({}), response);
-      assertRequest(commands, 0x20, {});
-      assert.deepEqual(MonoidAppletHello.satisfies(response), response);
-      const {authority: _authority, ...missingAuthority} = response;
-      assert.throws(() => MonoidAppletHello.satisfies(missingAuthority));
+        assert.deepEqual(await applet.hello({}), response);
+        assertRequest(commands, 0x20, {});
+        assert.deepEqual(MonoidAppletHello.satisfies(response), response);
+        for (const field of ['authority', 'alias', 'allowPeerExtension']) {
+          const missing = {...response};
+          delete missing[field];
+          assert.throws(() => MonoidAppletHello.satisfies(missing));
+        }
+      }
     }
   }
 });

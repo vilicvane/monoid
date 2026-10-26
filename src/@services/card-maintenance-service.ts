@@ -80,6 +80,7 @@ export type CardMaintenanceOperation = {
   phase: CardMaintenancePhase;
   card: {
     id?: MonoidIdHex;
+    alias?: string | false;
     publicKey?: PublicKeyHex;
     bundle: string | false;
     appletAid: string;
@@ -551,6 +552,11 @@ export class CardMaintenanceService {
           previous.card.fingerprint === operation.card.fingerprint &&
           previous.card.id,
       )?.card.id;
+      operation.card.alias ??= this.operations.find(
+        previous =>
+          previous.card.fingerprint === operation.card.fingerprint &&
+          previous.card.alias !== undefined,
+      )?.card.alias;
       operation.selectedOptionalStages = [...selectedOptionalStages];
       if (
         identityOptions.authorityUrl !== undefined ||
@@ -675,10 +681,10 @@ export class CardMaintenanceService {
           ),
           appletAid: operation.card.appletAid,
         });
-        // PIN setup is inferred from Hello. Empty automatic recovery tasks
-        // likewise need no continuation after installation is verified.
+        // PIN setup is inferred from Hello, but a fresh install's saved alias
+        // must survive until restored. Empty recovery tasks need no continuation.
         if (
-          operation.mode === 'fresh' ||
+          (operation.mode === 'fresh' && !operation.card.alias) ||
           (!operation.batchId && isEmptyRestore(operation))
         ) {
           await this.remove(id);
@@ -691,6 +697,27 @@ export class CardMaintenanceService {
           await this.remove(id);
         throw error;
       }
+    });
+  }
+
+  /** Fresh installation retains a known alias until PIN setup restores it. */
+  async finishFreshAlias(
+    id: string,
+    hello: MonoidAppletHello,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    return this.exclusive(async () => {
+      const operation = this.require(id);
+      signal?.throwIfAborted();
+      if (
+        operation.mode !== 'fresh' ||
+        operation.checkpoint !== 'verify' ||
+        (operation.card.id &&
+          operation.card.id !== uint8ArrayToHex(hello.id)) ||
+        hello.alias !== operation.card.alias
+      )
+        throw new MonoidCardError('Could not verify the card alias');
+      await this.remove(id);
     });
   }
 
@@ -1265,6 +1292,7 @@ function newOperation(
     phase: 'ready',
     card: {
       id: hello && uint8ArrayToHex(hello.id),
+      alias: hello?.alias,
       publicKey: hello && uint8ArrayToHex(hello.publicKey),
       bundle: hello?.bundle ? uint8ArrayToHex(hello.bundle) : false,
       appletAid: uint8ArrayToHex(monoid.aid),

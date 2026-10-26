@@ -1,4 +1,4 @@
-import {makeAutoObservable, toJS} from 'mobx';
+import {makeAutoObservable, runInAction, toJS} from 'mobx';
 
 import type {MonoidIdHex, PublicKeyHex, SafeIndexHex} from '../@atomics.js';
 import type {
@@ -109,6 +109,8 @@ export class CardState implements ScannedCardData {
   readonly id: MonoidIdHex;
   readonly publicKey: PublicKeyHex;
   bundle: string | false;
+  alias: string | false;
+  allowPeerExtension: boolean;
   items: CardItem[];
   /** Reset invalidates the initialization assumed by the original Card scan. */
   requiresPINSetup = false;
@@ -117,6 +119,8 @@ export class CardState implements ScannedCardData {
     this.id = card.id;
     this.publicKey = card.publicKey;
     this.bundle = card.bundle;
+    this.alias = card.alias;
+    this.allowPeerExtension = card.allowPeerExtension;
     this.items = card.items.map(item => new CardItem(item));
     makeAutoObservable(this, {id: false, publicKey: false});
   }
@@ -139,6 +143,8 @@ export class CardState implements ScannedCardData {
       id: this.id,
       publicKey: this.publicKey,
       bundle: this.bundle,
+      alias: this.alias,
+      allowPeerExtension: this.allowPeerExtension,
       items: this.items.map(item => ({
         index: item.index,
         ...(item.type !== undefined && {type: item.type}),
@@ -181,6 +187,23 @@ export class CardStore {
   ): MonoidApplet {
     const identities = new WeakMap<MonoidApplet, MonoidAppletHello>();
     const store = this;
+    const observe = (
+      connection: MonoidApplet,
+      hello: MonoidAppletHello,
+    ): void => {
+      identities.set(connection, hello);
+      const cached = store.get({
+        id: uint8ArrayToHex(hello.id),
+        publicKey: uint8ArrayToHex(hello.publicKey),
+      });
+      if (cached)
+        runInAction(() => {
+          cached.alias = hello.alias;
+          cached.allowPeerExtension = hello.allowPeerExtension;
+          cached.bundle =
+            hello.bundle === false ? false : uint8ArrayToHex(hello.bundle);
+        });
+    };
     const observed: MonoidApplet = Object.create(applet, {
       hello: {
         async value(
@@ -188,7 +211,7 @@ export class CardStore {
           request: Parameters<MonoidApplet['hello']>[0],
         ) {
           const hello = await applet.hello.call(this, request);
-          identities.set(this, hello);
+          observe(this, hello);
           return hello;
         },
       },
@@ -198,6 +221,7 @@ export class CardStore {
           [
             'create',
             'set',
+            'setAlias',
             'remove',
             'importItem',
             'createRandomKey',
@@ -230,7 +254,7 @@ export class CardStore {
         ]),
       ),
     });
-    if (initialHello) identities.set(observed, initialHello);
+    if (initialHello) observe(observed, initialHello);
     return observed;
   }
 
@@ -244,6 +268,8 @@ export class CardStore {
 
     if (existing) {
       existing.bundle = card.bundle;
+      existing.alias = card.alias;
+      existing.allowPeerExtension = card.allowPeerExtension;
       existing.items = card.items.map(item => new CardItem(item));
       existing.requiresPINSetup = false;
       return existing;

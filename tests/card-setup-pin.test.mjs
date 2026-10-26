@@ -140,6 +140,8 @@ function mount({
       publicKey: bytes(`04${'12'.repeat(64)}`),
       bundle: false,
       authority: false,
+      alias: false,
+      allowPeerExtension: false,
       pins: {access: accessPIN, secret: secretPIN},
     },
   };

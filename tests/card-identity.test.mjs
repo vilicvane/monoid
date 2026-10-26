@@ -14,11 +14,15 @@ const identity = {
   id: '01234567',
   publicKey: `04${'12'.repeat(64)}`,
   bundle: '34'.repeat(32),
+  alias: '旅行卡',
+  allowPeerExtension: true,
 };
 const hello = {
   id: bytes(identity.id),
   publicKey: bytes(identity.publicKey),
   bundle: bytes(identity.bundle),
+  alias: identity.alias,
+  allowPeerExtension: identity.allowPeerExtension,
 };
 
 test('reads the existing atomic identity and matches both Hello and retained identities', () => {

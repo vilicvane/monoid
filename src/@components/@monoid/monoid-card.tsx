@@ -57,6 +57,9 @@ const CardDescription = styled.span`
 `;
 
 const CardSubtitle = styled.span`
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--monoid-card-description-color, var(--ion-color-primary));
 `;
 
@@ -65,6 +68,7 @@ export function MonoidCard({
   children,
   error = false,
   id,
+  alias,
   subtitle,
   description,
   ref,
@@ -73,6 +77,7 @@ export function MonoidCard({
   children?: ReactNode;
   error?: boolean;
   id?: string;
+  alias?: string | false;
   subtitle?: string;
   description?: string;
   ref?: Ref<HTMLDivElement>;
@@ -83,7 +88,9 @@ export function MonoidCard({
       {id ? (
         <CardLabel>
           {id}
-          {subtitle && <CardSubtitle>{subtitle}</CardSubtitle>}
+          {(alias || subtitle) && (
+            <CardSubtitle>{alias || subtitle}</CardSubtitle>
+          )}
           {description && <CardDescription>{description}</CardDescription>}
         </CardLabel>
       ) : (

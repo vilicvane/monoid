@@ -8,7 +8,8 @@ import {
 } from '../../../../@atomics.js';
 import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {
-  type CardIdentity,
+  type CardIdentity as BaseCardIdentity,
+  type CardDisplayData,
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidAppletInvalidPINError,
@@ -18,6 +19,8 @@ import {
 } from '../../../../@lib/monoid/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 import type {ScannedCardData} from '../common.js';
+
+type CardIdentity = BaseCardIdentity & Partial<CardDisplayData>;
 
 export type CardBundleExtensionPhase =
   | 'collecting'
@@ -34,7 +37,8 @@ type ExtensionState = {
 };
 
 function readIdentity(
-  card: Pick<ScannedCardData, 'id' | 'publicKey' | 'bundle'>,
+  card: Pick<ScannedCardData, 'id' | 'publicKey' | 'bundle'> &
+    Partial<CardDisplayData>,
 ): CardIdentity {
   if (
     !/^[0-9a-f]{8}$/i.test(card.id) ||
@@ -46,12 +50,16 @@ function readIdentity(
   return {
     id: MonoidIdHex.satisfies(card.id.toLowerCase()),
     publicKey: PublicKeyHex.satisfies(card.publicKey.toLowerCase()),
+    alias: card.alias,
+    allowPeerExtension: card.allowPeerExtension,
   };
 }
 
 function readCardIdentity(hello: MonoidAppletHello): CardIdentity {
   return readIdentity({
     id: uint8ArrayToHex(hello.id),
+    alias: hello.alias,
+    allowPeerExtension: hello.allowPeerExtension,
     publicKey: uint8ArrayToHex(hello.publicKey),
     bundle: hello.bundle === false ? false : uint8ArrayToHex(hello.bundle),
   });

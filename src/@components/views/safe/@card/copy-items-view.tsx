@@ -696,6 +696,7 @@ export const CopyItemsView = observer(
           {sourceId ? (
             <CardPreview
               id={sourceId}
+              alias={backup?.source.alias}
               description={
                 step === 3
                   ? `items ${getCopyProgress(targets, 'exported')}`
@@ -726,6 +727,7 @@ export const CopyItemsView = observer(
           >
             <CardPreview
               id={target.id}
+              alias={target.alias}
               description={
                 activeStep === 4 && startedImports.has(target.publicKey)
                   ? `items ${getCopyProgress([target], 'imported')}`

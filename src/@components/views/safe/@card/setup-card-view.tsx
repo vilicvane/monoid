@@ -141,6 +141,8 @@ export const SetupCardView = observer(
             : {
                 id: uint8ArrayToHex(candidate.hello.id),
                 publicKey: uint8ArrayToHex(candidate.hello.publicKey),
+                alias: candidate.hello.alias,
+                allowPeerExtension: candidate.hello.allowPeerExtension,
                 bundle:
                   candidate.hello.bundle === false
                     ? (false as const)
@@ -288,6 +290,8 @@ export const SetupCardView = observer(
           (emptyCard
             ? cardStore.set({
                 ...identity,
+                alias: hello.alias,
+                allowPeerExtension: hello.allowPeerExtension,
                 bundle:
                   hello.bundle === false
                     ? false
@@ -469,6 +473,7 @@ export const SetupCardView = observer(
                   if (cached) {
                     cached.items = [];
                     cached.bundle = false;
+                    cached.allowPeerExtension = false;
                     cached.requiresPINSetup = true;
                   }
                 }),
@@ -627,6 +632,7 @@ export const SetupCardView = observer(
                     );
                     if (cached && confirmed?.status === 'complete') {
                       cached.bundle = confirmed.bundle!;
+                      cached.allowPeerExtension = true;
                       cardStore.set(cached);
                     }
                   });
@@ -700,6 +706,7 @@ export const SetupCardView = observer(
             >
               <CardPreview
                 id={card.id}
+                alias={card.alias}
                 description={
                   card.status === 'complete'
                     ? 'complete'

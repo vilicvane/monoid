@@ -252,6 +252,8 @@ function hello(number, bundle = false) {
     publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(number)),
     bundle,
     authority: false,
+    alias: false,
+    allowPeerExtension: false,
     pins: {access: 5, secret: 5},
   };
 }
@@ -1379,6 +1381,22 @@ for (const ending of [
     }
   });
 }
+
+test('maintenance preview keeps the alias with its selected action and export status', async () => {
+  const state = await mountMaintenance({});
+  state.session.cards[0].alias = 'Travel';
+  const preview = () =>
+    find(
+      state.render(),
+      node => node.type === 'CardPreview' && node.props.id === '00000001',
+    ).props;
+  assert.equal(preview().subtitle, 'Travel · reinstall');
+  assert.match(preview().description, /items/);
+  state.click('Continue');
+  await state.flush();
+  assert.equal(preview().alias, 'Travel');
+  assert.ok(preview().description);
+});
 
 test('maintenance keeps the target fixed while allowing multiple other Bundle cards', async () => {
   const state = await mountMaintenance({addPeer: false});

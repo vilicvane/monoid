@@ -187,6 +187,8 @@ function hello({bundle = false, pins = {access: 5, secret: 5}} = {}) {
     version: 0,
     bundle,
     authority: false,
+    alias: false,
+    allowPeerExtension: false,
     pins,
   };
 }

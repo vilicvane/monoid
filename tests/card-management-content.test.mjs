@@ -66,6 +66,7 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
   },
 });
 const {
+  CardAppletsContent,
   CardMaintenanceBatchContent,
   CardMaintenanceCards,
   CardMaintenanceContent,
@@ -98,6 +99,44 @@ const operation = {
   selectedOptionalStages: ['security-key', 'otp'],
   archive: {items: [{index: 'f2010000000000000001', alias: 'Example OTP'}]},
 };
+
+test('maintenance and catalogue heroes carry the alias, and batch cards retain their status', () => {
+  const card = {...operation.card, alias: '旅行卡', bundle: 'bundle'};
+  for (const tree of [
+    CardMaintenanceContent({
+      operation: {...operation, card},
+      processing: false,
+    }),
+    CardAppletsContent({
+      ...card,
+      bundled: true,
+      applets: [],
+      onSelectApplet() {},
+    }),
+  ]) {
+    const hero = find(tree, node => typeof node.type === 'function');
+    const preview = find(
+      hero.type(hero.props),
+      node => node.type === 'CardPreview',
+    );
+    assert.equal(preview.props.alias, card.alias);
+    assert.equal(preview.props.subtitle, 'bundle');
+  }
+  const grid = CardMaintenanceCards({
+    cards: [
+      {
+        ...card,
+        publicKey: 'key',
+        complete: false,
+        scan: 'next',
+        status: 'scan to install',
+      },
+    ],
+  });
+  const preview = find(grid, node => node.type === 'CardPreview');
+  assert.equal(preview.props.alias, card.alias);
+  assert.equal(preview.props.description, 'scan to install');
+});
 
 for (const [mode, title, hint] of [
   ['update', 'Update applets', 'Scan this card to update its applets.'],

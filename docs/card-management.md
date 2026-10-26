@@ -45,6 +45,22 @@ exports separately for each recipient public key.
 
 ## Update, reinstall, and fresh install
 
+Hello exposes the Identity alias as text or `false` when empty, and the flat
+`allowPeerExtension` boolean (`false` without a Bundle). `bundle` remains the
+Bundle hash. Scanned card snapshots cache these fields. Card previews show the
+alias on the second line, replacing the Bundle label when present, with long
+aliases ellipsized. The status line stays unchanged below it. The Card header
+shows the ID, editable alias, then Bundle tag. **Add alias** is in the actions
+menu when no alias exists, and **Extend bundle** is available only when peer
+extension is allowed.
+
+Card aliases use `0x27 Set Alias {alias: string}` with Secret PIN authentication.
+The shared validator counts UTF-8 bytes (at most 64), without trimming or a
+character limit; an empty string clears the alias. Editing prompts for the alias
+and Secret PIN before scanning the named card, then verifies Hello. An uncertain
+write stops without replay. First Identity installation offers an optional Alias
+field and sets it in the same scan as PIN setup.
+
 Update and Reinstall replace **Monoid only**. Identity, its Secret PIN, and bundle
 membership remain. Fresh install is a separate, explicitly confirmed action that
 replaces Identity as well and generates new cryptographic keys. It preserves the
@@ -54,6 +70,12 @@ Identity installation alongside optional Authority settings, and checked after
 installation, including verify-only resumes. If no original ID can be read or
 recovered, Identity generates an ID. Preserving the display ID does not retain
 PINs, items, keys or Bundle membership.
+
+The alias survives Reset and Monoid replacement. Fresh installation also retains
+the previous alias from Hello or maintenance records before deleting Identity.
+After PIN setup it authenticates Secret, sets the exact saved alias, and verifies
+Hello before removing the maintenance record. A failed alias write retains that
+record; an explicit retry checks Hello before writing again.
 
 Initial inspection uses the public GP registry. If the card requires authentication
 (`6982`) but Monoid still answers Hello, Update and Reinstall open the GP secure

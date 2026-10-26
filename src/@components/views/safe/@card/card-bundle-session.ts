@@ -8,7 +8,8 @@ import {
 } from '../../../../@atomics.js';
 import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {
-  type CardIdentity,
+  type CardIdentity as BaseCardIdentity,
+  type CardDisplayData,
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidAppletInvalidPINError,
@@ -18,6 +19,8 @@ import {
 } from '../../../../@lib/monoid/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 import type {ScannedCardData} from '../common.js';
+
+type CardIdentity = BaseCardIdentity & Partial<CardDisplayData>;
 
 export type CardBundleCard = CardIdentity & {
   status: 'pending' | 'complete';
@@ -47,12 +50,16 @@ function readIdentity(
   return {
     id: MonoidIdHex.satisfies(card.id.toLowerCase()),
     publicKey: PublicKeyHex.satisfies(card.publicKey.toLowerCase()),
+    alias: card.alias,
+    allowPeerExtension: card.allowPeerExtension,
   };
 }
 
 function readCardIdentity(hello: MonoidAppletHello): CardIdentity {
   return readIdentity({
     id: uint8ArrayToHex(hello.id),
+    alias: hello.alias,
+    allowPeerExtension: hello.allowPeerExtension,
     publicKey: uint8ArrayToHex(hello.publicKey),
     bundle: hello.bundle === false ? false : uint8ArrayToHex(hello.bundle),
   });
@@ -175,7 +182,8 @@ export class CardBundleSession {
 
   /** Seed collection from a Card scan that already checked initialization. */
   addPreparedCard(
-    card: Pick<ScannedCardData, 'id' | 'publicKey' | 'bundle'>,
+    card: Pick<ScannedCardData, 'id' | 'publicKey' | 'bundle'> &
+      Partial<CardDisplayData>,
   ): Promise<void> {
     return this.exclusive(() =>
       this.addIdentity(readIdentity(card), card.bundle),
@@ -262,7 +270,12 @@ export class CardBundleSession {
   private markComplete(publicKey: string): void {
     const cards = this.cards.map(card =>
       card.publicKey === publicKey
-        ? {...card, status: 'complete' as const, bundle: this.bundle!}
+        ? {
+            ...card,
+            status: 'complete' as const,
+            bundle: this.bundle!,
+            allowPeerExtension: true,
+          }
         : card,
     );
     this.setState({

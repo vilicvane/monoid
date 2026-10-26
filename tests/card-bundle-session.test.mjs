@@ -19,6 +19,8 @@ function hello(identity, overrides = {}) {
     publicKey: Uint8Array.from([4, ...new Array(64).fill(identity)]),
     bundle: false,
     authority: false,
+    alias: false,
+    allowPeerExtension: false,
     pins: {access: 5, secret: 5},
     ...overrides,
   };
@@ -28,6 +30,8 @@ function prepared(card) {
   return {
     id: hex(card.id),
     publicKey: hex(card.publicKey),
+    alias: card.alias,
+    allowPeerExtension: card.allowPeerExtension,
     bundle: card.bundle === false ? false : hex(card.bundle),
   };
 }
@@ -196,6 +200,8 @@ test('a prepared Card snapshot seeds collection without a synthetic Hello or PIN
       id: snapshot.id,
       publicKey: snapshot.publicKey,
       status: 'pending',
+      alias: snapshot.alias,
+      allowPeerExtension: snapshot.allowPeerExtension,
     },
   ]);
   assert.equal(session.phase, 'collecting');
