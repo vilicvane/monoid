@@ -1,9 +1,11 @@
+import {TriangleAlert as triangleAlert} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import {SafeIndexHex} from '../../../../@atomics.js';
 import type {CardItemIssue} from '../../../../@lib/monoid/index.js';
-import {WarningMessage} from '../../../@ui/message-content.js';
+import {AppIcon} from '../../../@ui/app-icon.js';
+import {ListSectionTitle} from '../../../@ui/list.js';
 
 import {CardResourceItem, CardResourceList} from './@resource-item.js';
 
@@ -19,7 +21,15 @@ const REASONS: Record<string, string> = {
 const Section = styled.section`
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
+`;
+
+const Title = styled(ListSectionTitle)`
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-warning);
+  font-weight: 500;
 `;
 
 /** Skipped items retain the same tags and identifiers as card resource lists. */
@@ -43,7 +53,10 @@ export function CardResourceIssues({
 
   return [...groups].map(([reason, group]) => (
     <Section key={reason}>
-      <WarningMessage>{`${reason} (${group.length})`}</WarningMessage>
+      <Title>
+        <AppIcon icon={triangleAlert} />
+        {`${reason} (${group.length})`}
+      </Title>
       <CardResourceList $contained>
         {group.map(issue => (
           <CardResourceItem
