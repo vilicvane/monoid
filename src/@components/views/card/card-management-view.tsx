@@ -57,7 +57,7 @@ import {
 import {useIsoDepScanPrompt} from '../../@monoid/use-isodep-scan-prompt.js';
 import {AppIcon} from '../../@ui/app-icon.js';
 import {Button, Buttons} from '../../@ui/button.js';
-import {ConfirmPopup} from '../../@ui/confirm-popup.js';
+import {ConfirmNotices, ConfirmPopup} from '../../@ui/confirm-popup.js';
 import {
   DetailsPopup,
   DetailsPopupDivider,
@@ -1180,8 +1180,13 @@ export const CardManagementView = observer(
               })
             }
           >
-            The skipped items and applet access that requires them will not be
-            restored. The recovery archive will be discarded after verification.
+            <ConfirmNotices
+              notices={[
+                'The skipped items will not be restored.',
+                'Applet access that requires them will not be restored.',
+                'The recovery archive will be discarded after verification.',
+              ]}
+            />
           </ConfirmPopup>
         )}
         {popup === 'details' && card.information && (
@@ -1357,46 +1362,39 @@ export const CardManagementView = observer(
               })
             }
           >
-            {confirm.mode === 'fresh' ? (
-              <>
-                <p>All items, PINs and bundle membership will be erased.</p>
-                <p>Card keys will be regenerated.</p>
-                {(hello || pending?.card.id) && <p>Card ID will be kept.</p>}
-              </>
-            ) : replacesStorage &&
-              (hello?.bundle || confirmationOperation?.card.bundle) ? (
-              <>
-                {!confirmationOperation?.archive && (
-                  <p>Sync items with another bundle card first.</p>
-                )}
-                <p>
-                  Items and applet access will be restored after installation.
-                </p>
-              </>
-            ) : replacesStorage ? (
-              <p>
-                {confirm.operationId
-                  ? 'Items and applet access will be restored after installation.'
-                  : 'Items and applet access will be backed up and restored.'}
-              </p>
-            ) : (
-              <p>Items and applet access will be preserved.</p>
-            )}
-            {affectsSecurityKey && (
-              <p>
-                {confirm.mode === 'fresh' &&
-                !selectedOptional.includes('security-key')
-                  ? 'Monoid Security Key Applet and its FIDO PIN will be removed.'
-                  : 'Monoid Security Key Applet will be reinstalled. Its FIDO PIN will be reset. Set it again from a FIDO client.'}
-              </p>
-            )}
-            {affectsOTP && (
-              <p>
-                {confirm.mode === 'fresh'
-                  ? 'OTP accounts and access will be removed.'
-                  : 'Monoid OTP Applet and its access will be restored.'}
-              </p>
-            )}
+            <ConfirmNotices
+              notices={[
+                ...(confirm.mode === 'fresh'
+                  ? [
+                      'All items, PINs and bundle membership will be erased.',
+                      'Card keys will be regenerated.',
+                      !!(hello || pending?.card.id) && 'Card ID will be kept.',
+                    ]
+                  : replacesStorage &&
+                      (hello?.bundle || confirmationOperation?.card.bundle)
+                    ? [
+                        !confirmationOperation?.archive &&
+                          'Sync items with another bundle card first.',
+                        'Items and applet access will be restored after installation.',
+                      ]
+                    : [
+                        replacesStorage
+                          ? confirm.operationId
+                            ? 'Items and applet access will be restored after installation.'
+                            : 'Items and applet access will be backed up and restored.'
+                          : 'Items and applet access will be preserved.',
+                      ]),
+                affectsSecurityKey &&
+                  (confirm.mode === 'fresh' &&
+                  !selectedOptional.includes('security-key')
+                    ? 'Monoid Security Key Applet and its FIDO PIN will be removed.'
+                    : 'Monoid Security Key Applet will be reinstalled. Its FIDO PIN will be reset. Set it again from a FIDO client.'),
+                affectsOTP &&
+                  (confirm.mode === 'fresh'
+                    ? 'OTP accounts and access will be removed.'
+                    : 'Monoid OTP Applet and its access will be restored.'),
+              ]}
+            />
           </ConfirmPopup>
         )}
       </>

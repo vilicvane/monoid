@@ -49,7 +49,7 @@ mock.module('../.bld/app/@components/@ui/info-section.js', {
   namedExports: {InfoSectionItemContent: 'description'},
 });
 
-const {ConfirmPopup} = await import(
+const {ConfirmNotices, ConfirmPopup} = await import(
   '../.bld/app/@components/@ui/confirm-popup.js'
 );
 
@@ -201,3 +201,18 @@ for (const confirmText of [undefined, []]) {
     assert.equal(state.cancelled, 0);
   });
 }
+
+test('a single notice stays a paragraph and several are numbered, without false or undefined entries', () => {
+  const single = ConfirmNotices({notices: [false, 'Only one.', undefined]});
+  assert.equal(single.type, 'p');
+  assert.equal(single.props.children, 'Only one.');
+  const several = ConfirmNotices({notices: ['First.', false, 'Second.']});
+  assert.equal(several.type, 'ol');
+  assert.deepEqual(
+    several.props.children.map(item => [item.type, item.props.children]),
+    [
+      ['li', 'First.'],
+      ['li', 'Second.'],
+    ],
+  );
+});

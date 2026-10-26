@@ -219,7 +219,7 @@ for (const [path, names] of [
   ['@monoid/monoid-scan-prompt', ['MonoidScanStatePromptProgress']],
   ['@ui/app-icon', ['AppIcon']],
   ['@ui/button', ['Button', 'Buttons']],
-  ['@ui/confirm-popup', ['ConfirmPopup']],
+  ['@ui/confirm-popup', ['ConfirmNotices', 'ConfirmPopup']],
   [
     '@ui/details-popup',
     ['DetailsPopup', 'DetailsPopupDivider', 'DetailsPopupTitle'],
@@ -282,6 +282,11 @@ function find(node, predicate) {
 function text(node) {
   if (typeof node === 'string' || typeof node === 'number') return String(node);
   if (!node) return '';
+  if (node.type === 'ConfirmNotices')
+    return node.props.notices
+      .filter(notice => notice !== false && notice !== undefined)
+      .map(text)
+      .join(' ');
   return (Array.isArray(node) ? node : [node.props?.children])
     .map(text)
     .join('');

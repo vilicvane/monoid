@@ -23,10 +23,37 @@ const Description = styled(InfoSectionItemContent)`
     padding-inline-start: 20px;
   }
 
+  > ol:first-child {
+    margin-top: 0;
+  }
+
   > ol > li + li {
     margin-top: 12px;
   }
 `;
+
+/**
+ * Warning notices are numbered when there are several, so skipping one is
+ * noticeable. False and undefined entries are left out.
+ */
+export function ConfirmNotices({
+  notices,
+}: {
+  notices: readonly (ReactNode | false | undefined)[];
+}): ReactNode {
+  const shown = notices.filter(
+    notice => notice !== false && notice !== undefined,
+  );
+  return shown.length > 1 ? (
+    <ol>
+      {shown.map((notice, index) => (
+        <li key={index}>{notice}</li>
+      ))}
+    </ol>
+  ) : (
+    <p>{shown[0]}</p>
+  );
+}
 
 export type ConfirmPopupProps = {
   title: string;
