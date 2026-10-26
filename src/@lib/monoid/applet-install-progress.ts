@@ -11,6 +11,14 @@ export const APPLET_NAMES = {
   otp: 'Monoid OTP Applet',
 };
 
+export const APPLET_SHORT_NAMES = {
+  identity: 'Identity',
+  library: undefined,
+  monoid: 'Monoid',
+  'security-key': 'Security Key',
+  otp: 'OTP',
+};
+
 export function describeAppletInstallProgress(
   update: AppletInstallProgress | AppletReplacementProgress,
 ): {

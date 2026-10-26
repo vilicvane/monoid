@@ -55,9 +55,13 @@ mock.module('../.bld/app/@components/views/safe/index.js', {
     CardResourceIssues,
   },
 });
+const {APPLET_NAMES, APPLET_SHORT_NAMES} = await import(
+  '../.bld/app/@lib/monoid/applet-install-progress.js'
+);
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
-    APPLET_NAMES: {otp: 'Monoid OTP Applet'},
+    APPLET_NAMES,
+    APPLET_SHORT_NAMES,
     getAppletCatalog: () => [{stage: 'otp', instanceAid: 'F06D6F6E6F69640501'}],
   },
 });
@@ -86,13 +90,19 @@ const operation = {
   mode: 'update',
   phase: 'ready',
   card: {id: '01020304', bundle: false},
+  replaceStages: ['library', 'monoid'],
+  selectedOptionalStages: ['security-key', 'otp'],
   archive: {items: [{index: 'f2010000000000000001', alias: 'Example OTP'}]},
 };
 
-for (const [mode, title] of [
-  ['update', 'Update applets'],
-  ['reinstall', 'Reinstall applets'],
-  ['fresh', 'Fresh install'],
+for (const [mode, title, hint] of [
+  ['update', 'Update applets', 'Scan this card to update its applets.'],
+  [
+    'reinstall',
+    'Reinstall applets',
+    'Scan this card to reinstall its applets.',
+  ],
+  ['fresh', 'Fresh install', 'Scan this card to install fresh applets.'],
 ]) {
   for (const phase of ['ready', 'replacing', 'restore', 'manual-restore']) {
     test(`${mode} in ${phase} shows the correct active step and scan indicator`, () => {
@@ -111,16 +121,88 @@ for (const [mode, title] of [
         assert.equal(step(1).summary, '1 item');
         assert.equal(step(1).activeNumero, active);
         assert.equal(step(2).title, title);
-        assert.equal(step(2).summary, 'Complete');
+        assert.equal(step(2).summary, 'Monoid · Security Key · OTP');
         assert.equal(step(2).activeNumero, active);
         assert.equal(step(2).processing, processing && active === 2);
         assert.equal(step(3).title, 'Restore');
         assert.equal(step(3).activeNumero, active);
         assert.equal(step(3).processing, processing && active === 3);
+        for (const numero of [1, 2, 3]) {
+          assert.equal(step(numero).color, 'warning');
+          assert.equal(
+            text(
+              find(step(numero).children, node => node.type === 'InfoMessage'),
+            ),
+            numero !== active
+              ? ''
+              : active === 2
+                ? hint
+                : phase === 'manual-restore'
+                  ? 'Restore your items from another bundle card.'
+                  : 'Scan this card to restore its 1 item and applet access.',
+          );
+        }
       }
     });
   }
 }
+
+test('steps use primary without a recovery archive', () => {
+  for (const phase of ['ready', 'replacing', 'restore', 'manual-restore']) {
+    const tree = CardMaintenanceContent({
+      operation: {...operation, phase, archive: undefined},
+      processing: false,
+    });
+    for (const numero of [1, 2, 3]) {
+      assert.equal(
+        find(tree, node => node.type === 'Step' && node.props.numero === numero)
+          .props.color,
+        'primary',
+      );
+    }
+  }
+});
+
+test('restore hint counts the archived items before the first pass', () => {
+  for (const count of [0, 1, 8]) {
+    const tree = CardMaintenanceContent({
+      operation: {
+        ...operation,
+        phase: 'restore',
+        archive: {items: Array(count).fill(operation.archive.items[0])},
+      },
+      processing: false,
+    });
+    assert.equal(
+      text(find(tree, node => node.type === 'InfoMessage')),
+      `Scan this card to restore its ${count} ${count === 1 ? 'item' : 'items'} and applet access.`,
+    );
+  }
+});
+
+test('applet summaries use short names once, in stage order, and omit the library', () => {
+  for (const [replaceStages, selectedOptionalStages, summary] of [
+    [['monoid', 'otp'], ['otp', 'security-key'], 'Monoid · OTP · Security Key'],
+    [['identity', 'library', 'monoid'], ['otp'], 'Identity · Monoid · OTP'],
+    [['library', 'monoid'], undefined, 'Monoid'],
+    [undefined, ['library', 'otp'], 'OTP'],
+    [['library'], [], 'Complete'],
+    [['unnamed', 'monoid'], undefined, 'Monoid'],
+    [['unnamed'], [], 'Complete'],
+    [[], [], 'Complete'],
+    [undefined, undefined, 'Complete'],
+  ]) {
+    const tree = CardMaintenanceContent({
+      operation: {...operation, replaceStages, selectedOptionalStages},
+      processing: false,
+    });
+    assert.equal(
+      find(tree, node => node.type === 'Step' && node.props.numero === 2).props
+        .summary,
+      summary,
+    );
+  }
+});
 
 test('manual recovery without an archive explains its source inside Restore', () => {
   const tree = CardMaintenanceContent({
@@ -138,8 +220,13 @@ test('manual recovery without an archive explains its source inside Restore', ()
   );
 });
 
-test('restore results and dropped access stay within the expanded Restore step after completion', () => {
-  for (const complete of [false, true]) {
+test('restore results replace hints and stay within Restore after completion', () => {
+  for (const [phase, complete] of [
+    ['restore', false],
+    ['restore', true],
+    ['manual-restore', false],
+    ['manual-restore', true],
+  ]) {
     const report = {
       complete,
       issues: [
@@ -147,13 +234,22 @@ test('restore results and dropped access stay within the expanded Restore step a
       ],
       droppedGrants: ['f06d6f6e6f69640501', 'unknown-aid'],
     };
-    const tree = CardMaintenanceContent({operation, processing: false, report});
+    const tree = CardMaintenanceContent({
+      operation: {...operation, phase},
+      processing: false,
+      report,
+    });
     const restore = find(
       tree,
       node => node.type === 'Step' && node.props.numero === 3,
     );
     assert.equal(restore.props.activeNumero, complete ? 4 : 3);
     assert.equal(restore.props.keepExpanded, true);
+    assert.equal(restore.props.color, 'warning');
+    assert.equal(
+      find(tree, node => node.type === 'InfoMessage'),
+      undefined,
+    );
     const issues = find(restore, node => node.type === CardResourceIssues);
     assert.equal(issues.props.issues, report.issues);
     assert.equal(issues.props.items, operation.archive.items);

@@ -24,12 +24,13 @@ export const OperationSteps = styled(Steps)<{$exiting: boolean}>`
   }
 `;
 
-const Container = styled.div`
+const Container = styled.div<{$color: 'primary' | 'warning'}>`
   --indicator-center-left-offset: 10px;
   --indicator-line-width: 1px;
   --indicator-size: 20px;
   --title-height: 20px;
-  --indicator-color: var(--ion-color-primary);
+  --indicator-color: var(--ion-color-${props => props.$color});
+  --indicator-contrast: var(--ion-color-primary-contrast);
   --indicator-line-color: var(--ion-color-light-shade);
 
   --indicator-line-left-offset: calc(
@@ -43,6 +44,10 @@ const Container = styled.div`
   padding-left: 32px;
 
   position: relative;
+
+  &.active {
+    --indicator-contrast: var(--ion-color-${props => props.$color}-contrast);
+  }
 
   &.done {
     --indicator-color: var(--ion-color-safe);
@@ -65,11 +70,11 @@ const Container = styled.div`
     background-color: var(--indicator-line-color);
   }
 
-  &.done:has(+ .active)::after {
+  .done:has(+ &.active)::after {
     background-image: linear-gradient(
       to bottom,
       var(--ion-color-safe),
-      var(--ion-color-primary)
+      var(--ion-color-${props => props.$color})
     );
   }
 
@@ -113,7 +118,7 @@ const Indicator = styled.div`
   border-radius: 50%;
 
   background-color: var(--indicator-color);
-  color: var(--ion-color-primary-contrast);
+  color: var(--indicator-contrast);
   font-size: 12px;
 
   transition: all 0.2s linear;
@@ -134,6 +139,7 @@ export const Step = ({
   title,
   numero,
   activeNumero,
+  color = 'primary',
   processing = false,
   keepExpanded = false,
   summary,
@@ -144,6 +150,7 @@ export const Step = ({
   processing?: boolean;
   keepExpanded?: boolean;
   activeNumero: number;
+  color?: 'primary' | 'warning';
   summary?: ReactNode;
   children?: ReactNode;
 }): ReactNode => {
@@ -172,6 +179,7 @@ export const Step = ({
 
   return (
     <Container
+      $color={color}
       className={classNames({
         [state]: true,
       })}

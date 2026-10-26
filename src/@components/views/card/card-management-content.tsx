@@ -11,6 +11,7 @@ import {styled} from 'styled-components';
 import type {CardInformation} from '../../../@lib/global-platform/card-information.js';
 import {
   APPLET_NAMES,
+  APPLET_SHORT_NAMES,
   type AppletStage,
   getAppletCatalog,
 } from '../../../@lib/monoid/index.js';
@@ -152,6 +153,16 @@ export function CardMaintenanceContent({
   const activeStep = report?.complete ? 4 : report || !replacing ? 3 : 2;
   const manualRestore = operation.phase === 'manual-restore';
   const itemCount = operation.archive?.items.length ?? 0;
+  const color = operation.archive ? 'warning' : 'primary';
+  const appletSummary = [
+    ...new Set([
+      ...(operation.replaceStages ?? []),
+      ...(operation.selectedOptionalStages ?? []),
+    ]),
+  ]
+    .map(stage => APPLET_SHORT_NAMES[stage])
+    .filter(Boolean)
+    .join(' · ');
 
   return (
     <>
@@ -165,6 +176,7 @@ export function CardMaintenanceContent({
           title="Save recovery"
           numero={1}
           activeNumero={activeStep}
+          color={color}
           summary={
             manualRestore && !operation.archive
               ? 'From another bundle card'
@@ -181,20 +193,34 @@ export function CardMaintenanceContent({
           }
           numero={2}
           activeNumero={activeStep}
+          color={color}
           processing={processing && activeStep === 2}
-          summary="Complete"
-        />
+          summary={appletSummary || 'Complete'}
+        >
+          {activeStep === 2 && (
+            <InfoMessage>
+              {operation.mode === 'fresh'
+                ? 'Scan this card to install fresh applets.'
+                : operation.mode === 'update'
+                  ? 'Scan this card to update its applets.'
+                  : 'Scan this card to reinstall its applets.'}
+            </InfoMessage>
+          )}
+        </Step>
         <Step
           title="Restore"
           numero={3}
           activeNumero={activeStep}
+          color={color}
           processing={processing && activeStep === 3}
           summary="Complete"
           keepExpanded
         >
-          {manualRestore && (
+          {activeStep === 3 && !report && (
             <InfoMessage>
-              Restore your items from another bundle card.
+              {manualRestore
+                ? 'Restore your items from another bundle card.'
+                : `Scan this card to restore its ${itemCount} ${itemCount === 1 ? 'item' : 'items'} and applet access.`}
             </InfoMessage>
           )}
           {!!report?.issues.length && (
