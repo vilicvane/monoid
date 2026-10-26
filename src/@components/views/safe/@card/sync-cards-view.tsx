@@ -623,7 +623,12 @@ export const SyncCardsView = observer(
                             ?.updateAvailable === false
                         ? 'up to date'
                         : 'installed version unknown'
-                    : `items ${formatCardResourceCount(getCardResourceGroups(card.items))}`
+                    : maintenance?.mode === 'reinstall' &&
+                        maintenance.phase !== 'manual-restore' &&
+                        card !== maintenanceTarget &&
+                        !flow.maintenanceCards.get(card.publicKey)?.target
+                      ? 'tap to reinstall too'
+                      : `items ${formatCardResourceCount(getCardResourceGroups(card.items))}`
                   : maintenance &&
                       flow.deferredCards.has(card.publicKey) &&
                       !flow.needsExport(card.publicKey)
@@ -762,7 +767,9 @@ export const SyncCardsView = observer(
                     <InfoMessage>
                       {maintenance.phase === 'manual-restore'
                         ? 'Add cards from this bundle to restore items.'
-                        : 'Choose the bundle cards to maintain. All recovery archives are saved before installation.'}
+                        : maintenance.mode === 'reinstall'
+                          ? 'Tap a scanned card to reinstall it too. All recovery archives are saved before installation.'
+                          : 'Choose the bundle cards to maintain. All recovery archives are saved before installation.'}
                     </InfoMessage>
                   ) : (
                     bundles.length > 0 && (

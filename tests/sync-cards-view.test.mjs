@@ -1906,3 +1906,25 @@ test('a no-op target can replace a failed exporter without writing or replaying 
     [state.target, ...state.peers].every(card => card.requests.length === 0),
   );
 });
+
+test('reinstall collection tells the user to tap scanned cards to include them', async () => {
+  const state = await mountMaintenance();
+  const peerKey = hex(state.peer.hello.publicKey);
+  const description = () =>
+    find(
+      state.render(),
+      node =>
+        node.type === 'CardPreview' &&
+        node.props.id === state.flow.session.cards[1].id,
+    ).props.description;
+  assert.ok(
+    find(state.render(), node =>
+      String(node.props?.children ?? '').startsWith(
+        'Tap a scanned card to reinstall it too.',
+      ),
+    ),
+  );
+  assert.equal(description(), 'tap to reinstall too');
+  state.flow.selectMaintenanceCard(peerKey, true);
+  assert.match(description(), /^items /);
+});
