@@ -39,8 +39,8 @@ import {Button, Buttons} from '../../../@ui/button.js';
 import {ConfirmPopup} from '../../../@ui/confirm-popup.js';
 import {
   DetailsPopup,
-  DetailsPopupDescription,
   DetailsPopupDivider,
+  DetailsPopupHeader,
   DetailsPopupTitle,
 } from '../../../@ui/details-popup.js';
 import {InfoMessage, WarningMessage} from '../../../@ui/message-content.js';
@@ -54,6 +54,7 @@ import {
   ViewContent,
   ViewHeader,
   ViewHeaderButton,
+  ViewHeaderIdentifier,
   ViewHeaderTitle,
   useViewActive,
 } from '../../../@view/index.js';
@@ -71,6 +72,19 @@ import {
   authenticateCardSync,
 } from './card-sync-session.js';
 import {SyncCardsState} from './sync-cards-state.js';
+
+/** View header identifier tags take the popup's text color. */
+const PopupIdentifier = styled(ViewHeaderIdentifier)`
+  z-index: auto;
+
+  && * {
+    color: inherit;
+  }
+`;
+
+const PopupIdentifiers = styled(DetailsPopupHeader)`
+  margin-top: calc(8px - var(--details-popup-gap));
+`;
 
 const Description = styled.p`
   margin: 0;
@@ -806,12 +820,17 @@ export const SyncCardsView = observer(
             aria-label="Card items"
             onDismiss={() => setDetails(undefined)}
           >
-            <DetailsPopupTitle>Card · {selectedCard.id}</DetailsPopupTitle>
-            <DetailsPopupDescription title={selectedCard.bundle || undefined}>
-              {selectedCard.bundle
-                ? `Bundle · ${selectedCard.bundle.slice(0, 8)}`
-                : 'Not in a bundle'}
-            </DetailsPopupDescription>
+            <DetailsPopupTitle>Card</DetailsPopupTitle>
+            <PopupIdentifiers>
+              <PopupIdentifier
+                identifier={{type: 'card', id: selectedCard.id}}
+              />
+              {selectedCard.bundle !== false && (
+                <PopupIdentifier
+                  identifier={{type: 'bundle', id: selectedCard.bundle}}
+                />
+              )}
+            </PopupIdentifiers>
             <DetailsPopupDivider />
             {collecting &&
               maintenance &&

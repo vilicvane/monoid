@@ -184,7 +184,7 @@ for (const [path, names] of [
     '@ui/details-popup',
     [
       'DetailsPopup',
-      'DetailsPopupDescription',
+      'DetailsPopupHeader',
       'DetailsPopupDivider',
       'DetailsPopupTitle',
     ],
@@ -199,6 +199,7 @@ for (const [path, names] of [
       'ViewContent',
       'ViewHeader',
       'ViewHeaderButton',
+      'ViewHeaderIdentifier',
       'ViewHeaderTitle',
     ],
   ],

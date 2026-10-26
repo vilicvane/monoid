@@ -29,19 +29,6 @@ export const DetailsPopupTitle = styled.h2`
   white-space: nowrap;
 `;
 
-/** A secondary line directly under the title, inside the header. */
-export const DetailsPopupDescription = styled.p`
-  min-width: 0;
-  margin: calc(4px - var(--details-popup-gap)) 0 0;
-  color: var(--color-text-secondary);
-  font-size: 14px;
-  line-height: 20px;
-  text-align: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-`;
-
 export const detailsPopupLogoCSS = css`
   flex-shrink: 0;
   width: 32px;
