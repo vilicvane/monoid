@@ -20,7 +20,7 @@
     "REOWN_PROJECT_ID": "aec3500aba9026d07588b3b244c402c7",
     "REOWN_AUTH_ORIGINS": "[\"https://authority.monoid.app\"]",
     "APP_REDIRECT_URIS": "[\"app.monoid://authority/callback\",\"https://www.monoid.app/authority\"]",
-    "APP_ORIGINS": "[\"capacitor://localhost\",\"https://localhost\",\"http://localhost\"]",
+    "APP_ORIGINS": "[\"*\"]",
   },
   "durable_objects": {
     "bindings": [{"name": "AUTHORITY_STATE", "class_name": "AuthorityState"}],

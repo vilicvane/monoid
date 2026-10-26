@@ -359,6 +359,21 @@ test('public time and metadata, CORS, body bounds and rate limiting', async cont
     ).status,
     403,
   );
+  // A wildcard opens the API to any origin, but not browser approval.
+  f.env.APP_ORIGINS = '["*"]';
+  const open = await f.call('/v1/metadata', undefined, undefined, {
+    Origin: 'http://100.64.0.1:8100',
+  });
+  assert.equal(open.status, 200);
+  assert.equal(
+    open.headers.get('Access-Control-Allow-Origin'),
+    'http://100.64.0.1:8100',
+  );
+  const approval = await f.call('/auth/approve?approval=x', {}, undefined, {
+    Origin: 'https://evil.example',
+  });
+  assert.equal(approval.status, 400);
+  assert.deepEqual(await approval.json(), {error: 'invalid_origin'});
   f.env.REQUEST_LIMIT.limit = async () => ({success: false});
   const limited = await f.call('/v1/metadata');
   assert.equal(limited.status, 429);

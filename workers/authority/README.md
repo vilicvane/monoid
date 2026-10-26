@@ -275,7 +275,7 @@ may require administrator approval; inaccessible membership fails closed.
 Set exact `APP_REDIRECT_URIS`, `APP_ORIGINS` and `REOWN_AUTH_ORIGINS` JSON arrays.
 The checked-in configuration contains proposed callback allowlist entries
 `app.monoid://authority/callback` and `https://www.monoid.app/authority`;
-native CORS origins are listed separately. These are protocol configuration,
+API CORS origins are listed separately in `APP_ORIGINS`. These are protocol configuration,
 not implemented APP handlers; confirm them when the future client is integrated.
 The hosted page and Worker share `https://authority.monoid.app`, which is the
 Reown authentication origin. The AppKit project must have **Social & Email** and
@@ -289,7 +289,7 @@ to stall. Verify the `/sdk` response's `frame-ancestors` includes the production
 origin; that response may remain in browser cache for 24 hours after an early
 failed attempt. The Worker independently restricts SIWX authentication to the
 same origin. Complete production login still requires end-to-end verification.
-Never add wildcard Worker origins or redirect URLs.
+`APP_ORIGINS` is `["*"]`: the API answers CORS for any origin, while browser login and approval endpoints still require the Authority origin. Never add wildcard redirect URLs or Reown origins.
 
 Keep the Durable Object namespace, object name and key record stable. Deleting
 the object/storage, changing its namespace or rolling storage back before key

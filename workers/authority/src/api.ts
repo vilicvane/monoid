@@ -38,8 +38,13 @@ export function createHandler(fetcher: typeof fetch = fetch) {
     try {
       const allowedOrigins = JSON.parse(env.APP_ORIGINS) as string[];
       const base = new URL(env.AUTHORITY_URL);
+      // "*" opens the API to any origin; browser login and approval endpoints
+      // still require the Authority's own origin.
       allowed =
-        !origin || origin === base.origin || allowedOrigins.includes(origin);
+        !origin ||
+        origin === base.origin ||
+        allowedOrigins.includes('*') ||
+        allowedOrigins.includes(origin);
       if (!allowed) throw new HttpError(403, 'origin_not_allowed');
 
       if (request.method === 'OPTIONS') {
