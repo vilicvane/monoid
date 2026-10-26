@@ -151,3 +151,7 @@
 76. [agent] the `manual-restore` maintenance phase (no longer created since 4edf03f) is removed; loading discards saved operations in obsolete phases before validating their payloads. Two leftover records on one chip had blocked a batch with "Invalid maintenance batch". Legacy manual restore removal.
 
 77. [user] in a warning prompt, important information is an ordered list, so the user can tell whether they are skipping one notice or several. [agent] `ConfirmNotices` renders one notice as a paragraph and several as a numbered list; optional context stays a paragraph above the list, as in "Reset card and join bundle?". Warning notices.
+
+## 81288d6
+
+78. [user] a warning prompt should hold real warnings and notices, not an explanation of the steps; a scan prompt meant for a specific card always includes that card's ID. [agent] maintenance confirmations list only consequences and required actions (card unusable until restored, the app's recovery being the only copy for a non-bundle card, FIDO PIN reset, erased data). `scanCardPrompt(id, action)` renders "Scan card <ID> <action>" and retry errors name the card. Prompts that any qualifying card can answer stay generic. Prompt wording.
