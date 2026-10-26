@@ -65,7 +65,11 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
     getAppletCatalog: () => [{stage: 'otp', instanceAid: 'F06D6F6E6F69640501'}],
   },
 });
-const {CardMaintenanceContent} = await import(
+const {
+  CardMaintenanceBatchContent,
+  CardMaintenanceCards,
+  CardMaintenanceContent,
+} = await import(
   '../.bld/app/@components/views/card/card-management-content.js'
 );
 
@@ -250,14 +254,90 @@ test('restore results replace hints and remain available during the completion e
       find(tree, node => node.type === 'InfoMessage'),
       undefined,
     );
-    const issues = find(restore, node => node.type === CardResourceIssues);
-    assert.equal(issues.props.issues, report.issues);
-    assert.equal(issues.props.items, operation.archive.items);
+    const shown = renderReport(restore);
+    assert.equal(shown.issues.props.issues, report.issues);
+    assert.equal(shown.issues.props.items, operation.archive.items);
     assert.equal(
-      text(find(restore, node => node.type === 'WarningMessage')),
+      shown.access,
       'Access not restored for Monoid OTP Applet, unknown-aid',
     );
   }
+});
+
+/** Renders the restore report component found under a step. */
+function renderReport(step) {
+  const node = find(step, node => node.type?.name === 'RestoreReport');
+  const tree = node.type(node.props);
+  return {
+    issues: find(tree, node => node.type === CardResourceIssues),
+    access: text(find(tree, node => node.type === 'WarningMessage')),
+  };
+}
+
+test('a batch shows saved recoveries, then its card grid in one active step', () => {
+  const cards = [
+    {
+      publicKey: 'a',
+      id: '00000001',
+      complete: false,
+      pending: true,
+      status: 'scan to install',
+    },
+    {
+      publicKey: 'b',
+      id: '00000002',
+      complete: false,
+      pending: false,
+      status: 'install later',
+    },
+  ];
+  const tree = CardMaintenanceBatchContent({
+    mode: 'update',
+    cards,
+    complete: false,
+    processing: true,
+  });
+  const [recovery, replacement] = [1, 2].map(numero =>
+    find(tree, node => node.type === 'Step' && node.props.numero === numero),
+  );
+  assert.equal(recovery.props.summary, '2 cards');
+  assert.equal(replacement.props.title, 'Update applets');
+  assert.equal(replacement.props.activeNumero, 2);
+  assert.equal(replacement.props.processing, true);
+  assert.equal(replacement.props.color, 'warning');
+  assert.equal(
+    find(replacement, node => node.type === CardMaintenanceCards).props.cards,
+    cards,
+  );
+  assert.match(
+    text(find(replacement, node => node.type === 'InfoMessage')),
+    /updated and restored before the next one/,
+  );
+
+  const report = {
+    complete: false,
+    issues: [{index: 'f201000000000000000a', reason: 'INVALID_PARAMETER'}],
+    droppedGrants: [],
+  };
+  const reported = CardMaintenanceBatchContent({
+    mode: 'reinstall',
+    cards,
+    complete: true,
+    processing: false,
+    report,
+    items: [],
+  });
+  const step = find(
+    reported,
+    node => node.type === 'Step' && node.props.numero === 2,
+  );
+  assert.equal(step.props.title, 'Reinstall applets');
+  assert.equal(step.props.activeNumero, 3);
+  assert.equal(
+    find(step, node => node.type === 'InfoMessage'),
+    undefined,
+  );
+  assert.equal(renderReport(step).issues.props.issues, report.issues);
 });
 
 test('skipped resources group by readable reason and pass aliases and indices to resource items', () => {

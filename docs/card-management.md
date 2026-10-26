@@ -74,19 +74,23 @@ so saved archives and their checksums remain intact. The card protocol uses
 
 During maintenance, Card Applets replaces the catalogue with the card preview and
 three shared operation steps: **Save recovery**, **Update applets** / **Reinstall
-applets** / **Fresh install**, and **Restore**. A batch keeps its card grid above
-the current card's preview. Recovery shows the archive item count; the active
+applets** / **Fresh install**, and **Restore**. A batch instead shows two steps
+like Sync: **Save recovery** (the card count), then **Update applets** /
+**Reinstall applets** holding the card grid. Only the next card is dimmed ("scan
+to install" or "scan to restore"); later cards read "install later", finished
+ones "complete", and cards still holding a recovery archive are yellow. The
+footer names the next action, not a card ID. Recovery shows the archive item count; the active
 installation or restore step shows processing while the scan runs. Restore covers
 items and applet access in the same scan.
 
 Restoration imports the complete archive and lists skipped items inside Restore,
-using the same type, alias and index rows as Card and Sync. Items are grouped by
-readable reason with a count, including in Sync's card details. Dropped applet
+using the same type, alias and index rows as Card and Sync. Each reason follows
+under a divider labelled with a warning icon, after the normal list in Sync's
+card details and under the grid in a batch. Dropped applet
 access appears below these groups. The omission report stays in Restore before
 **Finish without N items**. On completion, the card preview and steps animate out,
 then only the shared completion display and neutral back button remain, as in
-the other flows. A batch shows only its card grid between completed targets;
-the grid exits with the final target's steps when the whole batch completes.
+the other flows. A batch exits its steps once the whole batch completes.
 After a complete pass containing only deterministic card rejections (for example
 INVALID_PARAMETER) or conflicts, **Finish without N items** asks for explicit
 confirmation. It verifies identity and the inventory against the archive minus

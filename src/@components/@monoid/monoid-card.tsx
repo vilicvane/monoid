@@ -57,7 +57,7 @@ const CardDescription = styled.span`
 `;
 
 const CardSubtitle = styled.span`
-  color: var(--ion-color-primary);
+  color: var(--monoid-card-description-color, var(--ion-color-primary));
 `;
 
 export function MonoidCard({

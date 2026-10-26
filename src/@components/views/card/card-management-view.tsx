@@ -84,7 +84,7 @@ import type {CardAppletSnapshot} from './card-applet-snapshot.js';
 import {
   CardAppletsContent,
   CardInformationContent,
-  CardMaintenanceCards,
+  CardMaintenanceBatchContent,
   CardMaintenanceContent,
   CardScanPlaceholder,
 } from './card-management-content.js';
@@ -250,6 +250,9 @@ export const CardManagementView = observer(
       (maintenance.batches ?? []).at(-1);
     const batchComplete =
       !!batch && batch.targets.every(target => target.complete);
+    const nextBatchTarget = batch?.targets.find(target => !target.complete);
+    const nextBatchOperation =
+      nextBatchTarget && maintenance.get(nextBatchTarget.operationId);
     const [stepsExited, setStepsExited] = useState(batchComplete);
     const processComplete =
       !busy && (batch ? batchComplete : complete && !pending);
@@ -1003,7 +1006,7 @@ export const CardManagementView = observer(
                 </Buttons>
               ) : batch ? (
                 <Button
-                  color={batchComplete ? 'neutral' : 'primary'}
+                  color={batchComplete ? 'neutral' : 'warning'}
                   disabled={busy}
                   onClick={() => {
                     if (batchComplete)
@@ -1021,7 +1024,15 @@ export const CardManagementView = observer(
                 >
                   {batchComplete
                     ? 'Back to Card Applets'
-                    : `Continue card ${batch.targets.find(target => !target.complete)?.card.id}`}
+                    : nextBatchOperation?.phase === 'restore'
+                      ? 'Restore items'
+                      : nextBatchOperation?.checkpoint === undefined
+                        ? nextBatchOperation?.mode === 'update'
+                          ? 'Continue update'
+                          : 'Continue installation'
+                        : nextBatchOperation.mode === 'update'
+                          ? 'Resume update'
+                          : 'Resume reinstall'}
                 </Button>
               ) : complete ? (
                 <Button
@@ -1094,33 +1105,46 @@ export const CardManagementView = observer(
                   }
                 }}
               >
-                {batch && (
-                  <CardMaintenanceCards
-                    disabled={busy}
+                {batch ? (
+                  <CardMaintenanceBatchContent
+                    mode={
+                      processOperation?.mode ??
+                      nextBatchOperation?.mode ??
+                      'reinstall'
+                    }
+                    // Only the next card needs a scan now, so only it is dimmed;
+                    // later cards wait like Sync's "restore later" cards.
                     cards={batch.targets.map(target => {
-                      const operation = maintenance.get(target.operationId);
+                      const next = target === nextBatchTarget;
                       return {
                         publicKey: target.card.publicKey!,
                         id: target.card.id,
                         complete: target.complete,
+                        pending: next,
+                        interrupted: !target.complete,
                         status: target.complete
                           ? 'complete'
-                          : operation?.phase === 'restore'
-                            ? 'restore items'
-                            : operation?.phase === 'replacing'
-                              ? 'resume installation'
+                          : !next
+                            ? 'install later'
+                            : nextBatchOperation?.phase === 'restore'
+                              ? 'scan to restore'
                               : 'scan to install',
                       };
                     })}
-                  />
-                )}
-                {processOperation && (
-                  <CardMaintenanceContent
-                    operation={processOperation}
-                    processing={busy}
                     complete={processComplete}
+                    processing={busy}
                     report={reportedOperation?.result}
+                    items={reportedOperation?.operation.archive?.items}
                   />
+                ) : (
+                  processOperation && (
+                    <CardMaintenanceContent
+                      operation={processOperation}
+                      processing={busy}
+                      complete={processComplete}
+                      report={reportedOperation?.result}
+                    />
+                  )
                 )}
               </MaintenanceProcess>
             ) : complete ? null : card.unsupported ||

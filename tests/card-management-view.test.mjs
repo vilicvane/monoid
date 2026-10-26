@@ -233,6 +233,7 @@ for (const [path, names] of [
       'CardAppletsContent',
       'CardInformationContent',
       'CardScanPlaceholder',
+      'CardMaintenanceBatchContent',
       'CardMaintenanceCards',
       'CardMaintenanceContent',
     ],
@@ -572,7 +573,8 @@ function finishProcessExit(state) {
   assert.equal(process.props.$exiting, true);
   assert.equal(state.node('OperationComplete'), undefined);
   assert.ok(
-    state.node('CardMaintenanceContent') || state.node('CardMaintenanceCards'),
+    state.node('CardMaintenanceContent') ||
+      state.node('CardMaintenanceBatchContent'),
   );
   const element = {};
   process.props.onAnimationEnd({target: {}, currentTarget: element});
@@ -582,7 +584,7 @@ function finishProcessExit(state) {
   assert.ok(state.node('OperationComplete'));
   assert.equal(state.process(), undefined);
   assert.equal(state.node('CardMaintenanceContent'), undefined);
-  assert.equal(state.node('CardMaintenanceCards'), undefined);
+  assert.equal(state.node('CardMaintenanceBatchContent'), undefined);
   assert.equal(state.node('CardAppletsContent'), undefined);
   assert.equal(state.node('ViewContent').props.footer.props.color, 'neutral');
 }
@@ -2168,11 +2170,13 @@ test('Card Applets resumes the first unfinished batch target after navigation an
   state.maintenance.matchOperation = () => undefined;
   state.render();
   assert.deepEqual(
-    state.node('CardMaintenanceCards').props.cards.map(card => card.complete),
+    state
+      .node('CardMaintenanceBatchContent')
+      .props.cards.map(card => card.complete),
     [true, false],
   );
   assert.equal(state.node('OperationComplete'), undefined);
-  state.click('Continue card 01020304');
+  state.click('Restore items');
   await state.answer();
   assert.equal(
     state.scans.length,
@@ -2187,20 +2191,22 @@ test('Card Applets resumes the first unfinished batch target after navigation an
   state.unmount();
   state.render();
   assert.equal(
-    state.node('CardMaintenanceCards').props.cards[1].status,
-    'restore items',
+    state.node('CardMaintenanceBatchContent').props.cards[1].status,
+    'scan to restore',
   );
   batch.targets[1].complete = true;
   state.render();
   assert.ok(
-    state.node('CardMaintenanceCards').props.cards.every(card => card.complete),
+    state
+      .node('CardMaintenanceBatchContent')
+      .props.cards.every(card => card.complete),
   );
   finishProcessExit(state);
   state.unmount();
   state.render();
   assert.ok(state.node('OperationComplete'));
   assert.equal(state.process(), undefined);
-  assert.equal(state.node('CardMaintenanceCards'), undefined);
+  assert.equal(state.node('CardMaintenanceBatchContent'), undefined);
 });
 
 for (const [batchSize, description] of [
@@ -2249,40 +2255,46 @@ for (const [batchSize, description] of [
 
     for (let index = 0; index < operations.length; index++) {
       const operation = (state.pending = operations[index]);
-      state.click(
-        batchSize > 1 ? `Continue card ${operation.card.id}` : 'Restore items',
-      );
+      state.click('Restore items');
       await state.answer();
       assert.equal(state.scans.at(-1).label, `Scan card ${operation.card.id}`);
       await state.tap({finish: false});
       assert.equal(state.pending, undefined);
-      assert.equal(
-        state.node('CardMaintenanceContent').props.operation,
-        operation,
-      );
+      if (batchSize > 1) assert.ok(state.node('CardMaintenanceBatchContent'));
+      else
+        assert.equal(
+          state.node('CardMaintenanceContent').props.operation,
+          operation,
+        );
       assert.equal(state.process().props.$exiting, false);
       assert.equal(state.node('OperationComplete'), undefined);
       assert.equal(state.node('CardAppletsContent'), undefined);
 
       state.scans.at(-1).finished.resolve();
       await state.flush();
-      const content = state.node('CardMaintenanceContent');
+      const content = state.node(
+        batchSize > 1
+          ? 'CardMaintenanceBatchContent'
+          : 'CardMaintenanceContent',
+      );
       if (index < operations.length - 1) {
-        assert.equal(content, undefined);
+        // Between cards the batch shows its grid without the last card's report.
+        assert.equal(content.props.report, undefined);
+        assert.equal(content.props.complete, false);
         assert.equal(state.process().props.$exiting, false);
         assert.equal(state.node('OperationComplete'), undefined);
         assert.equal(
           text(state.node('ViewContent').props.footer),
-          `Continue card ${operations[index + 1].card.id}`,
+          'Restore items',
         );
         assert.deepEqual(
           state
-            .node('CardMaintenanceCards')
+            .node('CardMaintenanceBatchContent')
             .props.cards.map(card => card.complete),
           [true, false],
         );
       } else {
-        assert.equal(content.props.operation, operation);
+        if (batchSize === 1) assert.equal(content.props.operation, operation);
         assert.deepEqual(content.props.report, {
           complete: true,
           issues: [],
@@ -2373,7 +2385,7 @@ async function mountRejectedRestore(batch = false) {
     operation.rejectedItems = issues;
     return {complete: false, issues, droppedGrants: []};
   };
-  state.click(batch ? `Continue card ${operation.card.id}` : 'Restore items');
+  state.click('Restore items');
   await state.answer();
   await state.tap();
   return state;
@@ -2382,13 +2394,18 @@ async function mountRejectedRestore(batch = false) {
 for (const batch of [false, true]) {
   test(`${batch ? 'batch' : 'single-card'} rejected recovery lists issues and requires explicit confirmation to finish`, async () => {
     const state = await mountRejectedRestore(batch);
-    const process = state.node('CardMaintenanceContent');
+    const process = state.node(
+      batch ? 'CardMaintenanceBatchContent' : 'CardMaintenanceContent',
+    );
     assert.equal(state.node('CardAppletsContent'), undefined);
     assert.equal(process.props.processing, false);
-    assert.deepEqual(process.props.operation.archive.items, [
-      {index: 'f2010000000000000001', alias: 'Example OTP'},
-      {index: '05140000000000000002', alias: 'Signing key'},
-    ]);
+    assert.deepEqual(
+      batch ? process.props.items : process.props.operation.archive.items,
+      [
+        {index: 'f2010000000000000001', alias: 'Example OTP'},
+        {index: '05140000000000000002', alias: 'Signing key'},
+      ],
+    );
     assert.deepEqual(process.props.report.issues, [
       {index: 'f2010000000000000001', reason: 'INVALID_PARAMETER'},
       {index: '05140000000000000002', reason: 'Conflict'},
@@ -2418,11 +2435,11 @@ for (const batch of [false, true]) {
       assert.equal(completedProcess, undefined);
       assert.equal(
         text(state.node('ViewContent').props.footer),
-        'Continue card 11111111',
+        'Continue installation',
       );
       assert.deepEqual(
         state
-          .node('CardMaintenanceCards')
+          .node('CardMaintenanceBatchContent')
           .props.cards.map(card => card.complete),
         [true, false],
       );
@@ -2457,8 +2474,10 @@ test('finishing the last batch card with skipped items exits the grid and proces
   await state.flush();
   assert.deepEqual(state.errors, []);
   const process = state.process();
-  assert.ok(find(process, node => node.type === 'CardMaintenanceCards'));
-  const content = find(process, node => node.type === 'CardMaintenanceContent');
+  const content = find(
+    process,
+    node => node.type === 'CardMaintenanceBatchContent',
+  );
   assert.equal(content.props.report.complete, true);
   assert.equal(content.props.report.issues.length, 2);
   finishProcessExit(state);

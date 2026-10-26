@@ -140,6 +140,38 @@ function CardAppletHero({
   );
 }
 
+/** Items a restore pass skipped, then applet access it could not restore. */
+function RestoreReport({
+  report,
+  items,
+}: {
+  report: CardMaintenanceRestoreResult;
+  items?: readonly {index: string; alias?: string}[];
+}): ReactNode {
+  return (
+    <>
+      {!!report.issues.length && (
+        <CardResourceIssues issues={report.issues} items={items} />
+      )}
+      {!!report.droppedGrants.length && (
+        <WarningMessage>
+          Access not restored for{' '}
+          {report.droppedGrants
+            .map(aid => {
+              const applet = getAppletCatalog().find(
+                applet =>
+                  (applet.instanceAid ?? applet.appletAid)?.toLowerCase() ===
+                  aid,
+              );
+              return applet ? APPLET_NAMES[applet.stage] : aid;
+            })
+            .join(', ')}
+        </WarningMessage>
+      )}
+    </>
+  );
+}
+
 export function CardMaintenanceContent({
   operation,
   processing,
@@ -219,27 +251,8 @@ export function CardMaintenanceContent({
               {`Scan this card to restore its ${itemCount} ${itemCount === 1 ? 'item' : 'items'} and applet access.`}
             </InfoMessage>
           )}
-          {!!report?.issues.length && (
-            <CardResourceIssues
-              issues={report.issues}
-              items={operation.archive?.items}
-            />
-          )}
-          {!!report?.droppedGrants.length && (
-            <WarningMessage>
-              Access not restored for{' '}
-              {report.droppedGrants
-                .map(aid => {
-                  const applet = getAppletCatalog().find(
-                    applet =>
-                      (
-                        applet.instanceAid ?? applet.appletAid
-                      )?.toLowerCase() === aid,
-                  );
-                  return applet ? APPLET_NAMES[applet.stage] : aid;
-                })
-                .join(', ')}
-            </WarningMessage>
+          {report && (
+            <RestoreReport report={report} items={operation.archive?.items} />
           )}
         </Step>
       </Steps>
@@ -323,6 +336,59 @@ export function CardMaintenanceCards({
         </CardPreviewButton>
       ))}
     </CardGrid>
+  );
+}
+
+/**
+ * A batch reads like Sync: the saved recoveries, then one step in which the
+ * card grid shows which card to scan next. The current card's restore report
+ * follows the grid.
+ */
+export function CardMaintenanceBatchContent({
+  mode,
+  cards,
+  complete,
+  processing,
+  report,
+  items,
+}: {
+  mode: CardMaintenanceOperation['mode'];
+  cards: Parameters<typeof CardMaintenanceCards>[0]['cards'];
+  complete: boolean;
+  processing: boolean;
+  report?: CardMaintenanceRestoreResult;
+  items?: readonly {index: string; alias?: string}[];
+}): ReactNode {
+  const activeStep = complete ? 3 : 2;
+
+  return (
+    <Steps>
+      <Step
+        title="Save recovery"
+        numero={1}
+        activeNumero={activeStep}
+        color="warning"
+        summary={`${cards.length} cards`}
+      />
+      <Step
+        title={mode === 'update' ? 'Update applets' : 'Reinstall applets'}
+        numero={2}
+        activeNumero={activeStep}
+        color="warning"
+        processing={processing}
+        keepExpanded
+      >
+        <CardMaintenanceCards cards={cards} disabled />
+        {!report && (
+          <InfoMessage>
+            {mode === 'update'
+              ? 'Each card is updated and restored before the next one.'
+              : 'Each card is reinstalled and restored before the next one.'}
+          </InfoMessage>
+        )}
+        {report && <RestoreReport report={report} items={items} />}
+      </Step>
+    </Steps>
   );
 }
 
