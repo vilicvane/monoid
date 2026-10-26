@@ -148,6 +148,8 @@ export const SyncCardsView = observer(
     const [working, setWorking] = useState(false);
     const [details, setDetails] = useState<string>();
     const [confirmRestart, setConfirmRestart] = useState(false);
+    const [reinstallProposal, setReinstallProposal] =
+      useState<CardBackupIdentity>();
     const mounted = useRef(true);
     const operation = useRef<AbortController | undefined>(undefined);
     const busy = working || session.busy;
@@ -404,6 +406,12 @@ export const SyncCardsView = observer(
                       candidate,
                       cardMaintenanceService.isUpdateAvailable(hello),
                     );
+                    if (
+                      maintenance.mode === 'reinstall' &&
+                      identity.publicKey !== maintenance.card.publicKey &&
+                      !flow.maintenanceCards.get(identity.publicKey)?.target
+                    )
+                      setReinstallProposal(identity);
                   }
                   flow.consumeSource();
                 } else {
@@ -623,12 +631,7 @@ export const SyncCardsView = observer(
                             ?.updateAvailable === false
                         ? 'up to date'
                         : 'installed version unknown'
-                    : maintenance?.mode === 'reinstall' &&
-                        maintenance.phase !== 'manual-restore' &&
-                        card !== maintenanceTarget &&
-                        !flow.maintenanceCards.get(card.publicKey)?.target
-                      ? 'tap to reinstall too'
-                      : `items ${formatCardResourceCount(getCardResourceGroups(card.items))}`
+                    : `items ${formatCardResourceCount(getCardResourceGroups(card.items))}`
                   : maintenance &&
                       flow.deferredCards.has(card.publicKey) &&
                       !flow.needsExport(card.publicKey)
@@ -767,9 +770,7 @@ export const SyncCardsView = observer(
                     <InfoMessage>
                       {maintenance.phase === 'manual-restore'
                         ? 'Add cards from this bundle to restore items.'
-                        : maintenance.mode === 'reinstall'
-                          ? 'Tap a scanned card to reinstall it too. All recovery archives are saved before installation.'
-                          : 'Choose the bundle cards to maintain. All recovery archives are saved before installation.'}
+                        : 'Choose the bundle cards to maintain. All recovery archives are saved before installation.'}
                     </InfoMessage>
                   ) : (
                     bundles.length > 0 && (
@@ -866,12 +867,10 @@ export const SyncCardsView = observer(
               )}
             </CardResourceList>
             <Buttons data-popup-animation-group>
-              {(collecting
-                ? selectedCard !== maintenanceTarget
-                : !flow.deferredCards.has(selectedCard.publicKey) ||
+              {!collecting &&
+                (!flow.deferredCards.has(selectedCard.publicKey) ||
                   flow.needsExport(selectedCard.publicKey)) &&
-                (collecting ||
-                  !selectedCard.complete ||
+                (!selectedCard.complete ||
                   needsRecoveryExport ||
                   (allMaintenanceTargets &&
                     flow.needsExport(selectedCard.publicKey))) && (
@@ -883,12 +882,10 @@ export const SyncCardsView = observer(
                       readCard(selectedCard);
                     }}
                   >
-                    {collecting
-                      ? 'Read card'
-                      : selectedCard.complete &&
-                          flow.needsExport(selectedCard.publicKey)
-                        ? 'Export items'
-                        : 'Sync card'}
+                    {selectedCard.complete &&
+                    flow.needsExport(selectedCard.publicKey)
+                      ? 'Export items'
+                      : 'Sync card'}
                   </Button>
                 )}
               {collecting && selectedCard !== maintenanceTarget && (
@@ -919,6 +916,21 @@ export const SyncCardsView = observer(
             }}
           >
             Changes already written to cards will remain.
+          </ConfirmPopup>
+        )}
+        {reinstallProposal && !busy && isViewActive() && (
+          <ConfirmPopup
+            title={`Reinstall card ${reinstallProposal.id} too?`}
+            confirmText="Reinstall too"
+            cancelText="Sync only"
+            onCancel={() => setReinstallProposal(undefined)}
+            onConfirm={() => {
+              flow.selectMaintenanceCard(reinstallProposal.publicKey!, true);
+              setReinstallProposal(undefined);
+            }}
+          >
+            Its items are saved to a recovery archive with the others, and its
+            applets are reinstalled one card at a time afterwards.
           </ConfirmPopup>
         )}
       </>

@@ -85,7 +85,7 @@ export class SyncCardsState {
           card => !this.maintenanceCards.has(card.publicKey),
         )
       )
-        throw new MonoidCardError('Read each maintenance card again');
+        throw new MonoidCardError('Add each maintenance card again');
       const targets = this.maintenanceTargets;
       const nonTargets = this.session.cards.filter(
         card =>

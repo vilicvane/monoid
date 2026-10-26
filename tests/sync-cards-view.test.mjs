@@ -1907,24 +1907,29 @@ test('a no-op target can replace a failed exporter without writing or replaying 
   );
 });
 
-test('reinstall collection tells the user to tap scanned cards to include them', async () => {
-  const state = await mountMaintenance();
-  const peerKey = hex(state.peer.hello.publicKey);
-  const description = () =>
-    find(
+for (const accept of [true, false]) {
+  test(`reinstall collection asks to reinstall each added peer (${accept ? 'accept' : 'sync only'})`, async () => {
+    const state = await mountMaintenance({addPeer: false});
+    await state.startScan('Add another card');
+    const scan = await state.tap(state.peer.hello, state.peer.applet);
+    assert.equal(scan.error, undefined);
+    await state.finishScan();
+    const popup = find(
       state.render(),
       node =>
-        node.type === 'CardPreview' &&
-        node.props.id === state.flow.session.cards[1].id,
-    ).props.description;
-  assert.ok(
-    find(state.render(), node =>
-      String(node.props?.children ?? '').startsWith(
-        'Tap a scanned card to reinstall it too.',
-      ),
-    ),
-  );
-  assert.equal(description(), 'tap to reinstall too');
-  state.flow.selectMaintenanceCard(peerKey, true);
-  assert.match(description(), /^items /);
-});
+        node.type === 'ConfirmPopup' &&
+        node.props.title === 'Reinstall card 00000002 too?',
+    );
+    assert.ok(popup);
+    if (accept) popup.props.onConfirm();
+    else popup.props.onCancel();
+    assert.equal(
+      find(state.render(), node => node.type === 'ConfirmPopup'),
+      undefined,
+    );
+    assert.equal(
+      state.flow.maintenanceCards.get(hex(state.peer.hello.publicKey)).target,
+      accept,
+    );
+  });
+}
