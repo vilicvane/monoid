@@ -1667,7 +1667,7 @@ for (const wrong of ['self', 'unknown peer', 'different bundle']) {
   });
 }
 
-test('clicking a particular maintenance peer still binds the scan to that card', async () => {
+test('a maintenance peer popup offers no per-card scan once syncing starts', async () => {
   const state = await mountMaintenance({peerCount: 2, identical: false});
   state.click('Continue');
   await state.flush();
@@ -1677,16 +1677,9 @@ test('clicking a particular maintenance peer still binds the scan to that card',
       node.type === 'CardPreviewButton' &&
       node.props['aria-label'] === 'Card 00000002',
   ).props.onClick();
-  state.click('Sync card');
-  state.inputs.at(-1).finished.resolve(PIN);
-  await state.flush();
-  const scan = await state.tap(state.peers[1].hello, {
-    authenticate: () =>
-      assert.fail('Explicit card selection must bind the scan'),
-  });
-  assert.ok(scan.error instanceof MonoidWrongCardError);
-  assert.deepEqual(state.savedRecoveries, []);
-  assert.deepEqual(state.backs, []);
+  assert.ok(find(state.render(), node => node.type === 'DetailsPopup'));
+  for (const label of ['Sync card', 'Export items', 'Remove card'])
+    assert.equal(state.button(label), undefined);
 });
 
 test('maintenance validates the peer before reusing its cached Secret PIN', async () => {

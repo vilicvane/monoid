@@ -847,11 +847,15 @@ export const SyncCardsView = observer(
                 </>
               )}
             {!!selectedCard.issues?.length && (
-              <CardResourceIssues
-                issues={selectedCard.issues}
-                items={selectedCard.items}
-              />
+              <>
+                <DetailsPopupDivider />
+                <CardResourceIssues
+                  issues={selectedCard.issues}
+                  items={selectedCard.items}
+                />
+              </>
             )}
+            <DetailsPopupDivider />
             <CardResourceList $contained data-popup-animation-group>
               {getCardResourceGroups(selectedCard.items).map(({item}) => (
                 <CardResourceItem
@@ -866,29 +870,8 @@ export const SyncCardsView = observer(
                 </KeyListItem>
               )}
             </CardResourceList>
-            <Buttons data-popup-animation-group>
-              {!collecting &&
-                (!flow.deferredCards.has(selectedCard.publicKey) ||
-                  flow.needsExport(selectedCard.publicKey)) &&
-                (!selectedCard.complete ||
-                  needsRecoveryExport ||
-                  (allMaintenanceTargets &&
-                    flow.needsExport(selectedCard.publicKey))) && (
-                  <Button
-                    color="primary"
-                    disabled={busy}
-                    onClick={() => {
-                      setDetails(undefined);
-                      readCard(selectedCard);
-                    }}
-                  >
-                    {selectedCard.complete &&
-                    flow.needsExport(selectedCard.publicKey)
-                      ? 'Export items'
-                      : 'Sync card'}
-                  </Button>
-                )}
-              {collecting && selectedCard !== maintenanceTarget && (
+            {collecting && selectedCard !== maintenanceTarget && (
+              <Buttons data-popup-animation-group>
                 <Button
                   color="neutral"
                   disabled={busy}
@@ -899,8 +882,8 @@ export const SyncCardsView = observer(
                 >
                   Remove card
                 </Button>
-              )}
-            </Buttons>
+              </Buttons>
+            )}
           </DetailsPopup>
         )}
         {confirmRestart && isViewActive() && (

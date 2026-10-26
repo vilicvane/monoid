@@ -280,7 +280,7 @@ test('skipped resources group by readable reason and pass aliases and indices to
   });
   assert.deepEqual(
     groups.map(group =>
-      text(find(group, node => node.type === 'ListSectionTitle')),
+      text(find(group, node => node.type === 'WarningMessage')),
     ),
     [
       'Not accepted by this card (1)',

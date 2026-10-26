@@ -3,7 +3,7 @@ import {styled} from 'styled-components';
 
 import {SafeIndexHex} from '../../../../@atomics.js';
 import type {CardItemIssue} from '../../../../@lib/monoid/index.js';
-import {ListSectionTitle} from '../../../@ui/list.js';
+import {WarningMessage} from '../../../@ui/message-content.js';
 
 import {CardResourceItem, CardResourceList} from './@resource-item.js';
 
@@ -19,7 +19,7 @@ const REASONS: Record<string, string> = {
 const Section = styled.section`
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
 `;
 
 /** Skipped items retain the same tags and identifiers as card resource lists. */
@@ -43,7 +43,7 @@ export function CardResourceIssues({
 
   return [...groups].map(([reason, group]) => (
     <Section key={reason}>
-      <ListSectionTitle>{`${reason} (${group.length})`}</ListSectionTitle>
+      <WarningMessage>{`${reason} (${group.length})`}</WarningMessage>
       <CardResourceList $contained>
         {group.map(issue => (
           <CardResourceItem
