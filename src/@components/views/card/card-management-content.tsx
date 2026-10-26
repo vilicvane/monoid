@@ -9,7 +9,15 @@ import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import type {CardInformation} from '../../../@lib/global-platform/card-information.js';
-import {APPLET_NAMES, type AppletStage} from '../../../@lib/monoid/index.js';
+import {
+  APPLET_NAMES,
+  type AppletStage,
+  getAppletCatalog,
+} from '../../../@lib/monoid/index.js';
+import type {
+  CardMaintenanceOperation,
+  CardMaintenanceRestoreResult,
+} from '../../../@services/index.js';
 import {
   CardGrid,
   CardPlaceholder,
@@ -28,8 +36,9 @@ import {
   ListItemDescription,
   ListItemName,
 } from '../../@ui/list.js';
-import {InfoMessage} from '../../@ui/message-content.js';
-import {CardSetupInformation} from '../safe/index.js';
+import {InfoMessage, WarningMessage} from '../../@ui/message-content.js';
+import {OperationSteps, Step} from '../../@ui/step.js';
+import {CardResourceIssues, CardSetupInformation} from '../safe/index.js';
 
 const Empty = styled.div`
   flex: 1;
@@ -109,6 +118,112 @@ const Hero = styled.div`
   max-width: 100%;
   margin: 12px auto 30px;
 `;
+
+function CardAppletHero({
+  id,
+  bundled,
+  recovery,
+}: {
+  id?: string;
+  bundled?: boolean;
+  recovery?: boolean;
+}): ReactNode {
+  return (
+    <Hero>
+      <CardPreview
+        id={id}
+        description={bundled ? 'bundle' : undefined}
+        $interrupted={recovery}
+      />
+    </Hero>
+  );
+}
+
+export function CardMaintenanceContent({
+  operation,
+  processing,
+  report,
+}: {
+  operation: CardMaintenanceOperation;
+  processing: boolean;
+  report?: CardMaintenanceRestoreResult;
+}): ReactNode {
+  const replacing = ['ready', 'replacing'].includes(operation.phase);
+  const activeStep = report?.complete ? 4 : report || !replacing ? 3 : 2;
+  const manualRestore = operation.phase === 'manual-restore';
+  const itemCount = operation.archive?.items.length ?? 0;
+
+  return (
+    <>
+      <CardAppletHero
+        id={operation.card.id}
+        bundled={!!operation.card.bundle}
+        recovery={!!operation.archive}
+      />
+      <OperationSteps $exiting={false}>
+        <Step
+          title="Save recovery"
+          numero={1}
+          activeNumero={activeStep}
+          summary={
+            manualRestore && !operation.archive
+              ? 'From another bundle card'
+              : `${itemCount} ${itemCount === 1 ? 'item' : 'items'}`
+          }
+        />
+        <Step
+          title={
+            operation.mode === 'fresh'
+              ? 'Fresh install'
+              : operation.mode === 'update'
+                ? 'Update applets'
+                : 'Reinstall applets'
+          }
+          numero={2}
+          activeNumero={activeStep}
+          processing={processing && activeStep === 2}
+          summary="Complete"
+        />
+        <Step
+          title="Restore"
+          numero={3}
+          activeNumero={activeStep}
+          processing={processing && activeStep === 3}
+          summary="Complete"
+          keepExpanded
+        >
+          {manualRestore && (
+            <InfoMessage>
+              Restore your items from another bundle card.
+            </InfoMessage>
+          )}
+          {!!report?.issues.length && (
+            <CardResourceIssues
+              issues={report.issues}
+              items={operation.archive?.items}
+            />
+          )}
+          {!!report?.droppedGrants.length && (
+            <WarningMessage>
+              Access not restored for{' '}
+              {report.droppedGrants
+                .map(aid => {
+                  const applet = getAppletCatalog().find(
+                    applet =>
+                      (
+                        applet.instanceAid ?? applet.appletAid
+                      )?.toLowerCase() === aid,
+                  );
+                  return applet ? APPLET_NAMES[applet.stage] : aid;
+                })
+                .join(', ')}
+            </WarningMessage>
+          )}
+        </Step>
+      </OperationSteps>
+    </>
+  );
+}
 
 const Applets = styled(IconList)`
   flex: none;
@@ -193,26 +308,18 @@ export function CardAppletsContent({
   id,
   bundled,
   recovery,
-  manualRestore,
   applets,
   onSelectApplet,
 }: {
   id?: string;
   bundled?: boolean;
   recovery?: boolean;
-  manualRestore?: boolean;
   applets: AppletDisplay[];
   onSelectApplet?: (stage: AppletStage) => void;
 }): ReactNode {
   return (
     <>
-      <Hero>
-        <CardPreview
-          id={id}
-          description={bundled ? 'bundle' : undefined}
-          $interrupted={recovery}
-        />
-      </Hero>
+      <CardAppletHero id={id} bundled={bundled} recovery={recovery} />
       <Applets>
         {applets.map(applet => {
           const status = applet.unknown
@@ -269,9 +376,6 @@ export function CardAppletsContent({
           );
         })}
       </Applets>
-      {manualRestore && (
-        <InfoMessage>Restore your items from another bundle card.</InfoMessage>
-      )}
     </>
   );
 }

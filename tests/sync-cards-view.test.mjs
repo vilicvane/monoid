@@ -170,7 +170,7 @@ const {useViewActive} = await import(
   '../.bld/app/@components/@view/use-view-active.js'
 );
 for (const [path, names] of [
-  ['@monoid/card-item-issues', ['CardItemIssues']],
+  ['views/safe/@card/card-resource-issues', ['CardResourceIssues']],
   [
     '@monoid/card-preview',
     ['CardGrid', 'CardPlaceholder', 'CardPreview', 'CardPreviewButton'],
@@ -1131,6 +1131,18 @@ test('a conflicting collection stays actionable and reports the conflict through
   assert.equal(state.session.phase, 'complete');
   assert.deepEqual(state.errors, []);
   assert.ok(state.session.cards.some(card => card.issues?.length));
+  const card = state.session.cards.find(card => card.issues?.length);
+  const preview = find(
+    state.tree,
+    node =>
+      node.type === 'CardPreviewButton' &&
+      node.props['aria-label'] === `Card ${card.id}`,
+  );
+  preview.props.onClick();
+  state.render();
+  const issues = find(state.tree, node => node.type === 'CardResourceIssues');
+  assert.deepEqual(issues.props.issues, card.issues);
+  assert.deepEqual(issues.props.items, card.items);
   assert.ok(state.button('Back to Safe'));
   assert.ok(find(state.tree, node => node.type === 'WarningMessage'));
   assert.equal(

@@ -6,6 +6,7 @@ export * from './card-information-details.js';
 export * from './card-information-popup.js';
 export * from './card-pin-update.js';
 export * from './card-reset-session.js';
+export * from './card-resource-issues.js';
 export * from './card-secret-pin-session.js';
 export * from './card-setup-information.js';
 export * from './card-setup-pin.js';

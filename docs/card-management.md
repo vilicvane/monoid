@@ -72,7 +72,19 @@ The persisted recovery format keeps its existing `key` field for item metadata
 so saved archives and their checksums remain intact. The card protocol uses
 `metadata`; the maintenance service maps it at the storage boundary.
 
-Restoration imports the complete archive and lists skipped items with their reasons.
+During maintenance, Card Applets replaces the catalogue with the card preview and
+three shared operation steps: **Save recovery**, **Update applets** / **Reinstall
+applets** / **Fresh install**, and **Restore**. A batch keeps its card grid above
+the current card's preview. Recovery shows the archive item count (or **From
+another bundle card** for manual recovery); the active installation or restore
+step shows processing while the scan runs. Restore covers items and applet access
+in the same scan.
+
+Restoration imports the complete archive and lists skipped items inside Restore,
+using the same type, alias and index rows as Card and Sync. Items are grouped by
+readable reason with a count, including in Sync's card details. Dropped applet
+access appears below these groups. Completion keeps any omission report in the
+Restore step alongside the completion display until returning to the catalogue.
 After a complete pass containing only deterministic card rejections (for example
 INVALID_PARAMETER) or conflicts, **Finish without N items** asks for explicit
 confirmation. It verifies identity and the inventory against the archive minus

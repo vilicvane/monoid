@@ -6,6 +6,7 @@ export type {
 } from './@card/index.js';
 export {
   CardInformationPopup,
+  CardResourceIssues,
   CardResourceItem,
   CardResourceList,
   CardSetupInformation,

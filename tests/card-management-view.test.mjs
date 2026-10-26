@@ -212,7 +212,6 @@ const {useViewActive} = await import(
   '../.bld/app/@components/@view/use-view-active.js'
 );
 for (const [path, names] of [
-  ['@monoid/card-item-issues', ['CardItemIssues']],
   ['@monoid/applet-install-progress', ['AppletInstallProgressContent']],
   ['@monoid/monoid-scan-prompt', ['MonoidScanStatePromptProgress']],
   ['@ui/app-icon', ['AppIcon']],
@@ -232,6 +231,7 @@ for (const [path, names] of [
       'CardInformationContent',
       'CardScanPlaceholder',
       'CardMaintenanceCards',
+      'CardMaintenanceContent',
     ],
   ],
   ['views/card/applet-selection-popup', ['AppletSelectionPopup']],
@@ -946,7 +946,8 @@ test('bundle replacement collects its target and opens Sync only after NFC close
   });
   state.unmount();
   state.render();
-  assert.ok(state.node('CardAppletsContent'));
+  assert.ok(state.node('CardMaintenanceContent'));
+  assert.equal(state.node('CardAppletsContent'), undefined);
   assert.equal(state.view.maintenanceSyncId, handoff.options.syncId);
   assert.equal(
     state.entrances.syncCardsStore.get(handoff.options.syncId),
@@ -963,9 +964,13 @@ test('bundle replacement collects its target and opens Sync only after NFC close
     state.view.$match.$exact.$active = true;
   });
   state.render();
-  assert.ok(state.node('CardAppletsContent'));
+  assert.ok(state.node('CardMaintenanceContent'));
+  assert.equal(state.node('CardAppletsContent'), undefined);
   assert.equal(state.node('CardScanPlaceholder'), undefined);
-  assert.equal(state.node('CardAppletsContent').props.recovery, true);
+  assert.equal(
+    state.node('CardMaintenanceContent').props.operation.archive,
+    state.pending.archive,
+  );
   assert.equal(
     text(state.node('ViewContent').props.footer),
     'Continue installation',
@@ -1005,7 +1010,8 @@ test('bundle replacement collects its target and opens Sync only after NFC close
   nextFlow.finishMaintenance();
   state.unmount();
   state.render();
-  assert.ok(state.node('CardAppletsContent'));
+  assert.ok(state.node('CardMaintenanceContent'));
+  assert.equal(state.node('CardAppletsContent'), undefined);
   assert.equal(state.node('CardScanPlaceholder'), undefined);
   assert.equal(
     text(state.node('ViewContent').props.footer),
@@ -1916,7 +1922,11 @@ for (const failureStage of [
     assert.equal(state.pending.archive, archive);
     assert.equal(state.node('OperationComplete'), undefined);
     assert.equal(state.node('CardScanPlaceholder'), undefined);
-    assert.equal(state.node('CardAppletsContent').props.recovery, true);
+    assert.equal(
+      state.node('CardMaintenanceContent').props.operation.archive,
+      archive,
+    );
+    assert.equal(state.node('CardAppletsContent'), undefined);
     assert.equal(text(state.node('ViewContent').props.footer), 'Restore items');
     assert.equal(state.node('ViewContent').props.footer.props.disabled, false);
     assert.deepEqual(
@@ -1988,7 +1998,11 @@ test('recovery failure after a real replacement still discards the old card snap
   state.click('Scan a card');
   await state.tap();
   assert.equal(text(state.node('ViewContent').props.footer), 'Restore items');
-  assert.equal(state.node('CardAppletsContent').props.recovery, true);
+  assert.equal(
+    state.node('CardMaintenanceContent').props.operation.archive,
+    archive,
+  );
+  assert.equal(state.node('CardAppletsContent'), undefined);
 });
 
 test('fresh installation interrupted during PIN setup needs only a new card read, not a saved reinstall', async () => {
@@ -2082,7 +2096,8 @@ test('Start over confirms, awaits discard and keeps the current card without ope
   state.node('ConfirmPopup').props.onConfirm();
   await state.flush();
   assert.equal(state.pending, saved);
-  assert.ok(state.node('CardAppletsContent'));
+  assert.ok(state.node('CardMaintenanceContent'));
+  assert.equal(state.node('CardAppletsContent'), undefined);
   assert.equal(state.node('ViewContent').props.footer.props.disabled, true);
   assert.deepEqual(
     state.events.filter(event => event.type === 'discard-prepared'),
@@ -2166,7 +2181,8 @@ test('failed Start over keeps the recovery action and card visible', async () =>
   state.node('ConfirmPopup').props.onConfirm();
   await state.flush();
   assert.equal(state.pending, saved);
-  assert.ok(state.node('CardAppletsContent'));
+  assert.ok(state.node('CardMaintenanceContent'));
+  assert.equal(state.node('CardAppletsContent'), undefined);
   assert.equal(
     text(state.node('ViewContent').props.footer),
     'Continue installation',
@@ -2270,6 +2286,10 @@ async function mountRejectedRestore(batch = false) {
     {index: 'f2010000000000000001', reason: 'INVALID_PARAMETER'},
     {index: '05140000000000000002', reason: 'Conflict'},
   ];
+  operation.archive.items = [
+    {index: issues[0].index, alias: 'Example OTP'},
+    {index: issues[1].index, alias: 'Signing key'},
+  ];
   state.maintenance.restore = async (
     _applet,
     id,
@@ -2301,9 +2321,14 @@ async function mountRejectedRestore(batch = false) {
 for (const batch of [false, true]) {
   test(`${batch ? 'batch' : 'single-card'} rejected recovery lists issues and requires explicit confirmation to finish`, async () => {
     const state = await mountRejectedRestore(batch);
-    const list = state.node('CardItemIssues');
-    assert.equal(list.props.title, '2 items not restored');
-    assert.deepEqual(list.props.issues, [
+    const process = state.node('CardMaintenanceContent');
+    assert.equal(state.node('CardAppletsContent'), undefined);
+    assert.equal(process.props.processing, false);
+    assert.deepEqual(process.props.operation.archive.items, [
+      {index: 'f2010000000000000001', alias: 'Example OTP'},
+      {index: '05140000000000000002', alias: 'Signing key'},
+    ]);
+    assert.deepEqual(process.props.report.issues, [
       {index: 'f2010000000000000001', reason: 'INVALID_PARAMETER'},
       {index: '05140000000000000002', reason: 'Conflict'},
     ]);
@@ -2325,8 +2350,13 @@ for (const batch of [false, true]) {
     await state.tap();
     assert.deepEqual(state.errors, []);
     assert.equal(state.pending, undefined);
-    assert.match(text(state.render()), /Access not restored for/);
-    assert.match(text(state.render()), /f06d6f6e6f69640501/);
+    const completedProcess = state.node('CardMaintenanceContent');
+    assert.equal(completedProcess.props.report.complete, true);
+    assert.deepEqual(completedProcess.props.report.droppedGrants, [
+      'f06d6f6e6f69640501',
+    ]);
+    assert.equal(completedProcess.props.operation, process.props.operation);
+    assert.equal(state.node('CardAppletsContent'), undefined);
     if (batch) {
       assert.equal(
         text(state.node('ViewContent').props.footer),
@@ -2338,7 +2368,13 @@ for (const batch of [false, true]) {
           .props.cards.map(card => card.complete),
         [true, false],
       );
-    } else assert.ok(state.node('OperationComplete'));
+    } else {
+      assert.ok(state.node('OperationComplete'));
+      state.click('Back to Card Applets');
+      assert.ok(state.node('CardAppletsContent'));
+      assert.equal(state.node('CardMaintenanceContent'), undefined);
+      assert.equal(state.node('OperationComplete'), undefined);
+    }
   });
 }
 
@@ -2352,7 +2388,10 @@ test('leaving unfinished recovery keeps it and a fresh page can resume', async (
   state.click('Restore items');
   await state.answer();
   await state.tap();
-  assert.equal(state.node('CardItemIssues').props.issues.length, 2);
+  assert.equal(
+    state.node('CardMaintenanceContent').props.report.issues.length,
+    2,
+  );
 });
 
 test('a transport failure removes a stale finish offer and keeps retry and exit available', async () => {
@@ -2375,3 +2414,29 @@ test('a transport failure removes a stale finish offer and keeps retry and exit 
   assert.equal(text(state.node('ViewContent').props.footer), 'Restore items');
   assert.ok(state.pending.archive);
 });
+
+for (const phase of ['ready', 'replacing', 'restore', 'manual-restore']) {
+  test(`the scanned card uses the process layout in ${phase}`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    assert.ok(state.node('CardAppletsContent'));
+    state.pending = {
+      id: 'process',
+      mode: 'reinstall',
+      phase,
+      card: {
+        ...readCardIdentity(state.initialized),
+        bundle: false,
+        appletAid: AID,
+      },
+    };
+    const content = state.node('CardMaintenanceContent');
+    assert.equal(content.props.operation, state.pending);
+    assert.equal(content.props.processing, false);
+    assert.equal(state.node('CardAppletsContent'), undefined);
+    assert.equal(state.node('OperationComplete'), undefined);
+    assert.equal(state.node('CardScanPlaceholder'), undefined);
+  });
+}

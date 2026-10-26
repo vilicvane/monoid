@@ -48,7 +48,6 @@ import {
   uint8ArrayToHex,
 } from '../../../@utils/index.js';
 import {AppletInstallProgressContent} from '../../@monoid/applet-install-progress.js';
-import {CardItemIssues} from '../../@monoid/card-item-issues.js';
 import {MonoidScanStatePromptProgress} from '../../@monoid/monoid-scan-prompt.js';
 import {
   type CardSetupPINs,
@@ -63,7 +62,6 @@ import {
   DetailsPopupDivider,
   DetailsPopupTitle,
 } from '../../@ui/details-popup.js';
-import {InfoMessage, WarningMessage} from '../../@ui/message-content.js';
 import {OperationComplete} from '../../@ui/operation-complete.js';
 import {useToast} from '../../@ui/toast.js';
 import {useInputModal} from '../../@ui/use-input-modal.js';
@@ -83,6 +81,7 @@ import {
   CardAppletsContent,
   CardInformationContent,
   CardMaintenanceCards,
+  CardMaintenanceContent,
   CardScanPlaceholder,
 } from './card-management-content.js';
 type Action =
@@ -162,6 +161,7 @@ export const CardManagementView = observer(
     const [complete, setComplete] = useState(false);
     const [restoreReport, setRestoreReport] = useState<{
       operationId: string;
+      operation: CardMaintenanceOperation;
       result: CardMaintenanceRestoreResult;
       canFinish: boolean;
     }>();
@@ -248,6 +248,15 @@ export const CardManagementView = observer(
     const initialized =
       hello && hello.pins.secret !== false && hello.pins.access !== false;
     const recovery = !!pending?.archive;
+    const reportedOperation =
+      restoreReport &&
+      (restoreReport.result.issues.length ||
+        restoreReport.result.droppedGrants.length)
+        ? restoreReport
+        : undefined;
+    const processOperation =
+      reportedOperation?.operation ??
+      (pending?.phase !== 'setup' ? pending : undefined);
     const manualRestore = pending?.phase === 'manual-restore';
     const needsResume = pending && !manualRestore;
     const needsReplacement =
@@ -707,6 +716,7 @@ export const CardManagementView = observer(
             );
             restoration = {
               operationId: saved.id,
+              operation: saved,
               result: restored,
               canFinish: !!maintenance.get(saved.id)?.rejectedItems?.length,
             };
@@ -985,6 +995,7 @@ export const CardManagementView = observer(
                         .then(() => {
                           setBatchId(undefined);
                           setComplete(false);
+                          setRestoreReport(undefined);
                         })
                         .catch(error =>
                           errorService.catch(Promise.reject(error)),
@@ -1001,7 +1012,10 @@ export const CardManagementView = observer(
                   color="neutral"
                   onClick={() => {
                     if (back) back();
-                    else setComplete(false);
+                    else {
+                      setComplete(false);
+                      setRestoreReport(undefined);
+                    }
                   }}
                 >
                   {back ? backLabel : 'Back to Card Applets'}
@@ -1061,45 +1075,44 @@ export const CardManagementView = observer(
               )
             }
           >
-            {batch ? (
-              <>
-                {batchComplete && <OperationComplete />}
-                <CardMaintenanceCards
-                  disabled={busy}
-                  cards={batch.targets.map(target => {
-                    const operation = maintenance.get(target.operationId);
-                    return {
-                      publicKey: target.card.publicKey!,
-                      id: target.card.id,
-                      complete: target.complete,
-                      status: target.complete
-                        ? 'complete'
-                        : operation?.phase === 'restore'
-                          ? 'restore items'
-                          : operation?.phase === 'replacing'
-                            ? 'resume installation'
-                            : 'scan to install',
-                    };
-                  })}
-                />
-              </>
-            ) : complete ? (
-              <>
+            {(batchComplete || (complete && !batch)) &&
+              (!processOperation || reportedOperation?.result.complete) && (
                 <OperationComplete />
-                {manualRestore && (
-                  <InfoMessage>
-                    Restore your items from another bundle card.
-                  </InfoMessage>
-                )}
-              </>
-            ) : card.unsupported || (!card.information && !installation) ? (
+              )}
+            {batch && (
+              <CardMaintenanceCards
+                disabled={busy}
+                cards={batch.targets.map(target => {
+                  const operation = maintenance.get(target.operationId);
+                  return {
+                    publicKey: target.card.publicKey!,
+                    id: target.card.id,
+                    complete: target.complete,
+                    status: target.complete
+                      ? 'complete'
+                      : operation?.phase === 'restore'
+                        ? 'restore items'
+                        : operation?.phase === 'replacing'
+                          ? 'resume installation'
+                          : 'scan to install',
+                  };
+                })}
+              />
+            )}
+            {processOperation ? (
+              <CardMaintenanceContent
+                operation={processOperation}
+                processing={busy}
+                report={reportedOperation?.result}
+              />
+            ) : batch || complete ? null : card.unsupported ||
+              (!card.information && !installation) ? (
               <CardScanPlaceholder unsupported={card.unsupported} />
             ) : appletsPage ? (
               <CardAppletsContent
                 id={hello ? uint8ArrayToHex(hello.id) : pending?.card.id}
                 bundled={!!(hello?.bundle || pending?.card.bundle)}
                 recovery={recovery}
-                manualRestore={manualRestore}
                 applets={[
                   ...(['identity', 'monoid'] as const).map(name => ({
                     name,
@@ -1137,28 +1150,6 @@ export const CardManagementView = observer(
               <CardInformationContent information={card.information} />
             ) : (
               <CardScanPlaceholder />
-            )}
-            {!!restoreReport?.result.issues.length && (
-              <CardItemIssues
-                title={`${restoreReport.result.issues.length} items not restored`}
-                issues={restoreReport.result.issues}
-              />
-            )}
-            {!!restoreReport?.result.droppedGrants.length && (
-              <WarningMessage>
-                Access not restored for{' '}
-                {restoreReport.result.droppedGrants
-                  .map(aid => {
-                    const applet = getAppletCatalog().find(
-                      applet =>
-                        (
-                          applet.instanceAid ?? applet.appletAid
-                        )?.toLowerCase() === aid,
-                    );
-                    return applet ? APPLET_NAMES[applet.stage] : aid;
-                  })
-                  .join(', ')}
-              </WarningMessage>
             )}
           </ViewContent>
         </View>
