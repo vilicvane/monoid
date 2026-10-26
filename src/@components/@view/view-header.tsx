@@ -22,14 +22,6 @@ export const ViewHeaderTitle = styled.h1`
   margin: 0;
 `;
 
-export const ViewHeaderTags = styled.div`
-  grid-column: 2;
-  display: flex;
-  align-items: baseline;
-  gap: var(--view-header-gap);
-  min-width: 0;
-`;
-
 export const ViewHeaderButton = styled(IconButton).attrs({feedback: 'color'})`
   grid-column: 3;
   align-self: center;
@@ -71,6 +63,19 @@ const IdentifierContainer = styled(WhiteTag)`
   padding-right: 5px;
   z-index: 1;
   border-radius: 4px;
+`;
+
+export const ViewHeaderTags = styled.div`
+  grid-column: 2;
+  display: flex;
+  align-items: baseline;
+  gap: var(--view-header-gap);
+  min-width: 0;
+
+  /* An alias tucks under its identifier, as directly in the header. */
+  > ${IdentifierContainer} + :not(${IdentifierContainer}) {
+    margin-left: calc(-1 * var(--view-header-gap) - var(--tag-overlap));
+  }
 `;
 
 const ViewHeaderContainer = styled.div`

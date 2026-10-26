@@ -88,8 +88,16 @@ function mount(options = {}) {
       ...options,
     });
   };
-  state.input = () =>
-    find(state.render(), node => node.props?.['aria-label'] === 'Alias');
+  state.aliasToggle = () =>
+    find(state.render(), node => node.props?.children === 'Alias');
+  state.input = () => {
+    state.aliasToggle()?.props.onChange(true);
+    return find(
+      state.render(),
+      node => node.props?.['aria-label'] === 'Card alias',
+    );
+  };
+  state.button = () => find(state.render(), node => node.type === 'Button');
   state.install = async () => {
     find(state.render(), node => node.type === 'Button').props.onClick();
     await new Promise(resolve => setImmediate(resolve));
@@ -115,6 +123,18 @@ test('alias validation stops installation before passing options', async () => {
     find(state.render(), node => node.type === 'InfoMessage').props.children,
     /64 UTF-8 bytes/,
   );
+});
+
+test('the alias switch reveals its input and blocks an empty alias', async () => {
+  const state = mount();
+  assert.equal(
+    find(state.render(), node => node.props?.['aria-label'] === 'Card alias'),
+    undefined,
+  );
+  await state.install();
+  assert.deepEqual(state.installed, [[{}, undefined]]);
+  assert.equal(state.input().props.placeholder, 'Enter card alias');
+  assert.equal(state.button().props.disabled, true);
 });
 
 test('retained Identity and fresh installation do not offer an alias override', () => {

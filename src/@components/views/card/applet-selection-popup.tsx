@@ -51,9 +51,11 @@ export function AppletSelectionPopup({
   const [authorityEnabled, setAuthorityEnabled] = useState(!!authorityUrl);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string>();
+  const [aliasEnabled, setAliasEnabled] = useState(false);
   const [alias, setAlias] = useState('');
   const controller = useRef<AbortController | undefined>(undefined);
   const installsIdentity = fresh || installation?.identity.installed !== true;
+  const setsAlias = installsIdentity && !fresh && aliasEnabled;
   useEffect(() => () => controller.current?.abort(), []);
 
   function dismiss(): void {
@@ -68,7 +70,7 @@ export function AppletSelectionPopup({
     setError(undefined);
     setConnecting(true);
     try {
-      if (installsIdentity && !fresh) validateCardAlias(alias);
+      if (setsAlias) validateCardAlias(alias);
       const options =
         installsIdentity && authorityEnabled
           ? await resolveOTPAuthorityInstallationOptions(
@@ -77,7 +79,7 @@ export function AppletSelectionPopup({
             )
           : {};
       task.signal.throwIfAborted();
-      onInstall(options, installsIdentity && !fresh ? alias : undefined);
+      onInstall(options, setsAlias ? alias : undefined);
     } catch (error) {
       if (!task.signal.aborted)
         setError(
@@ -129,10 +131,20 @@ export function AppletSelectionPopup({
       {installsIdentity && (
         <DetailsPopupSection>
           {!fresh && (
+            <AppletToggle
+              checked={aliasEnabled}
+              disabled={connecting}
+              onChange={setAliasEnabled}
+            >
+              Alias
+            </AppletToggle>
+          )}
+          {setsAlias && (
             <InfoSectionItem as="label">
-              <InfoSectionItemLabel>Alias (optional)</InfoSectionItemLabel>
+              <InfoSectionItemLabel>Card alias</InfoSectionItemLabel>
               <PopupInput
-                aria-label="Alias"
+                aria-label="Card alias"
+                placeholder="Enter card alias"
                 value={alias}
                 disabled={connecting}
                 onChange={event => setAlias(event.target.value)}
@@ -169,6 +181,7 @@ export function AppletSelectionPopup({
         disabled={
           connecting ||
           (installsIdentity && authorityEnabled && !authorityUrl.trim()) ||
+          (setsAlias && !alias.trim()) ||
           (!fresh &&
             installation?.monoid.installed === true &&
             !missingSelection)

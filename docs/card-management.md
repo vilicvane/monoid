@@ -57,8 +57,9 @@ Card aliases use `0x27 Set Alias {alias: string}` with Secret PIN authentication
 The shared validator counts UTF-8 bytes (at most 64), without trimming or a
 character limit; an empty string clears the alias. Editing prompts for the alias
 and Secret PIN before scanning the named card, then verifies Hello. An uncertain
-write stops without replay. First Identity installation offers an optional Alias
-field and sets it in the same scan as PIN setup.
+write stops without replay. First Identity installation offers an **Alias** switch
+that reveals the alias field, like **Authority**; the alias is set in the same scan
+as PIN setup.
 
 Update and Reinstall replace **Monoid only**. Identity, its Secret PIN, and bundle
 membership remain. Fresh install is a separate, explicitly confirmed action that
