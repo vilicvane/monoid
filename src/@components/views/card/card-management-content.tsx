@@ -24,6 +24,7 @@ import {
   CardPlaceholder,
   CardPreview,
   CardPreviewButton,
+  type CardScanState,
 } from '../../@monoid/card-preview.js';
 import {AppIcon} from '../../@ui/app-icon.js';
 import {AppletIcon} from '../../@ui/feature-icons.js';
@@ -311,7 +312,7 @@ export function CardMaintenanceCards({
     publicKey: string;
     id?: string;
     complete: boolean;
-    pending?: boolean;
+    scan: CardScanState;
     status: string;
     interrupted?: boolean;
   }[];
@@ -330,7 +331,7 @@ export function CardMaintenanceCards({
           <CardPreview
             id={card.id}
             description={card.status}
-            $pending={card.pending ?? !card.complete}
+            $scan={card.scan}
             $interrupted={card.interrupted}
           />
         </CardPreviewButton>

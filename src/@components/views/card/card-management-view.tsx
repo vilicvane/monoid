@@ -1143,15 +1143,17 @@ export const CardManagementView = observer(
                       nextBatchOperation?.mode ??
                       'reinstall'
                     }
-                    // Only the next card needs a scan now, so only it is dimmed;
-                    // later cards wait like Sync's "restore later" cards.
                     cards={batch.targets.map(target => {
                       const next = target === nextBatchTarget;
                       return {
                         publicKey: target.card.publicKey!,
                         id: target.card.id,
                         complete: target.complete,
-                        pending: next,
+                        scan: target.complete
+                          ? 'ready'
+                          : next
+                            ? 'next'
+                            : 'pending',
                         interrupted: !target.complete,
                         status: target.complete
                           ? 'complete'

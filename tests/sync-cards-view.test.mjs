@@ -1735,12 +1735,12 @@ test('a failed last-peer export can retry from a different completed peer withou
       node =>
         node.type === 'CardPreview' && node.props.id === hex(card.hello.id),
     );
-  assert.equal(preview(first).props.$pending, true);
+  assert.equal(preview(first).props.$scan, 'next');
   assert.equal(preview(first).props.description, 'scan to export');
-  assert.equal(preview(last).props.$pending, false);
+  assert.equal(preview(last).props.$scan, 'pending');
   assert.equal(preview(last).props.description, 'recovery pending');
   assert.equal(preview(state.target).props.description, 'recovery pending');
-  assert.equal(preview(state.target).props.$pending, false);
+  assert.notEqual(preview(state.target).props.$scan, 'next');
   const writes = state.peers.map(peer => [...peer.requests]);
   const authentications = first.authentications.length;
   await state.startMaintenanceScan();
@@ -1936,7 +1936,10 @@ for (const count of [2, 3]) {
           node => node.type === 'CardPreview' && node.props.id === card.id,
         ),
       );
-      assert.equal(previews.filter(node => node.props.$pending).length, 1);
+      assert.equal(
+        previews.filter(node => node.props.$scan === 'next').length,
+        1,
+      );
       assert.equal(previews[index].props.description, 'scan to export');
       for (const [other, preview] of previews.entries()) {
         if (other !== index)

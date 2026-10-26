@@ -648,7 +648,7 @@ export const SyncCardsView = observer(
               id={source.id}
               subtitle={bundleLabel(source.bundle)}
               description="scan to read"
-              $pending
+              $scan="next"
             />
           </CardPreviewButton>
         )}
@@ -698,13 +698,18 @@ export const SyncCardsView = observer(
                           : 'synced'
                         : `items ${card.completed}/${card.total}`
               }
-              // Dimmed while this card still needs a scan in the current step.
-              $pending={
+              $scan={
                 flow.savingRecovery
                   ? card === flow.nextRecoveryCard
-                  : !collecting &&
-                    !flow.deferredCards.has(card.publicKey) &&
-                    !card.complete
+                    ? 'next'
+                    : flow.needsExport(card.publicKey)
+                      ? 'pending'
+                      : 'ready'
+                  : collecting
+                    ? undefined
+                    : card.complete && !flow.deferredCards.has(card.publicKey)
+                      ? 'ready'
+                      : 'pending'
               }
               $interrupted={
                 flow.interruptedCards.has(card.publicKey) ||

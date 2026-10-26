@@ -709,7 +709,13 @@ export const SetupCardView = observer(
                         ? 'pending'
                         : 'ready'
                 }
-                $pending={configuring && card.status !== 'complete'}
+                $scan={
+                  configuring
+                    ? card.status === 'complete'
+                      ? 'ready'
+                      : 'pending'
+                    : undefined
+                }
                 $interrupted={interruptedCard === card.publicKey}
               />
             </CardPreviewButton>

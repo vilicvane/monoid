@@ -353,7 +353,7 @@ export const ExtendBundleView = observer(
                       description={
                         session.phase === 'requesting' ? 'pending' : 'complete'
                       }
-                      $pending={session.phase === 'requesting'}
+                      $scan={session.phase === 'requesting' ? 'next' : 'ready'}
                     />
                   ) : (
                     <CardPreviewButton
@@ -368,6 +368,7 @@ export const ExtendBundleView = observer(
                     <CardPreview
                       id={session.approver.id}
                       description="complete"
+                      $scan="ready"
                     />
                   ) : (
                     <CardPreviewButton
@@ -399,7 +400,13 @@ export const ExtendBundleView = observer(
                     <CardPreview
                       id={session.target.id}
                       description={activeNumero === 3 ? 'pending' : 'complete'}
-                      $pending={activeNumero === 3}
+                      $scan={
+                        activeNumero === 3
+                          ? 'next'
+                          : activeNumero > 3
+                            ? 'ready'
+                            : undefined
+                      }
                     />
                   )}
                 </CardGrid>

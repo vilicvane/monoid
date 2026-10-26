@@ -76,9 +76,10 @@ During maintenance, Card Applets replaces the catalogue with the card preview an
 three shared operation steps: **Save recovery**, **Update applets** / **Reinstall
 applets** / **Fresh install**, and **Restore**. A batch instead shows two steps
 like Sync: **Save recovery** (the card count), then **Update applets** /
-**Reinstall applets** holding the card grid. Only the next card is dimmed ("scan
-to install" or "scan to restore"); later cards read "install later", finished
-ones "complete", and cards still holding a recovery archive are yellow. The
+**Reinstall applets** holding the card grid. The next card has the scan ring
+("scan to install" or "scan to restore"); later cards read "install later",
+finished ones "complete" and are dimmed, and cards still holding a recovery
+archive are yellow. The
 footer names the next action, not a card ID. Recovery shows the archive item count; the active
 installation or restore step shows processing while the scan runs. Restore covers
 items and applet access in the same scan.
@@ -125,7 +126,8 @@ including opaque items; conflicts, missing content or failed exports block
 replacement. An explicit retry may use another processed member.
 
 Maintenance Sync calls its second step **Save recovery**. Only the next export
-card is dimmed; other cards show **recovery saved** or **recovery pending**.
+card has the scan ring; other cards show **recovery saved** or **recovery
+pending**.
 Another eligible card may still supply the archive. Once all recoveries are saved,
 the steps stay visible with **Continue to installation**. This explicit action
 returns to Card Applets, where installation proceeds one card at a time.
@@ -138,7 +140,7 @@ drops its PINs. Completing or discarding an operation drops that card's PIN.
 App restart retains no Secret PINs. Fresh install and other actions still prompt
 as before, and Access PIN handling is unchanged.
 
-Card Applets displays the persisted target batch. Cards remain dimmed until their
+Card Applets displays the persisted target batch. Cards are dimmed once their
 installation, item restoration and original grant verification finish (including
 explicitly confirmed omissions). Each target reinstalls its own original optional
 applet list and restores its own grants, independently of the starting card. The

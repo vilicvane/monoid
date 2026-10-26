@@ -280,14 +280,14 @@ test('a batch shows saved recoveries, then its card grid in one active step', ()
       publicKey: 'a',
       id: '00000001',
       complete: false,
-      pending: true,
+      scan: 'next',
       status: 'scan to install',
     },
     {
       publicKey: 'b',
       id: '00000002',
       complete: false,
-      pending: false,
+      scan: 'pending',
       status: 'install later',
     },
   ];
