@@ -50,7 +50,6 @@ export function CardResourceIssues({
             key={issue.index}
             data={{
               index: SafeIndexHex.satisfies(issue.index),
-              type: parseInt(issue.index.slice(0, 4), 16),
               alias: aliases.get(issue.index),
             }}
           />

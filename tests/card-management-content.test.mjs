@@ -32,7 +32,7 @@ for (const [path, names] of [
     ],
   ],
   ['@ui/message-content', ['InfoMessage', 'WarningMessage']],
-  ['@ui/step', ['OperationSteps', 'Step']],
+  ['@ui/step', ['Steps', 'Step']],
   [
     '@monoid/card-preview',
     ['CardGrid', 'CardPlaceholder', 'CardPreview', 'CardPreviewButton'],
@@ -220,7 +220,27 @@ test('manual recovery without an archive explains its source inside Restore', ()
   );
 });
 
-test('restore results replace hints and stay within Restore after completion', () => {
+test('completed maintenance marks all steps done while the parent animates the process out', () => {
+  const tree = CardMaintenanceContent({
+    operation,
+    processing: false,
+    complete: true,
+  });
+  assert.ok(find(tree, node => node.type === 'Steps'));
+  for (const numero of [1, 2, 3]) {
+    assert.equal(
+      find(tree, node => node.type === 'Step' && node.props.numero === numero)
+        .props.activeNumero,
+      4,
+    );
+  }
+  assert.equal(
+    find(tree, node => node.type === 'InfoMessage'),
+    undefined,
+  );
+});
+
+test('restore results replace hints and remain available during the completion exit', () => {
   for (const [phase, complete] of [
     ['restore', false],
     ['restore', true],
@@ -260,7 +280,7 @@ test('restore results replace hints and stay within Restore after completion', (
   }
 });
 
-test('skipped resources group by readable reason and retain alias, type and index', () => {
+test('skipped resources group by readable reason and pass aliases and indices to resource items', () => {
   const reasons = [
     'INVALID_PARAMETER',
     'Conflict',
@@ -295,7 +315,6 @@ test('skipped resources group by readable reason and retain alias, type and inde
   assert.deepEqual(first.props.data, {
     index: issues[0].index,
     alias: 'Example OTP',
-    type: 0xf201,
   });
   assert.equal(
     find(groups[1], node => node.type === 'CardResourceItem').props.data.alias,

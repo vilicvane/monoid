@@ -66,6 +66,9 @@ mock.module('styled-components', {
     }),
   },
 });
+mock.module('../.bld/app/@components/@animations.js', {
+  namedExports: {popOutAnimationCSS: ''},
+});
 mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => fixture.entrances},
 });
@@ -349,6 +352,12 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     node(type) {
       return find(state.render(), node => node.type === type);
     },
+    process() {
+      return find(
+        state.render(),
+        node => node.props?.onAnimationEnd && '$exiting' in node.props,
+      );
+    },
     click(label) {
       const button = find(
         state.render(),
@@ -551,6 +560,26 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
   return state;
 }
 afterEach(() => owners.splice(0).forEach(owner => owner.unmount()));
+
+function finishProcessExit(state) {
+  const process = state.process();
+  assert.equal(process.props.$exiting, true);
+  assert.equal(state.node('OperationComplete'), undefined);
+  assert.ok(
+    state.node('CardMaintenanceContent') || state.node('CardMaintenanceCards'),
+  );
+  const element = {};
+  process.props.onAnimationEnd({target: {}, currentTarget: element});
+  assert.ok(state.process(), 'ignore a child animation ending');
+  assert.equal(state.node('OperationComplete'), undefined);
+  process.props.onAnimationEnd({target: element, currentTarget: element});
+  assert.ok(state.node('OperationComplete'));
+  assert.equal(state.process(), undefined);
+  assert.equal(state.node('CardMaintenanceContent'), undefined);
+  assert.equal(state.node('CardMaintenanceCards'), undefined);
+  assert.equal(state.node('CardAppletsContent'), undefined);
+  assert.equal(state.node('ViewContent').props.footer.props.color, 'neutral');
+}
 
 test('installation chooses applets before Secret PIN, completes PIN setup, then returns the new card to Copy', async () => {
   const state = mount({returnTo: 'copy'});
@@ -1087,7 +1116,7 @@ for (const mode of ['update', 'reinstall']) {
         appletAid: AID,
       },
     );
-    assert.ok(state.node('OperationComplete'));
+    finishProcessExit(state);
   });
 }
 
@@ -1197,7 +1226,7 @@ test('fresh installation uses danger confirmation with two explicit actions befo
     identityOptions,
   );
   assert.equal(state.pending, undefined);
-  assert.ok(state.node('OperationComplete'));
+  finishProcessExit(state);
 });
 
 test('dismissing applet selection performs no PIN prompt, scan or installation', () => {
@@ -1636,7 +1665,7 @@ for (const [phase, label, mode, archive, grants] of [
       state.events.some(event => event.type === 'initialize'),
       false,
     );
-    assert.ok(state.node('OperationComplete'));
+    finishProcessExit(state);
   });
 }
 
@@ -1864,7 +1893,7 @@ test('a saved Bundle archive still requires explicit Reinstall confirmation befo
     state.events.some(event => event.type === 'open-sync'),
     false,
   );
-  assert.ok(state.node('OperationComplete'));
+  finishProcessExit(state);
 });
 
 for (const failureStage of [
@@ -1953,7 +1982,7 @@ for (const failureStage of [
     await state.answer();
     await state.tap();
     assert.equal(state.pending, undefined);
-    assert.ok(state.node('OperationComplete'));
+    finishProcessExit(state);
   });
 }
 
@@ -2243,11 +2272,122 @@ test('Card Applets resumes the first unfinished batch target after navigation an
   );
   batch.targets[1].complete = true;
   state.render();
-  assert.ok(state.node('OperationComplete'));
   assert.ok(
     state.node('CardMaintenanceCards').props.cards.every(card => card.complete),
   );
+  finishProcessExit(state);
+  state.unmount();
+  state.render();
+  assert.ok(state.node('OperationComplete'));
+  assert.equal(state.process(), undefined);
+  assert.equal(state.node('CardMaintenanceCards'), undefined);
 });
+
+for (const [batchSize, description] of [
+  [1, 'clean restoration retains its process through NFC cleanup and exits'],
+  [
+    2,
+    'a batch with one complete card and one remaining shows only the grid, then exits after the last card',
+  ],
+]) {
+  test(description, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    const operations = Array.from({length: batchSize}, (_, index) => ({
+      id: `clean-${index}`,
+      batchId: batchSize > 1 ? 'clean-batch' : undefined,
+      mode: 'update',
+      phase: 'restore',
+      card: {
+        ...readCardIdentity(state.initialized),
+        appletAid: AID,
+        bundle: false,
+      },
+      archive: {items: [{index: 'f2010000000000000001', alias: 'Example OTP'}]},
+    }));
+    const batch = {
+      id: 'clean-batch',
+      targets: operations.map(operation => ({
+        operationId: operation.id,
+        card: operation.card,
+        complete: false,
+      })),
+    };
+    if (batchSize > 1) state.maintenance.batches = [batch];
+    state.maintenance.get = id =>
+      operations.find(operation => operation.id === id);
+    state.maintenance.dismissBatch = async () => {
+      state.maintenance.batches = [];
+    };
+    state.maintenance.restore = async (_applet, id) => {
+      batch.targets.find(target => target.operationId === id).complete = true;
+      state.pending = undefined;
+      return {complete: true, issues: [], droppedGrants: []};
+    };
+
+    for (let index = 0; index < operations.length; index++) {
+      const operation = (state.pending = operations[index]);
+      state.click(
+        batchSize > 1 ? `Continue card ${operation.card.id}` : 'Restore items',
+      );
+      await state.answer();
+      await state.tap({finish: false});
+      assert.equal(state.pending, undefined);
+      assert.equal(
+        state.node('CardMaintenanceContent').props.operation,
+        operation,
+      );
+      assert.equal(state.process().props.$exiting, false);
+      assert.equal(state.node('OperationComplete'), undefined);
+      assert.equal(state.node('CardAppletsContent'), undefined);
+
+      state.scans.at(-1).finished.resolve();
+      await state.flush();
+      const content = state.node('CardMaintenanceContent');
+      if (index < operations.length - 1) {
+        assert.equal(content, undefined);
+        assert.equal(state.process().props.$exiting, false);
+        assert.equal(state.node('OperationComplete'), undefined);
+        assert.equal(
+          text(state.node('ViewContent').props.footer),
+          `Continue card ${operations[index + 1].card.id}`,
+        );
+        assert.deepEqual(
+          state
+            .node('CardMaintenanceCards')
+            .props.cards.map(card => card.complete),
+          [true, false],
+        );
+      } else {
+        assert.equal(content.props.operation, operation);
+        assert.deepEqual(content.props.report, {
+          complete: true,
+          issues: [],
+          droppedGrants: [],
+        });
+        assert.equal(content.props.complete, true);
+      }
+    }
+
+    assert.deepEqual(state.errors, []);
+    finishProcessExit(state);
+    state.click('Back to Card Applets');
+    await state.flush();
+    assert.ok(state.node('CardAppletsContent'));
+    assert.equal(state.node('OperationComplete'), undefined);
+    assert.equal(state.node('CardMaintenanceContent'), undefined);
+    state.pending = {...operations[0], batchId: undefined};
+    assert.equal(state.process().props.$exiting, false);
+    assert.equal(state.node('CardMaintenanceContent').props.report, undefined);
+    state.click('Restore items');
+    await state.answer();
+    await state.tap();
+    assert.deepEqual(state.errors, []);
+    finishProcessExit(state);
+  });
+}
 
 async function mountRejectedRestore(batch = false) {
   const state = mount({cardInformation: false});
@@ -2339,6 +2479,7 @@ for (const batch of [false, true]) {
       'warning',
     );
     assert.equal(state.node('OperationComplete'), undefined);
+    assert.equal(state.process().props.$exiting, false);
     state.click('Finish without 2 items');
     assert.match(text(state.node('ConfirmPopup')), /archive will be discarded/);
     state.node('ConfirmPopup').props.onCancel();
@@ -2351,13 +2492,9 @@ for (const batch of [false, true]) {
     assert.deepEqual(state.errors, []);
     assert.equal(state.pending, undefined);
     const completedProcess = state.node('CardMaintenanceContent');
-    assert.equal(completedProcess.props.report.complete, true);
-    assert.deepEqual(completedProcess.props.report.droppedGrants, [
-      'f06d6f6e6f69640501',
-    ]);
-    assert.equal(completedProcess.props.operation, process.props.operation);
     assert.equal(state.node('CardAppletsContent'), undefined);
     if (batch) {
+      assert.equal(completedProcess, undefined);
       assert.equal(
         text(state.node('ViewContent').props.footer),
         'Continue card 11111111',
@@ -2368,8 +2505,15 @@ for (const batch of [false, true]) {
           .props.cards.map(card => card.complete),
         [true, false],
       );
+      assert.equal(state.process().props.$exiting, false);
+      assert.equal(state.node('OperationComplete'), undefined);
     } else {
-      assert.ok(state.node('OperationComplete'));
+      assert.equal(completedProcess.props.report.complete, true);
+      assert.deepEqual(completedProcess.props.report.droppedGrants, [
+        'f06d6f6e6f69640501',
+      ]);
+      assert.equal(completedProcess.props.operation, process.props.operation);
+      finishProcessExit(state);
       state.click('Back to Card Applets');
       assert.ok(state.node('CardAppletsContent'));
       assert.equal(state.node('CardMaintenanceContent'), undefined);
@@ -2377,6 +2521,27 @@ for (const batch of [false, true]) {
     }
   });
 }
+
+test('finishing the last batch card with skipped items exits the grid and process together', async () => {
+  const state = await mountRejectedRestore(true);
+  state.maintenance.batches[0].targets[1].complete = true;
+  assert.equal(state.process().props.$exiting, false);
+  state.click('Finish without 2 items');
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.answer();
+  await state.tap({finish: false});
+  assert.equal(state.process().props.$exiting, false);
+  assert.equal(state.node('OperationComplete'), undefined);
+  state.scans.at(-1).finished.resolve();
+  await state.flush();
+  assert.deepEqual(state.errors, []);
+  const process = state.process();
+  assert.ok(find(process, node => node.type === 'CardMaintenanceCards'));
+  const content = find(process, node => node.type === 'CardMaintenanceContent');
+  assert.equal(content.props.report.complete, true);
+  assert.equal(content.props.report.issues.length, 2);
+  finishProcessExit(state);
+});
 
 test('leaving unfinished recovery keeps it and a fresh page can resume', async () => {
   const state = await mountRejectedRestore();
@@ -2438,5 +2603,14 @@ for (const phase of ['ready', 'replacing', 'restore', 'manual-restore']) {
     assert.equal(state.node('CardAppletsContent'), undefined);
     assert.equal(state.node('OperationComplete'), undefined);
     assert.equal(state.node('CardScanPlaceholder'), undefined);
+    const process = state.process();
+    assert.equal(process.props.$exiting, false);
+    const element = {};
+    process.props.onAnimationEnd({target: element, currentTarget: element});
+    assert.equal(
+      state.node('CardMaintenanceContent').props.operation,
+      state.pending,
+    );
+    assert.equal(state.node('OperationComplete'), undefined);
   });
 }

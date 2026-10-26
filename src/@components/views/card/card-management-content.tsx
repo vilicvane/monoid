@@ -38,7 +38,7 @@ import {
   ListItemName,
 } from '../../@ui/list.js';
 import {InfoMessage, WarningMessage} from '../../@ui/message-content.js';
-import {OperationSteps, Step} from '../../@ui/step.js';
+import {Step, Steps} from '../../@ui/step.js';
 import {CardResourceIssues, CardSetupInformation} from '../safe/index.js';
 
 const Empty = styled.div`
@@ -143,14 +143,17 @@ function CardAppletHero({
 export function CardMaintenanceContent({
   operation,
   processing,
+  complete = false,
   report,
 }: {
   operation: CardMaintenanceOperation;
   processing: boolean;
+  complete?: boolean;
   report?: CardMaintenanceRestoreResult;
 }): ReactNode {
   const replacing = ['ready', 'replacing'].includes(operation.phase);
-  const activeStep = report?.complete ? 4 : report || !replacing ? 3 : 2;
+  const activeStep =
+    complete || report?.complete ? 4 : report || !replacing ? 3 : 2;
   const manualRestore = operation.phase === 'manual-restore';
   const itemCount = operation.archive?.items.length ?? 0;
   const color = operation.archive ? 'warning' : 'primary';
@@ -171,7 +174,7 @@ export function CardMaintenanceContent({
         bundled={!!operation.card.bundle}
         recovery={!!operation.archive}
       />
-      <OperationSteps $exiting={false}>
+      <Steps>
         <Step
           title="Save recovery"
           numero={1}
@@ -246,7 +249,7 @@ export function CardMaintenanceContent({
             </WarningMessage>
           )}
         </Step>
-      </OperationSteps>
+      </Steps>
     </>
   );
 }

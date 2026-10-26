@@ -47,6 +47,7 @@ import {
   hexToUint8Array,
   uint8ArrayToHex,
 } from '../../../@utils/index.js';
+import {popOutAnimationCSS} from '../../@animations.js';
 import {AppletInstallProgressContent} from '../../@monoid/applet-install-progress.js';
 import {MonoidScanStatePromptProgress} from '../../@monoid/monoid-scan-prompt.js';
 import {
@@ -100,6 +101,18 @@ const HeaderActions = styled.div`
 
   > button:not(:last-child) {
     margin-right: 0;
+  }
+`;
+
+const MaintenanceProcess = styled.div<{$exiting: boolean}>`
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  ${props => props.$exiting && popOutAnimationCSS}
+
+  @media (prefers-reduced-motion: reduce) {
+    animation-duration: 1ms;
   }
 `;
 
@@ -159,6 +172,8 @@ export const CardManagementView = observer(
           : undefined) ?? {information: view.cardInformation},
     );
     const [complete, setComplete] = useState(false);
+    const [operationSnapshot, setOperationSnapshot] =
+      useState<CardMaintenanceOperation>();
     const [restoreReport, setRestoreReport] = useState<{
       operationId: string;
       operation: CardMaintenanceOperation;
@@ -238,6 +253,9 @@ export const CardManagementView = observer(
       (maintenance.batches ?? []).at(-1);
     const batchComplete =
       !!batch && batch.targets.every(target => target.complete);
+    const [stepsExited, setStepsExited] = useState(batchComplete);
+    const processComplete =
+      !busy && (batch ? batchComplete : complete && !pending);
     const appletsPage =
       !!batch ||
       !!installation?.monoid.installed ||
@@ -250,13 +268,16 @@ export const CardManagementView = observer(
     const recovery = !!pending?.archive;
     const reportedOperation =
       restoreReport &&
-      (restoreReport.result.issues.length ||
-        restoreReport.result.droppedGrants.length)
+      (processComplete ||
+        (!restoreReport.result.complete &&
+          (restoreReport.result.issues.length ||
+            restoreReport.result.droppedGrants.length)))
         ? restoreReport
         : undefined;
     const processOperation =
       reportedOperation?.operation ??
-      (pending?.phase !== 'setup' ? pending : undefined);
+      (pending?.phase !== 'setup' ? pending : undefined) ??
+      (busy || processComplete ? operationSnapshot : undefined);
     const manualRestore = pending?.phase === 'manual-restore';
     const needsResume = pending && !manualRestore;
     const needsReplacement =
@@ -323,11 +344,17 @@ export const CardManagementView = observer(
       };
     }
 
+    function resetCompletion(): void {
+      setComplete(false);
+      setStepsExited(false);
+      setOperationSnapshot(undefined);
+      setRestoreReport(undefined);
+    }
+
     async function scanCard(): Promise<void> {
       if (!isActive() || busy) return;
       setBusy(true);
-      setComplete(false);
-      setRestoreReport(undefined);
+      resetCompletion();
       try {
         await scan('Scan a card', async (sessionId, setState, signal) => {
           setState('Reading card, hold tight...');
@@ -398,7 +425,7 @@ export const CardManagementView = observer(
       setBusy(true);
       setPopup(undefined);
       setConfirm(undefined);
-      setRestoreReport(undefined);
+      resetCompletion();
       let pin: MonoidPIN | undefined;
       let requestedPINs: CardSetupPINs | undefined;
       let accessPINId: MonoidIdHex | undefined;
@@ -619,6 +646,8 @@ export const CardManagementView = observer(
             return;
           }
 
+          // Retain the process while successful card writes remove its saved task.
+          setOperationSnapshot(saved);
           let next: MonoidAppletHello;
           if (saved) {
             const replacing =
@@ -771,10 +800,13 @@ export const CardManagementView = observer(
           } catch (error) {
             errorService.catch(Promise.reject(error));
           }
-        } else if (appletsChanged) {
-          // Installation is recoverable by reading the card again; do not keep
-          // the previous identity or a pending setup action after interruption.
-          setCard({});
+        } else {
+          setOperationSnapshot(undefined);
+          if (appletsChanged) {
+            // Installation is recoverable by reading the card again; do not keep
+            // the previous identity or a pending setup action after interruption.
+            setCard({});
+          }
         }
         if (controller.current === operation) controller.current = undefined;
         setBusy(false);
@@ -987,6 +1019,7 @@ export const CardManagementView = observer(
                 </Buttons>
               ) : batch ? (
                 <Button
+                  color={batchComplete ? 'neutral' : 'primary'}
                   disabled={busy}
                   onClick={() => {
                     if (batchComplete)
@@ -994,8 +1027,7 @@ export const CardManagementView = observer(
                         .dismissBatch(batch.id)
                         .then(() => {
                           setBatchId(undefined);
-                          setComplete(false);
-                          setRestoreReport(undefined);
+                          resetCompletion();
                         })
                         .catch(error =>
                           errorService.catch(Promise.reject(error)),
@@ -1012,10 +1044,7 @@ export const CardManagementView = observer(
                   color="neutral"
                   onClick={() => {
                     if (back) back();
-                    else {
-                      setComplete(false);
-                      setRestoreReport(undefined);
-                    }
+                    else resetCompletion();
                   }}
                 >
                   {back ? backLabel : 'Back to Card Applets'}
@@ -1075,37 +1104,50 @@ export const CardManagementView = observer(
               )
             }
           >
-            {(batchComplete || (complete && !batch)) &&
-              (!processOperation || reportedOperation?.result.complete) && (
-                <OperationComplete />
-              )}
-            {batch && (
-              <CardMaintenanceCards
-                disabled={busy}
-                cards={batch.targets.map(target => {
-                  const operation = maintenance.get(target.operationId);
-                  return {
-                    publicKey: target.card.publicKey!,
-                    id: target.card.id,
-                    complete: target.complete,
-                    status: target.complete
-                      ? 'complete'
-                      : operation?.phase === 'restore'
-                        ? 'restore items'
-                        : operation?.phase === 'replacing'
-                          ? 'resume installation'
-                          : 'scan to install',
-                  };
-                })}
-              />
-            )}
-            {processOperation ? (
-              <CardMaintenanceContent
-                operation={processOperation}
-                processing={busy}
-                report={reportedOperation?.result}
-              />
-            ) : batch || complete ? null : card.unsupported ||
+            {processComplete &&
+            (stepsExited || (!batch && !processOperation)) ? (
+              <OperationComplete />
+            ) : batch || processOperation ? (
+              <MaintenanceProcess
+                $exiting={processComplete}
+                onAnimationEnd={event => {
+                  if (processComplete && event.target === event.currentTarget) {
+                    setStepsExited(true);
+                    setOperationSnapshot(undefined);
+                    setRestoreReport(undefined);
+                  }
+                }}
+              >
+                {batch && (
+                  <CardMaintenanceCards
+                    disabled={busy}
+                    cards={batch.targets.map(target => {
+                      const operation = maintenance.get(target.operationId);
+                      return {
+                        publicKey: target.card.publicKey!,
+                        id: target.card.id,
+                        complete: target.complete,
+                        status: target.complete
+                          ? 'complete'
+                          : operation?.phase === 'restore'
+                            ? 'restore items'
+                            : operation?.phase === 'replacing'
+                              ? 'resume installation'
+                              : 'scan to install',
+                      };
+                    })}
+                  />
+                )}
+                {processOperation && (
+                  <CardMaintenanceContent
+                    operation={processOperation}
+                    processing={busy}
+                    complete={processComplete}
+                    report={reportedOperation?.result}
+                  />
+                )}
+              </MaintenanceProcess>
+            ) : complete ? null : card.unsupported ||
               (!card.information && !installation) ? (
               <CardScanPlaceholder unsupported={card.unsupported} />
             ) : appletsPage ? (
