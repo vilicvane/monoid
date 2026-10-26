@@ -281,7 +281,9 @@ test('a changed source bundle is rejected before authentication or export', asyn
   source.hello.bundle = new Uint8Array(32).fill(1);
   await assert.rejects(
     session.exportItems(source, source.hello, PIN, signal(), progress),
-    /bundle changed/,
+    new RegExp(
+      `Card bundle changed, scan card ${session.backup.source.id} again`,
+    ),
   );
   assert.deepEqual(
     source.calls.map(([name]) => name),

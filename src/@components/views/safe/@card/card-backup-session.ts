@@ -118,7 +118,7 @@ function createBackup(
 
     if ([...selectedIndexes].some(index => !availableIndexes.has(index))) {
       throw new MonoidCardError(
-        'Some selected items were not found on the source card. Return to Card and scan it again.',
+        `Some selected items were not found on the source card. Return to Card and scan card ${source.id} again.`,
       );
     }
   }
@@ -169,7 +169,7 @@ export function assertBackupBundle(
 export function assertBackupCard(
   hello: MonoidAppletHello,
   expected: CardBackupIdentity,
-  bundleChangedMessage = 'Card bundle changed, scan source again',
+  bundleChangedMessage = `Card bundle changed, scan card ${expected.id} again`,
 ): void {
   assertSameCardWithBundle(hello, expected, bundleChangedMessage);
 

@@ -221,10 +221,12 @@ for (const failure of [
       },
     };
     await assert.rejects(
-      createCardKey(applet, 'seed', signal(), () =>
+      createCardKey(applet, '01020304', 'seed', signal(), () =>
         assert.fail('No acknowledged index'),
       ),
-      error => error.cause === failure && /rescan card/.test(error.message),
+      error =>
+        error.cause === failure &&
+        /scan card 01020304 again to check/.test(error.message),
     );
     assert.equal(calls, 1);
   });

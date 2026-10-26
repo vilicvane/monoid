@@ -35,6 +35,7 @@ import {keyTypeColorsCSS} from '../../../@key/key-tags.js';
 import {
   type MonoidScanPromptSetStateContentCallback,
   MonoidScanStatePromptProgress,
+  scanCardPrompt,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
 import {PINKind} from '../../../@monoid/pin-input-placeholder.js';
@@ -500,7 +501,7 @@ const CardContent = observer(
 
       try {
         await createScan(
-          'Scan card to create key',
+          scanCardPrompt(card.id, 'to create key'),
           async (applet, setStateContent, _hello, signal) => {
             const cancel = (): void => operation.abort();
             signal.addEventListener('abort', cancel, {once: true});
@@ -511,6 +512,7 @@ const CardContent = observer(
               // Retain the command even if the callback is entered again.
               writing ??= createCardKey(
                 applet,
+                card.id,
                 type,
                 operation.signal,
                 item => {
@@ -559,7 +561,7 @@ const CardContent = observer(
 
       try {
         await scanPrompt(
-          'Scan card to derive',
+          scanCardPrompt(card.id, 'to derive'),
           async (applet, setStateContent, _hello, signal) => {
             const showProgress = (current: number): void => {
               if (signal.aborted || !mounted.current || !isViewActive()) return;
@@ -618,7 +620,7 @@ const CardContent = observer(
         index: SafeIndexHex,
         wallets: WalletKeyPublicKeyData[],
       ) => void,
-      prompt = 'Scan card to update',
+      prompt = 'to update',
       beforeWriting?: (
         applet: MonoidApplet,
         setStateContent: (content: ReactNode) => void,
@@ -637,7 +639,7 @@ const CardContent = observer(
       );
       try {
         await scanPrompt(
-          prompt,
+          scanCardPrompt(card.id, prompt),
           async (applet, setStateContent, _hello, signal) => {
             const cancel = (): void => operation.abort();
             signal.addEventListener('abort', cancel, {once: true});
@@ -863,7 +865,7 @@ const CardContent = observer(
                 setImported(true);
               }
             },
-            'Scan card to import',
+            'to import',
             unreadRecords.length
               ? async (applet, setStateContent, signal) => {
                   const total = unreadRecords.reduce(
@@ -1025,7 +1027,7 @@ const CardContent = observer(
 
       try {
         await scanPrompt(
-          'Scan card to delete',
+          scanCardPrompt(card.id, 'to delete'),
           (applet, setStateContent, _hello, signal) =>
             deleteFromCard(applet, setStateContent, signal, pending, index => {
               const sourceIndex = card.items.find(item => item.index === index)

@@ -189,7 +189,12 @@ test('an unbundled card discovered before any Reset attempt is rejected without 
   const unbundled = {...state.hello, bundle: false};
   const reinitialized = {...unbundled, pins: {access: 5, secret: 5}};
   for (const hello of [unbundled, reinitialized]) {
-    await assert.rejects(state.run(hello), /Card bundle changed, scan again/);
+    await assert.rejects(
+      state.run(hello),
+      new RegExp(
+        `Card bundle changed, scan card ${state.session.card.id} again`,
+      ),
+    );
     assert.deepEqual(state.calls, []);
     assert.equal(state.session.attempted, false);
     assert.equal(state.session.confirmed, false);

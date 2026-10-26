@@ -39,7 +39,7 @@ export class CardResetSession {
       assertSameCardWithBundle(
         hello,
         readBackupCardIdentity(this.replacement),
-        'Card bundle changed, scan again',
+        `Card bundle changed, scan card ${uint8ArrayToHex(this.replacement.id)} again`,
       );
       return hello;
     }
@@ -47,7 +47,7 @@ export class CardResetSession {
     assertSameCardWithBundle(
       hello,
       this.card,
-      'Card bundle changed, scan again',
+      `Card bundle changed, scan card ${this.card.id} again`,
     );
 
     await beforeReset();

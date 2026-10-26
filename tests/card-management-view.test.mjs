@@ -252,6 +252,9 @@ for (const [path, names] of [
   mock.module(`../.bld/app/@components/${path}.js`, {
     namedExports: {
       ...Object.fromEntries(names.map(name => [name, name])),
+      ...(path === '@monoid/monoid-scan-prompt' && {
+        scanCardPrompt: id => `Scan card ${id}`,
+      }),
       ...(path === '@view/index' && {useViewActive}),
       ...(path === 'views/safe/index' && {SyncCardsState}),
     },
@@ -707,6 +710,7 @@ test('setting PINs reuses the current applet inventory and updated Hello', async
 
   state.click('Set Secret PIN');
   await state.answer();
+  assert.equal(state.scans.at(-1).label, 'Scan card 01020304');
   await state.tap();
 
   assert.deepEqual(state.errors, []);
@@ -809,24 +813,41 @@ for (const [kind, label] of [
   });
 }
 
-test('a different physical card is rejected before installation or any PIN command', async () => {
-  const state = mount();
-  state.click('Install applets');
-  state.node('AppletSelectionPopup').props.onInstall();
-  await state.answer();
-  state.information = {
-    ...state.information,
-    cplc: {icSerialNumber: 'different'},
-  };
-  await state.tap();
-  assert.match(state.errors[0].message, /same card/);
-  assert.equal(
-    state.events.some(event =>
-      ['install', 'auth', 'initialize'].includes(event.type),
-    ),
-    false,
-  );
-});
+for (const known of [false, true]) {
+  test(`a different physical card is rejected before any writes with ${known ? 'a known ID' : 'no Identity installed'}`, async () => {
+    const state = mount({cardInformation: !known});
+    if (known) {
+      state.installation = installed(state.uninitialized);
+      state.click('Scan a card');
+      assert.equal(state.scans[0].label, 'Scan a card');
+      await state.tap();
+      state.click('Set Secret PIN');
+    } else {
+      state.click('Install applets');
+      state.node('AppletSelectionPopup').props.onInstall();
+    }
+    await state.answer();
+    assert.equal(
+      state.scans.at(-1).label,
+      known ? 'Scan card 01020304' : 'Scan the card',
+    );
+    state.information = {
+      ...state.information,
+      cplc: {icSerialNumber: 'different'},
+    };
+    await state.tap();
+    assert.equal(
+      state.errors[0].message,
+      known ? 'Scan card 01020304' : 'Scan the same card',
+    );
+    assert.equal(
+      state.events.some(event =>
+        ['install', 'auth', 'initialize'].includes(event.type),
+      ),
+      false,
+    );
+  });
+}
 
 test('leaving while entering Secret PIN cancels the flow before opening the scanner', async () => {
   const state = mount();
@@ -2158,6 +2179,7 @@ test('Card Applets resumes the first unfinished batch target after navigation an
     1,
     'restore can start without scanning a different target first',
   );
+  assert.equal(state.scans[0].label, 'Scan card 01020304');
   state.scans[0].finished.reject(
     Object.assign(new Error('cancelled'), {code: 'CANCELLED'}),
   );
@@ -2231,6 +2253,7 @@ for (const [batchSize, description] of [
         batchSize > 1 ? `Continue card ${operation.card.id}` : 'Restore items',
       );
       await state.answer();
+      assert.equal(state.scans.at(-1).label, `Scan card ${operation.card.id}`);
       await state.tap({finish: false});
       assert.equal(state.pending, undefined);
       assert.equal(

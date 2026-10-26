@@ -382,7 +382,7 @@ export const ExtendBundleView = observer(
                 {activeNumero === 2 && (
                   <InfoMessage>
                     {session.phase === 'requesting' && session.requester
-                      ? 'Scan the same card to retry.'
+                      ? `Scan card ${session.requester.id} to retry.`
                       : 'Scan two cards from this bundle.'}
                   </InfoMessage>
                 )}
@@ -404,7 +404,9 @@ export const ExtendBundleView = observer(
                   )}
                 </CardGrid>
                 {activeNumero === 3 && (
-                  <InfoMessage>Scan the new card added in step 1.</InfoMessage>
+                  <InfoMessage>
+                    Scan card {session.target!.id} added in step 1.
+                  </InfoMessage>
                 )}
               </Step>
             </OperationSteps>

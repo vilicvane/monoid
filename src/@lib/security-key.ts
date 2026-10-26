@@ -307,10 +307,11 @@ export class SecurityKeyConfiguration {
     signal: AbortSignal,
   ): Promise<void> {
     if (this.busy || this.complete) return;
+    const id = uint8ArrayToHex(this.snapshot.hello.id);
     if (this.uncertain)
-      throw new MonoidCardError('Scan card again to check changes');
+      throw new MonoidCardError(`Scan card ${id} again to check changes`);
     assertSameCard(hello, {
-      id: uint8ArrayToHex(this.snapshot.hello.id),
+      id,
       publicKey: uint8ArrayToHex(this.snapshot.hello.publicKey),
     });
     if (!this.snapshot.installed)
@@ -322,7 +323,7 @@ export class SecurityKeyConfiguration {
       const current = findSecurityKeyGrant(grants);
       if (!sameSeed(current?.seed, this.snapshot.grant?.seed))
         throw new MonoidCardError(
-          'Security Key configuration changed, scan again',
+          `Security Key configuration changed, scan card ${id} again`,
         );
       signal.throwIfAborted();
       const {items} = await applet.list({});
@@ -332,7 +333,7 @@ export class SecurityKeyConfiguration {
         this.selection !== uint8ArrayToHex(current.seed.index) &&
         items.some(item => item.index[0] === 0xf1 && item.index[1] === 1)
       )
-        throw new MonoidCardError('Credentials changed, scan card again');
+        throw new MonoidCardError(`Credentials changed, scan card ${id} again`);
       signal.throwIfAborted();
       let index = this.createdIndex;
       if (this.selection === 'create') {
@@ -347,7 +348,7 @@ export class SecurityKeyConfiguration {
             if (error instanceof CBORAppletError) this.uncertain = false;
             if (error instanceof CardItemExistsError) {
               throw new MonoidCardError(
-                'Key already exists, rescan card to check',
+                `Key already exists, scan card ${id} again to check`,
                 {cause: error},
               );
             }

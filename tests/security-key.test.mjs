@@ -541,7 +541,7 @@ for (const stage of ['Create', 'Grant']) {
     const count = commands.length;
     await assert.rejects(
       configuration.apply(applet, hello, signal()),
-      /Scan card again/,
+      /Scan card 11223344 again to check changes/,
     );
     assert.equal(commands.length, count);
   });
@@ -650,7 +650,7 @@ for (const [name, currentGrant] of [
     );
     await assert.rejects(
       configuration.apply(applet, hello, signal()),
-      /configuration changed/,
+      /configuration changed, scan card 11223344 again/,
     );
     assert.deepEqual(
       commands.map(([name]) => name),
@@ -669,7 +669,7 @@ test('credentials added after reading the card cannot bypass Seed-change confirm
   const configuration = new SecurityKeyConfiguration(current, 'create');
   await assert.rejects(
     configuration.apply(applet, hello, signal()),
-    /Credentials changed/,
+    /Credentials changed, scan card 11223344 again/,
   );
   assert.equal(
     commands.some(([name]) => name === 'create' || name === 'grant'),

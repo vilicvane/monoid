@@ -49,7 +49,10 @@ import {
 } from '../../../@utils/index.js';
 import {popOutAnimationCSS} from '../../@animations.js';
 import {AppletInstallProgressContent} from '../../@monoid/applet-install-progress.js';
-import {MonoidScanStatePromptProgress} from '../../@monoid/monoid-scan-prompt.js';
+import {
+  MonoidScanStatePromptProgress,
+  scanCardPrompt,
+} from '../../@monoid/monoid-scan-prompt.js';
 import {
   type CardSetupPINs,
   requestCardPINs,
@@ -482,7 +485,8 @@ export const CardManagementView = observer(
         pin = requestedPINs.secret;
         operation.signal.throwIfAborted();
 
-        await scan('Scan the card', async (sessionId, setState, scanSignal) => {
+        const prompt = id ? scanCardPrompt(id) : 'Scan the card';
+        await scan(prompt, async (sessionId, setState, scanSignal) => {
           const signal = AbortSignal.any([operation.signal, scanSignal]);
           const progress = (progress: CardMaintenanceProgress): void =>
             setState(<Progress progress={progress} />);
@@ -516,7 +520,9 @@ export const CardManagementView = observer(
             card.information?.cplc &&
             cardFingerprint(information) !== cardFingerprint(card.information)
           ) {
-            throw new MonoidCardError('Scan the same card');
+            throw new MonoidCardError(
+              id ? `Scan card ${id}` : 'Scan the same card',
+            );
           }
           const current = await readMonoidAppletInstallation(
             sessionId,
@@ -530,7 +536,9 @@ export const CardManagementView = observer(
           });
 
           if (pending && action !== 'fresh' && saved?.id !== pending.id) {
-            throw new MonoidCardError('Scan the same card');
+            throw new MonoidCardError(
+              id ? `Scan card ${id}` : 'Scan the same card',
+            );
           }
           if (!pending && hello) {
             if (!current.hello) {
@@ -541,7 +549,9 @@ export const CardManagementView = observer(
           // A newly chosen action must never inherit an earlier destructive
           // operation. Resuming binds the user's confirmation to its saved plan.
           if (options.operationId && saved?.id !== options.operationId) {
-            throw new MonoidCardError('Scan the card again');
+            throw new MonoidCardError(
+              `Scan ${id ? `card ${id}` : 'the card'} again`,
+            );
           }
           if (
             (action === 'resume' &&
@@ -680,7 +690,9 @@ export const CardManagementView = observer(
           } else if (action === 'setup' && current.hello) {
             next = current.hello;
           } else {
-            throw new MonoidCardError('Scan the card again');
+            throw new MonoidCardError(
+              `Scan ${id ? `card ${id}` : 'the card'} again`,
+            );
           }
 
           signal.throwIfAborted();

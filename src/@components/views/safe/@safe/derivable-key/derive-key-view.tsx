@@ -23,7 +23,10 @@ import {
 } from '../../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../../@utils/index.js';
 import {AddressTypeSelector} from '../../../../@key/address-type-selector.js';
-import {useMonoidScanPrompt} from '../../../../@monoid/monoid-scan-prompt.js';
+import {
+  scanCardPrompt,
+  useMonoidScanPrompt,
+} from '../../../../@monoid/monoid-scan-prompt.js';
 import {Button} from '../../../../@ui/button.js';
 import {ResettableInput} from '../../../../@ui/input.js';
 import {InteractiveAddress} from '../../../../@ui/interactive-address.js';
@@ -223,7 +226,7 @@ export const DeriveKeyView = observer(
 
       await runOperation('import', async controller => {
         await scanPrompt(
-          'Scan card to import',
+          card ? scanCardPrompt(card.id, 'to import') : 'Scan card to import',
           async (applet, setStateContent, hello, signal) => {
             const cancel = (): void => controller.abort();
             signal.addEventListener('abort', cancel, {once: true});

@@ -276,6 +276,7 @@ export const OTPView = observer(
               setState('Removing account, hold tight...');
               accounts = await removeOTPAccount(
                 applet,
+                identity.id,
                 operation.account,
                 signal,
               );

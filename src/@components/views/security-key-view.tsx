@@ -419,7 +419,8 @@ export const SecurityKeyView = observer(
               )}
               {configuration?.uncertain && (
                 <WarningMessage>
-                  Scan card again to check changes before continuing
+                  Scan card {uint8ArrayToHex(configuration.snapshot.hello.id)}{' '}
+                  again to check changes before continuing
                 </WarningMessage>
               )}
               {snapshot.credentials.length === 0 ? (

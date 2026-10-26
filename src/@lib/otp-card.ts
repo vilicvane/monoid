@@ -158,6 +158,7 @@ export async function addOTPAccount(
 /** Resolves undefined without writing when this card lacks the account. */
 export async function removeOTPAccount(
   applet: MonoidApplet,
+  cardId: MonoidIdHex,
   account: OTPAccount,
   signal: AbortSignal,
 ): Promise<OTPAccount[] | undefined> {
@@ -170,7 +171,7 @@ export async function removeOTPAccount(
       encodeOTPConfiguration(account),
     )
   )
-    throw new MonoidCardError('Account changed, scan card again');
+    throw new MonoidCardError(`Account changed, scan card ${cardId} again`);
   await removeItems(applet, new Set([account.index]), signal);
   return accounts.filter(item => item.index !== account.index);
 }

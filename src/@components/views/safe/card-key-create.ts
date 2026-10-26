@@ -1,4 +1,4 @@
-import {SafeKnownType} from '../../../@atomics.js';
+import {type MonoidIdHex, SafeKnownType} from '../../../@atomics.js';
 import {
   CBORAppletError,
   CardItemExistsError,
@@ -32,6 +32,7 @@ function throwIfCancelled(signal: AbortSignal): void {
 
 export async function createCardKey(
   applet: MonoidApplet,
+  cardId: MonoidIdHex,
   type: CardKeyType,
   signal: AbortSignal,
   onUpdated: (item: ScannedCardItemData) => void,
@@ -48,13 +49,16 @@ export async function createCardKey(
     .catch(error => {
       if (error instanceof CardItemExistsError) {
         // The failed random-key response supplies no index to reconcile.
-        throw new MonoidCardError('Key already exists, rescan card to check', {
-          cause: error,
-        });
+        throw new MonoidCardError(
+          `Key already exists, scan card ${cardId} again to check`,
+          {
+            cause: error,
+          },
+        );
       }
       if (error instanceof CBORAppletError) throw error;
       throw new MonoidCardError(
-        'Creation not confirmed, rescan card to check',
+        `Creation not confirmed, scan card ${cardId} again to check`,
         {
           cause: error,
         },

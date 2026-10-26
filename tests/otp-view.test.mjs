@@ -120,7 +120,7 @@ mock.module('../.bld/app/@lib/otp-card.js', {
       fixture.events.push('add');
       return applet.card.accounts;
     },
-    removeOTPAccount: async (applet, account) => {
+    removeOTPAccount: async (applet, _cardId, account) => {
       fixture.events.push('remove');
       applet.card = {
         ...applet.card,

@@ -198,9 +198,20 @@ const {MonoidScanPromptPresenter} = await import(
   '../.bld/app/@services/monoid-scan-prompt-presenter.js'
 );
 const {ErrorService} = await import('../.bld/app/@services/error-service.js');
-const {useMonoidScanPrompt, MonoidScanRedirectError} = await import(
-  '../.bld/app/@components/@monoid/monoid-scan-prompt.js'
-);
+const {useMonoidScanPrompt, MonoidScanRedirectError, scanCardPrompt} =
+  await import('../.bld/app/@components/@monoid/monoid-scan-prompt.js');
+
+test('a specific-card prompt highlights the ID and keeps the action after it', () => {
+  for (const action of [undefined, 'to delete', 'to update Access PIN']) {
+    const prompt = scanCardPrompt('10db2908', action);
+    assert.deepEqual(prompt.props.children, [
+      'Scan card',
+      ' ',
+      {type: 'span', props: {children: '10db2908'}},
+      action && ` ${action}`,
+    ]);
+  }
+});
 
 class HookOwner {
   constructor(render) {

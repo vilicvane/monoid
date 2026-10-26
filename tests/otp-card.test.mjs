@@ -427,6 +427,7 @@ test('delete removes only F201, retains unrelated HMAC items and never rewrites 
   });
   const next = await removeOTPAccount(
     fixture.applet,
+    '01020304',
     {index: hex(accountIndex), ...configuration},
     signal(),
   );
@@ -447,6 +448,7 @@ test('delete skips a missing or incompatible account without writing', async () 
     assert.equal(
       await removeOTPAccount(
         fixture.applet,
+        '01020304',
         {index: hex(accountIndex), ...configuration},
         signal(),
       ),
@@ -462,8 +464,8 @@ test('delete checks changed configuration and never replays uncertain or cancell
     items: [accountRecord(accountIndex, {metadata: bytes('010108001e')})],
   });
   await assert.rejects(
-    removeOTPAccount(changed.applet, account, signal()),
-    /Account changed/,
+    removeOTPAccount(changed.applet, '01020304', account, signal()),
+    /Account changed, scan card 01020304 again/,
   );
   assert.deepEqual(changed.commands, [['list', {type: -3583}]]);
   for (const cancel of [false, true]) {
@@ -476,7 +478,7 @@ test('delete checks changed configuration and never replays uncertain or cancell
       },
     });
     await assert.rejects(
-      removeOTPAccount(fixture.applet, account, controller.signal),
+      removeOTPAccount(fixture.applet, '01020304', account, controller.signal),
       cancel ? {name: 'AbortError'} : /Tag lost/,
     );
     assert.deepEqual(fixture.commands, [

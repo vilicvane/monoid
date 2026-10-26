@@ -52,6 +52,7 @@ mock.module('../.bld/app/@components/@monoid/pin-input-placeholder.js', {
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
+    scanCardPrompt: (id, action) => `Scan card ${id} ${action}`,
     useMonoidScanPrompt: options => {
       fixture.scanOptions = options;
       return [null, fixture.scan];
@@ -212,6 +213,10 @@ for (const kind of ['Access', 'Secret']) {
       ),
     );
     assert.equal(state.scanOptions.auth, false);
+    assert.equal(
+      state.scans[0].label,
+      `Scan card ${state.card.id} to update ${kind} PIN`,
+    );
     assert.equal(state.scanOptions.ensureSetup, false);
     assert.equal(state.scanOptions.retryOnError, false);
     assert.deepEqual(state.saved, []);

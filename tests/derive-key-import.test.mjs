@@ -76,6 +76,7 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
     MonoidScanStatePromptProgress: 'progress',
+    scanCardPrompt: (id, action) => `Scan card ${id} ${action}`,
     useMonoidScanPrompt: options => {
       fixture.scanOptions.push(options);
       return [null, fixture.scan];
@@ -289,7 +290,10 @@ test('Import scans to save metadata and reuses the previewed public key without 
   state.click('Import');
   assert.deepEqual(
     state.scans.map(scan => scan.label),
-    ['Scan card to derive', 'Scan card to import'],
+    [
+      'Scan card to derive',
+      `Scan card ${Buffer.from(state.hello.id).toString('hex')} to import`,
+    ],
   );
   assert.equal(state.storage.keys[0].wallets.length, 1);
   assert.equal(state.button('Import').props.disabled, true);

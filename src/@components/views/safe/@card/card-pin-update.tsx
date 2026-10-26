@@ -9,7 +9,10 @@ import {assertSameCard} from '../../../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
 import {type MonoidPINSession} from '../../../../@services/index.js';
-import {useMonoidScanPrompt} from '../../../@monoid/monoid-scan-prompt.js';
+import {
+  scanCardPrompt,
+  useMonoidScanPrompt,
+} from '../../../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
@@ -136,7 +139,7 @@ export const CardPINUpdate = observer(
           try {
             await waitForOperation(
               scan(
-                `Scan card to update ${kind} PIN`,
+                scanCardPrompt(card.id, `to update ${kind} PIN`),
                 async (applet, setState, hello, scanSignal) => {
                   const cancel = (): void => operation.abort();
                   scanSignal.addEventListener('abort', cancel, {once: true});

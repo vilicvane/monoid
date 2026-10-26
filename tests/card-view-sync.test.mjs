@@ -107,6 +107,8 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
     MonoidScanStatePromptProgress: 'progress',
+    scanCardPrompt: (id, action) =>
+      `Scan card ${id}${action ? ` ${action}` : ''}`,
     useMonoidScanPrompt: options => {
       const state = fixture;
       state.scanOptions.push(options);
@@ -614,7 +616,7 @@ test('deleting a selected group and standalone resource removes companions first
   state.select(unknown.index);
   state.confirmDelete()();
 
-  assert.equal(state.scans[0].label, 'Scan card to delete');
+  assert.equal(state.scans[0].label, `Scan card ${state.card.id} to delete`);
   assert.equal(state.menuButton().props.disabled, true);
   assert.equal(state.popup(), undefined);
   assert.equal(state.item(INDEX).props.disabled, true);
@@ -998,7 +1000,7 @@ test('divergent derivations merge into the phone before offering the merged card
   assert.equal(state.visible('Update card'), true);
 
   state.click('Update card');
-  assert.equal(state.scans[0].label, 'Scan card to update');
+  assert.equal(state.scans[0].label, `Scan card ${state.card.id} to update`);
   await state.tap();
   await state.finish();
 
@@ -1082,7 +1084,7 @@ test('a sparse recorded list stays downloadable and reads only its missing addre
 
   state.click('Update');
   assert.equal(state.scans.length, 1);
-  assert.equal(state.scans[0].label, 'Scan card to import');
+  assert.equal(state.scans[0].label, `Scan card ${state.card.id} to import`);
   assert.deepEqual(toJS(state.storage.keys[0].wallets), [common]);
   await state.tap();
   await state.finish();
@@ -1340,6 +1342,7 @@ test('a single derived address remains at zero until its read finishes', async (
   };
   state.select(INDEX);
   state.click('Derive');
+  assert.equal(state.scans[0].label, `Scan card ${state.card.id} to derive`);
   const tapping = state.tap();
   assert.equal(state.progressUpdates.at(-1).props.current, 0);
   assert.equal(state.progressUpdates.at(-1).props.total, 1);
@@ -1868,7 +1871,7 @@ for (const source of ['card', 'phone']) {
     }
     state.click('Update');
     assert.equal(state.scans.length, 1);
-    assert.equal(state.scans[0].label, 'Scan card to import');
+    assert.equal(state.scans[0].label, `Scan card ${state.card.id} to import`);
     assert.deepEqual(state.writes, []);
     await state.tap();
     await state.finish();
@@ -2014,6 +2017,7 @@ test('creating a key on an empty card reads it and adds the canonical and displa
   state.createKey();
   const scan = state.scans[0];
 
+  assert.equal(scan.label, `Scan card ${state.card.id} to create key`);
   assert.equal(state.menuButton().props.disabled, true);
   assert.equal(scan.options.retryOnError, false);
   assert.equal(scan.options.pinSession, state.pinSession);

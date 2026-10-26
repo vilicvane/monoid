@@ -40,6 +40,18 @@ export const MonoidScanStatePromptContentHighlight = styled.span`
   color: white;
 `;
 
+export function scanCardPrompt(id: string, action?: string): ReactNode {
+  return (
+    <>
+      Scan card{' '}
+      <MonoidScanStatePromptContentHighlight>
+        {id}
+      </MonoidScanStatePromptContentHighlight>
+      {action && ` ${action}`}
+    </>
+  );
+}
+
 export function MonoidScanStatePromptProgress({
   children,
   current,
@@ -429,15 +441,7 @@ export function useMonoidScanPrompt({
           const setup = setupPIN;
           setupPIN = undefined;
 
-          retryStateContent = (
-            <>
-              Scan card{' '}
-              <MonoidScanStatePromptContentHighlight>
-                {id}
-              </MonoidScanStatePromptContentHighlight>{' '}
-              again
-            </>
-          );
+          retryStateContent = scanCardPrompt(id, 'again');
 
           let initializedAccessPIN = false;
 
