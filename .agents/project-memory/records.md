@@ -155,3 +155,7 @@
 ## 81288d6
 
 78. [user] a warning prompt should hold real warnings and notices, not an explanation of the steps; a scan prompt meant for a specific card always includes that card's ID. [agent] maintenance confirmations list only consequences and required actions (card unusable until restored, the app's recovery being the only copy for a non-bundle card, FIDO PIN reset, erased data). `scanCardPrompt(id, action)` renders "Scan card <ID> <action>" and retry errors name the card. Prompts that any qualifying card can answer stay generic. Prompt wording.
+
+## 5d38bd6
+
+79. [user] the Card Applets batch screen was messy (small cards, then a big card, then steps); the next card to continue looked like every other ("scan to install" on all); a scan for a specific card is shown by card style, not by an ID on a button; small-card text colors must agree. [agent] a batch shows two Sync-style steps: Save recovery (card count), then Update/Reinstall applets holding the card grid, with the current card's skipped items after it. Only the next card is dimmed ("scan to install"/"scan to restore"); later cards read "install later", like Sync's "restore later"; finished cards are "complete"; cards still holding a recovery archive are yellow. The footer names the action ("Continue installation", "Restore items"), not a card ID. A card preview's subtitle shares its description color. Single-card maintenance keeps the big card and three steps. Batch layout.
