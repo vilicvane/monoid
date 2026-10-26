@@ -281,6 +281,21 @@ for (const checkpoint of [undefined, 'verify']) {
   });
 }
 
+test('missing Monoid inspection and replacement retain the failed SELECT identity', async () => {
+  fixture.instances.delete(monoidAid);
+  const installation = await readMonoidAppletInstallation('session');
+  assert.equal(installation.monoid.installed, false);
+  await assert.rejects(replaceMonoidApplets('session', options()), error => {
+    assert.equal(error.name, 'AppletNotFoundError');
+    assert.deepEqual(error.aid, bytes(monoidAid));
+    assert.equal(error.sw, 0x6a82);
+    return true;
+  });
+  assert.ok(
+    fixture.events.every(value => !/saved|delete|install /.test(value)),
+  );
+});
+
 test('ordinary replacement checkpoints Monoid and Library while preserving Identity', async () => {
   await replaceMonoidApplets('session', options());
   assert.deepEqual(

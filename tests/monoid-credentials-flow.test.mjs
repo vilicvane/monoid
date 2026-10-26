@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {afterEach, mock, test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
 
+import {appletBundle} from '../.bld/app/@lib/monoid/@applet-bundle.js';
+import {APPLET_NAMES} from '../.bld/app/@lib/monoid/applet-install-progress.js';
 import {
   MonoidCardError,
   MonoidWrongCardError,
@@ -137,8 +139,9 @@ class AppletISOError extends Error {
   }
 }
 class AppletNotFoundError extends AppletISOError {
-  constructor() {
-    super('Applet not found', 0x6a82, new Uint8Array());
+  constructor(data, aid) {
+    super('Applet not found', 0x6a82, data);
+    this.aid = aid;
   }
 }
 mock.module('../.bld/app/@lib/applet.js', {
@@ -178,6 +181,8 @@ const {initializeMonoidCard} = await import(
 );
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    APPLET_NAMES,
+    getAppletCatalog: () => appletBundle,
     cardName,
     cardNameWithId,
     assertSameCardWithBundle,
@@ -416,6 +421,7 @@ function mount(overrides = {}) {
       },
     },
     monoidApplet: {
+      aid: Uint8Array.from(Buffer.from('f06d6f6e6f69640201', 'hex')),
       standby(
         callback,
         onError,
@@ -558,7 +564,11 @@ function mount(overrides = {}) {
     scan.onConnectionChange(true);
     try {
       if (scan.onNotFound) await scan.onNotFound('missing-applet-card');
-      else throw new AppletNotFoundError();
+      else
+        throw new AppletNotFoundError(
+          new Uint8Array(),
+          state.entrances.monoidApplet.aid,
+        );
     } catch (error) {
       scan.onError(error);
     }
@@ -1888,9 +1898,59 @@ test('prompt: a caller handling installation receives the original missing-apple
   assert.equal(state.errors[0].message, 'Monoid not installed');
   assert.ok(state.errors[0].cause instanceof AppletNotFoundError);
   assert.equal(state.errors[0].cause.sw, 0x6a82);
+  assert.deepEqual(state.errors[0].cause.aid, state.entrances.monoidApplet.aid);
   assert.deepEqual(state.navigations, []);
   assert.deepEqual(state.authenticationRequests, []);
 });
+
+for (const [aidHex, name] of [
+  ['f06d6f6e6f69640501', 'Monoid OTP Applet'],
+  ['a0000006472f0001', 'Monoid Security Key Applet'],
+]) {
+  for (const ensureSetup of [false, true]) {
+    for (const device of ['android', 'ios']) {
+      test(`prompt: missing ${name} on ${device} ends without setup or retry (ensureSetup: ${ensureSetup})`, async () => {
+        platform = device;
+        const aid = Uint8Array.from(Buffer.from(aidHex, 'hex'));
+        const failure = new AppletNotFoundError(new Uint8Array(), aid);
+        const state = mount({
+          ensureSetup,
+          allowSetup: true,
+          allowInstallRedirect: true,
+          savedPINs: {[CARD_ID]: PIN},
+          authentication: {
+            aid,
+            prepare: async () => {
+              throw failure;
+            },
+          },
+        });
+        const scan = await state.tap({cleanup: device === 'ios'});
+        const message = `${name} not installed`;
+        if (device === 'ios')
+          assert.deepEqual(scan.closeOptions, {errorMessage: message});
+        else {
+          assert.equal(state.presenter.current.content, message);
+          scan.onCleanup();
+          await state.flush();
+        }
+        await state.finishExit();
+        assert.equal(state.outcome, 'rejected');
+        assert.equal(state.errors.length, 1);
+        assert.equal(state.errors[0].message, message);
+        assert.equal(state.errors[0].cause, failure);
+        assert.equal(state.scans.length, 1);
+        assert.equal(state.businessCalls, 0);
+        assert.deepEqual(state.inputs, []);
+        assert.deepEqual(state.authenticationRequests, []);
+        assert.deepEqual(state.navigations, []);
+        assert.deepEqual(state.cardInformationReads, []);
+        assert.deepEqual(state.notifications, []);
+        assert.deepEqual(state.retryErrors, []);
+      });
+    }
+  }
+}
 
 for (const allowSetup of [undefined, false, true]) {
   test(`prompt: Hello always returns Identity and both PIN states (allowSetup: ${allowSetup})`, async () => {

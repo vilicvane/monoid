@@ -155,7 +155,8 @@ function CredentialDetails({
 
 export const SecurityKeyView = observer(
   ({view}: RouteComponentProps<Router['securityKey']>): ReactNode => {
-    const {router, monoidCredentialsStore, errorService} = useEntrances();
+    const {router, monoidApplet, monoidCredentialsStore, errorService} =
+      useEntrances();
     const active = useViewActive(view);
     const [snapshot, setSnapshot] = useState<SecurityKeySnapshot>();
     const [missingMonoid, setMissingMonoid] = useState(false);
@@ -308,7 +309,9 @@ export const SecurityKeyView = observer(
             !config &&
             active() &&
             error instanceof Error &&
-            error.cause instanceof AppletNotFoundError
+            error.cause instanceof AppletNotFoundError &&
+            uint8ArrayToHex(error.cause.aid) ===
+              uint8ArrayToHex(monoidApplet.aid)
           ) {
             setMissingMonoid(true);
             setNeedsPINSetup(false);

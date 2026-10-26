@@ -50,6 +50,7 @@ beforeEach(() => {
       pins: {access: false, secret: false},
     },
     applet: {
+      aid: Uint8Array.from(Buffer.from('f06d6f6e6f69640201', 'hex')),
       attachSession(sessionId) {
         fixture.sessions.push(sessionId);
         return {
@@ -84,7 +85,10 @@ test('an installed destination reads its identity and PIN metadata without readi
 });
 
 test('a missing Monoid applet reads GP information in the same NFC session for Setup', async () => {
-  fixture.selectError = new AppletNotFoundError(new Uint8Array());
+  fixture.selectError = new AppletNotFoundError(
+    new Uint8Array(),
+    fixture.applet.aid,
+  );
   const statuses = [];
   const result = await readCardForSetup(
     'destination',
@@ -128,7 +132,10 @@ for (const error of [
 }
 
 test('a hello error never triggers setup, even if it reports a missing applet', async () => {
-  fixture.helloError = new AppletNotFoundError(new Uint8Array());
+  fixture.helloError = new AppletNotFoundError(
+    new Uint8Array(),
+    fixture.applet.aid,
+  );
 
   await assert.rejects(
     readCardForSetup(
@@ -157,7 +164,10 @@ test('invalid identity metadata is rejected without trying to read GP informatio
 });
 
 test('a GP read error is returned to the caller without retry or installation', async () => {
-  fixture.selectError = new AppletNotFoundError(new Uint8Array());
+  fixture.selectError = new AppletNotFoundError(
+    new Uint8Array(),
+    fixture.applet.aid,
+  );
   fixture.informationError = Object.assign(new Error('Card lost'), {
     code: 'TAG_LOST',
   });
@@ -217,7 +227,9 @@ test('a late missing-applet SELECT after cancellation cannot start reading GP in
     fixture.controller.signal,
   );
   const reason = cancel();
-  fixture.selectPending.reject(new AppletNotFoundError(new Uint8Array()));
+  fixture.selectPending.reject(
+    new AppletNotFoundError(new Uint8Array(), fixture.applet.aid),
+  );
 
   await assert.rejects(reading, error => error === reason);
   assert.deepEqual(fixture.sessions, ['destination']);
@@ -259,7 +271,10 @@ test('a hello returning after cancellation cannot report a destination', async (
 });
 
 test('cancellation during the setup status update prevents reading GP information', async () => {
-  fixture.selectError = new AppletNotFoundError(new Uint8Array());
+  fixture.selectError = new AppletNotFoundError(
+    new Uint8Array(),
+    fixture.applet.aid,
+  );
   let reason;
 
   await assert.rejects(
@@ -278,7 +293,10 @@ test('cancellation during the setup status update prevents reading GP informatio
 });
 
 test('GP information returning after cancellation cannot request setup', async () => {
-  fixture.selectError = new AppletNotFoundError(new Uint8Array());
+  fixture.selectError = new AppletNotFoundError(
+    new Uint8Array(),
+    fixture.applet.aid,
+  );
   fixture.informationPending = deferred();
   const reading = readCardForSetup(
     'destination',
@@ -296,7 +314,10 @@ test('GP information returning after cancellation cannot request setup', async (
 });
 
 test('a late GP read failure cannot request setup or retry the read', async () => {
-  fixture.selectError = new AppletNotFoundError(new Uint8Array());
+  fixture.selectError = new AppletNotFoundError(
+    new Uint8Array(),
+    fixture.applet.aid,
+  );
   fixture.informationPending = deferred();
   const reading = readCardForSetup(
     'destination',

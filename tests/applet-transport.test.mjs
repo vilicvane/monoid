@@ -174,6 +174,21 @@ test('an unsupported SELECT instruction remains an ISO error', async () => {
   );
 });
 
+test('a missing explicitly selected AID retains the SELECT target and response data', async () => {
+  const applet = await openApplet();
+  const aid = Uint8Array.of(4, 5, 6);
+  respond = () => [0x12, 0x34, 0x6a, 0x82];
+  await assert.rejects(applet.select(aid), error => {
+    assert.ok(error instanceof AppletNotFoundError);
+    assert.equal(error.name, 'AppletNotFoundError');
+    assert.equal(error.sw, 0x6a82);
+    assert.deepEqual(error.data, Uint8Array.of(0x12, 0x34));
+    assert.deepEqual(error.aid, aid);
+    assert.notDeepEqual(error.aid, applet.aid);
+    return true;
+  });
+});
+
 test('standby forwards a missing SELECT when no preflight handler was supplied', async () => {
   respond = () => [0x6a, 0x82];
   const state = standby({
@@ -182,6 +197,7 @@ test('standby forwards a missing SELECT when no preflight handler was supplied',
   await state.tap();
   assert.equal(state.failures.length, 1);
   assert.ok(state.failures[0] instanceof AppletNotFoundError);
+  assert.deepEqual(state.failures[0].aid, Uint8Array.of(1, 2, 3));
   assert.deepEqual(state.events, ['connected', 'disconnected', 'cleanup']);
 });
 
@@ -210,7 +226,10 @@ for (const kind of [
         return data[1] === 0xa4 ? [0x61, 1] : [0x6a, 0x82];
       return data[1] === 0xa4 ? [0x90, 0] : [0x6a, 0x82];
     };
-    const failure = new AppletNotFoundError(new Uint8Array());
+    const failure = new AppletNotFoundError(
+      new Uint8Array(),
+      Uint8Array.of(4, 5, 6),
+    );
     const state = standby({
       callback: async applet => {
         if (kind === 'business exception') throw failure;

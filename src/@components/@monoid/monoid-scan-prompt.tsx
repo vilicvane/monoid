@@ -16,6 +16,7 @@ import {CBORAppletError} from '../../@lib/cbor-applet.js';
 import {readCardInformation} from '../../@lib/global-platform/card-information.js';
 import {IsoDepScanError} from '../../@lib/isodep.js';
 import {
+  APPLET_NAMES,
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidAppletInvalidPINError,
@@ -25,6 +26,7 @@ import {
   assertCardPINsNotBlocked,
   assertSameCardWithBundle,
   cardName,
+  getAppletCatalog,
   initializeMonoidCard,
   readBackupCardIdentity,
 } from '../../@lib/monoid/index.js';
@@ -667,16 +669,28 @@ export function useMonoidScanPrompt({
 
           if (error instanceof AppletNotFoundError) {
             update = undefined;
-            if (!ensureSetup) {
+            const aid = uint8ArrayToHex(error.aid);
+            const missingMonoid = aid === uint8ArrayToHex(monoidApplet.aid);
+            if (missingMonoid && ensureSetup) {
+              result = {type: 'uninitialized'};
+            } else {
+              const applet = getAppletCatalog().find(
+                applet =>
+                  applet.appletAid?.toLowerCase() === aid ||
+                  applet.instanceAid?.toLowerCase() === aid,
+              );
+              const name = missingMonoid
+                ? 'Monoid'
+                : applet
+                  ? APPLET_NAMES[applet.stage]
+                  : `Applet ${aid}`;
               result = {
                 type: 'error',
-                error: new MonoidCardError('Monoid not installed', {
+                error: new MonoidCardError(`${name} not installed`, {
                   cause: error,
                 }),
                 retry: false,
               };
-            } else {
-              result = {type: 'uninitialized'};
             }
             return;
           }

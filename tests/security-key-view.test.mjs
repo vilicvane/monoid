@@ -335,6 +335,9 @@ function mount() {
     },
   });
   state.entrances = {
+    monoidApplet: {
+      aid: Uint8Array.from(Buffer.from('f06d6f6e6f69640201', 'hex')),
+    },
     monoidCredentialsStore: {
       createPINSession: mock.fn(() => ({
         clear: mock.fn(),
@@ -555,13 +558,42 @@ for (const kind of ['access', 'secret']) {
   });
 }
 
+test('a missing optional applet is not mistaken for missing Monoid', async () => {
+  const state = mount();
+  state.click('Scan a card');
+  await state.flush();
+  const failure = new MonoidCardError(
+    'Monoid Security Key Applet not installed',
+    {
+      cause: new AppletNotFoundError(
+        new Uint8Array(),
+        Uint8Array.from(Buffer.from('a0000006472f0001', 'hex')),
+      ),
+    },
+  );
+  state.scans.at(-1).finished.reject(failure);
+  await state.flush();
+  assert.deepEqual(state.errors, [failure]);
+  assert.equal(
+    find(
+      state.tree,
+      node =>
+        node.type === 'Button' && node.props.children === 'Open Card Applets',
+    ),
+    undefined,
+  );
+});
+
 test('a missing Monoid applet preserves an actionable Card Applets entry', async () => {
   const state = mount();
   state.click('Scan a card');
   await state.flush();
   state.scans.at(-1).finished.reject(
     new MonoidCardError('Monoid not installed', {
-      cause: new AppletNotFoundError(new Uint8Array()),
+      cause: new AppletNotFoundError(
+        new Uint8Array(),
+        state.entrances.monoidApplet.aid,
+      ),
     }),
   );
   await state.flush();

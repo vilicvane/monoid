@@ -175,7 +175,10 @@ test('preserves other protocol, applet-selection and transport errors during sig
   for (const operation of ['viewKey', 'sign']) {
     for (const error of [
       new CBORAppletError({code: 'UNAUTHORIZED'}),
-      new AppletNotFoundError(new Uint8Array()),
+      new AppletNotFoundError(
+        new Uint8Array(),
+        getBytes('0xf06d6f6e6f69640201'),
+      ),
       Object.assign(new Error('Tag lost'), {code: 'TAG_LOST'}),
       new Error('NOT_FOUND'),
     ]) {

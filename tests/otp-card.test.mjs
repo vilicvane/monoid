@@ -73,7 +73,8 @@ function card(options = {}) {
   let grants = options.grants ?? [];
   otp = {
     async select() {
-      if (options.notInstalled) throw new AppletNotFoundError(new Uint8Array());
+      if (options.notInstalled)
+        throw new AppletNotFoundError(new Uint8Array(), OTP_AID);
     },
     async hello() {
       commands.push(['otp.hello']);

@@ -132,7 +132,7 @@ export abstract class Applet<TCommandDefinitions> {
       );
     } catch (error) {
       if (error instanceof AppletISOError && error.sw === 0x6a82) {
-        throw new AppletNotFoundError(error.data);
+        throw new AppletNotFoundError(error.data, aid);
       }
 
       throw error;
@@ -256,7 +256,10 @@ export async function probeApplet(
 }
 
 export class AppletNotFoundError extends AppletISOError {
-  constructor(data: Uint8Array) {
+  constructor(
+    data: Uint8Array,
+    readonly aid: Uint8Array,
+  ) {
     super('Applet not found during SELECT', 0x6a82, data);
   }
 }

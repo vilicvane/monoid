@@ -386,7 +386,7 @@ test('only explicit FIDO SELECT not-found is reported as missing', async () => {
   {
     const missing = card({
       onSelect: async () => {
-        throw new AppletNotFoundError(new Uint8Array());
+        throw new AppletNotFoundError(new Uint8Array(), SECURITY_KEY_AID);
       },
     });
     assert.equal(

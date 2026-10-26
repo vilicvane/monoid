@@ -360,7 +360,7 @@ export async function readMonoidAppletInstallation(
       sessionId,
     );
     if (!(await probeApplet(monoid, monoid.aid))) {
-      throw new AppletNotFoundError(new Uint8Array());
+      throw new AppletNotFoundError(new Uint8Array(), monoid.aid);
     }
     signal?.throwIfAborted();
     result.monoid.installed = true;
@@ -711,7 +711,7 @@ export async function replaceMonoidApplets(
         'The card Bundle changed during maintenance',
       );
     } else if (!checkpoint) {
-      throw new AppletNotFoundError(new Uint8Array());
+      throw new AppletNotFoundError(new Uint8Array(), applet.aid);
     }
   }
   signal?.throwIfAborted();
