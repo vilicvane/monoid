@@ -13,6 +13,7 @@ import {
   type MonoidAppletHello,
   MonoidCardError,
   assertSameCardWithBundle,
+  cardName,
   createMonoidApplet,
   readBackupCardIdentity,
   readMonoidAppletInstallation,
@@ -30,8 +31,8 @@ import {
   CardPreviewButton,
 } from '../../../@monoid/card-preview.js';
 import {
-  MonoidScanStatePromptContentHighlight,
   MonoidScanStatePromptProgress,
+  scanCardPrompt,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
@@ -319,7 +320,7 @@ export const SyncCardsView = observer(
             {
               type: 'password',
               ...getPINInputPlaceholder('Secret', 'Enter card'),
-              description: card?.id,
+              description: card && cardName(card),
               center: true,
               maxLength: 16,
             },
@@ -327,21 +328,13 @@ export const SyncCardsView = observer(
           ),
         async (credentials, pinSignal) => {
           await scan(
-            suggested ? (
-              <>
-                Scan card{' '}
-                <MonoidScanStatePromptContentHighlight>
-                  {suggested.id}
-                </MonoidScanStatePromptContentHighlight>
-                {!expected && ' to export'}
-              </>
-            ) : collecting ? (
-              'Scan a card'
-            ) : needsRecoveryExport ? (
-              'Scan a card to export'
-            ) : (
-              'Scan a pending card'
-            ),
+            suggested
+              ? scanCardPrompt(suggested, expected ? undefined : 'to export')
+              : collecting
+                ? 'Scan a card'
+                : needsRecoveryExport
+                  ? 'Scan a card to export'
+                  : 'Scan a pending card',
             async (
               applet,
               setState,
@@ -997,7 +990,7 @@ export const SyncCardsView = observer(
         )}
         {maintenanceProposal && !busy && isViewActive() && (
           <ConfirmPopup
-            title={`${maintenance?.mode === 'update' ? 'Update' : 'Reinstall'} card ${maintenanceProposal.id} too?`}
+            title={`${maintenance?.mode === 'update' ? 'Update' : 'Reinstall'} card ${cardName(maintenanceProposal)} too?`}
             confirmText={
               maintenance?.mode === 'update' ? 'Update too' : 'Reinstall too'
             }

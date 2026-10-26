@@ -9,6 +9,7 @@ import {
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
 import {readBackupCardIdentity} from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 import * as monoid from '../.bld/app/@lib/monoid/index.js';
 import {assertCardMaintenanceBundleRecovery} from '../.bld/app/@services/card-maintenance-service.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
@@ -104,6 +105,8 @@ mock.module('../.bld/app/@components/@animations.js', {
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
+    scanCardPrompt: (card, action) =>
+      `Scan card ${cardNameWithId(card)}${action ? ` ${action}` : ''}`,
     MonoidScanStatePromptContentHighlight: 'highlight',
     MonoidScanStatePromptProgress: 'progress',
     useMonoidScanPrompt(options) {
@@ -1398,6 +1401,18 @@ test('maintenance preview keeps the alias with its selected action and export st
   await state.flush();
   assert.equal(preview().alias, 'Travel');
   assert.ok(preview().description);
+});
+
+test('Sync names its known source in the scan prompt without reading it again', async () => {
+  const sourceCard = publicCard(1);
+  const source = {
+    ...readBackupCardIdentity(sourceCard.hello),
+    alias: 'Travel',
+    items: [],
+  };
+  const state = mount({source});
+  await state.startScan('Scan card');
+  assert.equal(state.scans[0].content, 'Scan card Travel (00000001)');
 });
 
 test('maintenance keeps the target fixed while allowing multiple other Bundle cards', async () => {

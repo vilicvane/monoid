@@ -5,6 +5,7 @@ import {setImmediate} from 'node:timers/promises';
 import {observable, runInAction} from 'mobx';
 
 import {MonoidWrongCardError} from '../.bld/app/@lib/monoid/card-error.js';
+import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 import {
   MonoidCredentialsStore,
   MonoidPINSession,
@@ -52,7 +53,8 @@ mock.module('../.bld/app/@components/@monoid/pin-input-placeholder.js', {
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
-    scanCardPrompt: (id, action) => `Scan card ${id} ${action}`,
+    scanCardPrompt: (card, action) =>
+      `Scan card ${cardNameWithId(card)}${action ? ` ${action}` : ''}`,
     useMonoidScanPrompt: options => {
       fixture.scanOptions = options;
       return [null, fixture.scan];

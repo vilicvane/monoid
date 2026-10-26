@@ -265,6 +265,22 @@ function addUnrelatedRegistryEntries() {
   };
 }
 
+for (const checkpoint of [undefined, 'verify']) {
+  test(`maintenance names the saved card when identity validation fails at ${checkpoint ?? 'start'}`, async () => {
+    fixture.hello.publicKey = bytes(`04${'22'.repeat(64)}`);
+    await assert.rejects(
+      replaceMonoidApplets(
+        'session',
+        options({checkpoint, expectedCardAlias: 'Daily wallet'}),
+      ),
+      /Wrong card, scan Daily wallet \(01020304\)/,
+    );
+    assert.ok(
+      fixture.events.every(value => !/saved|delete|install /.test(value)),
+    );
+  });
+}
+
 test('ordinary replacement checkpoints Monoid and Library while preserving Identity', async () => {
   await replaceMonoidApplets('session', options());
   assert.deepEqual(

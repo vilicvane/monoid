@@ -14,7 +14,7 @@ import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import {type MonoidPINSession} from '../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {
-  MonoidScanStatePromptContentHighlight,
+  scanCardPrompt,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
 import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
@@ -131,12 +131,7 @@ export function CardSetupPIN({
         try {
           await waitForOperation(
             scan(
-              <>
-                Scan card{' '}
-                <MonoidScanStatePromptContentHighlight>
-                  {uint8ArrayToHex(hello.id)}
-                </MonoidScanStatePromptContentHighlight>
-              </>,
+              scanCardPrompt(hello),
               async (applet, setState, current, scanSignal) => {
                 const cancel = (): void => operation.abort(scanSignal.reason);
                 scanSignal.addEventListener('abort', cancel, {once: true});

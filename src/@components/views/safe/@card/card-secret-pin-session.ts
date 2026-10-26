@@ -7,7 +7,10 @@ import {
   assertSameCardWithBundle,
 } from '../../../../@lib/monoid/index.js';
 
-type Identity = Pick<CardBackupIdentity, 'id' | 'publicKey' | 'bundle'>;
+type Identity = Pick<
+  CardBackupIdentity,
+  'id' | 'publicKey' | 'bundle' | 'alias'
+>;
 type Credentials = {pin: MonoidPIN; onAuthenticated: () => void};
 type ProcedurePINs = {
   secretPIN(card: Identity): MonoidPIN | undefined;

@@ -1,8 +1,10 @@
+import {type NamedCard, cardNameWithId} from './card-name.js';
+
 /** A card failure with a message suitable for the scan prompt. */
 export class MonoidCardError extends Error {}
 
 export class MonoidWrongCardError extends MonoidCardError {
-  constructor(readonly expectedId: string) {
-    super(`Wrong card, scan ${expectedId}`);
+  constructor(readonly card: NamedCard) {
+    super(`Wrong card, scan ${cardNameWithId(card)}`);
   }
 }

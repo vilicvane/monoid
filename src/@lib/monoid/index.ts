@@ -3,6 +3,7 @@ export * from './card-alias.js';
 export * from './card-contents.js';
 export * from './card-error.js';
 export * from './card-identity.js';
+export * from './card-name.js';
 export * from './card-pins.js';
 export * from './get-applet-key.js';
 export * from './initialize-card.js';

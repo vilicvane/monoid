@@ -9,6 +9,7 @@ import {AppletNotFoundError} from '../.bld/app/@lib/applet.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
 import {readBackupCardIdentity} from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
 
 import {credential} from './helpers/security-key-credential.mjs';
@@ -86,6 +87,8 @@ mock.module('../.bld/app/@components/@ui/use-input-modal.js', {
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
+    scanCardPrompt: (card, action) =>
+      `Scan card ${cardNameWithId(card)}${action ? ` ${action}` : ''}`,
     MonoidScanStatePromptContentHighlight: 'highlight',
     MonoidScanRedirectError: class extends Error {
       code = 'CANCELLED';

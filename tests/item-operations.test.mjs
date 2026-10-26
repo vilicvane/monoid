@@ -221,7 +221,7 @@ for (const failure of [
       },
     };
     await assert.rejects(
-      createCardKey(applet, '01020304', 'seed', signal(), () =>
+      createCardKey(applet, {id: '01020304'}, 'seed', signal(), () =>
         assert.fail('No acknowledged index'),
       ),
       error =>

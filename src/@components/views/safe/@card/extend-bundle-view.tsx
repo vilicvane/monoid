@@ -8,6 +8,8 @@ import {useEntrances} from '../../../../@entrances.js';
 import type {CardInformation} from '../../../../@lib/global-platform/card-information.js';
 import {
   MonoidAppletHello,
+  cardName,
+  cardNameWithId,
   readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
@@ -19,7 +21,7 @@ import {
   CardPreview,
   CardPreviewButton,
 } from '../../../@monoid/card-preview.js';
-import {MonoidScanStatePromptContentHighlight} from '../../../@monoid/monoid-scan-prompt.js';
+import {scanCardPrompt} from '../../../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
 import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
 import {Button} from '../../../@ui/button.js';
@@ -184,7 +186,7 @@ export const ExtendBundleView = observer(
           async (card, pinSignal) => {
             const signal = AbortSignal.any([controller.signal, pinSignal]);
             let description: ReactNode = card
-              ? `Card ${card.id}`
+              ? `Card ${cardName(card)}`
               : phase === 'requesting'
                 ? 'For a card in this bundle'
                 : 'For another card in this bundle';
@@ -207,18 +209,11 @@ export const ExtendBundleView = observer(
           },
           (credentials, pinSignal) =>
             scan(
-              expected ? (
-                <>
-                  Scan card{' '}
-                  <MonoidScanStatePromptContentHighlight>
-                    {expected.id}
-                  </MonoidScanStatePromptContentHighlight>
-                </>
-              ) : phase === 'requesting' ? (
-                'Scan a bundle card'
-              ) : (
-                'Scan another bundle card'
-              ),
+              expected
+                ? scanCardPrompt(expected)
+                : phase === 'requesting'
+                  ? 'Scan a bundle card'
+                  : 'Scan another bundle card',
               async (sessionId, setState, scanSignal) => {
                 const signal = AbortSignal.any([
                   controller.signal,
@@ -393,7 +388,7 @@ export const ExtendBundleView = observer(
                 {activeNumero === 2 && (
                   <InfoMessage>
                     {session.phase === 'requesting' && session.requester
-                      ? `Scan card ${session.requester.id} to retry.`
+                      ? `Scan card ${cardNameWithId(session.requester)} to retry.`
                       : 'Scan two cards from this bundle.'}
                   </InfoMessage>
                 )}
@@ -424,7 +419,7 @@ export const ExtendBundleView = observer(
                 </CardGrid>
                 {activeNumero === 3 && (
                   <InfoMessage>
-                    Scan card {session.target!.id} added in step 1.
+                    Scan card {cardNameWithId(session.target!)} added in step 1.
                   </InfoMessage>
                 )}
               </Step>

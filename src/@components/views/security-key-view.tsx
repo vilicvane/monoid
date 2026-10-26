@@ -14,6 +14,7 @@ import {AppletNotFoundError} from '../../@lib/applet.js';
 import {
   assertCardPINs,
   assertSameCard,
+  cardNameWithId,
   readCardIdentity,
   removeItems,
 } from '../../@lib/monoid/index.js';
@@ -32,7 +33,7 @@ import {
   type MonoidScanPromptCallback,
   type MonoidScanPromptValidateCard,
   MonoidScanRedirectError,
-  MonoidScanStatePromptContentHighlight,
+  scanCardPrompt,
   useMonoidScanPrompt,
 } from '../@monoid/monoid-scan-prompt.js';
 import {scanNextCards} from '../@monoid/scan-next-cards.js';
@@ -211,7 +212,10 @@ export const SecurityKeyView = observer(
       await runOperation(async ({signal, active, scan}) => {
         setDeleting(undefined);
         setDetail(undefined);
-        const identity = readCardIdentity(snapshot.hello);
+        const identity = {
+          ...readCardIdentity(snapshot.hello),
+          alias: snapshot.hello.alias,
+        };
 
         const validate =
           (card: typeof identity | undefined): MonoidScanPromptValidateCard =>
@@ -231,12 +235,7 @@ export const SecurityKeyView = observer(
         };
 
         await scan(
-          <>
-            Scan card{' '}
-            <MonoidScanStatePromptContentHighlight>
-              {identity.id}
-            </MonoidScanStatePromptContentHighlight>
-          </>,
+          scanCardPrompt(identity),
           async (applet, setState, hello, scanSignal) => {
             await deleteFromCard(applet, setState, hello, scanSignal);
             if (active())
@@ -268,20 +267,14 @@ export const SecurityKeyView = observer(
       await runOperation(async ({signal, active, scan}) => {
         setPopup(undefined);
         const identity = config
-          ? readCardIdentity(config.snapshot.hello)
+          ? {
+              ...readCardIdentity(config.snapshot.hello),
+              alias: config.snapshot.hello.alias,
+            }
           : undefined;
         try {
           await scan(
-            identity ? (
-              <>
-                Scan card{' '}
-                <MonoidScanStatePromptContentHighlight>
-                  {identity.id}
-                </MonoidScanStatePromptContentHighlight>
-              </>
-            ) : (
-              'Scan a card'
-            ),
+            identity ? scanCardPrompt(identity) : 'Scan a card',
             async (applet, setState, hello, signal) => {
               signal.throwIfAborted();
               if (config) {
@@ -419,8 +412,8 @@ export const SecurityKeyView = observer(
               )}
               {configuration?.uncertain && (
                 <WarningMessage>
-                  Scan card {uint8ArrayToHex(configuration.snapshot.hello.id)}{' '}
-                  again to check changes before continuing
+                  Scan card {cardNameWithId(configuration.snapshot.hello)} again
+                  to check changes before continuing
                 </WarningMessage>
               )}
               {snapshot.credentials.length === 0 ? (

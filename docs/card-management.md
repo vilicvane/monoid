@@ -63,6 +63,12 @@ write stops without replay. First Identity installation offers an **Alias** swit
 that reveals the alias field, like **Authority**; the alias is set in the same scan
 as PIN setup.
 
+Specific-card text uses the shared `cardName` formatter. Scan prompts and retry
+messages show the alias with the Card ID in parentheses, or only the ID when no
+alias is known; `scanCardPrompt` highlights only the name. Identity-only callers
+use the existing card cache for aliases, without another scan. The Security Key
+header keeps its card ID and bound Seed alias.
+
 Update and Reinstall replace **Monoid only**. Identity, its Secret PIN, and bundle
 membership remain. Fresh install is a separate, explicitly confirmed action that
 replaces Identity as well and generates new cryptographic keys. It preserves the

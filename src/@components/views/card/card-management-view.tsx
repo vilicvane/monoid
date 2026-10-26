@@ -25,6 +25,7 @@ import {
   MonoidWrongCardError,
   assertCardPINsNotBlocked,
   assertSameCard,
+  cardNameWithId,
   createMonoidApplet,
   getAppletCatalog,
   getAppletDependents,
@@ -485,6 +486,9 @@ export const CardManagementView = observer(
         const id = expectedHello
           ? uint8ArrayToHex(expectedHello.id)
           : pending?.card.id;
+        const namedCard = id
+          ? {id, alias: expectedHello?.alias ?? pending?.card.alias}
+          : undefined;
         requestedPINs = await requestCardPINs(
           showPIN,
           {
@@ -511,7 +515,7 @@ export const CardManagementView = observer(
           throw error;
         };
 
-        const prompt = id ? scanCardPrompt(id) : 'Scan the card';
+        const prompt = namedCard ? scanCardPrompt(namedCard) : 'Scan the card';
         await scan(prompt, async (sessionId, setState, scanSignal) => {
           const signal = AbortSignal.any([operation.signal, scanSignal]);
           const progress = (progress: CardMaintenanceProgress): void =>
@@ -549,7 +553,9 @@ export const CardManagementView = observer(
             cardFingerprint(information) !== cardFingerprint(card.information)
           ) {
             throw new MonoidCardError(
-              id ? `Scan card ${id}` : 'Scan the same card',
+              namedCard
+                ? `Scan card ${cardNameWithId(namedCard)}`
+                : 'Scan the same card',
             );
           }
           const current = await readMonoidAppletInstallation(
@@ -565,20 +571,25 @@ export const CardManagementView = observer(
 
           if (pending && action !== 'fresh' && saved?.id !== pending.id) {
             throw new MonoidCardError(
-              id ? `Scan card ${id}` : 'Scan the same card',
+              namedCard
+                ? `Scan card ${cardNameWithId(namedCard)}`
+                : 'Scan the same card',
             );
           }
           if (!pending && hello) {
             if (!current.hello) {
-              throw new MonoidWrongCardError(uint8ArrayToHex(hello.id));
+              throw new MonoidWrongCardError(hello);
             }
-            assertSameCard(current.hello, readCardIdentity(hello));
+            assertSameCard(current.hello, {
+              ...readCardIdentity(hello),
+              alias: hello.alias,
+            });
           }
           // A newly chosen action must never inherit an earlier destructive
           // operation. Resuming binds the user's confirmation to its saved plan.
           if (options.operationId && saved?.id !== options.operationId) {
             throw new MonoidCardError(
-              `Scan ${id ? `card ${id}` : 'the card'} again`,
+              `Scan ${namedCard ? `card ${cardNameWithId(namedCard)}` : 'the card'} again`,
             );
           }
           if (
@@ -723,7 +734,7 @@ export const CardManagementView = observer(
             next = current.hello;
           } else {
             throw new MonoidCardError(
-              `Scan ${id ? `card ${id}` : 'the card'} again`,
+              `Scan ${namedCard ? `card ${cardNameWithId(namedCard)}` : 'the card'} again`,
             );
           }
 

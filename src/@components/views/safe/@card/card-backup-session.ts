@@ -24,6 +24,7 @@ import {
   assertCardPINsNotBlocked,
   assertSameCardWithBundle,
   cardItemIssue,
+  cardNameWithId,
   initializeMonoidCard,
   readBackupCardIdentity,
   readCardContents,
@@ -118,7 +119,7 @@ function createBackup(
 
     if ([...selectedIndexes].some(index => !availableIndexes.has(index))) {
       throw new MonoidCardError(
-        `Some selected items were not found on the source card. Return to Card and scan card ${source.id} again.`,
+        `Some selected items were not found on the source card. Return to Card and scan card ${cardNameWithId(source)} again.`,
       );
     }
   }
@@ -171,7 +172,7 @@ export function assertBackupBundle(
 export function assertBackupCard(
   hello: MonoidAppletHello,
   expected: CardBackupIdentity,
-  bundleChangedMessage = `Card bundle changed, scan card ${expected.id} again`,
+  bundleChangedMessage = `Card bundle changed, scan card ${cardNameWithId(expected)} again`,
 ): void {
   assertSameCardWithBundle(hello, expected, bundleChangedMessage);
 

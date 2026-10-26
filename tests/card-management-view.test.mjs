@@ -14,6 +14,7 @@ import {
   assertSameCard,
   readCardIdentity,
 } from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
 import * as monoid from '../.bld/app/@lib/monoid/index.js';
 import {SyncCardsStore} from '../.bld/app/@services/sync-cards-store.js';
@@ -255,7 +256,8 @@ for (const [path, names] of [
     namedExports: {
       ...Object.fromEntries(names.map(name => [name, name])),
       ...(path === '@monoid/monoid-scan-prompt' && {
-        scanCardPrompt: id => `Scan card ${id}`,
+        scanCardPrompt: (card, action) =>
+          `Scan card ${cardNameWithId(card)}${action ? ` ${action}` : ''}`,
       }),
       ...(path === '@view/index' && {useViewActive}),
       ...(path === 'views/safe/index' && {SyncCardsState}),
@@ -838,7 +840,10 @@ for (const known of [false, true]) {
   test(`a different physical card is rejected before any writes with ${known ? 'a known ID' : 'no Identity installed'}`, async () => {
     const state = mount({cardInformation: !known});
     if (known) {
-      state.installation = installed(state.uninitialized);
+      state.installation = installed({
+        ...state.uninitialized,
+        alias: 'Daily wallet',
+      });
       state.click('Scan a card');
       assert.equal(state.scans[0].label, 'Scan a card');
       await state.tap();
@@ -850,7 +855,7 @@ for (const known of [false, true]) {
     await state.answer();
     assert.equal(
       state.scans.at(-1).label,
-      known ? 'Scan card 01020304' : 'Scan the card',
+      known ? 'Scan card Daily wallet (01020304)' : 'Scan the card',
     );
     state.information = {
       ...state.information,
@@ -859,7 +864,7 @@ for (const known of [false, true]) {
     await state.tap();
     assert.equal(
       state.errors[0].message,
-      known ? 'Scan card 01020304' : 'Scan the same card',
+      known ? 'Scan card Daily wallet (01020304)' : 'Scan the same card',
     );
     assert.equal(
       state.events.some(event =>
@@ -2250,6 +2255,7 @@ test('Card Applets resumes the first unfinished batch target after navigation an
   const state = mount({cardInformation: false});
   const card = {
     id: '01020304',
+    alias: 'Travel',
     publicKey: `04${'11'.repeat(64)}`,
     bundle: 'ab'.repeat(32),
     appletAid: AID,
@@ -2287,7 +2293,7 @@ test('Card Applets resumes the first unfinished batch target after navigation an
     1,
     'restore can start without scanning a different target first',
   );
-  assert.equal(state.scans[0].label, 'Scan card 01020304');
+  assert.equal(state.scans[0].label, 'Scan card Travel (01020304)');
   state.scans[0].finished.reject(
     Object.assign(new Error('cancelled'), {code: 'CANCELLED'}),
   );

@@ -14,6 +14,7 @@ import {
   type MonoidAppletHello,
   MonoidCardError,
   assertSameCard,
+  cardNameWithId,
   readCardContents,
 } from './monoid/index.js';
 
@@ -308,10 +309,12 @@ export class SecurityKeyConfiguration {
   ): Promise<void> {
     if (this.busy || this.complete) return;
     const id = uint8ArrayToHex(this.snapshot.hello.id);
+    const name = cardNameWithId(this.snapshot.hello);
     if (this.uncertain)
-      throw new MonoidCardError(`Scan card ${id} again to check changes`);
+      throw new MonoidCardError(`Scan card ${name} again to check changes`);
     assertSameCard(hello, {
       id,
+      alias: this.snapshot.hello.alias,
       publicKey: uint8ArrayToHex(this.snapshot.hello.publicKey),
     });
     if (!this.snapshot.installed)
@@ -323,7 +326,7 @@ export class SecurityKeyConfiguration {
       const current = findSecurityKeyGrant(grants);
       if (!sameSeed(current?.seed, this.snapshot.grant?.seed))
         throw new MonoidCardError(
-          `Security Key configuration changed, scan card ${id} again`,
+          `Security Key configuration changed, scan card ${name} again`,
         );
       signal.throwIfAborted();
       const {items} = await applet.list({});
@@ -333,7 +336,9 @@ export class SecurityKeyConfiguration {
         this.selection !== uint8ArrayToHex(current.seed.index) &&
         items.some(item => item.index[0] === 0xf1 && item.index[1] === 1)
       )
-        throw new MonoidCardError(`Credentials changed, scan card ${id} again`);
+        throw new MonoidCardError(
+          `Credentials changed, scan card ${name} again`,
+        );
       signal.throwIfAborted();
       let index = this.createdIndex;
       if (this.selection === 'create') {
@@ -348,7 +353,7 @@ export class SecurityKeyConfiguration {
             if (error instanceof CBORAppletError) this.uncertain = false;
             if (error instanceof CardItemExistsError) {
               throw new MonoidCardError(
-                `Key already exists, scan card ${id} again to check`,
+                `Key already exists, scan card ${name} again to check`,
                 {cause: error},
               );
             }

@@ -1182,6 +1182,7 @@ test('restore verifies the full Identity, caller AID and unchanged Bundle before
   for (const mismatch of ['id', 'publicKey', 'aid', 'bundle']) {
     const service = await CardMaintenanceService.create(storageFixture());
     const card = cardFixture();
+    card.state.alias = 'Daily wallet';
     const operation = await service.prepare(card, {
       mode: 'update',
       cardInformation: information,
@@ -1195,7 +1196,9 @@ test('restore verifies the full Identity, caller AID and unchanged Bundle before
     else card.state.bundle = new Uint8Array(32);
     await assert.rejects(
       service.restore(card, operation.id),
-      /Wrong card|Bundle changed/,
+      mismatch === 'id' || mismatch === 'publicKey'
+        ? /Wrong card, scan Daily wallet \(01020304\)/
+        : /Wrong card|Bundle changed/,
     );
     assert.equal(card.imports.length, 0);
     assert.ok(service.get(operation.id).archive);

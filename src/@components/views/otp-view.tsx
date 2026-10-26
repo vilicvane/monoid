@@ -39,7 +39,7 @@ import {
   type MonoidScanAuthentication,
   type MonoidScanPromptCallback,
   type MonoidScanPromptValidateCard,
-  MonoidScanStatePromptContentHighlight,
+  scanCardPrompt,
   useMonoidScanPrompt,
 } from '../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../@monoid/pin-input-placeholder.js';
@@ -162,7 +162,7 @@ type Operation =
 
 export const OTPView = observer(
   ({view}: RouteComponentProps<Router['otp']>): ReactNode => {
-    const {router, otpStore, monoidCredentialsStore, errorService} =
+    const {router, cardStore, otpStore, monoidCredentialsStore, errorService} =
       useEntrances();
     const active = useViewActive(view);
     const [requestedCard] = useState(() => view.card);
@@ -217,8 +217,11 @@ export const OTPView = observer(
 
     async function run(
       operation: Operation,
-      expected?: Pick<OTPCard, 'id' | 'publicKey'>,
+      expected?: Pick<OTPCard, 'id' | 'publicKey'> &
+        Partial<Pick<OTPCard, 'alias'>>,
     ): Promise<void> {
+      if (expected && expected.alias === undefined)
+        expected = cardStore.get(expected) ?? expected;
       await runOperation(async ({signal, active, getPINs, scan}) => {
         setPopup(undefined);
         setURI(undefined);
@@ -266,6 +269,7 @@ export const OTPView = observer(
             const identity = {
               id: uint8ArrayToHex(hello.id),
               publicKey: uint8ArrayToHex(hello.publicKey),
+              alias: hello.alias,
             };
             signal.throwIfAborted();
             let accounts: OTPAccount[] | undefined;
@@ -276,7 +280,7 @@ export const OTPView = observer(
               setState('Removing account, hold tight...');
               accounts = await removeOTPAccount(
                 applet,
-                identity.id,
+                identity,
                 operation.account,
                 signal,
               );
@@ -321,16 +325,7 @@ export const OTPView = observer(
               : undefined;
 
           await scan(
-            expected ? (
-              <>
-                Scan card{' '}
-                <MonoidScanStatePromptContentHighlight>
-                  {expected.id}
-                </MonoidScanStatePromptContentHighlight>
-              </>
-            ) : (
-              'Scan a card'
-            ),
+            expected ? scanCardPrompt(expected) : 'Scan a card',
             process,
             validate(expected),
             signal,

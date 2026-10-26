@@ -26,6 +26,7 @@ import {
   assertSameCardWithBundle,
   readBackupCardIdentity,
 } from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
 import {MonoidAppletInvalidPINError} from '../.bld/app/@lib/monoid/monoid-applet.js';
 
@@ -89,6 +90,8 @@ mock.module('../.bld/app/@services/index.js', {
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    cardName,
+    cardNameWithId,
     assertSameCardWithBundle,
     readBackupCardIdentity,
     assertCardPINsNotBlocked,
@@ -106,6 +109,8 @@ mock.module('../.bld/app/@components/@animations.js', {
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
+    scanCardPrompt: (card, action) =>
+      `Scan card ${cardNameWithId(card)}${action ? ` ${action}` : ''}`,
     MonoidScanStatePromptContentHighlight: 'highlight',
     useMonoidScanPrompt: options => [
       null,
@@ -1245,7 +1250,7 @@ for (const hasRecord of [true, false]) {
 test('a rejected Copy item stays visible after the other items complete', async () => {
   const state = mount(),
     session = state.sessions[0];
-  await session.addTarget(hello(2));
+  await session.addTarget({...hello(2), alias: 'Backup'});
   await session.confirmTargets();
   await session.exportItems(
     {
@@ -1299,6 +1304,11 @@ test('a rejected Copy item stays visible after the other items complete', async 
       typeof node.type === 'function' && node.type.name === 'DestinationCards',
   );
   assert.ok(cards);
+  assert.equal(
+    find(cards.type(cards.props), node => node.type === 'ListItemName').props
+      .children,
+    'Backup',
+  );
   assert.ok(
     find(
       cards.type(cards.props),
@@ -1306,4 +1316,18 @@ test('a rejected Copy item stays visible after the other items complete', async 
     ),
   );
   assert.deepEqual(state.errors, []);
+});
+
+test('the editable Copy destination popup names the card by alias', async () => {
+  const state = mount();
+  await state.sessions[0].addTarget({...hello(2), alias: 'Backup'});
+  find(
+    state.render(),
+    node => node.props?.['aria-label'] === 'Destination card 00000002',
+  ).props.onClick();
+  assert.equal(
+    find(state.render(), node => node.type === 'DetailsPopupTitle').props
+      .children,
+    'Backup',
+  );
 });

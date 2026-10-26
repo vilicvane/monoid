@@ -8,6 +8,7 @@ import {
   readBackupCardIdentity,
   readCardIdentity,
 } from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 
 const bytes = hex => Uint8Array.from(Buffer.from(hex, 'hex'));
 const identity = {
@@ -24,6 +25,18 @@ const hello = {
   alias: identity.alias,
   allowPeerExtension: identity.allowPeerExtension,
 };
+
+test('card names prefer aliases while scan names retain the ID for both Hello and cached cards', () => {
+  for (const id of [identity.id, hello.id]) {
+    for (const alias of [undefined, false, '', 'Daily wallet']) {
+      assert.equal(cardName({id, alias}), alias || identity.id);
+      assert.equal(
+        cardNameWithId({id, alias}),
+        alias ? `Daily wallet (${identity.id})` : identity.id,
+      );
+    }
+  }
+});
 
 test('reads the existing atomic identity and matches both Hello and retained identities', () => {
   assert.deepEqual(readCardIdentity(hello), {
@@ -47,8 +60,11 @@ for (const [field, value] of [
         () => check({...hello, [field]: value}, identity),
         error => {
           assert.ok(error instanceof MonoidWrongCardError);
-          assert.equal(error.expectedId, identity.id);
-          assert.equal(error.message, `Wrong card, scan ${identity.id}`);
+          assert.equal(error.card.id, identity.id);
+          assert.equal(
+            error.message,
+            `Wrong card, scan ${identity.alias} (${identity.id})`,
+          );
           return true;
         },
       );

@@ -12,6 +12,7 @@ import {
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
 import {assertSameCard} from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
 import {
   acceptMatchingItem,
@@ -99,6 +100,8 @@ mock.module('../.bld/app/@services/index.js', {
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    cardName,
+    cardNameWithId,
     assertSameCard,
     getAppletKey,
     MonoidCardError,
@@ -114,8 +117,8 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
     MonoidScanStatePromptProgress: 'progress',
-    scanCardPrompt: (id, action) =>
-      `Scan card ${id}${action ? ` ${action}` : ''}`,
+    scanCardPrompt: (card, action) =>
+      `Scan card ${cardNameWithId(card)}${action ? ` ${action}` : ''}`,
     useMonoidScanPrompt: options => {
       const state = fixture;
       state.scanOptions.push(options);
@@ -2379,7 +2382,12 @@ for (const alias of ['Travel 😀', '']) {
     assert.equal(state.inputs[0].options.maxLength, undefined);
     assert.equal(state.inputs[1].options.placeholder, 'Enter Secret PIN');
     const scan = state.scans.at(-1);
-    assert.equal(scan.label, 'Scan card aabbccdd to save alias');
+    assert.equal(
+      scan.label,
+      alias
+        ? 'Scan card aabbccdd to save alias'
+        : 'Scan card Old (aabbccdd) to save alias',
+    );
     assert.equal(scan.options.auth, false);
     assert.equal(scan.options.retryOnError, false);
     assert.throws(

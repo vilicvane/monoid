@@ -13,6 +13,7 @@ import {
   APPLET_NAMES,
   APPLET_SHORT_NAMES,
   type AppletStage,
+  cardNameWithId,
   getAppletCatalog,
 } from '../../../@lib/monoid/index.js';
 import type {
@@ -192,6 +193,9 @@ export function CardMaintenanceContent({
     complete || report?.complete ? 4 : report || !replacing ? 3 : 2;
   const itemCount = operation.archive?.items.length ?? 0;
   const color = operation.archive ? 'warning' : 'primary';
+  const scanInstruction = operation.card.id
+    ? `Scan card ${cardNameWithId({id: operation.card.id, alias: operation.card.alias})}`
+    : 'Scan this card';
   const appletSummary = [
     ...new Set([
       ...(operation.replaceStages ?? []),
@@ -234,11 +238,12 @@ export function CardMaintenanceContent({
         >
           {activeStep === 2 && (
             <InfoMessage>
+              {scanInstruction}{' '}
               {operation.mode === 'fresh'
-                ? 'Scan this card to install fresh applets.'
+                ? 'to install fresh applets.'
                 : operation.mode === 'update'
-                  ? 'Scan this card to update its applets.'
-                  : 'Scan this card to reinstall its applets.'}
+                  ? 'to update its applets.'
+                  : 'to reinstall its applets.'}
             </InfoMessage>
           )}
         </Step>
@@ -253,7 +258,7 @@ export function CardMaintenanceContent({
         >
           {activeStep === 3 && !report && (
             <InfoMessage>
-              {`Scan this card to restore its ${itemCount} ${itemCount === 1 ? 'item' : 'items'} and applet access.`}
+              {`${scanInstruction} to restore its ${itemCount} ${itemCount === 1 ? 'item' : 'items'} and applet access.`}
             </InfoMessage>
           )}
           {report && (

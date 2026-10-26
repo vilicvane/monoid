@@ -4,6 +4,8 @@ import {setImmediate} from 'node:timers/promises';
 
 import {observable, runInAction} from 'mobx';
 
+import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
+
 const {parseOTPURI, validateOTPAccountLabel} = await import(
   '../.bld/app/@lib/otp.js'
 );
@@ -221,6 +223,8 @@ mock.module('../.bld/app/@components/@ui/use-input-modal.js', {
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
+    scanCardPrompt: (card, action) =>
+      `Scan card ${cardNameWithId(card)}${action ? ` ${action}` : ''}`,
     MonoidScanStatePromptContentHighlight: 'highlight',
     MonoidScanRedirectError: class extends Error {
       code = 'CANCELLED';
@@ -372,7 +376,7 @@ function cachedCard(number, count = 1) {
     })),
   };
 }
-function mount(cards = [cachedCard(1)], context = {}, importURI) {
+function mount(cards = [cachedCard(1)], context = {}, importURI, cached = []) {
   const state = {
     slots: [],
     index: 0,
@@ -486,6 +490,13 @@ function mount(cards = [cachedCard(1)], context = {}, importURI) {
     },
   };
   state.entrances = {
+    cardStore: {
+      get: identity =>
+        cached.find(
+          card =>
+            card.id === identity.id && card.publicKey === identity.publicKey,
+        ),
+    },
     monoidCredentialsStore: {createPINSession: () => state.pinSession},
     otpStore: {
       takeImport: id => {
@@ -722,8 +733,13 @@ test('tapping a cached account starts one scan and prepares before authenticatio
 });
 
 test('explicit card management requests a missing PIN after unlocking and before NFC', async () => {
-  const card = cachedCard(1);
-  const state = mount([card], {card: {id: card.id, publicKey: card.publicKey}});
+  const card = {...cachedCard(1), alias: 'Daily wallet'};
+  const state = mount(
+    [card],
+    {card: {id: card.id, publicKey: card.publicKey}},
+    undefined,
+    [card],
+  );
   state.pins = {};
   state.unlock = deferred();
   state.click('Scan a card');
@@ -732,6 +748,7 @@ test('explicit card management requests a missing PIN after unlocking and before
   state.unlock.resolve();
   await state.flush();
   assert.deepEqual(state.events, ['unlock', 'input', 'remember', 'scan']);
+  assert.equal(state.scans[0].content, 'Scan card Daily wallet (00000001)');
   await state.tap(card);
   assert.equal(state.scans.length, 1);
   assert.deepEqual(state.errors, []);

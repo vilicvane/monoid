@@ -221,12 +221,12 @@ export const DeriveKeyView = observer(
       }
 
       const {wallet} = derived;
-      let card = derived.card;
+      let card = derived.card && (cardStore.get(derived.card) ?? derived.card);
       const wallets = [getWalletReference(wallet)];
 
       await runOperation('import', async controller => {
         await scanPrompt(
-          card ? scanCardPrompt(card.id, 'to import') : 'Scan card to import',
+          card ? scanCardPrompt(card, 'to import') : 'Scan card to import',
           async (applet, setStateContent, hello, signal) => {
             const cancel = (): void => controller.abort();
             signal.addEventListener('abort', cancel, {once: true});

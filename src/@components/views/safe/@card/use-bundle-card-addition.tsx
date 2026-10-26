@@ -7,12 +7,13 @@ import type {CardInformation} from '../../../../@lib/global-platform/card-inform
 import {
   MonoidAppletHello,
   assertCardPINsNotBlocked,
+  cardName,
   initializeMonoidCard,
   readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
-import {MonoidScanStatePromptContentHighlight} from '../../../@monoid/monoid-scan-prompt.js';
+import {scanCardPrompt} from '../../../@monoid/monoid-scan-prompt.js';
 import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
 import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
 import {ConfirmPopup} from '../../../@ui/confirm-popup.js';
@@ -147,6 +148,7 @@ export function useBundleCardAddition({
         card: {
           id: uint8ArrayToHex(hello.id),
           publicKey: uint8ArrayToHex(hello.publicKey),
+          alias: hello.alias,
           bundle: uint8ArrayToHex(hello.bundle),
         },
         generation: ++bundleConfirmation.current,
@@ -235,14 +237,7 @@ export function useBundleCardAddition({
         if (!isActive()) return;
       }
       await scanPrompt(
-        <>
-          Scan card{' '}
-          <MonoidScanStatePromptContentHighlight>
-            {reset.replacement
-              ? uint8ArrayToHex(reset.replacement.id)
-              : reset.card.id}
-          </MonoidScanStatePromptContentHighlight>
-        </>,
+        scanCardPrompt(reset.replacement ?? reset.card),
         async (sessionId, setState, scanSignal) => {
           const signal = AbortSignal.any([
             scanSignal,
@@ -406,7 +401,10 @@ export function useBundleCardAddition({
               await resetAndAdd(new CardResetSession(pendingBundleCard.card));
             })}
           >
-            <p>Card {pendingBundleCard.card.id} already belongs to a bundle.</p>
+            <p>
+              Card {cardName(pendingBundleCard.card)} already belongs to a
+              bundle.
+            </p>
             <ol>
               <li>
                 Adding this card will erase its stored items and both PINs, and

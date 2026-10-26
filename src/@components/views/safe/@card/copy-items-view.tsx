@@ -20,6 +20,7 @@ import {
   MonoidCardError,
   assertCardPINsNotBlocked,
   assertSameCardWithBundle,
+  cardName,
   readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
@@ -33,6 +34,7 @@ import {
 } from '../../../@monoid/card-preview.js';
 import {
   MonoidScanStatePromptContentHighlight,
+  scanCardPrompt,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
@@ -175,7 +177,7 @@ const DestinationCards = ({
             aria-hidden="true"
           />
           <ListItemContent>
-            <ListItemName>{target.id}</ListItemName>
+            <ListItemName>{cardName(target)}</ListItemName>
             <ListItemDescription>
               Items · {getCopyProgress([target], 'imported')}
             </ListItemDescription>
@@ -414,12 +416,7 @@ export const CopyItemsView = observer(
         }
         const onAuthenticated = secretPINs.onAuthenticated(identity, pin);
         await scan(
-          <>
-            Scan destination card{' '}
-            <MonoidScanStatePromptContentHighlight>
-              {identity.id}
-            </MonoidScanStatePromptContentHighlight>
-          </>,
+          scanCardPrompt(identity),
           async (applet, setState, hello, nativeSignal) => {
             const signal = AbortSignal.any([nativeSignal, pinSignal]);
             const operation = new AbortController();
@@ -537,7 +534,7 @@ export const CopyItemsView = observer(
                 {
                   type: 'password',
                   ...getPINInputPlaceholder('Secret', 'Enter source card'),
-                  description: card?.id,
+                  description: card && cardName(card),
                   center: true,
                   maxLength: 16,
                 },
@@ -545,12 +542,7 @@ export const CopyItemsView = observer(
               ),
             async (credentials, pinSignal) => {
               await scan(
-                <>
-                  Scan source card{' '}
-                  <MonoidScanStatePromptContentHighlight>
-                    {backup.source.id}
-                  </MonoidScanStatePromptContentHighlight>
-                </>,
+                scanCardPrompt(backup.source),
                 async (applet, setState, hello, signal) => {
                   const {pin, onAuthenticated} = credentials(
                     readBackupCardIdentity(hello),
@@ -601,7 +593,7 @@ export const CopyItemsView = observer(
                 {
                   type: 'password',
                   ...getPINInputPlaceholder('Secret', 'Enter destination card'),
-                  description: card?.id,
+                  description: card && cardName(card),
                   center: true,
                   maxLength: 16,
                 },
@@ -903,6 +895,7 @@ export const CopyItemsView = observer(
             aria-label={`Destination card ${destination.id}`}
             onDismiss={() => setDestination(undefined)}
           >
+            <DetailsPopupTitle>{cardName(destination)}</DetailsPopupTitle>
             <Button
               color="danger"
               disabled={busy}

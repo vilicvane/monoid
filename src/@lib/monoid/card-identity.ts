@@ -2,6 +2,7 @@ import type {MonoidIdHex, PublicKeyHex} from '../../@atomics.js';
 import {uint8ArrayToHex} from '../../@utils/index.js';
 
 import {MonoidCardError, MonoidWrongCardError} from './card-error.js';
+import type {NamedCard} from './card-name.js';
 import type {MonoidAppletHello} from './monoid-applet.js';
 
 export type CardIdentity = {id: MonoidIdHex; publicKey: PublicKeyHex};
@@ -54,12 +55,12 @@ export function readBackupCardIdentity(
 
 export function assertSameCard(
   hello: CardIdentitySource,
-  identity: CardIdentity,
+  identity: CardIdentity & Pick<NamedCard, 'alias'>,
 ): void {
   const card = readCardIdentity(hello);
 
   if (card.id !== identity.id || card.publicKey !== identity.publicKey) {
-    throw new MonoidWrongCardError(identity.id);
+    throw new MonoidWrongCardError(identity);
   }
 }
 
@@ -78,6 +79,6 @@ export function assertSameCardWithBundle(
   if (bundle !== identity.bundle) {
     throw bundleChangedMessage
       ? new MonoidCardError(bundleChangedMessage)
-      : new MonoidWrongCardError(identity.id);
+      : new MonoidWrongCardError(identity);
   }
 }

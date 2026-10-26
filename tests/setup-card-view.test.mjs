@@ -13,6 +13,7 @@ import {
   readBackupCardIdentity,
   readCardIdentity,
 } from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
 import {initializeMonoidCard} from '../.bld/app/@lib/monoid/initialize-card.js';
 import {
@@ -175,6 +176,8 @@ mock.module('../.bld/app/@components/@monoid/use-isodep-scan-prompt.js', {
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
+    scanCardPrompt: (card, action) =>
+      `Scan card ${cardNameWithId(card)}${action ? ` ${action}` : ''}`,
     MonoidScanStatePromptContentHighlight: 'highlight',
   },
 });
@@ -320,6 +323,8 @@ const install = async (sessionId, onProgress, signal) => {
 };
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    cardName,
+    cardNameWithId,
     assertSameCard,
     assertSameCardWithBundle,
     readCardIdentity,
@@ -437,6 +442,8 @@ function preparedCard(hello) {
     id: hex(hello.id),
     publicKey: hex(hello.publicKey),
     bundle: hello.bundle === false ? false : hex(hello.bundle),
+    alias: hello.alias,
+    allowPeerExtension: hello.allowPeerExtension,
     items: [],
   };
 }
@@ -454,8 +461,8 @@ async function roundTwo(identities = [1, 2]) {
   return state;
 }
 
-async function replacementCard() {
-  const hello = bundleCard(1, {bundle: new Uint8Array(32).fill(9)});
+async function replacementCard(alias = false) {
+  const hello = bundleCard(1, {bundle: new Uint8Array(32).fill(9), alias});
   const source = preparedCard(hello);
   source.items.push({index: '0001', secret: true});
   const state = mount(
@@ -998,6 +1005,23 @@ test('an existing Bundle is reset and initialized during Add with one tap before
     false,
   );
   assert.deepEqual(state.errors, []);
+});
+
+test('Setup names a cached bundled card in its confirmation and Reset scan', async () => {
+  const state = await replacementCard('Travel');
+  assert.match(
+    textOf(state.confirmation()),
+    /Card Travel already belongs to a bundle/,
+  );
+  const adding = state.confirmation().props.onConfirm();
+  await state.answerBundlePIN('New-42');
+  assert.equal(
+    textOf(state.bundleScans.at(-1).label),
+    'Scan card Travel (00000001)',
+  );
+  await state.tapBundle(state.replacementHello);
+  state.bundleScans.at(-1).resolve();
+  await adding;
 });
 
 test('cancelling the new Secret PIN prompt leaves the existing bundled card unchanged', async () => {

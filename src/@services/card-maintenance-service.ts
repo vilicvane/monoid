@@ -647,6 +647,7 @@ export class CardMaintenanceService {
           checkpoint: operation.checkpoint,
           expectedPublicKey: operation.card.publicKey,
           expectedCardId: operation.card.id,
+          expectedCardAlias: operation.card.alias,
           expectedAppletAid: operation.card.appletAid,
           expectedBundle: operation.card.bundle,
           expectedFingerprint: operation.card.fingerprint,
@@ -1341,6 +1342,7 @@ function assertIdentity(
     hello,
     {
       id: operation.card.id!,
+      alias: operation.card.alias,
       publicKey: operation.card.publicKey!,
       bundle: operation.card.bundle,
     },

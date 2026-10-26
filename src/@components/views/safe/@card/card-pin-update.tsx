@@ -139,7 +139,7 @@ export const CardPINUpdate = observer(
           try {
             await waitForOperation(
               scan(
-                scanCardPrompt(card.id, `to update ${kind} PIN`),
+                scanCardPrompt(card, `to update ${kind} PIN`),
                 async (applet, setState, hello, scanSignal) => {
                   const cancel = (): void => operation.abort();
                   scanSignal.addEventListener('abort', cancel, {once: true});

@@ -10,6 +10,7 @@ import {
   assertSameCardWithBundle,
   readBackupCardIdentity,
 } from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
 import {isOperationCancelled} from '../.bld/app/@lib/operation-cancelled.js';
 
@@ -177,6 +178,8 @@ const {initializeMonoidCard} = await import(
 );
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    cardName,
+    cardNameWithId,
     assertSameCardWithBundle,
     readBackupCardIdentity,
     assertCardPINsNotBlocked,
@@ -201,15 +204,33 @@ const {ErrorService} = await import('../.bld/app/@services/error-service.js');
 const {useMonoidScanPrompt, MonoidScanRedirectError, scanCardPrompt} =
   await import('../.bld/app/@components/@monoid/monoid-scan-prompt.js');
 
-test('a specific-card prompt highlights the ID and keeps the action after it', () => {
-  for (const action of [undefined, 'to delete', 'to update Access PIN']) {
-    const prompt = scanCardPrompt('10db2908', action);
-    assert.deepEqual(prompt.props.children, [
-      'Scan card',
-      ' ',
-      {type: 'span', props: {children: '10db2908'}},
-      action && ` ${action}`,
-    ]);
+function promptText(node) {
+  if (typeof node === 'string') return node;
+  if (!node) return '';
+  return (Array.isArray(node) ? node : [node.props?.children])
+    .map(promptText)
+    .join('');
+}
+function promptHighlights(node) {
+  if (!node || typeof node !== 'object') return [];
+  if (node.type === 'span') return [promptText(node)];
+  return (Array.isArray(node) ? node : [node.props?.children]).flatMap(
+    promptHighlights,
+  );
+}
+
+test('specific-card prompts highlight the alias or ID, keep the ID visible and append the action', () => {
+  for (const alias of [undefined, false, '', 'Daily wallet']) {
+    for (const action of [undefined, 'to delete', 'to update Access PIN']) {
+      const prompt = scanCardPrompt({id: '10db2908', alias}, action);
+      assert.equal(
+        promptText(prompt),
+        `Scan card ${
+          alias ? 'Daily wallet (10db2908)' : '10db2908'
+        }${action ? ` ${action}` : ''}`,
+      );
+      assert.deepEqual(promptHighlights(prompt), [alias || '10db2908']);
+    }
   }
 });
 
@@ -444,6 +465,7 @@ function mount(overrides = {}) {
         publicKey: state.identityPublicKey.slice(),
         bundle: false,
         authority: false,
+        alias: state.cardAlias ?? false,
         pins: {access: state.accessPIN ?? 5, secret: state.secretPIN ?? 5},
       };
     },
@@ -702,24 +724,48 @@ test('prompt: wrong card highlights the expected card ID', async () => {
   const state = mount({
     auth: false,
     onBusiness: () => {
-      throw new MonoidWrongCardError('1234abcd');
+      throw new MonoidWrongCardError({id: '1234abcd'});
     },
   });
   const scan = await state.tap({cleanup: false});
 
   assert.equal(scan.waitingForRemoval, true);
   assert.equal(state.presenter.current.error, true);
-  assert.deepEqual(state.presenter.current.content, {
-    type: 'fragment',
-    props: {
-      children: [
-        'Wrong card, scan',
-        ' ',
-        {type: 'span', props: {children: '1234abcd'}},
-      ],
+  assert.equal(
+    promptText(state.presenter.current.content),
+    'Wrong card, scan 1234abcd',
+  );
+  assert.deepEqual(promptHighlights(state.presenter.current.content), [
+    '1234abcd',
+  ]);
+  assert.deepEqual(state.retryErrors, []);
+});
+
+test('prompt: wrong-card and PIN retry instructions retain the alias and unhighlighted ID', async () => {
+  const wrong = mount({
+    auth: false,
+    onBusiness: () => {
+      throw new MonoidWrongCardError({id: '1234abcd', alias: 'Daily wallet'});
     },
   });
-  assert.deepEqual(state.retryErrors, []);
+  await wrong.tap({cleanup: false});
+  assert.equal(
+    promptText(wrong.presenter.current.content),
+    'Wrong card, scan Daily wallet (1234abcd)',
+  );
+  assert.deepEqual(promptHighlights(wrong.presenter.current.content), [
+    'Daily wallet',
+  ]);
+
+  const retry = mount({cardAlias: 'Travel'});
+  await retry.enterManualPIN();
+  assert.equal(
+    promptText(retry.presenter.current.content),
+    `Scan card Travel (${CARD_ID}) again`,
+  );
+  assert.deepEqual(promptHighlights(retry.presenter.current.content), [
+    'Travel',
+  ]);
 });
 
 test('prompt: ordinary errors retain their identity after inline display and retry', async () => {
@@ -2813,7 +2859,7 @@ test('prompt: wrong-card validation runs before client preparation and authentic
     retryOnError: false,
     savedPINs: {[CARD_ID]: PIN},
     validateCard() {
-      throw new MonoidWrongCardError(OTHER_CARD_ID);
+      throw new MonoidWrongCardError({id: OTHER_CARD_ID});
     },
     authentication: {
       aid: new Uint8Array([1, 2, 3, 4, 5]),

@@ -14,6 +14,7 @@ import {
   readBackupCardIdentity,
   readCardIdentity,
 } from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
 import {initializeMonoidCard} from '../.bld/app/@lib/monoid/initialize-card.js';
 import {
@@ -84,6 +85,8 @@ mock.module('../.bld/app/@entrances.js', {
 
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    cardName,
+    cardNameWithId,
     assertSameCard,
     assertSameCardWithBundle,
     readCardIdentity,
@@ -100,7 +103,11 @@ mock.module('../.bld/app/@services/index.js', {
   namedExports: {},
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
-  namedExports: {MonoidScanStatePromptContentHighlight: 'highlight'},
+  namedExports: {
+    scanCardPrompt: (card, action) =>
+      `Scan card ${cardNameWithId(card)}${action ? ` ${action}` : ''}`,
+    MonoidScanStatePromptContentHighlight: 'highlight',
+  },
 });
 mock.module('../.bld/app/@components/@monoid/pin-input-placeholder.js', {
   namedExports: {

@@ -11,6 +11,7 @@ import {
   MonoidCardError,
   assertCardPINsNotBlocked,
   assertSameCard,
+  cardName,
   initializeMonoidCard,
   readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
@@ -23,7 +24,7 @@ import {
   CardPreview,
   CardPreviewButton,
 } from '../../../@monoid/card-preview.js';
-import {MonoidScanStatePromptContentHighlight} from '../../../@monoid/monoid-scan-prompt.js';
+import {scanCardPrompt} from '../../../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
 import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
 import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
@@ -61,7 +62,10 @@ import {readCardForSetup} from './read-card-for-setup.js';
 type BundleCandidate =
   | {
       type: 'prepared';
-      card: Pick<ScannedCardData, 'id' | 'publicKey' | 'bundle'>;
+      card: Pick<
+        ScannedCardData,
+        'id' | 'publicKey' | 'bundle' | 'alias' | 'allowPeerExtension'
+      >;
     }
   | {type: 'scanned'; hello: MonoidAppletHello};
 
@@ -214,11 +218,7 @@ export const SetupCardView = observer(
               errorService.catch(
                 requestBundleCard({
                   type: 'prepared',
-                  card: {
-                    id: card.id,
-                    publicKey: card.publicKey,
-                    bundle: card.bundle,
-                  },
+                  card,
                 }),
               );
           },
@@ -440,14 +440,7 @@ export const SetupCardView = observer(
           if (!isActive()) return;
         }
         await scanPrompt(
-          <>
-            Scan card{' '}
-            <MonoidScanStatePromptContentHighlight>
-              {reset.replacement
-                ? uint8ArrayToHex(reset.replacement.id)
-                : reset.card.id}
-            </MonoidScanStatePromptContentHighlight>
-          </>,
+          scanCardPrompt(reset.replacement ?? reset.card),
           async (sessionId, setState, scanSignal) => {
             const signal = AbortSignal.any([
               scanSignal,
@@ -570,23 +563,16 @@ export const SetupCardView = observer(
           (card, signal) =>
             requestSecretPIN(
               'Enter',
-              card ? <>Card {card.id}</> : 'For the card you will scan',
+              card ? <>Card {cardName(card)}</> : 'For the card you will scan',
               AbortSignal.any([signal, operation.signal]),
             ),
           (credentials, pinSignal) =>
             scanPrompt(
-              selected ? (
-                <>
-                  Scan card{' '}
-                  <MonoidScanStatePromptContentHighlight>
-                    {selected.id}
-                  </MonoidScanStatePromptContentHighlight>
-                </>
-              ) : bundleSession.configuredCount ? (
-                'Scan next card'
-              ) : (
-                'Scan a card'
-              ),
+              selected
+                ? scanCardPrompt(selected)
+                : bundleSession.configuredCount
+                  ? 'Scan next card'
+                  : 'Scan a card',
               async (sessionId, setState, scanSignal) => {
                 const signal = AbortSignal.any([
                   scanSignal,
@@ -852,11 +838,7 @@ export const SetupCardView = observer(
                     if (enabled && sourceCard) {
                       await requestBundleCard({
                         type: 'prepared',
-                        card: {
-                          id: sourceCard.id,
-                          publicKey: sourceCard.publicKey,
-                          bundle: sourceCard.bundle,
-                        },
+                        card: sourceCard,
                       });
                     }
                     runInAction(() => {
@@ -962,7 +944,10 @@ export const SetupCardView = observer(
               await resetAndAdd(new CardResetSession(pendingBundleCard.card));
             })}
           >
-            <p>Card {pendingBundleCard.card.id} already belongs to a bundle.</p>
+            <p>
+              Card {cardName(pendingBundleCard.card)} already belongs to a
+              bundle.
+            </p>
             <ol>
               <li>
                 Adding this card will erase its stored items and both PINs, and

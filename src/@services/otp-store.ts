@@ -15,6 +15,7 @@ export type OTPAccount = OTPAccountConfiguration & {
 export type OTPCard = {
   id: MonoidIdHex;
   publicKey: PublicKeyHex;
+  alias: string | false;
   accounts: OTPAccount[];
   installed: boolean;
   authorized: boolean;

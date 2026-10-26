@@ -11,6 +11,7 @@ import {
   assertSameCardWithBundle,
   readBackupCardIdentity,
 } from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
 import {initializeMonoidCard} from '../.bld/app/@lib/monoid/initialize-card.js';
 import {MonoidAppletInvalidPINError} from '../.bld/app/@lib/monoid/monoid-applet.js';
@@ -72,6 +73,8 @@ mock.module('../.bld/app/@components/@monoid/pin-input-placeholder.js', {
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
+    scanCardPrompt: (card, action) =>
+      `Scan card ${cardNameWithId(card)}${action ? ` ${action}` : ''}`,
     MonoidScanStatePromptContentHighlight: 'highlight',
     useMonoidScanPrompt: options => {
       fixture.scanOptions = options;

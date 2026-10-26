@@ -21,8 +21,10 @@ import {
   MonoidAppletInvalidPINError,
   MonoidCardError,
   MonoidWrongCardError,
+  type NamedCard,
   assertCardPINsNotBlocked,
   assertSameCardWithBundle,
+  cardName,
   initializeMonoidCard,
   readBackupCardIdentity,
 } from '../../@lib/monoid/index.js';
@@ -40,13 +42,21 @@ export const MonoidScanStatePromptContentHighlight = styled.span`
   color: white;
 `;
 
-export function scanCardPrompt(id: string, action?: string): ReactNode {
+function cardPromptName(card: NamedCard): ReactNode {
   return (
     <>
-      Scan card{' '}
       <MonoidScanStatePromptContentHighlight>
-        {id}
+        {cardName(card)}
       </MonoidScanStatePromptContentHighlight>
+      {card.alias && ` (${cardName({id: card.id})})`}
+    </>
+  );
+}
+
+export function scanCardPrompt(card: NamedCard, action?: string): ReactNode {
+  return (
+    <>
+      Scan card {cardPromptName(card)}
       {action && ` ${action}`}
     </>
   );
@@ -441,7 +451,7 @@ export function useMonoidScanPrompt({
           const setup = setupPIN;
           setupPIN = undefined;
 
-          retryStateContent = scanCardPrompt(id, 'again');
+          retryStateContent = scanCardPrompt(hello, 'again');
 
           let initializedAccessPIN = false;
 
@@ -776,12 +786,7 @@ export function useMonoidScanPrompt({
           } else {
             setStateContent(
               result.error instanceof MonoidWrongCardError ? (
-                <>
-                  Wrong card, scan{' '}
-                  <MonoidScanStatePromptContentHighlight>
-                    {result.error.expectedId}
-                  </MonoidScanStatePromptContentHighlight>
-                </>
+                <>Wrong card, scan {cardPromptName(result.error.card)}</>
               ) : result.error instanceof Error ? (
                 result.error.message
               ) : (

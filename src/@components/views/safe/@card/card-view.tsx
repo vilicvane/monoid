@@ -353,7 +353,7 @@ const CardContent = observer(
             );
             if (!pins) return;
             await aliasScan(
-              scanCardPrompt(card.id, 'to save alias'),
+              scanCardPrompt(card, 'to save alias'),
               async (applet, setState, hello, scanSignal) => {
                 const activeSignal = AbortSignal.any([signal, scanSignal]);
                 activeSignal.throwIfAborted();
@@ -584,7 +584,7 @@ const CardContent = observer(
 
       try {
         await createScan(
-          scanCardPrompt(card.id, 'to create key'),
+          scanCardPrompt(card, 'to create key'),
           async (applet, setStateContent, _hello, signal) => {
             const cancel = (): void => operation.abort();
             signal.addEventListener('abort', cancel, {once: true});
@@ -595,7 +595,7 @@ const CardContent = observer(
               // Retain the command even if the callback is entered again.
               writing ??= createCardKey(
                 applet,
-                card.id,
+                card,
                 type,
                 operation.signal,
                 item => {
@@ -644,7 +644,7 @@ const CardContent = observer(
 
       try {
         await scanPrompt(
-          scanCardPrompt(card.id, 'to derive'),
+          scanCardPrompt(card, 'to derive'),
           async (applet, setStateContent, _hello, signal) => {
             const showProgress = (current: number): void => {
               if (signal.aborted || !mounted.current || !isViewActive()) return;
@@ -722,7 +722,7 @@ const CardContent = observer(
       );
       try {
         await scanPrompt(
-          scanCardPrompt(card.id, prompt),
+          scanCardPrompt(card, prompt),
           async (applet, setStateContent, _hello, signal) => {
             const cancel = (): void => operation.abort();
             signal.addEventListener('abort', cancel, {once: true});
@@ -1110,7 +1110,7 @@ const CardContent = observer(
 
       try {
         await scanPrompt(
-          scanCardPrompt(card.id, 'to delete'),
+          scanCardPrompt(card, 'to delete'),
           (applet, setStateContent, _hello, signal) =>
             deleteFromCard(applet, setStateContent, signal, pending, index => {
               const sourceIndex = card.items.find(item => item.index === index)

@@ -16,7 +16,9 @@ import {
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidCardError,
+  type NamedCard,
   acceptMatchingItem,
+  cardNameWithId,
   readCardContents,
   removeItems,
 } from './monoid/index.js';
@@ -93,6 +95,7 @@ export async function readOTPCard(
   return {
     id: MonoidIdHex.satisfies(uint8ArrayToHex(hello.id)),
     publicKey: PublicKeyHex.satisfies(uint8ArrayToHex(hello.publicKey)),
+    alias: hello.alias,
     installed,
     authorized: installed && authorized,
     accounts,
@@ -158,7 +161,7 @@ export async function addOTPAccount(
 /** Resolves undefined without writing when this card lacks the account. */
 export async function removeOTPAccount(
   applet: MonoidApplet,
-  cardId: MonoidIdHex,
+  card: NamedCard,
   account: OTPAccount,
   signal: AbortSignal,
 ): Promise<OTPAccount[] | undefined> {
@@ -171,7 +174,9 @@ export async function removeOTPAccount(
       encodeOTPConfiguration(account),
     )
   )
-    throw new MonoidCardError(`Account changed, scan card ${cardId} again`);
+    throw new MonoidCardError(
+      `Account changed, scan card ${cardNameWithId(card)} again`,
+    );
   await removeItems(applet, new Set([account.index]), signal);
   return accounts.filter(item => item.index !== account.index);
 }

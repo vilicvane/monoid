@@ -3,14 +3,16 @@ import {
   MonoidAppletHello,
   MonoidCardError,
   assertSameCardWithBundle,
+  cardNameWithId,
   readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import type {ScannedCardData} from '../common.js';
 
-export type CardResetIdentity = Pick<ScannedCardData, 'id' | 'publicKey'> & {
-  bundle: string;
-};
+export type CardResetIdentity = Pick<ScannedCardData, 'id' | 'publicKey'> &
+  Partial<Pick<ScannedCardData, 'alias'>> & {
+    bundle: string;
+  };
 
 /** One explicit reset approval, bound to the old and observed replacement IDs. */
 export class CardResetSession {
@@ -39,7 +41,7 @@ export class CardResetSession {
       assertSameCardWithBundle(
         hello,
         readBackupCardIdentity(this.replacement),
-        `Card bundle changed, scan card ${uint8ArrayToHex(this.replacement.id)} again`,
+        `Card bundle changed, scan card ${cardNameWithId(this.replacement)} again`,
       );
       return hello;
     }
@@ -47,7 +49,7 @@ export class CardResetSession {
     assertSameCardWithBundle(
       hello,
       this.card,
-      `Card bundle changed, scan card ${this.card.id} again`,
+      `Card bundle changed, scan card ${cardNameWithId(this.card)} again`,
     );
 
     await beforeReset();

@@ -578,6 +578,7 @@ export async function replaceMonoidApplets(
     checkpoint,
     expectedPublicKey,
     expectedCardId,
+    expectedCardAlias,
     expectedAppletAid,
     expectedBundle,
     expectedFingerprint,
@@ -593,6 +594,7 @@ export async function replaceMonoidApplets(
     checkpoint?: AppletReplacementCheckpoint;
     expectedPublicKey?: PublicKeyHex;
     expectedCardId?: MonoidIdHex;
+    expectedCardAlias?: string | false;
     expectedAppletAid?: string;
     expectedBundle?: string | false;
     expectedFingerprint: string;
@@ -702,6 +704,7 @@ export async function replaceMonoidApplets(
         hello,
         {
           id: expectedCardId!,
+          alias: expectedCardAlias,
           publicKey: expectedPublicKey!,
           bundle: expectedBundle!,
         },
@@ -849,6 +852,7 @@ export async function replaceMonoidApplets(
       hello,
       {
         id: expectedCardId!,
+        alias: expectedCardAlias,
         publicKey: expectedPublicKey!,
         bundle: expectedBundle!,
       },

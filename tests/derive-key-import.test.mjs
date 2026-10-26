@@ -5,6 +5,7 @@ import {observable, runInAction, toJS} from 'mobx';
 
 import {MonoidWrongCardError} from '../.bld/app/@lib/monoid/card-error.js';
 import {assertSameCard} from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
 import {
@@ -76,7 +77,8 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
     MonoidScanStatePromptProgress: 'progress',
-    scanCardPrompt: (id, action) => `Scan card ${id} ${action}`,
+    scanCardPrompt: (card, action) =>
+      `Scan card ${cardNameWithId(card)}${action ? ` ${action}` : ''}`,
     useMonoidScanPrompt: options => {
       fixture.scanOptions.push(options);
       return [null, fixture.scan];
@@ -339,6 +341,27 @@ test('a wrong Safe with the same short ID is rejected before authentication or w
   await state.tap();
   await state.finish();
   assert.equal(state.storage.keys[0].wallets.length, 2);
+});
+
+test('derived-key import resolves the card alias from the existing cache', async () => {
+  const state = mount();
+  await derive(state);
+  const id = Buffer.from(state.hello.id).toString('hex');
+  state.cardStore.set({
+    id,
+    publicKey: Buffer.from(state.hello.publicKey).toString('hex'),
+    alias: 'Daily wallet',
+    allowPeerExtension: false,
+    bundle: false,
+    items: [],
+  });
+  state.click('Import');
+  assert.equal(
+    state.scans.at(-1).label,
+    `Scan card Daily wallet (${id}) to import`,
+  );
+  await state.tap();
+  await state.finish();
 });
 
 test('a cancelled second scan leaves local wallets untouched and does not navigate', async () => {

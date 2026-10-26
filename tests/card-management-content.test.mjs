@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {mock, test} from 'node:test';
 
+import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
+
 mock.module('react/jsx-runtime', {
   namedExports: {
     jsx: (type, props) => ({type, props}),
@@ -62,6 +64,7 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
     APPLET_NAMES,
     APPLET_SHORT_NAMES,
+    cardNameWithId,
     getAppletCatalog: () => [{stage: 'otp', instanceAid: 'F06D6F6E6F69640501'}],
   },
 });
@@ -139,13 +142,13 @@ test('maintenance and catalogue heroes carry the alias, and batch cards retain t
 });
 
 for (const [mode, title, hint] of [
-  ['update', 'Update applets', 'Scan this card to update its applets.'],
+  ['update', 'Update applets', 'Scan card 01020304 to update its applets.'],
   [
     'reinstall',
     'Reinstall applets',
-    'Scan this card to reinstall its applets.',
+    'Scan card 01020304 to reinstall its applets.',
   ],
-  ['fresh', 'Fresh install', 'Scan this card to install fresh applets.'],
+  ['fresh', 'Fresh install', 'Scan card 01020304 to install fresh applets.'],
 ]) {
   for (const phase of ['ready', 'replacing', 'restore']) {
     test(`${mode} in ${phase} shows the correct active step and scan indicator`, () => {
@@ -180,13 +183,34 @@ for (const [mode, title, hint] of [
               ? ''
               : active === 2
                 ? hint
-                : 'Scan this card to restore its 1 item and applet access.',
+                : 'Scan card 01020304 to restore its 1 item and applet access.',
           );
         }
       }
     });
   }
 }
+
+test('maintenance scan hints name the saved alias and retain the ID when known', () => {
+  for (const [card, instruction] of [
+    [{id: '01020304', alias: 'Travel'}, 'Scan card Travel (01020304)'],
+    [{}, 'Scan this card'],
+  ]) {
+    for (const [phase, action] of [
+      ['ready', 'to update its applets.'],
+      ['restore', 'to restore its 1 item and applet access.'],
+    ]) {
+      const tree = CardMaintenanceContent({
+        operation: {...operation, card, phase},
+        processing: false,
+      });
+      assert.equal(
+        text(find(tree, node => node.type === 'InfoMessage')),
+        `${instruction} ${action}`,
+      );
+    }
+  }
+});
 
 test('steps use primary without a recovery archive', () => {
   for (const phase of ['ready', 'replacing', 'restore']) {
@@ -216,7 +240,7 @@ test('restore hint counts the archived items before the first pass', () => {
     });
     assert.equal(
       text(find(tree, node => node.type === 'InfoMessage')),
-      `Scan this card to restore its ${count} ${count === 1 ? 'item' : 'items'} and applet access.`,
+      `Scan card 01020304 to restore its ${count} ${count === 1 ? 'item' : 'items'} and applet access.`,
     );
   }
 });
