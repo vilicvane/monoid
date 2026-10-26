@@ -1572,7 +1572,7 @@ for (const [mode, label] of [
     await state.flush();
     assert.equal(
       state.inputs[0].options.placeholder,
-      mode === 'fresh' ? 'Set Secret PIN' : 'Enter existing Secret PIN',
+      mode === 'fresh' ? 'Set Secret PIN' : 'Enter Secret PIN',
     );
     await state.answer();
     await state.tap();
@@ -1731,8 +1731,8 @@ for (const cached of [false, true]) {
     assert.deepEqual(
       state.inputs.map(i => i.options.placeholder),
       cached
-        ? ['Enter existing Secret PIN']
-        : ['Enter existing Secret PIN', 'Set Access PIN', 'Confirm Access PIN'],
+        ? ['Enter Secret PIN']
+        : ['Enter Secret PIN', 'Set Access PIN', 'Confirm Access PIN'],
     );
     await state.tap();
     assert.deepEqual(state.errors, []);
@@ -1874,10 +1874,7 @@ for (const phase of ['ready', 'restore']) {
     state.click('Restore items');
     await state.flush();
     assert.equal(state.inputs.length, 1);
-    assert.equal(
-      state.inputs[0].options.placeholder,
-      'Enter existing Secret PIN',
-    );
+    assert.equal(state.inputs[0].options.placeholder, 'Enter Secret PIN');
     await state.answer(undefined);
   });
 }

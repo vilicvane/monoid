@@ -429,7 +429,7 @@ test('restoring saved Access PIN asks only for the existing Secret PIN', async (
   await state.answer(PIN);
   assert.deepEqual(
     state.inputs.map(i => i.options.placeholder),
-    ['Enter existing Secret PIN'],
+    ['Enter Secret PIN'],
   );
   await state.tap();
   await state.finishScan();
@@ -560,10 +560,7 @@ for (const blocked of ['accessPIN', 'secretPIN']) {
 test('an existing Secret PIN initializes only the missing Access PIN', async () => {
   const state = mount({accessPIN: false, secretPIN: 5});
   await setImmediate();
-  assert.equal(
-    state.inputs[0].options.placeholder,
-    'Enter existing Secret PIN',
-  );
+  assert.equal(state.inputs[0].options.placeholder, 'Enter Secret PIN');
   assert.equal(state.inputs[0].options.checkbox, undefined);
   await state.answer(PIN);
   await state.tap();
@@ -617,10 +614,7 @@ test('a newly set Secret PIN returns its fresh state so retry initializes only t
 
   const retry = mount({hello: state.latestHellos[0]});
   await setImmediate();
-  assert.equal(
-    retry.inputs[0].options.placeholder,
-    'Enter existing Secret PIN',
-  );
+  assert.equal(retry.inputs[0].options.placeholder, 'Enter Secret PIN');
   await retry.answer('existing-pin');
   await retry.tap();
   await retry.finishScan();

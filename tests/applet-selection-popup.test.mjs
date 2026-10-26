@@ -134,6 +134,7 @@ test('the alias switch reveals its input and blocks an empty alias', async () =>
   await state.install();
   assert.deepEqual(state.installed, [[{}, undefined]]);
   assert.equal(state.input().props.placeholder, 'Enter card alias');
+  assert.equal(state.input().props.autoFocus, true);
   assert.equal(state.button().props.disabled, true);
 });
 

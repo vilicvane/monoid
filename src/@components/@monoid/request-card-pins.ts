@@ -39,7 +39,7 @@ export async function requestCardPINs(
       value = await show(
         {
           type: 'password',
-          ...getPINInputPlaceholder(kind, existing ? 'Enter existing' : 'Set'),
+          ...getPINInputPlaceholder(kind, existing ? 'Enter' : 'Set'),
           description,
           center: true,
           maxLength: 16,

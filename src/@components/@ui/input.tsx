@@ -50,6 +50,11 @@ export const PopupInput = styled(Input)`
     padding-bottom ${selectionTransition.duration}ms
       ${selectionTransition.easing};
 
+  &::placeholder {
+    color: var(--color-text-label);
+    opacity: 1;
+  }
+
   &:focus {
     min-width: min(2ch, 100%);
     border-bottom-width: 1px;

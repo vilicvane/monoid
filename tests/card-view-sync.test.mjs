@@ -2377,10 +2377,7 @@ for (const alias of ['Travel 😀', '']) {
     ).props.onClick();
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(state.inputs[0].options.maxLength, undefined);
-    assert.equal(
-      state.inputs[1].options.placeholder,
-      'Enter existing Secret PIN',
-    );
+    assert.equal(state.inputs[1].options.placeholder, 'Enter Secret PIN');
     const scan = state.scans.at(-1);
     assert.equal(scan.label, 'Scan card aabbccdd to save alias');
     assert.equal(scan.options.auth, false);

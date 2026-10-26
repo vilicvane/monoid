@@ -1534,10 +1534,7 @@ test('prompt: an existing Secret PIN authorizes setting only the missing Access 
   });
   await state.tap();
   await state.finishExit();
-  assert.equal(
-    state.inputs[0].options.placeholder,
-    'Enter existing Secret PIN',
-  );
+  assert.equal(state.inputs[0].options.placeholder, 'Enter Secret PIN');
   await state.enterPIN(SECRET_PIN);
   await state.tap();
 
@@ -1590,10 +1587,7 @@ test('prompt: a Safe initialized between taps prompts for its existing PIN befor
   assert.equal(state.businessCalls, 0);
   await state.finishExit();
   assert.equal(state.inputs.length, 5);
-  assert.equal(
-    state.inputs[4].options.placeholder,
-    'Enter existing Secret PIN',
-  );
+  assert.equal(state.inputs[4].options.placeholder, 'Enter Secret PIN');
   await state.enterPIN(OLD_PIN);
   await state.tap();
   await state.finishExit();
@@ -1726,10 +1720,7 @@ test('prompt: incorrect Secret PIN reopens input after cleanup without mutating 
   await state.finishAnimation();
 
   assert.equal(state.inputs.length, 4);
-  assert.equal(
-    state.inputs[3].options.placeholder,
-    'Enter existing Secret PIN',
-  );
+  assert.equal(state.inputs[3].options.placeholder, 'Enter Secret PIN');
   assert.match(state.notifications[0].message, /tries remaining: 4/);
   assert.deepEqual(state.removals, []);
   assert.deepEqual(state.writes, []);

@@ -145,6 +145,7 @@ export function AppletSelectionPopup({
               <PopupInput
                 aria-label="Card alias"
                 placeholder="Enter card alias"
+                autoFocus
                 value={alias}
                 disabled={connecting}
                 onChange={event => setAlias(event.target.value)}

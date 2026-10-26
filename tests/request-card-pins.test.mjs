@@ -81,7 +81,7 @@ test('restore without saved Access PIN confirms the new Access PIN', async () =>
   );
   assert.deepEqual(
     ui.inputs.map(i => i.placeholder),
-    ['Enter existing Secret PIN', 'Set Access PIN', 'Confirm Access PIN'],
+    ['Enter Secret PIN', 'Set Access PIN', 'Confirm Access PIN'],
   );
 });
 
