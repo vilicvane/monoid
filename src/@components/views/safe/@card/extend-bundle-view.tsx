@@ -331,6 +331,7 @@ export const ExtendBundleView = observer(
                     <CardPreview
                       id={session.target.id}
                       alias={session.target.alias}
+                      aliasToggle
                       description="ready"
                     />
                   ) : (
@@ -356,6 +357,7 @@ export const ExtendBundleView = observer(
                     <CardPreview
                       id={session.requester.id}
                       alias={session.requester.alias}
+                      aliasToggle
                       description={
                         session.phase === 'requesting' ? 'pending' : 'complete'
                       }
@@ -374,6 +376,7 @@ export const ExtendBundleView = observer(
                     <CardPreview
                       id={session.approver.id}
                       alias={session.approver.alias}
+                      aliasToggle
                       description="complete"
                       $scan="ready"
                     />
@@ -407,6 +410,7 @@ export const ExtendBundleView = observer(
                     <CardPreview
                       id={session.target.id}
                       alias={session.target.alias}
+                      aliasToggle
                       description={activeNumero === 3 ? 'pending' : 'complete'}
                       $scan={
                         activeNumero === 3

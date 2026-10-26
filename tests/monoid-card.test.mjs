@@ -15,6 +15,12 @@ const assets = registerHooks({
   },
 });
 after(() => assets.deregister());
+let state;
+mock.module('react', {
+  namedExports: {
+    useState: initial => [state ?? initial, value => (state = value)],
+  },
+});
 mock.module('react/jsx-runtime', {
   namedExports: {
     jsx: (type, props) => ({type, props}),
@@ -39,7 +45,7 @@ function text(node) {
 for (const [props, lines] of [
   [
     {alias: 'Travel', subtitle: 'bundle', description: 'scan to read'},
-    ['Travel', 'scan to read'],
+    ['Travel', 'bundle', 'scan to read'],
   ],
   [
     {alias: '旅行卡', description: 'scan to install'},
@@ -48,18 +54,30 @@ for (const [props, lines] of [
   [{alias: 'a'.repeat(64)}, ['a'.repeat(64)]],
   [
     {alias: false, subtitle: 'bundle', description: 'ready'},
-    ['bundle', 'ready'],
+    ['01020304', 'bundle', 'ready'],
   ],
-  [{description: 'complete'}, ['complete']],
+  [{description: 'complete'}, ['01020304', 'complete']],
 ]) {
-  test(`card preview shows alias or subtitle above the unchanged status: ${lines.join(' / ')}`, () => {
+  test(`card preview shows the alias in place of the ID: ${lines.join(' / ')}`, () => {
+    state = undefined;
     const tree = MonoidCard({id: '01020304', ...props});
     const label = tree.props.children.find(node => node?.type === 'span');
-    assert.deepEqual(label.props.children.filter(Boolean).map(text), [
-      '01020304',
-      ...lines,
-    ]);
-    if (props.description)
-      assert.equal(label.props.children[2].props.children, props.description);
+    assert.deepEqual(label.props.children.filter(Boolean).map(text), lines);
   });
 }
+
+test('a card without its own tap action toggles between alias and ID', () => {
+  state = undefined;
+  const render = () =>
+    MonoidCard({id: '01020304', alias: 'Travel', aliasToggle: true})
+      .props.children.find(node => node?.type === 'span')
+      .props.children.filter(Boolean)[0];
+  const name = render();
+  assert.equal(name.type, 'button');
+  assert.equal(text(name), 'Travel');
+  let stopped = false;
+  name.props.onClick({stopPropagation: () => (stopped = true)});
+  assert.equal(stopped, true);
+  state = typeof state === 'function' ? state(false) : state;
+  assert.equal(text(render()), '01020304');
+});

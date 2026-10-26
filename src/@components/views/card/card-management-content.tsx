@@ -23,7 +23,6 @@ import {
   CardGrid,
   CardPlaceholder,
   CardPreview,
-  CardPreviewButton,
   type CardScanState,
 } from '../../@monoid/card-preview.js';
 import {AppIcon} from '../../@ui/app-icon.js';
@@ -137,6 +136,7 @@ function CardAppletHero({
       <CardPreview
         id={id}
         alias={alias}
+        aliasToggle
         subtitle={bundled ? 'bundle' : undefined}
         $interrupted={recovery}
       />
@@ -309,8 +309,6 @@ export type AppletDisplay = {
 
 export function CardMaintenanceCards({
   cards,
-  onSelect,
-  disabled = false,
 }: {
   cards: readonly {
     publicKey: string;
@@ -321,26 +319,19 @@ export function CardMaintenanceCards({
     status: string;
     interrupted?: boolean;
   }[];
-  onSelect?: (publicKey: string) => void;
-  disabled?: boolean;
 }): ReactNode {
   return (
     <CardGrid>
       {cards.map(card => (
-        <CardPreviewButton
+        <CardPreview
           key={card.publicKey}
-          disabled={disabled || !onSelect || card.complete || !card.id}
-          onClick={() => onSelect?.(card.publicKey)}
-          aria-label={`Card ${card.id ?? 'unknown'}`}
-        >
-          <CardPreview
-            id={card.id}
-            alias={card.alias}
-            description={card.status}
-            $scan={card.scan}
-            $interrupted={card.interrupted}
-          />
-        </CardPreviewButton>
+          id={card.id}
+          alias={card.alias}
+          aliasToggle
+          description={card.status}
+          $scan={card.scan}
+          $interrupted={card.interrupted}
+        />
       ))}
     </CardGrid>
   );
@@ -385,7 +376,7 @@ export function CardMaintenanceBatchContent({
         processing={processing}
         keepExpanded
       >
-        <CardMaintenanceCards cards={cards} disabled />
+        <CardMaintenanceCards cards={cards} />
         {!report && (
           <InfoMessage>
             {mode === 'update'

@@ -177,6 +177,7 @@ for (const [path, names] of [
     ['CardGrid', 'CardPlaceholder', 'CardPreview', 'CardPreviewButton'],
   ],
   ['@key/key-list', ['KeyListItem', 'KeyListPlaceholder']],
+  ['@key/key-tags', ['KeyAliasTag']],
   ['@ui/app-icon', ['AppIcon']],
   ['@ui/button', ['Button', 'Buttons']],
   ['@ui/toggle', ['Toggle']],
@@ -1390,7 +1391,8 @@ test('maintenance preview keeps the alias with its selected action and export st
       state.render(),
       node => node.type === 'CardPreview' && node.props.id === '00000001',
     ).props;
-  assert.equal(preview().subtitle, 'Travel · reinstall');
+  assert.equal(preview().alias, 'Travel');
+  assert.equal(preview().subtitle, 'reinstall');
   assert.match(preview().description, /items/);
   state.click('Continue');
   await state.flush();

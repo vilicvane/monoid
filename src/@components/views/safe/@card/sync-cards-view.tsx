@@ -22,6 +22,7 @@ import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
 import {hexToUint8Array} from '../../../../@utils/index.js';
 import {KeyListItem, KeyListPlaceholder} from '../../../@key/key-list.js';
+import {KeyAliasTag} from '../../../@key/key-tags.js';
 import {
   CardGrid,
   CardPlaceholder,
@@ -75,8 +76,6 @@ import {SyncCardsState} from './sync-cards-state.js';
 
 /** View header identifier tags take the popup's text color. */
 const PopupIdentifier = styled(ViewHeaderIdentifier)`
-  z-index: auto;
-
   && * {
     color: inherit;
   }
@@ -84,6 +83,11 @@ const PopupIdentifier = styled(ViewHeaderIdentifier)`
 
 const PopupIdentifiers = styled(DetailsPopupHeader)`
   margin-top: calc(8px - var(--details-popup-gap));
+`;
+
+/** The alias tucks under the card ID tag, as in the Card page header. */
+const PopupAlias = styled(KeyAliasTag)`
+  margin-left: calc(-8px - var(--tag-overlap));
 `;
 
 const Description = styled.p`
@@ -668,15 +672,12 @@ export const SyncCardsView = observer(
             >
               <CardPreview
                 id={card.id}
-                alias={target ? undefined : card.alias}
+                alias={card.alias}
                 subtitle={
                   target
-                    ? [
-                        card.alias,
-                        maintenance.mode === 'update' ? 'update' : 'reinstall',
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')
+                    ? maintenance.mode === 'update'
+                      ? 'update'
+                      : 'reinstall'
                     : bundleLabel(card.bundle)
                 }
                 description={
@@ -898,6 +899,9 @@ export const SyncCardsView = observer(
               <PopupIdentifier
                 identifier={{type: 'card', id: selectedCard.id}}
               />
+              {selectedCard.alias && (
+                <PopupAlias>{selectedCard.alias}</PopupAlias>
+              )}
               {selectedCard.bundle !== false && (
                 <PopupIdentifier
                   identifier={{type: 'bundle', id: selectedCard.bundle}}

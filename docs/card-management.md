@@ -48,8 +48,10 @@ exports separately for each recipient public key.
 Hello exposes the Identity alias as text or `false` when empty, and the flat
 `allowPeerExtension` boolean (`false` without a Bundle). `bundle` remains the
 Bundle hash. Scanned card snapshots cache these fields. Card previews show the
-alias on the second line, replacing the Bundle label when present, with long
-aliases ellipsized. The status line stays unchanged below it. The Card header
+alias in place of the card ID (ellipsized when long); the subtitle and status
+lines stay as they are. Where a card already opens its details on tap, the popup
+header shows the ID with the alias tucked under it; the big Card Applets card and
+cards without a tap action switch between alias and ID when their name is tapped. The Card header
 shows the ID, the alias, then the Bundle tag; tapping the ID or the alias edits
 it. **Extend bundle** is available only when peer extension is allowed.
 
