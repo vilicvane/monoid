@@ -524,7 +524,12 @@ export const SyncCardsView = observer(
                           : 'synced'
                         : `items ${card.completed}/${card.total}`
               }
-              $pending={!collecting && !card.completed && !card.complete}
+              // Dimmed while this card still needs a scan in the current step.
+              $pending={
+                needsRecoveryExport
+                  ? card !== maintenanceTarget
+                  : !collecting && !card.completed && !card.complete
+              }
               $interrupted={
                 flow.interruptedCards.has(card.publicKey) ||
                 !!card.issues?.length

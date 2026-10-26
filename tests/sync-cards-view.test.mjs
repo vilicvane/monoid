@@ -1536,6 +1536,15 @@ test('a failed last-peer export can retry from a different completed peer withou
   assert.deepEqual(state.savedRecoveries, []);
   assert.deepEqual(state.backs, []);
   assert.ok(state.button('Scan a card to export'));
+  // Peers still need the export scan, so they stay dimmed; the target waits.
+  const preview = card =>
+    find(
+      state.render(),
+      node =>
+        node.type === 'CardPreview' && node.props.id === hex(card.hello.id),
+    );
+  assert.ok(state.peers.every(peer => preview(peer).props.$pending === true));
+  assert.equal(preview(state.target).props.$pending, false);
   const writes = state.peers.map(peer => [...peer.requests]);
   const authentications = first.authentications.length;
   await state.startMaintenanceScan();

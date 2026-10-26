@@ -706,6 +706,7 @@ export const CopyItemsView = observer(
                   : itemCountLabel
               }
               $interrupted={interruptedCards.has(backup!.source.publicKey)}
+              $pending={step === 3}
             />
           ) : (
             <CardPlaceholder>
@@ -738,9 +739,7 @@ export const CopyItemsView = observer(
                 interruptedCards.has(target.publicKey) ||
                 target.items.some(item => !!item.issue)
               }
-              $pending={
-                activeStep === 4 && !startedImports.has(target.publicKey)
-              }
+              $pending={activeStep === 4 && !target.complete}
             />
           </CardPreviewButton>
         ))}
