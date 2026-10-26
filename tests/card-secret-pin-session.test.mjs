@@ -11,6 +11,82 @@ const PIN = 'First-42';
 const OTHER_PIN = 'Second-42';
 const noPrompt = () => assert.fail('A verified card must reuse its PIN');
 
+function procedureFixture() {
+  const pins = new Map();
+  return {
+    pins,
+    secretPIN: card => pins.get(card.publicKey),
+    holdSecretPIN: (card, pin) => pins.set(card.publicKey, pin),
+    dropSecretPIN: card => pins.delete(card.publicKey),
+  };
+}
+
+test('procedure PINs are reused and only verified credentials are forwarded', async () => {
+  const procedure = procedureFixture();
+  procedure.holdSecretPIN(first, PIN);
+  const session = new CardSecretPINSession(procedure);
+  await session.run([first], noPrompt, async credentials => {
+    assert.equal(credentials(first).pin, PIN);
+    credentials(first).onAuthenticated();
+  });
+  await session.run(
+    [second],
+    async () => OTHER_PIN,
+    async credentials => {
+      const next = credentials(second);
+      assert.equal(procedure.secretPIN(second), undefined);
+      next.onAuthenticated();
+      assert.equal(procedure.secretPIN(second), OTHER_PIN);
+    },
+  );
+  session.clear();
+  assert.equal(
+    procedure.secretPIN(first),
+    PIN,
+    'page clear preserves transferred procedure PINs',
+  );
+  assert.equal(procedure.secretPIN(second), OTHER_PIN);
+  const late = session.onAuthenticated(
+    {...second, publicKey: 'late'},
+    OTHER_PIN,
+  );
+  session.clear();
+  late();
+  assert.equal(procedure.pins.has('late'), false);
+});
+
+test('rejected procedure PIN is dropped and an explicit retry prompts', async () => {
+  const procedure = procedureFixture();
+  procedure.holdSecretPIN(first, PIN);
+  const session = new CardSecretPINSession(procedure);
+  let attempts = 0;
+  await assert.rejects(
+    session.run([first], noPrompt, async credentials => {
+      credentials(first);
+      attempts++;
+      throw new MonoidCardError('Incorrect Secret PIN', {
+        cause: new CBORAppletError({code: 'INVALID_PIN', tries: 4}),
+      });
+    }),
+    /Incorrect Secret PIN/,
+  );
+  assert.equal(attempts, 1);
+  assert.equal(procedure.secretPIN(first), undefined);
+  let prompts = 0;
+  await session.run(
+    [first],
+    async () => {
+      prompts++;
+      return OTHER_PIN;
+    },
+    async credentials => {
+      credentials(first).onAuthenticated();
+    },
+  );
+  assert.equal(prompts, 1);
+  assert.equal(procedure.secretPIN(first), OTHER_PIN);
+});
+
 async function remember(session, card = first, pin = PIN) {
   await session.run(
     [card],

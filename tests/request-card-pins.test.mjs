@@ -97,6 +97,66 @@ test('existing PINs require authentication only and never prepare replacement Ac
   );
 });
 
+for (const accessSet of [true, false]) {
+  for (const savedAccessPIN of [undefined, access]) {
+    test(`held Secret skips only its prompt (Access set ${accessSet}, saved ${!!savedAccessPIN})`, async () => {
+      const needsAccess = !accessSet && !savedAccessPIN;
+      const ui = prompt(needsAccess ? [access, access] : []);
+      assert.deepEqual(
+        await requestCardPINs(
+          ui.show,
+          {
+            secretSet: true,
+            accessSet,
+            savedAccessPIN,
+            heldSecretPIN: secret,
+          },
+          signal(),
+        ),
+        accessSet ? {secret} : {secret, access},
+      );
+      assert.deepEqual(
+        ui.inputs.map(input => input.placeholder),
+        needsAccess ? ['Set Access PIN', 'Confirm Access PIN'] : [],
+      );
+    });
+  }
+}
+
+test('new Secret setup ignores a held PIN and still requires confirmation', async () => {
+  const ui = prompt([secret, secret, access, access]);
+  assert.deepEqual(
+    await requestCardPINs(
+      ui.show,
+      {
+        secretSet: false,
+        accessSet: false,
+        heldSecretPIN: 'Old-Secret',
+      },
+      signal(),
+    ),
+    {secret, access},
+  );
+  assert.equal(ui.inputs.length, 4);
+});
+
+test('an aborted request cannot return a held Secret PIN', async () => {
+  const ui = prompt([]);
+  await assert.rejects(
+    requestCardPINs(
+      ui.show,
+      {
+        secretSet: true,
+        accessSet: true,
+        heldSecretPIN: secret,
+      },
+      AbortSignal.abort(),
+    ),
+    {name: 'AbortError'},
+  );
+  assert.equal(ui.inputs.length, 0);
+});
+
 test('format and confirmation errors remain in the corresponding prompt', async () => {
   const ui = prompt([
     'short',

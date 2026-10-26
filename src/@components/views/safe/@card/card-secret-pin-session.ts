@@ -9,6 +9,11 @@ import {
 
 type Identity = Pick<CardBackupIdentity, 'id' | 'publicKey' | 'bundle'>;
 type Credentials = {pin: MonoidPIN; onAuthenticated: () => void};
+type ProcedurePINs = {
+  secretPIN(card: Identity): MonoidPIN | undefined;
+  holdSecretPIN(card: Identity, pin: MonoidPIN): void;
+  dropSecretPIN(card: Identity): void;
+};
 
 class SecretPINRequired extends Error {
   readonly code = 'CANCELLED';
@@ -26,6 +31,12 @@ export class CardSecretPINSession {
   private readonly pins = new Map<string, MonoidPIN>();
   private owner = new AbortController();
 
+  constructor(private readonly procedure?: ProcedurePINs) {}
+
+  private pin(card: Identity): MonoidPIN | undefined {
+    return this.pins.get(key(card)) ?? this.procedure?.secretPIN(card);
+  }
+
   get signal(): AbortSignal {
     return this.owner.signal;
   }
@@ -39,7 +50,10 @@ export class CardSecretPINSession {
   onAuthenticated(card: Identity, pin: MonoidPIN): () => void {
     const {signal} = this.owner;
     return () => {
-      if (!signal.aborted) this.pins.set(key(card), pin);
+      if (!signal.aborted) {
+        this.pins.set(key(card), pin);
+        this.procedure?.holdSecretPIN(card, pin);
+      }
     };
   }
 
@@ -72,7 +86,7 @@ export class CardSecretPINSession {
     };
 
     try {
-      if (!cards.some(card => this.pins.has(key(card)))) {
+      if (!cards.some(card => this.pin(card) !== undefined)) {
         if (!(await request(cards.length === 1 ? cards[0] : undefined))) return;
       }
       for (;;) {
@@ -81,7 +95,7 @@ export class CardSecretPINSession {
           await scan(card => {
             signal.throwIfAborted();
             if (expected) assertSameCardWithBundle(card, expected);
-            const pin = entered ?? this.pins.get(key(card));
+            const pin = entered ?? this.pin(card);
             if (pin === undefined) throw new SecretPINRequired(card);
             // A PIN entered before an unknown card is scanned belongs only to
             // the first validated identity. It must never follow another tap.
@@ -105,6 +119,7 @@ export class CardSecretPINSession {
             MonoidAppletInvalidPINError.is(cause.source)
           ) {
             this.pins.delete(key(attempted));
+            this.procedure?.dropSecretPIN(attempted);
           }
           throw error;
         }

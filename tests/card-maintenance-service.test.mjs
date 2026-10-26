@@ -259,6 +259,53 @@ beforeEach(() => {
   };
 });
 
+test('procedure Secret PINs are isolated by public key and never persisted or restored', async () => {
+  const storage = storageFixture();
+  const service = await CardMaintenanceService.create(storage);
+  const card = cardFixture();
+  const first = {id: hex(card.state.id), publicKey: hex(card.state.publicKey)};
+  const other = {...first, publicKey: `04${'99'.repeat(64)}`};
+  service.holdSecretPIN(first, 'Secret-42');
+  assert.equal(service.secretPIN(first), 'Secret-42');
+  assert.equal(service.secretPIN(other), undefined);
+  service.holdSecretPIN(other, 'Other-43');
+  service.dropSecretPIN(first);
+  assert.equal(service.secretPIN(first), undefined);
+  assert.equal(service.secretPIN(other), 'Other-43');
+  service.holdSecretPIN(first, 'Secret-42');
+  const operation = await service.prepare(card, {
+    mode: 'update',
+    cardInformation: information,
+    appletAid: hex(aid),
+  });
+  await service.replace('session', operation.id);
+  assert.equal(service.secretPIN(first), 'Secret-42');
+  assert.doesNotMatch(
+    JSON.stringify(storage.writes),
+    /Secret-42|Other-43|secretPIN/,
+  );
+  const restarted = await CardMaintenanceService.create(storage);
+  assert.equal(restarted.secretPIN(first), undefined);
+  assert.equal(restarted.secretPIN(other), undefined);
+  await service.restore(card, operation.id);
+  assert.equal(service.secretPIN(first), undefined);
+  assert.equal(service.secretPIN(other), 'Other-43');
+});
+
+test('discarding a prepared batch drops all target PINs but preserves unrelated cards', async () => {
+  const service = await CardMaintenanceService.create(storageFixture());
+  const {preparations} = await batchFixture(service);
+  await service.saveBundleRecoveryBatch(preparations);
+  for (const {operation} of preparations)
+    service.holdSecretPIN(operation.card, 'Secret-42');
+  const unrelated = {publicKey: `04${'99'.repeat(64)}`};
+  service.holdSecretPIN(unrelated, 'Other-43');
+  await service.discardPrepared(preparations[0].operation.id);
+  for (const {operation} of preparations)
+    assert.equal(service.secretPIN(operation.card), undefined);
+  assert.equal(service.secretPIN(unrelated), 'Other-43');
+});
+
 test('backs up every resource with exact optional metadata and no PIN before replacement', async () => {
   const storage = storageFixture();
   const service = await CardMaintenanceService.create(storage);
@@ -2063,7 +2110,9 @@ test('discarding an unstarted peer recovery archive is durable and allows collec
   replacement = async () => {
     throw new Error('Must not touch the card');
   };
+  service.holdSecretPIN(original.card, 'Secret-42');
   await service.discardPrepared(original.id);
+  assert.equal(service.secretPIN(original.card), undefined);
   assert.equal(service.get(original.id), undefined);
   assert.deepEqual((await storage.get()).operations, []);
   service = await CardMaintenanceService.create(storage);
@@ -2146,6 +2195,7 @@ for (const failure of ['write', 'readback']) {
       appletAid: hex(aid),
     });
     const saved = await service.saveBundleRecovery(draft, bundleRecovery(card));
+    service.holdSecretPIN(saved.card, 'Secret-42');
     if (failure === 'write') storage.failWrite = true;
     else {
       const get = storage.get;
@@ -2157,6 +2207,7 @@ for (const failure of ['write', 'readback']) {
       };
     }
     await assert.rejects(service.discardPrepared(saved.id), /Disk full|verify/);
+    assert.equal(service.secretPIN(saved.card), 'Secret-42');
     assert.deepEqual(service.get(saved.id), saved);
     assert.deepEqual(card.imports, []);
   });
@@ -2405,7 +2456,11 @@ test('a batch persists every archive before replacement and resumes with at most
   }
   assert.equal(service.operations.length, 0);
   assert.ok(service.batches[0].targets.every(target => target.complete));
+  for (const {operation} of preparations)
+    service.holdSecretPIN(operation.card, 'Secret-42');
   await service.dismissBatch(batch.id);
+  for (const {operation} of preparations)
+    assert.equal(service.secretPIN(operation.card), undefined);
   assert.equal(service.batches.length, 0);
 });
 
@@ -2570,7 +2625,9 @@ for (const bundle of [false, true]) {
       ...fixture
     } = await rejectedRecovery({bundle});
     let {service} = fixture;
+    service.holdSecretPIN(operation.card, 'Secret-42');
     const result = await service.restore(card, operation.id);
+    assert.equal(service.secretPIN(operation.card), 'Secret-42');
     assert.equal(result.complete, false);
     assert.deepEqual(
       new Set(result.issues.map(item => item.index)),
@@ -2585,6 +2642,7 @@ for (const bundle of [false, true]) {
       );
     }
     service = await CardMaintenanceService.create(storage);
+    service.holdSecretPIN(operation.card, 'Secret-42');
     card.importItem = () =>
       assert.fail('Finish must not repeat rejected imports');
     const finished = await service.restore(
@@ -2600,6 +2658,7 @@ for (const bundle of [false, true]) {
       issues: result.issues,
       droppedGrants: [hex(otpAid)],
     });
+    assert.equal(service.secretPIN(operation.card), undefined);
     assert.deepEqual(
       card.grants.map(grant => hex(grant.aid)),
       [hex(securityKeyAid), 'f06d6f6e6f69640601'],

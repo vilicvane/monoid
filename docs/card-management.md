@@ -124,6 +124,20 @@ their writes until restoration. Every archive covers all participating cards,
 including opaque items; conflicts, missing content or failed exports block
 replacement. An explicit retry may use another processed member.
 
+Maintenance Sync calls its second step **Save recovery**. Only the next export
+card is dimmed; other cards show **recovery saved** or **recovery pending**.
+Another eligible card may still supply the archive. Once all recoveries are saved,
+the steps stay visible with **Continue to installation**. This explicit action
+returns to Card Applets, where installation proceeds one card at a time.
+
+Verified Secret PINs stay only in memory for this maintenance procedure, keyed by
+card public key, across Sync and installation/restoration. Each scan still
+authenticates the card. Wrong PINs are dropped without an automatic retry. Saving
+recovery retains only target PINs; leaving Sync before saving or starting over
+drops its PINs. Completing or discarding an operation drops that card's PIN.
+App restart retains no Secret PINs. Fresh install and other actions still prompt
+as before, and Access PIN handling is unchanged.
+
 Card Applets displays the persisted target batch. Cards remain dimmed until their
 installation, item restoration and original grant verification finish (including
 explicitly confirmed omissions). Each target reinstalls its own original optional

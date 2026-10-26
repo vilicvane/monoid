@@ -17,9 +17,16 @@ export async function requestCardPINs(
     secretSet,
     accessSet,
     savedAccessPIN,
-  }: {secretSet: boolean; accessSet: boolean; savedAccessPIN?: MonoidPIN},
+    heldSecretPIN,
+  }: {
+    secretSet: boolean;
+    accessSet: boolean;
+    savedAccessPIN?: MonoidPIN;
+    heldSecretPIN?: MonoidPIN;
+  },
   signal: AbortSignal,
 ): Promise<CardSetupPINs | undefined> {
+  signal.throwIfAborted();
   let differentAccessPIN = true;
   const read = async (
     kind: 'Secret' | 'Access',
@@ -76,7 +83,9 @@ export async function requestCardPINs(
     return value;
   };
 
-  const secret = await read('Secret', secretSet);
+  const secret =
+    (secretSet ? heldSecretPIN : undefined) ??
+    (await read('Secret', secretSet));
   if (secret === undefined) return;
   if (accessSet) return {secret};
   const access = !secretSet

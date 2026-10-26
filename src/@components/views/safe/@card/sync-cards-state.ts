@@ -108,6 +108,21 @@ export class SyncCardsState {
     );
   }
 
+  get savingRecovery(): boolean {
+    return (
+      !!this.maintenance &&
+      this.session.phase !== 'collect' &&
+      (this.maintenanceSaved ||
+        !this.pendingMaintenanceCards.length ||
+        this.maintenanceTargets.length === this.session.cards.length)
+    );
+  }
+
+  get nextRecoveryCard(): (typeof this.session.cards)[number] | undefined {
+    if (!this.savingRecovery || this.maintenanceSaved) return;
+    return this.session.cards.find(card => this.needsExport(card.publicKey));
+  }
+
   needsExport(publicKey: string): boolean {
     return (
       (!this.deferredCards.has(publicKey) ||

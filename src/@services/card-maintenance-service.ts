@@ -3,6 +3,7 @@ import {observable, runInAction} from 'mobx';
 
 import {
   type MonoidIdHex,
+  type MonoidPIN,
   PublicKey,
   type PublicKeyHex,
   SafeIndex,
@@ -162,6 +163,8 @@ type PrepareOptions = {
 
 /** Only card-encrypted item envelopes and public metadata are persisted here. */
 export class CardMaintenanceService {
+  /** Verified procedure credentials only; never part of persisted state. */
+  private readonly secretPINs = new Map<string, MonoidPIN>();
   private readonly state = observable.box<MaintenanceStorage>({
     version: 1,
     operations: [],
@@ -178,6 +181,25 @@ export class CardMaintenanceService {
 
   get operations(): readonly CardMaintenanceOperation[] {
     return this.state.get().operations;
+  }
+
+  holdSecretPIN(
+    card: Pick<CardMaintenanceOperation['card'], 'publicKey'>,
+    pin: MonoidPIN,
+  ): void {
+    if (card.publicKey) this.secretPINs.set(card.publicKey, pin);
+  }
+
+  secretPIN(
+    card: Pick<CardMaintenanceOperation['card'], 'publicKey'>,
+  ): MonoidPIN | undefined {
+    return card.publicKey ? this.secretPINs.get(card.publicKey) : undefined;
+  }
+
+  dropSecretPIN(
+    card: Pick<CardMaintenanceOperation['card'], 'publicKey'>,
+  ): void {
+    if (card.publicKey) this.secretPINs.delete(card.publicKey);
   }
 
   get(id: string): CardMaintenanceOperation | undefined {
@@ -197,6 +219,8 @@ export class CardMaintenanceService {
         ...current,
         batches: current.batches?.filter(batch => batch.id !== id),
       }));
+      for (const target of batch?.targets ?? [])
+        this.dropSecretPIN(target.card);
     });
   }
 
@@ -1092,6 +1116,10 @@ export class CardMaintenanceService {
         const saved = await this.storage.get('cardMaintenance');
         if (JSON.stringify(saved) !== JSON.stringify(next)) {
           throw new Error('Could not verify the saved card recovery data');
+        }
+        for (const operation of this.operations) {
+          if (!next.operations.some(saved => saved.id === operation.id))
+            this.dropSecretPIN(operation.card);
         }
         runInAction(() => this.state.set(next));
       });

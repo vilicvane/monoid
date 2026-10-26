@@ -1,7 +1,7 @@
 import {Plus as plus, RotateCcw as rotateCcw} from 'lucide-react';
 import {reaction} from 'mobx';
 import {observer} from 'mobx-react-lite';
-import {type ReactNode, useEffect, useRef, useState} from 'react';
+import {type ReactNode, useCallback, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
@@ -159,7 +159,37 @@ export const SyncCardsView = observer(
       retryOnError: false,
     });
     const [pinInput, showPINInput] = useInputModal();
-    const [secretPINs] = useState(() => new CardSecretPINSession());
+    const heldPINCards = useRef(
+      new Set(maintenance?.card.publicKey ? [maintenance.card.publicKey] : []),
+    );
+    const [secretPINs] = useState(
+      () =>
+        new CardSecretPINSession(
+          maintenance
+            ? {
+                secretPIN: card => cardMaintenanceService.secretPIN(card),
+                holdSecretPIN: (card, pin) => {
+                  heldPINCards.current.add(card.publicKey);
+                  cardMaintenanceService.holdSecretPIN(card, pin);
+                },
+                dropSecretPIN: card =>
+                  cardMaintenanceService.dropSecretPIN(card),
+              }
+            : undefined,
+        ),
+    );
+    const releaseProcedurePINs = useCallback(() => {
+      for (const publicKey of heldPINCards.current) {
+        if (
+          !flow.maintenanceSaved ||
+          !flow.maintenanceTargets.some(
+            target => target.card.publicKey === publicKey,
+          )
+        )
+          cardMaintenanceService.dropSecretPIN({publicKey});
+      }
+      heldPINCards.current.clear();
+    }, [flow, cardMaintenanceService]);
     const [working, setWorking] = useState(false);
     const [details, setDetails] = useState<string>();
     const [confirmRestart, setConfirmRestart] = useState(false);
@@ -173,7 +203,7 @@ export const SyncCardsView = observer(
       !busy;
     const hasIssues = session.cards.some(card => card.issues?.length);
     const activeStep =
-      complete && !maintenance && !hasIssues ? 3 : collecting ? 1 : 2;
+      complete && (maintenance || !hasIssues) ? 3 : collecting ? 1 : 2;
     const source = !flow.sourceConsumed ? flow.sourceCard : undefined;
     const bundles = [
       ...new Set(
@@ -208,8 +238,9 @@ export const SyncCardsView = observer(
         mounted.current = false;
         operation.current?.abort();
         secretPINs.clear();
+        releaseProcedurePINs();
       };
-    }, [secretPINs]);
+    }, [secretPINs, releaseProcedurePINs]);
 
     useEffect(
       () =>
@@ -219,13 +250,14 @@ export const SyncCardsView = observer(
             if (!active) {
               operation.current?.abort();
               secretPINs.clear();
+              releaseProcedurePINs();
               setDetails(undefined);
               setConfirmRestart(false);
             }
           },
           {fireImmediately: true},
         ),
-      [isViewActive, secretPINs],
+      [isViewActive, secretPINs, releaseProcedurePINs],
     );
 
     useEffect(() => {
@@ -260,6 +292,7 @@ export const SyncCardsView = observer(
       expectedCard?: CardBackupIdentity,
     ): Promise<void> => {
       const expected = expectedCard ?? source;
+      const suggested = expected ?? flow.nextRecoveryCard;
       const previewCard = view.card ?? flow.sourceCard;
       signal.throwIfAborted();
       if (!mounted.current || !isViewActive()) return;
@@ -290,12 +323,13 @@ export const SyncCardsView = observer(
           ),
         async (credentials, pinSignal) => {
           await scan(
-            expected ? (
+            suggested ? (
               <>
                 Scan card{' '}
                 <MonoidScanStatePromptContentHighlight>
-                  {expected.id}
+                  {suggested.id}
                 </MonoidScanStatePromptContentHighlight>
+                {!expected && ' to export'}
               </>
             ) : collecting ? (
               'Scan a card'
@@ -496,6 +530,7 @@ export const SyncCardsView = observer(
                             activeSignal,
                           );
                         flow.finishMaintenance();
+                        releaseProcedurePINs();
                       } catch (error) {
                         flow.recoveries.clear();
                         throw error;
@@ -592,9 +627,6 @@ export const SyncCardsView = observer(
           );
         },
       );
-      // Return only after NFC cleanup. Installation still requires an explicit
-      // action on the original Card Applets page.
-      if (flow.maintenanceSaved && isViewActive()) back?.();
     };
 
     const readCard = (expected?: CardBackupIdentity): void => {
@@ -649,14 +681,17 @@ export const SyncCardsView = observer(
                         ? 'up to date'
                         : 'installed version unknown'
                     : `items ${formatCardResourceCount(getCardResourceGroups(card.items))}`
-                  : maintenance &&
-                      flow.deferredCards.has(card.publicKey) &&
-                      !flow.needsExport(card.publicKey)
-                    ? 'restore later'
-                    : (needsRecoveryExport ||
-                          (allMaintenanceTargets && card.complete)) &&
-                        flow.needsExport(card.publicKey)
+                  : flow.savingRecovery
+                    ? card === flow.nextRecoveryCard
                       ? 'scan to export'
+                      : flow.recoveries.has(
+                            flow.maintenanceCards.get(card.publicKey)!.operation
+                              .id,
+                          )
+                        ? 'recovery saved'
+                        : 'recovery pending'
+                    : maintenance && flow.deferredCards.has(card.publicKey)
+                      ? 'restore later'
                       : card.complete
                         ? card.issues?.length
                           ? `skipped ${card.issues.length}`
@@ -665,8 +700,8 @@ export const SyncCardsView = observer(
               }
               // Dimmed while this card still needs a scan in the current step.
               $pending={
-                needsRecoveryExport || (!collecting && allMaintenanceTargets)
-                  ? flow.needsExport(card.publicKey)
+                flow.savingRecovery
+                  ? card === flow.nextRecoveryCard
                   : !collecting &&
                     !flow.deferredCards.has(card.publicKey) &&
                     !card.complete
@@ -714,8 +749,11 @@ export const SyncCardsView = observer(
             footer={
               complete ? (
                 back && (
-                  <Button color="neutral" onClick={() => back()}>
-                    {backLabel}
+                  <Button
+                    color={maintenance ? 'warning' : 'neutral'}
+                    onClick={() => back()}
+                  >
+                    {maintenance ? 'Continue to installation' : backLabel}
                   </Button>
                 )
               ) : collecting ? (
@@ -732,7 +770,11 @@ export const SyncCardsView = observer(
                         </Button>
                       )
                     ) : (
-                      <Button color="primary" disabled={busy} onClick={prepare}>
+                      <Button
+                        color={maintenance ? 'warning' : 'primary'}
+                        disabled={busy}
+                        onClick={prepare}
+                      >
                         Continue
                       </Button>
                     ))}
@@ -750,11 +792,11 @@ export const SyncCardsView = observer(
                 </>
               ) : (
                 <Button
-                  color="primary"
+                  color={maintenance ? 'warning' : 'primary'}
                   disabled={busy}
                   onClick={() => readCard()}
                 >
-                  {needsRecoveryExport
+                  {flow.nextRecoveryCard
                     ? 'Scan a card to export'
                     : 'Scan a pending card'}
                 </Button>
@@ -780,6 +822,7 @@ export const SyncCardsView = observer(
                   title="Add cards"
                   numero={1}
                   activeNumero={activeStep}
+                  color={maintenance ? 'warning' : 'primary'}
                   processing={busy && collecting}
                 >
                   {cards}
@@ -797,12 +840,26 @@ export const SyncCardsView = observer(
                   )}
                 </Step>
                 <Step
-                  title="Sync cards"
+                  title={maintenance ? 'Save recovery' : 'Sync cards'}
                   numero={2}
                   activeNumero={activeStep}
+                  color={maintenance ? 'warning' : 'primary'}
+                  summary={
+                    maintenance && complete
+                      ? `${flow.maintenanceTargets.length} ${flow.maintenanceTargets.length === 1 ? 'card' : 'cards'}`
+                      : undefined
+                  }
+                  keepExpanded={!!maintenance && complete}
                   processing={busy && !collecting}
                 >
-                  {cards}
+                  {maintenance && complete ? (
+                    <InfoMessage>
+                      Recoveries saved. Continue in Card Applets, one card at a
+                      time.
+                    </InfoMessage>
+                  ) : (
+                    cards
+                  )}
                   {hasIssues && (
                     <WarningMessage>
                       Some items were skipped. View card details.
@@ -910,6 +967,7 @@ export const SyncCardsView = observer(
             onConfirm={() => {
               setConfirmRestart(false);
               secretPINs.clear();
+              releaseProcedurePINs();
               flow.restart();
               if (maintenance) back?.();
             }}

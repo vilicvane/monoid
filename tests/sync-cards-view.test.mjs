@@ -43,6 +43,7 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
 mock.module('react', {
   namedExports: {
     useMemo: create => rendering.slot(() => ({value: create()})).value,
+    useCallback: callback => rendering.slot(() => ({callback})).callback,
     useState(initial) {
       const slot = rendering.slot(() => ({
         value: typeof initial === 'function' ? initial() : initial,
@@ -341,6 +342,7 @@ function mount({
     localKeys: [],
     progress: [],
     savedRecoveries: [],
+    heldPINs: new Map(),
     mounted: true,
     slot: create => (state.slots[state.index++] ??= create()),
     render() {
@@ -446,6 +448,9 @@ function mount({
     cardStore,
     syncCardsStore: store,
     cardMaintenanceService: {
+      secretPIN: card => state.heldPINs.get(card.publicKey),
+      holdSecretPIN: (card, pin) => state.heldPINs.set(card.publicKey, pin),
+      dropSecretPIN: card => state.heldPINs.delete(card.publicKey),
       isUpdateAvailable: () =>
         'updateAvailable' in state ? state.updateAvailable : false,
       prepare: async (_applet, options) => ({
@@ -1215,6 +1220,35 @@ function maintenancePeer(number, itemNumber = number) {
   return peer;
 }
 
+function continueToInstallation(state) {
+  assert.deepEqual(
+    state.backs,
+    [],
+    'saving recovery never navigates automatically',
+  );
+  const button = state.button('Continue to installation');
+  assert.equal(button.props.color, 'warning');
+  assert.equal(
+    find(state.tree, node => node.type === 'OperationComplete'),
+    undefined,
+  );
+  const steps = find(state.tree, node => node.type === 'OperationSteps');
+  assert.ok(!steps.props.$exiting);
+  const step = find(
+    steps,
+    node => node.type === 'Step' && node.props.numero === 2,
+  );
+  assert.equal(step.props.title, 'Save recovery');
+  assert.equal(step.props.activeNumero, 3);
+  assert.equal(
+    step.props.summary,
+    `${state.flow.maintenanceTargets.length} ${state.flow.maintenanceTargets.length === 1 ? 'card' : 'cards'}`,
+  );
+  assert.ok(step.props.keepExpanded);
+  state.click('Continue to installation');
+  assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+}
+
 async function mountMaintenance({
   addPeer = true,
   identical = true,
@@ -1272,6 +1306,78 @@ async function mountMaintenance({
     assert.equal(state.scans.length, before + 1);
   };
   return state;
+}
+
+for (const ending of [
+  'leave',
+  'unmount',
+  'restart',
+  'save one target',
+  'save both targets',
+]) {
+  test(`maintenance verified PIN ownership follows ${ending}`, async () => {
+    const state = await mountMaintenance({addPeer: false});
+    const service = state.entrances.cardMaintenanceService;
+    const target = state.draft.card;
+    const peer = readBackupCardIdentity(state.peer.hello);
+    service.holdSecretPIN(target, PIN);
+    await state.startScan('Add another card');
+    const added = await state.tap(state.peer.hello, state.peer.applet);
+    assert.equal(added.error, undefined);
+    await state.finishScan();
+    assert.equal(
+      service.secretPIN(peer),
+      PIN,
+      'only verified collection transfers the PIN',
+    );
+    const inputs = state.inputs.length;
+    if (ending.startsWith('save')) {
+      const both = ending === 'save both targets';
+      state.flow.selectMaintenanceCard(peer.publicKey, both);
+      service.saveBundleRecoveryBatch = async () => {};
+      state.click('Continue');
+      await state.flush();
+      for (const card of both ? [state.target, state.peer] : [state.peer]) {
+        await state.startMaintenanceScan();
+        assert.equal(
+          state.inputs.length,
+          inputs,
+          'collection and the original Applets PIN are reused',
+        );
+        const scan = await state.tap(card.hello, card.applet);
+        assert.equal(scan.error, undefined);
+        await state.finishScan();
+      }
+      assert.equal(state.flow.maintenanceSaved, true);
+      assert.equal(service.secretPIN(target), PIN);
+      assert.equal(service.secretPIN(peer), both ? PIN : undefined);
+      continueToInstallation(state);
+      state.unmount();
+      assert.equal(service.secretPIN(target), PIN);
+      assert.equal(service.secretPIN(peer), both ? PIN : undefined);
+    } else {
+      if (ending === 'leave')
+        runInAction(() => {
+          state.view.$leaving = true;
+        });
+      else if (ending === 'unmount') state.unmount();
+      else {
+        find(
+          state.render(),
+          node =>
+            node.type === 'ViewHeaderButton' &&
+            node.props['aria-label'] === 'Start over',
+        ).props.onClick();
+        find(
+          state.render(),
+          node =>
+            node.type === 'ConfirmPopup' && node.props.title === 'Start over?',
+        ).props.onConfirm();
+      }
+      assert.equal(service.secretPIN(target), undefined);
+      assert.equal(service.secretPIN(peer), undefined);
+    }
+  });
 }
 
 test('maintenance keeps the target fixed while allowing multiple other Bundle cards', async () => {
@@ -1447,7 +1553,7 @@ for (const identical of [true, false]) {
     assert.equal(state.previewSignals.length, 0);
     assert.deepEqual(state.backs, [], 'native cleanup precedes route handoff');
     await state.finishScan();
-    assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+    continueToInstallation(state);
     assert.equal(state.flow.maintenanceSaved, true);
   });
 }
@@ -1512,7 +1618,7 @@ for (const order of [
         (_, index) => `0fff000000000000000${index + 1}`,
       ),
     );
-    assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+    continueToInstallation(state);
     assert.equal(state.previewSignals.length, 0);
   });
 }
@@ -1569,7 +1675,7 @@ test('an already complete maintenance peer skips authentication and export while
   );
   assert.deepEqual(state.target.requests, []);
   await state.finishScan();
-  assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+  continueToInstallation(state);
 });
 
 for (const selected of [0, 1, 2]) {
@@ -1594,7 +1700,7 @@ for (const selected of [0, 1, 2]) {
     assert.ok(state.peers.every(candidate => candidate.requests.length === 0));
     assert.deepEqual(state.target.requests, []);
     await state.finishScan();
-    assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+    continueToInstallation(state);
   });
 }
 
@@ -1622,14 +1728,18 @@ test('a failed last-peer export can retry from a different completed peer withou
   assert.deepEqual(state.savedRecoveries, []);
   assert.deepEqual(state.backs, []);
   assert.ok(state.button('Scan a card to export'));
-  // Peers still need the export scan, so they stay dimmed; the target waits.
+  // Only the next eligible exporter is dimmed; other cards show their own recovery.
   const preview = card =>
     find(
       state.render(),
       node =>
         node.type === 'CardPreview' && node.props.id === hex(card.hello.id),
     );
-  assert.ok(state.peers.every(peer => preview(peer).props.$pending === true));
+  assert.equal(preview(first).props.$pending, true);
+  assert.equal(preview(first).props.description, 'scan to export');
+  assert.equal(preview(last).props.$pending, false);
+  assert.equal(preview(last).props.description, 'recovery pending');
+  assert.equal(preview(state.target).props.description, 'recovery pending');
   assert.equal(preview(state.target).props.$pending, false);
   const writes = state.peers.map(peer => [...peer.requests]);
   const authentications = first.authentications.length;
@@ -1648,7 +1758,7 @@ test('a failed last-peer export can retry from a different completed peer withou
   assert.equal(state.savedRecoveries[0].recovery.items.length, 3);
   assert.deepEqual(state.target.requests, []);
   await state.finishScan();
-  assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+  continueToInstallation(state);
 });
 
 for (const wrong of ['self', 'unknown peer', 'different bundle']) {
@@ -1739,7 +1849,7 @@ test('failed recovery persistence keeps peer progress and allows an explicit fre
   assert.deepEqual(state.backs, []);
   await state.finishScan();
   assert.equal(state.savedRecoveries.length, 1);
-  assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+  continueToInstallation(state);
 });
 
 test('maintenance waits for durable recovery saving before marking the flow ready to return', async () => {
@@ -1760,7 +1870,7 @@ test('maintenance waits for durable recovery saving before marking the flow read
   assert.equal(state.flow.maintenanceSaved, true);
   assert.deepEqual(state.backs, []);
   await state.finishScan();
-  assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+  continueToInstallation(state);
 });
 
 for (const leavingAt of ['PIN', 'authentication', 'NFC cleanup']) {
@@ -1796,6 +1906,11 @@ for (const leavingAt of ['PIN', 'authentication', 'NFC cleanup']) {
       assert.deepEqual(state.savedRecoveries, []);
       assert.deepEqual(state.exports, []);
     }
+    assert.equal(
+      state.heldPINs.size,
+      0,
+      'aborted authentication must not hold a late PIN',
+    );
   });
 }
 
@@ -1814,6 +1929,23 @@ for (const count of [2, 3]) {
     await state.flush();
     assert.equal(state.flow.deferredCards.size, count - 2);
     for (const [index, card] of [state.target, state.peers[0]].entries()) {
+      const expected = state.session.cards[index];
+      const previews = state.session.cards.map(card =>
+        find(
+          state.render(),
+          node => node.type === 'CardPreview' && node.props.id === card.id,
+        ),
+      );
+      assert.equal(previews.filter(node => node.props.$pending).length, 1);
+      assert.equal(previews[index].props.description, 'scan to export');
+      for (const [other, preview] of previews.entries()) {
+        if (other !== index)
+          assert.equal(
+            preview.props.description,
+            index === 0 || other === 0 ? 'recovery pending' : 'recovery saved',
+          );
+      }
+      assert.equal(state.flow.nextRecoveryCard.publicKey, expected.publicKey);
       await state.startMaintenanceScan();
       const scan = await state.tap(card.hello, card.applet);
       assert.equal(scan.error, undefined);
@@ -1831,7 +1963,7 @@ for (const count of [2, 3]) {
           recovery.items.length === count,
       ),
     );
-    assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+    continueToInstallation(state);
   });
 }
 

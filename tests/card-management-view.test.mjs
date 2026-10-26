@@ -5,6 +5,7 @@ import {setImmediate} from 'node:timers/promises';
 import {observable, runInAction} from 'mobx';
 
 import {SyncCardsState} from '../.bld/app/@components/views/safe/@card/sync-cards-state.js';
+import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {
   MonoidCardError,
   MonoidWrongCardError,
@@ -327,6 +328,7 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     scans: [],
     events: [],
     recordedInstallations: [],
+    heldPINs: new Map(),
     errors: [],
     toasts: [],
     progress: [],
@@ -440,6 +442,9 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     clear: () => state.events.push({type: 'clear'}),
   };
   state.maintenance = {
+    secretPIN: card => state.heldPINs.get(card.publicKey),
+    holdSecretPIN: (card, pin) => state.heldPINs.set(card.publicKey, pin),
+    dropSecretPIN: card => state.heldPINs.delete(card.publicKey),
     matchOperation: () => state.pending,
     get: () => state.pending,
     discardPrepared: async id => {
@@ -1772,6 +1777,94 @@ for (const leavingAt of ['PIN', 'target read', 'NFC cleanup']) {
     );
     assert.equal(state.pending, undefined);
     assert.deepEqual(state.errors, []);
+  });
+}
+
+test('a held maintenance Secret PIN spans installation and a later restore attempt', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  const card = {...readCardIdentity(state.initialized), appletAid: AID};
+  state.savedPINs = {[card.id]: 'Access-43'};
+  state.maintenance.holdSecretPIN(card, PIN);
+  state.pending = {
+    id: 'held',
+    mode: 'reinstall',
+    phase: 'ready',
+    card,
+    archive: {items: []},
+  };
+  let restores = 0;
+  state.maintenance.restore = async () => {
+    restores++;
+    return {complete: false, issues: [], droppedGrants: []};
+  };
+  state.click('Continue installation');
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.flush();
+  assert.equal(state.inputs.length, 0);
+  await state.tap();
+  assert.deepEqual(state.errors, []);
+  assert.equal(state.pending.phase, 'restore');
+  assert.equal(restores, 1);
+  state.click('Restore items');
+  await state.flush();
+  assert.equal(state.inputs.length, 0);
+  await state.tap();
+  assert.equal(restores, 2);
+  assert.deepEqual(state.errors, []);
+  assert.ok(
+    state.events
+      .filter(event => event.type === 'auth' && event.secret)
+      .every(event => event.pin === PIN),
+  );
+});
+
+for (const phase of ['ready', 'restore']) {
+  test(`a rejected held Secret during ${phase} is dropped without retry and the next attempt prompts`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    const card = {...readCardIdentity(state.initialized), appletAid: AID};
+    state.savedPINs = {[card.id]: 'Access-43'};
+    state.pending = {
+      id: 'held',
+      mode: 'reinstall',
+      phase,
+      card,
+      archive: {items: []},
+    };
+    state.maintenance.holdSecretPIN(card, PIN);
+    const failure = new CBORAppletError({code: 'INVALID_PIN', tries: 4});
+    if (phase === 'ready') state.initializeError = failure;
+    else
+      state.applet.authenticate = async () => {
+        throw failure;
+      };
+    const start = () => {
+      state.click(
+        phase === 'ready' ? 'Continue installation' : 'Restore items',
+      );
+      if (phase === 'ready') state.node('ConfirmPopup').props.onConfirm();
+    };
+    start();
+    await state.flush();
+    assert.equal(state.inputs.length, 0);
+    await state.tap();
+    assert.equal(state.scans.length, 2, 'one read and one failed attempt');
+    assert.deepEqual(state.errors, [failure]);
+    assert.equal(state.maintenance.secretPIN(card), undefined);
+    state.installation = installed(state.initialized);
+    state.click('Restore items');
+    await state.flush();
+    assert.equal(state.inputs.length, 1);
+    assert.equal(
+      state.inputs[0].options.placeholder,
+      'Enter existing Secret PIN',
+    );
+    await state.answer(undefined);
   });
 }
 

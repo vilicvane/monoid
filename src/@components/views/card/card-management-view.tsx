@@ -7,6 +7,7 @@ import {styled} from 'styled-components';
 
 import {MonoidIdHex, type MonoidPIN, PublicKeyHex} from '../../../@atomics.js';
 import {useEntrances} from '../../../@entrances.js';
+import {CBORAppletError} from '../../../@lib/cbor-applet.js';
 import {
   type CardInformation,
   readCardInformation,
@@ -19,6 +20,7 @@ import {
   type IdentityInstallationOptions,
   type MonoidApplet,
   type MonoidAppletHello,
+  MonoidAppletInvalidPINError,
   MonoidCardError,
   MonoidWrongCardError,
   assertCardPINsNotBlocked,
@@ -418,6 +420,14 @@ export const CardManagementView = observer(
         options.batchOperation ??
         maintenance.matchOperation({hello, cardInformation: card.information});
       const expectedHello = options.batchOperation ? undefined : hello;
+      const fresh =
+        action === 'fresh' ||
+        (action === 'resume' && pending?.mode === 'fresh');
+      const procedureCard =
+        !fresh && ['update', 'reinstall', 'resume', 'restore'].includes(action)
+          ? (pending?.card ??
+            (expectedHello && readCardIdentity(expectedHello)))
+          : undefined;
       const operation = new AbortController();
       controller.current = operation;
       setBusy(true);
@@ -429,6 +439,7 @@ export const CardManagementView = observer(
       let accessPINId: MonoidIdHex | undefined;
       let appletsChanged = false;
       let syncId: string | undefined;
+      let syncPreparation: CardMaintenanceOperation | undefined;
       let restoration: typeof restoreReport;
       let result:
         | {hello: MonoidAppletHello; snapshot: CardAppletSnapshot}
@@ -438,9 +449,6 @@ export const CardManagementView = observer(
         const savedPINs = await pinSession.getPINs(operation.signal);
         operation.signal.throwIfAborted();
         if (!isActive()) return;
-        const fresh =
-          action === 'fresh' ||
-          (action === 'resume' && pending?.mode === 'fresh');
         const freshAlreadyInstalled =
           fresh &&
           action === 'resume' &&
@@ -481,12 +489,24 @@ export const CardManagementView = observer(
             accessSet,
             savedAccessPIN:
               !fresh && id ? savedPINs[MonoidIdHex.satisfies(id)] : undefined,
+            heldSecretPIN:
+              procedureCard && maintenance.secretPIN(procedureCard),
           },
           operation.signal,
         );
         if (!requestedPINs || !isActive()) return;
         pin = requestedPINs.secret;
         operation.signal.throwIfAborted();
+
+        const rejectSecretPIN = (error: unknown): never => {
+          if (
+            procedureCard &&
+            error instanceof CBORAppletError &&
+            MonoidAppletInvalidPINError.is(error.source)
+          )
+            maintenance.dropSecretPIN(procedureCard);
+          throw error;
+        };
 
         const prompt = id ? scanCardPrompt(id) : 'Scan the card';
         await scan(prompt, async (sessionId, setState, scanSignal) => {
@@ -508,7 +528,9 @@ export const CardManagementView = observer(
               pin!,
               signal,
               requestedPINs?.access,
-            );
+            ).catch(rejectSecretPIN);
+            if (procedureCard && pending && maintenance.get(pending.id))
+              maintenance.holdSecretPIN(procedureCard, pin!);
             if (accessUnset) {
               await applet.authenticate({pin: requestedPINs!.access!});
               signal.throwIfAborted();
@@ -594,7 +616,9 @@ export const CardManagementView = observer(
             const applet = await createMonoidApplet(
               hexToUint8Array(appletAid),
             ).openSession(sessionId);
-            await applet.authenticate({secret: true, pin: pin!});
+            await applet
+              .authenticate({secret: true, pin: pin!})
+              .catch(rejectSecretPIN);
             signal.throwIfAborted();
             saved = await maintenance.prepare(applet, {
               mode: action,
@@ -605,6 +629,7 @@ export const CardManagementView = observer(
               onProgress: progress,
               signal,
             });
+            maintenance.holdSecretPIN(saved.card, pin!);
           }
 
           // Bundle envelopes cannot be restored to their own sender. Sync to
@@ -615,6 +640,7 @@ export const CardManagementView = observer(
             saved.phase === 'ready' &&
             !maintenance.get(saved.id)
           ) {
+            syncPreparation = saved;
             if (!current.hello)
               throw new MonoidCardError('Could not read Monoid Applet');
             const applet = await createMonoidApplet(
@@ -726,8 +752,11 @@ export const CardManagementView = observer(
               );
             }
             setState('Authenticating, hold tight...');
-            await applet.authenticate({secret: true, pin: pin!});
+            await applet
+              .authenticate({secret: true, pin: pin!})
+              .catch(rejectSecretPIN);
             signal.throwIfAborted();
+            maintenance.holdSecretPIN(saved.card, pin!);
             const restored = await maintenance.restore(
               applet,
               saved.id,
@@ -808,6 +837,8 @@ export const CardManagementView = observer(
             view.maintenanceSyncId = syncId;
           });
           router.safe.syncCards({syncId}).$push();
+        } else if (syncPreparation) {
+          maintenance.dropSecretPIN(syncPreparation.card);
         }
       }
     }
