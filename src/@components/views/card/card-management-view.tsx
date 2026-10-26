@@ -85,13 +85,7 @@ import {
   CardMaintenanceContent,
   CardScanPlaceholder,
 } from './card-management-content.js';
-type Action =
-  | CardMaintenanceMode
-  | 'install'
-  | 'resume'
-  | 'restore'
-  | 'setup'
-  | 'sync';
+type Action = CardMaintenanceMode | 'install' | 'resume' | 'restore' | 'setup';
 
 const HeaderActions = styled.div`
   grid-column: 3;
@@ -278,8 +272,6 @@ export const CardManagementView = observer(
       reportedOperation?.operation ??
       (pending?.phase !== 'setup' ? pending : undefined) ??
       (busy || processComplete ? operationSnapshot : undefined);
-    const manualRestore = pending?.phase === 'manual-restore';
-    const needsResume = pending && !manualRestore;
     const needsReplacement =
       pending && ['ready', 'replacing'].includes(pending.phase);
     const canRestart =
@@ -537,12 +529,7 @@ export const CardManagementView = observer(
             cardInformation: information,
           });
 
-          if (
-            pending &&
-            !manualRestore &&
-            action !== 'fresh' &&
-            saved?.id !== pending.id
-          ) {
+          if (pending && action !== 'fresh' && saved?.id !== pending.id) {
             throw new MonoidCardError('Scan the same card');
           }
           if (!pending && hello) {
@@ -561,10 +548,7 @@ export const CardManagementView = observer(
               (!options.operationId ||
                 !saved ||
                 !['ready', 'replacing'].includes(saved.phase))) ||
-            (action === 'restore' &&
-              (!saved ||
-                !['restore', 'manual-restore'].includes(saved.phase))) ||
-            (action === 'sync' && saved?.phase !== 'manual-restore') ||
+            (action === 'restore' && saved?.phase !== 'restore') ||
             (action === 'setup' && saved) ||
             (action === 'fresh' && saved?.mode === 'fresh') ||
             (saved &&
@@ -615,8 +599,8 @@ export const CardManagementView = observer(
           if (
             saved?.card.bundle &&
             !saved.archive &&
-            ((saved.phase === 'ready' && !maintenance.get(saved.id)) ||
-              action === 'sync')
+            saved.phase === 'ready' &&
+            !maintenance.get(saved.id)
           ) {
             if (!current.hello)
               throw new MonoidCardError('Could not read Monoid Applet');
@@ -707,13 +691,7 @@ export const CardManagementView = observer(
             next,
           );
           next = await setupPINs(applet, next);
-          if (
-            saved &&
-            (maintenance.get(saved.id)?.phase === 'restore' ||
-              (action === 'restore' &&
-                saved.phase === 'manual-restore' &&
-                saved.grants?.length))
-          ) {
+          if (saved && maintenance.get(saved.id)?.phase === 'restore') {
             let installedAppletAids: string[] | undefined;
             if (saved.grants?.length) {
               const installed = await readMonoidAppletInstallation(
@@ -841,10 +819,6 @@ export const CardManagementView = observer(
 
     function resumeMaintenance(): void {
       if (!pending) return;
-      if (manualRestore) {
-        void perform('sync', {operationId: pending.id});
-        return;
-      }
       if (needsReplacement) {
         setSelectedOptional([...(pending.selectedOptionalStages ?? [])]);
         setConfirm({
@@ -1049,21 +1023,13 @@ export const CardManagementView = observer(
                 >
                   {back ? backLabel : 'Back to Card Applets'}
                 </Button>
-              ) : needsResume ? (
+              ) : pending ? (
                 <Button
                   color={recovery ? 'warning' : 'primary'}
                   disabled={busy}
                   onClick={resumeMaintenance}
                 >
                   {resumeLabel}
-                </Button>
-              ) : manualRestore ? (
-                <Button
-                  color="warning"
-                  disabled={busy}
-                  onClick={resumeMaintenance}
-                >
-                  Sync items
                 </Button>
               ) : (!card.information && !installation) || card.unsupported ? (
                 <Button

@@ -49,7 +49,6 @@ export type CardMaintenancePhase =
   | 'ready'
   | 'replacing'
   | 'restore'
-  | 'manual-restore'
   /** Read only for validating and discarding obsolete persisted tasks. */
   | 'setup';
 
@@ -245,24 +244,15 @@ export class CardMaintenanceService {
     const fingerprint =
       cardInformation?.cplc && cardFingerprint(cardInformation);
     const operations = [...this.operations].reverse();
-    const active = operations.filter(
-      operation => operation.phase !== 'manual-restore',
-    );
     return (
-      active.find(
+      operations.find(
         operation => publicKey && operation.card.publicKey === publicKey,
       ) ??
-      active.find(
+      operations.find(
         operation =>
           fingerprint === operation.card.fingerprint &&
           (operation.mode === 'fresh' ||
             (!publicKey && operation.phase === 'replacing')),
-      ) ??
-      operations.find(
-        operation =>
-          operation.phase === 'manual-restore' &&
-          publicKey &&
-          operation.card.publicKey === publicKey,
       )
     );
   }
@@ -420,39 +410,28 @@ export class CardMaintenanceService {
   ): Promise<CardMaintenanceOperation> {
     return this.exclusive(async () => {
       signal?.throwIfAborted();
-      const saved = this.get(operation.id);
-      const current = saved ?? operation;
       if (
-        (saved ? saved.phase !== 'manual-restore' : !isPreparedOnly(current)) ||
-        current.mode === 'fresh' ||
-        !replacesMonoid(current) ||
-        !current.card.bundle ||
-        current.archive !== undefined
+        this.get(operation.id) ||
+        !isPreparedOnly(operation) ||
+        operation.mode === 'fresh' ||
+        !replacesMonoid(operation) ||
+        !operation.card.bundle ||
+        operation.archive !== undefined
       ) {
         throw new MonoidCardError('This card recovery cannot be replaced');
       }
       if (
-        !saved &&
         this.operations.some(
           item =>
-            item.card.publicKey === current.card.publicKey ||
-            item.card.fingerprint === current.card.fingerprint,
+            item.card.publicKey === operation.card.publicKey ||
+            item.card.fingerprint === operation.card.fingerprint,
         )
       ) {
         throw new MonoidCardError(
           'Continue the existing card maintenance first',
         );
       }
-      const next = withBundleRecovery(
-        {...current, phase: saved ? 'restore' : 'ready'},
-        recovery,
-      );
-
-      if (!saved) return this.savePrepared(next, signal);
-
-      // A failed recovery save must not discard the previous operation or grants.
-      await this.save(next);
-      return this.require(next.id);
+      return this.savePrepared(withBundleRecovery(operation, recovery), signal);
     });
   }
 
@@ -648,7 +627,7 @@ export class CardMaintenanceService {
               phase: 'replacing' as const,
               checkpoint,
             };
-            await this.save(next, replacesMonoid(next));
+            await this.save(next);
             operation = next;
           },
           signal,
@@ -661,7 +640,7 @@ export class CardMaintenanceService {
           assertIdentity(operation, hello, {
             aid: hexToUint8Array(operation.card.appletAid),
           });
-          await this.save(operation, replacesMonoid(operation));
+          await this.save(operation);
         }
         await this.recordInstallation(hello, {
           identity: operation.mode === 'fresh',
@@ -703,11 +682,8 @@ export class CardMaintenanceService {
     return this.exclusive(async () => {
       const operation = this.require(id);
       if (
-        !['restore', 'manual-restore'].includes(operation.phase) ||
-        (operation.phase === 'manual-restore' && !operation.grants?.length) ||
-        (operation.phase === 'restore' &&
-          replacesMonoid(operation) &&
-          !operation.archive)
+        operation.phase !== 'restore' ||
+        (replacesMonoid(operation) && !operation.archive)
       ) {
         throw new Error('This operation has no automatic recovery archive');
       }
@@ -857,16 +833,7 @@ export class CardMaintenanceService {
         }
       }
       signal?.throwIfAborted();
-      if (operation.phase === 'manual-restore') {
-        await this.save({
-          ...operation,
-          grants: [],
-          grantsChecksum: grantsChecksum([]),
-          rejectedItems: undefined,
-        });
-      } else {
-        await this.remove(id);
-      }
+      await this.remove(id);
       return {
         complete: true,
         issues: finishWithout ? skipped : [],
@@ -982,6 +949,11 @@ export class CardMaintenanceService {
       })
       .filter(
         operation =>
+          // Obsolete phases are discarded before validation so their data
+          // cannot block loading.
+          ['ready', 'replacing', 'restore', 'setup'].includes(
+            operation.phase,
+          ) &&
           (!isPreparedOnly(operation) || !!operation.archive?.source) &&
           !(
             operation.mode === 'fresh' &&
@@ -1054,24 +1026,12 @@ export class CardMaintenanceService {
     }
   }
 
-  private async save(
-    operation: CardMaintenanceOperation,
-    replaceManualRestore = false,
-  ): Promise<void> {
+  private async save(operation: CardMaintenanceOperation): Promise<void> {
     await this.write(current => ({
       ...current,
       version: 1,
       operations: [
-        ...current.operations.filter(
-          saved =>
-            saved.id !== operation.id &&
-            !(
-              replaceManualRestore &&
-              saved.phase === 'manual-restore' &&
-              saved.card.publicKey === operation.card.publicKey &&
-              saved.card.appletAid === operation.card.appletAid
-            ),
-        ),
+        ...current.operations.filter(saved => saved.id !== operation.id),
         operation,
       ],
     }));

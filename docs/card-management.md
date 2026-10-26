@@ -75,16 +75,18 @@ so saved archives and their checksums remain intact. The card protocol uses
 During maintenance, Card Applets replaces the catalogue with the card preview and
 three shared operation steps: **Save recovery**, **Update applets** / **Reinstall
 applets** / **Fresh install**, and **Restore**. A batch keeps its card grid above
-the current card's preview. Recovery shows the archive item count (or **From
-another bundle card** for manual recovery); the active installation or restore
-step shows processing while the scan runs. Restore covers items and applet access
-in the same scan.
+the current card's preview. Recovery shows the archive item count; the active
+installation or restore step shows processing while the scan runs. Restore covers
+items and applet access in the same scan.
 
 Restoration imports the complete archive and lists skipped items inside Restore,
 using the same type, alias and index rows as Card and Sync. Items are grouped by
 readable reason with a count, including in Sync's card details. Dropped applet
-access appears below these groups. Completion keeps any omission report in the
-Restore step alongside the completion display until returning to the catalogue.
+access appears below these groups. The omission report stays in Restore before
+**Finish without N items**. On completion, the card preview and steps animate out,
+then only the shared completion display and neutral back button remain, as in
+the other flows. A batch shows only its card grid between completed targets;
+the grid exits with the final target's steps when the whole batch completes.
 After a complete pass containing only deterministic card rejections (for example
 INVALID_PARAMETER) or conflicts, **Finish without N items** asks for explicit
 confirmation. It verifies identity and the inventory against the archive minus
@@ -100,6 +102,9 @@ Card Applets can resume it.
 Interrupted work survives navigation and application restart. Physical production
 information locates an interrupted installation while Monoid is absent; it does
 not authorize importing an archive into another Identity.
+On load, the retention filter discards operations whose phases are no longer
+current and rewrites storage. Recovery archive, grant and batch validation remain
+strict.
 
 Bundle members cannot recover their own exported envelopes. Update and Reinstall
 open maintenance Sync, with the starting card always selected. Each added bundle

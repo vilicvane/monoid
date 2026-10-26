@@ -78,7 +78,6 @@ export class SyncCardsState {
   prepare(): void {
     if (this.maintenance) {
       if (
-        this.maintenance.phase !== 'manual-restore' &&
         this.session.cards.some(
           card => !this.maintenanceCards.has(card.publicKey),
         )

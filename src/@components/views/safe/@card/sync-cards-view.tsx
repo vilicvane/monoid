@@ -358,7 +358,7 @@ export const SyncCardsView = observer(
                     },
                     onAuthenticated,
                   );
-                  if (maintenance && maintenance.phase !== 'manual-restore') {
+                  if (maintenance) {
                     const sessionId = applet.activeSessionId;
                     const information = await readCardInformation(
                       sessionId,
@@ -770,9 +770,8 @@ export const SyncCardsView = observer(
                   {cards}
                   {maintenance ? (
                     <InfoMessage>
-                      {maintenance.phase === 'manual-restore'
-                        ? 'Add cards from this bundle to restore items.'
-                        : 'Choose the bundle cards to maintain. All recovery archives are saved before installation.'}
+                      Choose the bundle cards to maintain. All recovery archives
+                      are saved before installation.
                     </InfoMessage>
                   ) : (
                     bundles.length > 0 && (
@@ -815,7 +814,6 @@ export const SyncCardsView = observer(
             </Description>
             {collecting &&
               maintenance &&
-              maintenance.phase !== 'manual-restore' &&
               selectedCard !== maintenanceTarget &&
               flow.maintenanceCards.has(selectedCard.publicKey) && (
                 <>

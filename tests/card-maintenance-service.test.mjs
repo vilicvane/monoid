@@ -237,14 +237,6 @@ function bundleRecovery(card) {
   };
 }
 
-async function saveLegacyManual(storage, operation) {
-  await storage.set('cardMaintenance', {
-    version: 1,
-    operations: [{...operation, phase: 'manual-restore', checkpoint: 'verify'}],
-  });
-  return CardMaintenanceService.create(storage);
-}
-
 beforeEach(() => {
   bundleHashes.splice(
     0,
@@ -372,7 +364,7 @@ test('grant read failure prevents automatic replacement without pretending grant
 
 test('pending Bundle applet access cannot be overwritten by another maintenance operation', async () => {
   const storage = storageFixture();
-  let service = await CardMaintenanceService.create(storage);
+  const service = await CardMaintenanceService.create(storage);
   const card = cardFixture();
   card.state.bundle = new Uint8Array(32).fill(0x42);
   card.grants = [
@@ -389,11 +381,11 @@ test('pending Bundle applet access cannot be overwritten by another maintenance 
     appletAid: hex(aid),
   };
   const operation = await service.prepare(card, options);
-  service = await saveLegacyManual(storage, operation);
+  await service.saveBundleRecovery(operation, bundleRecovery(card));
   const recovery = structuredClone(await storage.get());
   await assert.rejects(service.prepare(card, options), /Continue the existing/);
   assert.deepEqual(await storage.get(), recovery);
-  assert.equal(service.get(operation.id).phase, 'manual-restore');
+  assert.equal(service.get(operation.id).phase, 'ready');
   assert.equal(service.get(operation.id).grants.length, 1);
 });
 
@@ -433,39 +425,6 @@ test('optional applet replacement preserves items even on a Bundle card and rest
   );
 });
 
-test('a legacy Bundle reminder without grants must be restored before any new maintenance', async () => {
-  const storage = storageFixture();
-  let service = await CardMaintenanceService.create(storage);
-  const card = cardFixture();
-  card.state.bundle = new Uint8Array(32).fill(0x42);
-  const options = {
-    mode: 'reinstall',
-    cardInformation: information,
-    appletAid: hex(aid),
-    selectedOptionalStages: ['security-key'],
-  };
-  const original = await service.prepare(card, options);
-  service = await saveLegacyManual(storage, original);
-  const saved = structuredClone(await storage.get());
-  for (const replaceStages of [undefined, ['security-key']]) {
-    await assert.rejects(
-      service.prepare(card, {...options, replaceStages}),
-      /Continue the existing/,
-    );
-    assert.deepEqual(await storage.get(), saved);
-  }
-  await service.saveBundleRecovery(original, bundleRecovery(card));
-  await service.restore(card, original.id);
-  assert.equal(service.get(original.id), undefined);
-  const optional = await service.prepare(card, {
-    ...options,
-    replaceStages: ['security-key'],
-  });
-  replacement = async () => structuredClone(card.state);
-  await service.replace('session', optional.id);
-  assert.equal(service.get(optional.id), undefined);
-});
-
 for (const kind of ['empty card', 'optional without grants']) {
   test(`${kind} replacement finishes without retaining an empty automatic recovery task`, async () => {
     const storage = storageFixture();
@@ -496,7 +455,7 @@ for (const kind of ['empty card', 'optional without grants']) {
   });
 }
 
-test('restart removes verified empty automatic recovery but retains Bundle reminders and uncertain checkpoints', async () => {
+test('restart removes verified empty automatic recovery but retains uncertain checkpoints', async () => {
   const storage = storageFixture();
   const service = await CardMaintenanceService.create(storage);
   const card = cardFixture();
@@ -510,7 +469,6 @@ test('restart removes verified empty automatic recovery but retains Bundle remin
     const template = state.operations[0];
     state.operations = [
       {...template, id: 'empty', phase: 'restore'},
-      {...template, id: 'manual', phase: 'manual-restore'},
       {
         ...template,
         id: 'uncertain',
@@ -523,13 +481,48 @@ test('restart removes verified empty automatic recovery but retains Bundle remin
   const restarted = await CardMaintenanceService.create(storage);
   assert.deepEqual(
     restarted.operations.map(operation => operation.id),
-    ['manual', 'uncertain'],
+    ['uncertain'],
   );
   assert.deepEqual(await storage.get(), {
     ...before,
     operations: before.operations.slice(1),
   });
 });
+
+for (const phase of ['manual-restore', 'obsolete-phase']) {
+  test(`loading discards ${phase} and rewrites storage while preserving a current recovery`, async () => {
+    const storage = storageFixture();
+    const service = await CardMaintenanceService.create(storage);
+    const operation = await service.prepare(cardFixture(), {
+      mode: 'reinstall',
+      cardInformation: information,
+      appletAid: hex(aid),
+    });
+    await service.replace('session', operation.id);
+    const normal = (await storage.get()).operations[0];
+    storage.mutate(state => {
+      state.operations.unshift({
+        ...normal,
+        id: 'obsolete',
+        phase,
+        checkpoint: 'verify',
+        archive: undefined,
+        // Obsolete records are discarded before their payloads are validated.
+        grants: [],
+        grantsChecksum: 'invalid',
+        card: {...normal.card, publicKey: `04${'55'.repeat(64)}`},
+      });
+    });
+    const before = await storage.get();
+    const writes = storage.writes.length;
+    const restarted = await CardMaintenanceService.create(storage);
+    assert.deepEqual(restarted.operations, [normal]);
+    assert.equal(storage.writes.length, writes + 1);
+    assert.deepEqual(await storage.get(), {...before, operations: [normal]});
+    await CardMaintenanceService.create(storage);
+    assert.equal(storage.writes.length, writes + 1);
+  });
+}
 
 test('corrupt recovery payloads cannot masquerade as empty automatic recovery during startup cleanup', async () => {
   const checksum = value =>
@@ -1060,19 +1053,13 @@ test('restart discards unstarted and completed Fresh setup records while preserv
         mode: 'fresh',
         phase: 'setup',
       },
-      {
-        ...withoutArchive,
-        id: 'manual',
-        phase: 'manual-restore',
-        card: {...template.card, bundle: '09'.repeat(32)},
-      },
     ];
   });
   const before = await storage.get();
   const restarted = await CardMaintenanceService.create(storage);
   assert.deepEqual(
     restarted.operations.map(item => item.id),
-    ['checkpoint', 'replacing', 'restore', 'manual'],
+    ['checkpoint', 'replacing', 'restore'],
   );
   assert.deepEqual(await storage.get(), {
     ...before,
@@ -1271,66 +1258,6 @@ test('Bundle maintenance stays an unpersisted draft until a peer recovery archiv
   );
 });
 
-test('a legacy Bundle reminder receives a peer archive without reinstalling or changing its saved access', async () => {
-  const storage = storageFixture();
-  let service = await CardMaintenanceService.create(storage);
-  const card = cardFixture();
-  card.state.bundle = new Uint8Array(32).fill(9);
-  card.grants = [
-    {
-      aid: bytes('a0000006472f0001'),
-      seed: {index: sourceItems[0].index, domain: bytes('aabb')},
-    },
-  ];
-  const operation = await service.prepare(card, {
-    mode: 'reinstall',
-    cardInformation: information,
-    appletAid: hex(aid),
-  });
-  service = await saveLegacyManual(storage, operation);
-  const next = await service.saveBundleRecovery(
-    {...operation, grants: [], grantsChecksum: ''},
-    bundleRecovery(card),
-  );
-  assert.equal(next.id, operation.id);
-  assert.equal(next.phase, 'restore');
-  assert.equal(next.checkpoint, 'verify');
-  assert.deepEqual(next.grants, operation.grants);
-  replacement = async () => {
-    throw new Error('Must not reinstall');
-  };
-  service = await CardMaintenanceService.create(storage);
-  await service.restore(card, operation.id, undefined, undefined, [
-    'a0000006472f0001',
-  ]);
-  assert.equal(card.imports.length, sourceItems.length);
-  assert.equal(service.get(operation.id), undefined);
-});
-
-test('failed peer archive saving keeps the previous Bundle reminder and grants', async () => {
-  const storage = storageFixture();
-  let service = await CardMaintenanceService.create(storage);
-  const card = cardFixture();
-  card.state.bundle = new Uint8Array(32).fill(9);
-  const operation = await service.prepare(card, {
-    mode: 'reinstall',
-    cardInformation: information,
-    appletAid: hex(aid),
-  });
-  service = await saveLegacyManual(storage, operation);
-  const previous = structuredClone(await storage.get());
-  storage.failWrite = true;
-  await assert.rejects(
-    service.saveBundleRecovery(operation, bundleRecovery(card)),
-    /Disk full/,
-  );
-  assert.deepEqual(await storage.get(), previous);
-  assert.equal(service.get(operation.id).phase, 'manual-restore');
-  storage.failWrite = false;
-  service = await CardMaintenanceService.create(storage);
-  assert.equal(service.get(operation.id).phase, 'manual-restore');
-});
-
 test('discarding one card preparation does not remove another card recovery archive', async () => {
   const storage = storageFixture();
   const service = await CardMaintenanceService.create(storage);
@@ -1358,36 +1285,6 @@ test('discarding one card preparation does not remove another card recovery arch
   );
   assert.deepEqual(await storage.get(), original);
   assert.deepEqual(service.get(first.id).archive, first.archive);
-});
-
-test('an active Fresh operation takes precedence over a Bundle recovery reminder', async () => {
-  const storage = storageFixture();
-  let service = await CardMaintenanceService.create(storage);
-  const card = cardFixture();
-  card.state.bundle = new Uint8Array(32).fill(9);
-  const ordinary = await service.prepare(card, {
-    mode: 'reinstall',
-    cardInformation: information,
-    appletAid: hex(aid),
-  });
-  replacement = async () => structuredClone(card.state);
-  service = await saveLegacyManual(storage, ordinary);
-  const fresh = await service.prepareFresh(information);
-  assert.equal(fresh.card.id, hex(card.state.id));
-  replacement = async (_session, options) => {
-    assert.equal(options.expectedCardId, hex(card.state.id));
-    await options.onCheckpoint('remove-monoid-instance');
-    throw new Error('Tag lost');
-  };
-  await assert.rejects(service.replace('session', fresh.id), /Tag lost/);
-  const resumed = await CardMaintenanceService.create(storage);
-  assert.equal(resumed.get(fresh.id).card.id, hex(card.state.id));
-  assert.equal(
-    service.matchOperation({hello: card.state, cardInformation: information})
-      .id,
-    fresh.id,
-  );
-  assert.ok(service.get(ordinary.id));
 });
 
 test('fresh reinstall works without Hello and clears only its own completed operation', async () => {
@@ -1808,43 +1705,6 @@ for (const failure of ['write', 'readback']) {
   });
 }
 
-test('a failed manual recovery readback retains the previous in-memory reminder without deleting accepted recovery data', async () => {
-  const storage = storageFixture();
-  let service = await CardMaintenanceService.create(storage);
-  const card = cardFixture();
-  card.state.bundle = new Uint8Array(32).fill(9);
-  card.grants = [
-    {
-      aid: bytes('a0000006472f0001'),
-      seed: {index: sourceItems[0].index, domain: bytes('aabb')},
-    },
-  ];
-  const draft = await service.prepare(card, {
-    mode: 'update',
-    cardInformation: information,
-    appletAid: hex(aid),
-  });
-  service = await saveLegacyManual(storage, draft);
-  storage.corruptRead = true;
-  await assert.rejects(
-    service.saveBundleRecovery(draft, bundleRecovery(card)),
-    /verify/,
-  );
-  assert.equal(service.get(draft.id).phase, 'manual-restore');
-  assert.deepEqual(service.get(draft.id).grants, draft.grants);
-  storage.corruptRead = false;
-  const persisted = (await storage.get()).operations[0];
-  assert.equal(persisted.phase, 'restore');
-  assert.equal(persisted.archive.items.length, sourceItems.length);
-  const retried = await service.saveBundleRecovery(draft, bundleRecovery(card));
-  assert.deepEqual(retried.grants, draft.grants);
-  service = await CardMaintenanceService.create(storage);
-  assert.equal(
-    service.get(draft.id).archive.checksum,
-    persisted.archive.checksum,
-  );
-});
-
 test('peer archive source metadata is bound to the checksum on restart', async () => {
   const storage = storageFixture();
   const service = await CardMaintenanceService.create(storage);
@@ -2119,9 +1979,9 @@ for (const missing of ['seed', 'key', 'applet']) {
 }
 
 for (const missing of ['seed', 'key']) {
-  test(`a peer missing a legacy grant's ${missing} is rejected before saving and another peer can be chosen`, async () => {
+  test(`a peer missing a grant's ${missing} is rejected before saving and another peer can be chosen`, async () => {
     const storage = storageFixture();
-    let service = await CardMaintenanceService.create(storage);
+    const service = await CardMaintenanceService.create(storage);
     const card = cardFixture();
     card.state.bundle = new Uint8Array(32).fill(9);
     const index =
@@ -2140,24 +2000,19 @@ for (const missing of ['seed', 'key']) {
       cardInformation: information,
       appletAid: hex(aid),
     });
-    service = await saveLegacyManual(storage, draft);
     const previous = structuredClone(await storage.get());
     const missingDependency = bundleRecovery(card);
     missingDependency.items = missingDependency.items.filter(
       item => item.index !== hex(index),
     );
     await assert.rejects(
-      service.saveBundleRecovery(
-        {...draft, grants: [], grantsChecksum: ''},
-        missingDependency,
-      ),
+      service.saveBundleRecovery(draft, missingDependency),
       /Restore applet keys first/,
     );
     assert.deepEqual(await storage.get(), previous);
-    assert.deepEqual(service.get(draft.id).grants, draft.grants);
-    assert.equal(service.get(draft.id).phase, 'manual-restore');
+    assert.equal(service.get(draft.id), undefined);
     const saved = await service.saveBundleRecovery(draft, bundleRecovery(card));
-    assert.equal(saved.phase, 'restore');
+    assert.equal(saved.phase, 'ready');
     assert.deepEqual(saved.grants, draft.grants);
   });
 }
@@ -2186,35 +2041,6 @@ test('an unstarted Bundle draft requires its saved grant sources in the peer arc
   );
   assert.equal(storage.writes.length, 0);
   assert.equal(service.operations.length, 0);
-});
-
-test('cancellation after a legacy recovery save ACK returns the committed operation without losing its archive', async () => {
-  const storage = storageFixture();
-  let service = await CardMaintenanceService.create(storage);
-  const card = cardFixture();
-  card.state.bundle = new Uint8Array(32).fill(9);
-  const draft = await service.prepare(card, {
-    mode: 'update',
-    cardInformation: information,
-    appletAid: hex(aid),
-  });
-  service = await saveLegacyManual(storage, draft);
-  const controller = new AbortController();
-  storage.afterSet = value => {
-    if (value.operations[0]?.phase === 'restore') controller.abort();
-  };
-  const saved = await service.saveBundleRecovery(
-    draft,
-    bundleRecovery(card),
-    controller.signal,
-  );
-  assert.equal(controller.signal.aborted, true);
-  assert.equal(saved.phase, 'restore');
-  assert.equal(saved.archive.items.length, sourceItems.length);
-  assert.deepEqual(saved, service.get(draft.id));
-  service = await CardMaintenanceService.create(storage);
-  assert.deepEqual(service.get(draft.id), saved);
-  assert.deepEqual(card.imports, []);
 });
 
 test('discarding an unstarted peer recovery archive is durable and allows collecting a new preparation', async () => {
@@ -2278,7 +2104,6 @@ for (const [phase, checkpoint] of [
   ['replacing', undefined],
   ['replacing', 'remove-monoid-instance'],
   ['restore', 'verify'],
-  ['manual-restore', 'verify'],
 ]) {
   test(`discard rejects ${phase} with ${checkpoint ?? 'no'} checkpoint and preserves the recovery data`, async () => {
     const storage = storageFixture();
@@ -2300,7 +2125,6 @@ for (const [phase, checkpoint] of [
     storage.mutate(state => {
       state.operations[0].phase = phase;
       state.operations[0].checkpoint = checkpoint;
-      if (phase === 'manual-restore') delete state.operations[0].archive;
     });
     service = await CardMaintenanceService.create(storage);
     const saved = structuredClone(await storage.get());
@@ -2498,6 +2322,40 @@ async function batchFixture(
   }
   return {cards, preparations};
 }
+
+test('a batch can save after obsolete operations for earlier identities of the same chip are discarded', async () => {
+  const storage = storageFixture();
+  let service = await CardMaintenanceService.create(storage);
+  const {preparations} = await batchFixture(service);
+  const target = preparations[0].operation;
+  await storage.set('cardMaintenance', {
+    version: 1,
+    operations: ['55', '66'].map(key => ({
+      ...target,
+      id: `obsolete-${key}`,
+      phase: 'manual-restore',
+      checkpoint: 'verify',
+      card: {...target.card, publicKey: `04${key.repeat(64)}`},
+    })),
+  });
+  service = await CardMaintenanceService.create(storage);
+  assert.deepEqual(service.operations, []);
+  assert.deepEqual((await storage.get()).operations, []);
+  const batch = await service.saveBundleRecoveryBatch(preparations);
+  assert.deepEqual(
+    batch.targets.map(target => target.operationId),
+    preparations.map(({operation}) => operation.id),
+  );
+  service = await CardMaintenanceService.create(storage);
+  assert.deepEqual(service.batches, [batch]);
+  assert.equal(service.operations.length, 2);
+  for (const {operation} of preparations) {
+    const saved = service.get(operation.id);
+    assert.equal(saved.phase, 'ready');
+    assert.deepEqual(saved.card, operation.card);
+    assert.equal(saved.archive.items.length, sourceItems.length);
+  }
+});
 
 test('a batch persists every archive before replacement and resumes with at most one unrestored card', async () => {
   const storage = storageFixture();

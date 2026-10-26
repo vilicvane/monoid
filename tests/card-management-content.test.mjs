@@ -104,7 +104,7 @@ for (const [mode, title, hint] of [
   ],
   ['fresh', 'Fresh install', 'Scan this card to install fresh applets.'],
 ]) {
-  for (const phase of ['ready', 'replacing', 'restore', 'manual-restore']) {
+  for (const phase of ['ready', 'replacing', 'restore']) {
     test(`${mode} in ${phase} shows the correct active step and scan indicator`, () => {
       for (const processing of [false, true]) {
         const tree = CardMaintenanceContent({
@@ -137,9 +137,7 @@ for (const [mode, title, hint] of [
               ? ''
               : active === 2
                 ? hint
-                : phase === 'manual-restore'
-                  ? 'Restore your items from another bundle card.'
-                  : 'Scan this card to restore its 1 item and applet access.',
+                : 'Scan this card to restore its 1 item and applet access.',
           );
         }
       }
@@ -148,7 +146,7 @@ for (const [mode, title, hint] of [
 }
 
 test('steps use primary without a recovery archive', () => {
-  for (const phase of ['ready', 'replacing', 'restore', 'manual-restore']) {
+  for (const phase of ['ready', 'replacing', 'restore']) {
     const tree = CardMaintenanceContent({
       operation: {...operation, phase, archive: undefined},
       processing: false,
@@ -204,22 +202,6 @@ test('applet summaries use short names once, in stage order, and omit the librar
   }
 });
 
-test('manual recovery without an archive explains its source inside Restore', () => {
-  const tree = CardMaintenanceContent({
-    operation: {...operation, phase: 'manual-restore', archive: undefined},
-    processing: false,
-  });
-  assert.equal(
-    find(tree, node => node.type === 'Step' && node.props.numero === 1).props
-      .summary,
-    'From another bundle card',
-  );
-  assert.match(
-    text(find(tree, node => node.type === 'Step' && node.props.numero === 3)),
-    /Restore your items from another bundle card/,
-  );
-});
-
 test('completed maintenance marks all steps done while the parent animates the process out', () => {
   const tree = CardMaintenanceContent({
     operation,
@@ -244,8 +226,6 @@ test('restore results replace hints and remain available during the completion e
   for (const [phase, complete] of [
     ['restore', false],
     ['restore', true],
-    ['manual-restore', false],
-    ['manual-restore', true],
   ]) {
     const report = {
       complete,

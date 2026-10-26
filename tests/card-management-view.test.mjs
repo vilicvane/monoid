@@ -503,9 +503,7 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
         return state.installation.hello;
       }
       if (state.pending.mode === 'fresh') state.pending = undefined;
-      else
-        state.pending.phase =
-          bundle && !state.pending.archive ? 'manual-restore' : 'restore';
+      else state.pending.phase = 'restore';
       state.installation = installed(state.uninitialized);
       return state.uninitialized;
     },
@@ -1345,14 +1343,15 @@ test('an unresolved Bundle recovery without grants still blocks a new installati
   state.pending = {
     id: 'earlier',
     mode: 'update',
-    phase: 'manual-restore',
+    phase: 'restore',
     card: {appletAid: AID, bundle: true},
+    archive: {items: []},
     grants: [],
   };
   assert.ok(
     find(
       state.render(),
-      node => node.type === 'Button' && text(node) === 'Sync items',
+      node => node.type === 'Button' && text(node) === 'Restore items',
     ),
   );
   state.click('Card menu');
@@ -1706,51 +1705,6 @@ for (const cached of [false, true]) {
   });
 }
 
-for (const grants of [[], ['grant']]) {
-  test(`Bundle manual recovery syncs items before ${grants.length ? 'restoring grants' : 'finishing recovery'}`, async () => {
-    const state = mount({
-      cardInformation: false,
-      bundle: new Uint8Array(32).fill(1),
-    });
-    state.installation = installed(state.initialized);
-    state.click('Scan a card');
-    await state.tap();
-    state.pending = {
-      id: 'remaining-bundle',
-      mode: 'reinstall',
-      phase: 'manual-restore',
-      card: {
-        id: Buffer.from(state.initialized.id).toString('hex'),
-        publicKey: Buffer.from(state.initialized.publicKey).toString('hex'),
-        appletAid: AID,
-        bundle: '01'.repeat(32),
-      },
-      grants,
-    };
-    const saved = state.pending;
-    assert.equal(text(state.node('ViewContent').props.footer), 'Sync items');
-    state.click('Sync items');
-    await state.answer();
-    await state.tap({finish: false});
-    assert.deepEqual(state.errors, []);
-    assert.equal(state.pending, saved);
-    assert.equal(
-      state.events.some(event => event.type === 'open-sync'),
-      false,
-    );
-    assert.equal(
-      state.events.some(event =>
-        ['replace', 'restore', 'prepare'].includes(event.type),
-      ),
-      false,
-    );
-    state.scans.at(-1).finished.resolve();
-    await state.flush();
-    assert.ok(state.events.some(event => event.type === 'open-sync'));
-    assert.equal(state.node('OperationComplete'), undefined);
-  });
-}
-
 for (const leavingAt of ['PIN', 'target read', 'NFC cleanup']) {
   test(`Bundle backup does not hand off or replace after leaving during ${leavingAt}`, async () => {
     const state = mount({
@@ -1800,58 +1754,6 @@ for (const leavingAt of ['PIN', 'target read', 'NFC cleanup']) {
     assert.deepEqual(state.errors, []);
   });
 }
-
-test('manual Bundle recovery sets missing PINs before collecting its target in the same scan', async () => {
-  const state = mount({
-    cardInformation: false,
-    bundle: new Uint8Array(32).fill(1),
-  });
-  state.installation = installed(state.uninitialized);
-  state.click('Scan a card');
-  await state.tap();
-  state.pending = {
-    id: 'manual-setup',
-    mode: 'reinstall',
-    phase: 'manual-restore',
-    grants: ['grant'],
-    card: {
-      id: Buffer.from(state.initialized.id).toString('hex'),
-      publicKey: Buffer.from(state.initialized.publicKey).toString('hex'),
-      appletAid: AID,
-      bundle: '01'.repeat(32),
-    },
-  };
-  state.click('Sync items');
-  await state.flush();
-  assert.equal(state.inputs.length, 1);
-  assert.match(state.inputs[0].options.placeholder, /Set Secret PIN/);
-  await state.answer();
-  await state.tap({finish: false});
-  assert.deepEqual(state.errors, []);
-  assert.equal(state.inputs.length, 4);
-  assert.equal(
-    state.scans.length,
-    2,
-    'one initial read and one setup/collection scan',
-  );
-  const initialize = state.events.findIndex(
-    event => event.type === 'initialize',
-  );
-  const list = state.events.findIndex(event => event.type === 'list');
-  assert.ok(initialize >= 0 && list > initialize);
-  assert.equal(
-    state.events.some(event => event.type === 'save-access'),
-    false,
-  );
-  state.scans.at(-1).finished.resolve();
-  await state.flush();
-  assert.ok(state.events.some(event => event.type === 'save-access'));
-  assert.ok(state.events.some(event => event.type === 'open-sync'));
-  assert.equal(
-    state.events.some(event => ['restore', 'replace'].includes(event.type)),
-    false,
-  );
-});
 
 test('a saved Bundle archive still requires explicit Reinstall confirmation before replacement', async () => {
   const state = mount({
@@ -2161,7 +2063,6 @@ for (const [phase, checkpoint] of [
   ['ready', 'remove-monoid-instance'],
   ['replacing', undefined],
   ['restore', 'verify'],
-  ['manual-restore', 'verify'],
 ]) {
   test(`Start over is unavailable for ${phase} with ${checkpoint ?? 'no'} checkpoint`, async () => {
     const state = mount({cardInformation: false});
@@ -2580,7 +2481,7 @@ test('a transport failure removes a stale finish offer and keeps retry and exit 
   assert.ok(state.pending.archive);
 });
 
-for (const phase of ['ready', 'replacing', 'restore', 'manual-restore']) {
+for (const phase of ['ready', 'replacing', 'restore']) {
   test(`the scanned card uses the process layout in ${phase}`, async () => {
     const state = mount({cardInformation: false});
     state.installation = installed(state.initialized);

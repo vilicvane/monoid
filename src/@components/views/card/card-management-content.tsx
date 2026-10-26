@@ -154,7 +154,6 @@ export function CardMaintenanceContent({
   const replacing = ['ready', 'replacing'].includes(operation.phase);
   const activeStep =
     complete || report?.complete ? 4 : report || !replacing ? 3 : 2;
-  const manualRestore = operation.phase === 'manual-restore';
   const itemCount = operation.archive?.items.length ?? 0;
   const color = operation.archive ? 'warning' : 'primary';
   const appletSummary = [
@@ -180,11 +179,7 @@ export function CardMaintenanceContent({
           numero={1}
           activeNumero={activeStep}
           color={color}
-          summary={
-            manualRestore && !operation.archive
-              ? 'From another bundle card'
-              : `${itemCount} ${itemCount === 1 ? 'item' : 'items'}`
-          }
+          summary={`${itemCount} ${itemCount === 1 ? 'item' : 'items'}`}
         />
         <Step
           title={
@@ -221,9 +216,7 @@ export function CardMaintenanceContent({
         >
           {activeStep === 3 && !report && (
             <InfoMessage>
-              {manualRestore
-                ? 'Restore your items from another bundle card.'
-                : `Scan this card to restore its ${itemCount} ${itemCount === 1 ? 'item' : 'items'} and applet access.`}
+              {`Scan this card to restore its ${itemCount} ${itemCount === 1 ? 'item' : 'items'} and applet access.`}
             </InfoMessage>
           )}
           {!!report?.issues.length && (
