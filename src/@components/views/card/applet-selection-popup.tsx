@@ -57,6 +57,11 @@ export function AppletSelectionPopup({
   const installsIdentity = fresh || installation?.identity.installed !== true;
   const setsAlias = installsIdentity && !fresh && aliasEnabled;
   useEffect(() => () => controller.current?.abort(), []);
+  const aliasInput = useRef<HTMLInputElement>(null);
+  // Focusing without scrolling keeps the popup still while the keyboard opens.
+  useEffect(() => {
+    if (setsAlias) aliasInput.current?.focus({preventScroll: true});
+  }, [setsAlias]);
 
   function dismiss(): void {
     controller.current?.abort();
@@ -145,7 +150,7 @@ export function AppletSelectionPopup({
               <PopupInput
                 aria-label="Card alias"
                 placeholder="Enter card alias"
-                autoFocus
+                ref={aliasInput}
                 value={alias}
                 disabled={connecting}
                 onChange={event => setAlias(event.target.value)}

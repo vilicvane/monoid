@@ -17,6 +17,12 @@ ion-app.keyboard-shown {
   );
 }
 
+/* The page footer rises above the keyboard for its own forms; under a popup it
+   would only show through the backdrop. */
+ion-app.keyboard-shown:has(.popup-backdrop.active) [data-footer-reveal] {
+  visibility: hidden;
+}
+
 .popup-backdrop {
   position: fixed;
   inset: 0;
