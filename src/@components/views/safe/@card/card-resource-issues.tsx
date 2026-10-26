@@ -5,7 +5,6 @@ import {styled} from 'styled-components';
 import {SafeIndexHex} from '../../../../@atomics.js';
 import type {CardItemIssue} from '../../../../@lib/monoid/index.js';
 import {AppIcon} from '../../../@ui/app-icon.js';
-import {ListSectionTitle} from '../../../@ui/list.js';
 
 import {CardResourceItem, CardResourceList} from './@resource-item.js';
 
@@ -24,12 +23,31 @@ const Section = styled.section`
   gap: 4px;
 `;
 
-const Title = styled(ListSectionTitle)`
+/** A rule with the reason in its middle, so the group reads as a tail of the list. */
+const Separator = styled.div`
   display: flex;
   align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  line-height: 20px;
+
+  &::before,
+  &::after {
+    content: '';
+    flex: 1;
+    border-top: solid 0.5px var(--color-text-secondary);
+    opacity: 0.5;
+  }
+`;
+
+const Label = styled.span`
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
-  color: var(--color-text-warning);
-  font-weight: 500;
+
+  > svg {
+    color: var(--color-text-warning);
+  }
 `;
 
 /** Skipped items retain the same tags and identifiers as card resource lists. */
@@ -53,10 +71,12 @@ export function CardResourceIssues({
 
   return [...groups].map(([reason, group]) => (
     <Section key={reason}>
-      <Title>
-        <AppIcon icon={triangleAlert} />
-        {`${reason} (${group.length})`}
-      </Title>
+      <Separator role="separator">
+        <Label>
+          <AppIcon icon={triangleAlert} />
+          {reason}
+        </Label>
+      </Separator>
       <CardResourceList $contained>
         {group.map(issue => (
           <CardResourceItem

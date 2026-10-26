@@ -39,6 +39,7 @@ import {Button, Buttons} from '../../../@ui/button.js';
 import {ConfirmPopup} from '../../../@ui/confirm-popup.js';
 import {
   DetailsPopup,
+  DetailsPopupDescription,
   DetailsPopupDivider,
   DetailsPopupTitle,
 } from '../../../@ui/details-popup.js';
@@ -806,12 +807,12 @@ export const SyncCardsView = observer(
             onDismiss={() => setDetails(undefined)}
           >
             <DetailsPopupTitle>Card · {selectedCard.id}</DetailsPopupTitle>
-            <DetailsPopupDivider />
-            <Description title={selectedCard.bundle || undefined}>
+            <DetailsPopupDescription title={selectedCard.bundle || undefined}>
               {selectedCard.bundle
                 ? `Bundle · ${selectedCard.bundle.slice(0, 8)}`
                 : 'Not in a bundle'}
-            </Description>
+            </DetailsPopupDescription>
+            <DetailsPopupDivider />
             {collecting &&
               maintenance &&
               selectedCard !== maintenanceTarget &&
@@ -846,16 +847,6 @@ export const SyncCardsView = observer(
                   </Toggle>
                 </>
               )}
-            {!!selectedCard.issues?.length && (
-              <>
-                <DetailsPopupDivider />
-                <CardResourceIssues
-                  issues={selectedCard.issues}
-                  items={selectedCard.items}
-                />
-              </>
-            )}
-            <DetailsPopupDivider />
             <CardResourceList $contained data-popup-animation-group>
               {getCardResourceGroups(selectedCard.items).map(({item}) => (
                 <CardResourceItem
@@ -870,6 +861,12 @@ export const SyncCardsView = observer(
                 </KeyListItem>
               )}
             </CardResourceList>
+            {!!selectedCard.issues?.length && (
+              <CardResourceIssues
+                issues={selectedCard.issues}
+                items={selectedCard.items}
+              />
+            )}
             {collecting && selectedCard !== maintenanceTarget && (
               <Buttons data-popup-animation-group>
                 <Button

@@ -280,15 +280,15 @@ test('skipped resources group by readable reason and pass aliases and indices to
   });
   assert.deepEqual(
     groups.map(group =>
-      text(find(group, node => node.type === 'ListSectionTitle')),
+      text(find(group, node => node.props?.role === 'separator')),
     ),
     [
-      'Not accepted by this card (1)',
-      'Different item already on card (1)',
-      'Unreadable record (1)',
-      'Missing on card (1)',
-      'Not supported by this card (2)',
-      'Other (1)',
+      'Not accepted by this card',
+      'Different item already on card',
+      'Unreadable record',
+      'Missing on card',
+      'Not supported by this card',
+      'Other',
     ],
   );
   const first = find(groups[0], node => node.type === 'CardResourceItem');

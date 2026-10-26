@@ -182,7 +182,12 @@ for (const [path, names] of [
   ['@ui/confirm-popup', ['ConfirmPopup']],
   [
     '@ui/details-popup',
-    ['DetailsPopup', 'DetailsPopupDivider', 'DetailsPopupTitle'],
+    [
+      'DetailsPopup',
+      'DetailsPopupDescription',
+      'DetailsPopupDivider',
+      'DetailsPopupTitle',
+    ],
   ],
   ['@ui/step', ['Step', 'OperationSteps']],
   ['@ui/message-content', ['InfoMessage', 'WarningMessage']],
