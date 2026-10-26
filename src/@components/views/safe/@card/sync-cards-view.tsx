@@ -22,6 +22,7 @@ import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
 import {hexToUint8Array} from '../../../../@utils/index.js';
 import {KeyListItem, KeyListPlaceholder} from '../../../@key/key-list.js';
+import {CardItemIssues} from '../../../@monoid/card-item-issues.js';
 import {
   CardGrid,
   CardPlaceholder,
@@ -838,11 +839,11 @@ export const SyncCardsView = observer(
                 </>
               )}
             {!!selectedCard.issues?.length && (
-              <WarningMessage>
-                {selectedCard.issues
-                  .map(issue => `${issue.index} (${issue.reason})`)
-                  .join(', ')}
-              </WarningMessage>
+              <CardItemIssues
+                title={`${selectedCard.issues.length} items skipped`}
+                issues={selectedCard.issues}
+                contained
+              />
             )}
             <CardResourceList $contained data-popup-animation-group>
               {getCardResourceGroups(selectedCard.items).map(({item}) => (

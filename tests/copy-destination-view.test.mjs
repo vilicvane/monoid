@@ -1302,7 +1302,7 @@ test('a rejected Copy item stays visible after the other items complete', async 
   assert.ok(
     find(
       cards.type(cards.props),
-      node => typeof node === 'string' && node.includes('INVALID_PARAMETER'),
+      node => typeof node === 'string' && node === 'Skipped 1',
     ),
   );
   assert.deepEqual(state.errors, []);

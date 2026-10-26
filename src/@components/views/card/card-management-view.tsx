@@ -1,8 +1,4 @@
-import {
-  ArrowLeft as arrowLeft,
-  Ellipsis as ellipsis,
-  Info as info,
-} from 'lucide-react';
+import {Ellipsis as ellipsis, Info as info} from 'lucide-react';
 import {reaction, runInAction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useRef, useState} from 'react';
@@ -52,6 +48,7 @@ import {
   uint8ArrayToHex,
 } from '../../../@utils/index.js';
 import {AppletInstallProgressContent} from '../../@monoid/applet-install-progress.js';
+import {CardItemIssues} from '../../@monoid/card-item-issues.js';
 import {MonoidScanStatePromptProgress} from '../../@monoid/monoid-scan-prompt.js';
 import {
   type CardSetupPINs,
@@ -59,7 +56,7 @@ import {
 } from '../../@monoid/request-card-pins.js';
 import {useIsoDepScanPrompt} from '../../@monoid/use-isodep-scan-prompt.js';
 import {AppIcon} from '../../@ui/app-icon.js';
-import {Button} from '../../@ui/button.js';
+import {Button, Buttons} from '../../@ui/button.js';
 import {ConfirmPopup} from '../../@ui/confirm-popup.js';
 import {
   DetailsPopup,
@@ -938,15 +935,6 @@ export const CardManagementView = observer(
               {appletsPage ? 'Card applets' : 'Card information'}
             </ViewHeaderTitle>
             <HeaderActions>
-              <ViewHeaderButton
-                aria-label="Back"
-                onClick={() => {
-                  controller.current?.abort();
-                  router.$back();
-                }}
-              >
-                <AppIcon icon={arrowLeft} />
-              </ViewHeaderButton>
               {card.information && (
                 <ViewHeaderButton
                   aria-label="Card information"
@@ -969,7 +957,25 @@ export const CardManagementView = observer(
           </ViewHeader>
           <ViewContent
             footer={
-              batch ? (
+              restoreReport?.canFinish && !restoreReport.result.complete ? (
+                // A card rejection repeats on retry, so finishing leads.
+                <Buttons>
+                  <Button
+                    color="warning"
+                    disabled={busy}
+                    onClick={() => setPopup('finish')}
+                  >
+                    {`Finish without ${restoreReport.result.issues.length} items`}
+                  </Button>
+                  <Button
+                    color="neutral"
+                    disabled={busy}
+                    onClick={batch ? resumeBatch : resumeMaintenance}
+                  >
+                    Retry
+                  </Button>
+                </Buttons>
+              ) : batch ? (
                 <Button
                   disabled={busy}
                   onClick={() => {
@@ -1133,16 +1139,14 @@ export const CardManagementView = observer(
               <CardScanPlaceholder />
             )}
             {!!restoreReport?.result.issues.length && (
-              <WarningMessage>
-                Skipped:{' '}
-                {restoreReport.result.issues
-                  .map(issue => `${issue.index} (${issue.reason})`)
-                  .join(', ')}
-              </WarningMessage>
+              <CardItemIssues
+                title={`${restoreReport.result.issues.length} items not restored`}
+                issues={restoreReport.result.issues}
+              />
             )}
             {!!restoreReport?.result.droppedGrants.length && (
               <WarningMessage>
-                Applet access not restored (skipped required items):{' '}
+                Access not restored for{' '}
                 {restoreReport.result.droppedGrants
                   .map(aid => {
                     const applet = getAppletCatalog().find(
@@ -1155,15 +1159,6 @@ export const CardManagementView = observer(
                   })
                   .join(', ')}
               </WarningMessage>
-            )}
-            {restoreReport?.canFinish && !restoreReport.result.complete && (
-              <Button
-                color="warning"
-                disabled={busy}
-                onClick={() => setPopup('finish')}
-              >
-                {`Finish without ${restoreReport.result.issues.length} items`}
-              </Button>
             )}
           </ViewContent>
         </View>

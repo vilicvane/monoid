@@ -170,6 +170,7 @@ const {useViewActive} = await import(
   '../.bld/app/@components/@view/use-view-active.js'
 );
 for (const [path, names] of [
+  ['@monoid/card-item-issues', ['CardItemIssues']],
   [
     '@monoid/card-preview',
     ['CardGrid', 'CardPlaceholder', 'CardPreview', 'CardPreviewButton'],

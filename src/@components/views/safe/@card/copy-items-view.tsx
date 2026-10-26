@@ -181,11 +181,7 @@ const DestinationCards = ({
             </ListItemDescription>
             {conflicts.length > 0 && (
               <ConflictDescription>
-                Skipped:{' '}
-                {target.items
-                  .filter(item => item.issue)
-                  .map(item => `${item.index} (${item.issue!.reason})`)
-                  .join(', ')}
+                {`Skipped ${target.items.filter(item => item.issue).length}`}
               </ConflictDescription>
             )}
           </ListItemContent>

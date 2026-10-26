@@ -212,10 +212,11 @@ const {useViewActive} = await import(
   '../.bld/app/@components/@view/use-view-active.js'
 );
 for (const [path, names] of [
+  ['@monoid/card-item-issues', ['CardItemIssues']],
   ['@monoid/applet-install-progress', ['AppletInstallProgressContent']],
   ['@monoid/monoid-scan-prompt', ['MonoidScanStatePromptProgress']],
   ['@ui/app-icon', ['AppIcon']],
-  ['@ui/button', ['Button']],
+  ['@ui/button', ['Button', 'Buttons']],
   ['@ui/confirm-popup', ['ConfirmPopup']],
   [
     '@ui/details-popup',
@@ -2300,13 +2301,17 @@ async function mountRejectedRestore(batch = false) {
 for (const batch of [false, true]) {
   test(`${batch ? 'batch' : 'single-card'} rejected recovery lists issues and requires explicit confirmation to finish`, async () => {
     const state = await mountRejectedRestore(batch);
-    assert.match(
-      text(state.node('WarningMessage')),
-      /f2010000000000000001 \(INVALID_PARAMETER\)/,
-    );
-    assert.match(
-      text(state.node('WarningMessage')),
-      /05140000000000000002 \(Conflict\)/,
+    const list = state.node('CardItemIssues');
+    assert.equal(list.props.title, '2 items not restored');
+    assert.deepEqual(list.props.issues, [
+      {index: 'f2010000000000000001', reason: 'INVALID_PARAMETER'},
+      {index: '05140000000000000002', reason: 'Conflict'},
+    ]);
+    const footer = state.node('ViewContent').props.footer;
+    assert.equal(text(footer), 'Finish without 2 itemsRetry');
+    assert.equal(
+      find(footer, node => node.type === 'Button').props.color,
+      'warning',
     );
     assert.equal(state.node('OperationComplete'), undefined);
     state.click('Finish without 2 items');
@@ -2320,7 +2325,7 @@ for (const batch of [false, true]) {
     await state.tap();
     assert.deepEqual(state.errors, []);
     assert.equal(state.pending, undefined);
-    assert.match(text(state.render()), /Applet access not restored/);
+    assert.match(text(state.render()), /Access not restored for/);
     assert.match(text(state.render()), /f06d6f6e6f69640501/);
     if (batch) {
       assert.equal(
@@ -2337,12 +2342,9 @@ for (const batch of [false, true]) {
   });
 }
 
-test('Back exits unfinished recovery without discarding it and a fresh page can resume', async () => {
+test('leaving unfinished recovery keeps it and a fresh page can resume', async () => {
   const state = await mountRejectedRestore();
   const saved = state.pending;
-  state.click('Back');
-  assert.deepEqual(state.backs, ['previous']);
-  assert.equal(state.pending, saved);
   state.unmount();
   state.render();
   assert.equal(text(state.node('ViewContent').props.footer), 'Restore items');
@@ -2350,7 +2352,7 @@ test('Back exits unfinished recovery without discarding it and a fresh page can 
   state.click('Restore items');
   await state.answer();
   await state.tap();
-  assert.match(text(state.node('WarningMessage')), /INVALID_PARAMETER/);
+  assert.equal(state.node('CardItemIssues').props.issues.length, 2);
 });
 
 test('a transport failure removes a stale finish offer and keeps retry and exit available', async () => {
@@ -2359,7 +2361,7 @@ test('a transport failure removes a stale finish offer and keeps retry and exit 
   state.maintenance.restore = async () => {
     throw failure;
   };
-  state.click('Restore items');
+  state.click('Retry');
   await state.answer();
   await state.tap();
   assert.deepEqual(state.errors, [failure]);
@@ -2372,6 +2374,4 @@ test('a transport failure removes a stale finish offer and keeps retry and exit 
   );
   assert.equal(text(state.node('ViewContent').props.footer), 'Restore items');
   assert.ok(state.pending.archive);
-  state.click('Back');
-  assert.deepEqual(state.backs, ['previous']);
 });
