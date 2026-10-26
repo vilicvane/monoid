@@ -7,6 +7,7 @@ import {
   type PublicKeyHex,
   SafeIndex,
 } from '../@atomics.js';
+import {CBORAppletError} from '../@lib/cbor-applet.js';
 import {
   type CardInformation,
   readCardInformation,
@@ -16,6 +17,7 @@ import {
   type AppletReplacementCheckpoint,
   type AppletReplacementProgress,
   type AppletStage,
+  CardItemConflictError,
   type CardItemIssue,
   type IdentityInstallationOptions,
   type MonoidApplet,
@@ -42,6 +44,7 @@ import {xCBOR} from '../@x-value/index.js';
 import type {StorageService} from './storage-service.js';
 
 export type CardMaintenanceMode = 'update' | 'reinstall' | 'fresh';
+
 export type CardMaintenancePhase =
   | 'ready'
   | 'replacing'
@@ -71,6 +74,7 @@ export type CardMaintenanceBundleRecovery = {
 
 export type CardMaintenanceOperation = {
   id: string;
+  batchId?: string;
   createdAt: number;
   mode: CardMaintenanceMode;
   phase: CardMaintenancePhase;
@@ -89,8 +93,28 @@ export type CardMaintenanceOperation = {
   /** Public authorization scopes only; installation tokens are never copied. */
   grants?: string[];
   grantsChecksum?: string;
+  /** Public token hashes distinguish old grants from an acknowledged re-grant. */
+  previousGrantTokens?: Record<string, string>;
+  previousGrantTokensChecksum?: string;
   archive?: CardMaintenanceArchive;
+  /** Only a complete pass of definite card rejections authorizes omission. */
+  rejectedItems?: CardItemIssue[];
   checkpoint?: AppletReplacementCheckpoint;
+};
+
+export type CardMaintenanceRestoreResult = {
+  complete: boolean;
+  issues: CardItemIssue[];
+  droppedGrants: string[];
+};
+
+export type CardMaintenanceBatch = {
+  id: string;
+  targets: {
+    operationId: string;
+    card: CardMaintenanceOperation['card'];
+    complete: boolean;
+  }[];
 };
 
 export type CardMaintenanceProgress =
@@ -108,6 +132,7 @@ export type CardMaintenanceProgress =
 type MaintenanceStorage = {
   version: 1;
   operations: CardMaintenanceOperation[];
+  batches?: CardMaintenanceBatch[];
   installations?: {
     publicKey: string;
     appletAid: string;
@@ -160,6 +185,22 @@ export class CardMaintenanceService {
     return this.operations.find(operation => operation.id === id);
   }
 
+  get batches(): readonly CardMaintenanceBatch[] {
+    return this.state.get().batches ?? [];
+  }
+
+  async dismissBatch(id: string): Promise<void> {
+    return this.exclusive(async () => {
+      const batch = this.batches.find(batch => batch.id === id);
+      if (batch?.targets.some(target => !target.complete))
+        throw new MonoidCardError('Finish card maintenance first');
+      await this.write(current => ({
+        ...current,
+        batches: current.batches?.filter(batch => batch.id !== id),
+      }));
+    });
+  }
+
   /** Only preparations preceding the first destructive checkpoint may restart. */
   async discardPrepared(operationId: string): Promise<void> {
     return this.exclusive(async () => {
@@ -167,6 +208,27 @@ export class CardMaintenanceService {
       if (!operation) return;
       if (!isPreparedOnly(operation)) {
         throw new MonoidCardError('Card maintenance has already started');
+      }
+      if (operation.batchId) {
+        const batch = this.batches.find(
+          batch => batch.id === operation.batchId,
+        )!;
+        if (
+          batch.targets.some(
+            target =>
+              target.complete ||
+              !isPreparedOnly(this.require(target.operationId)),
+          )
+        )
+          throw new MonoidCardError('Card maintenance has already started');
+        await this.write(current => ({
+          ...current,
+          operations: current.operations.filter(
+            item => item.batchId !== batch.id,
+          ),
+          batches: current.batches?.filter(item => item.id !== batch.id),
+        }));
+        return;
       }
       await this.remove(operationId);
     });
@@ -253,6 +315,17 @@ export class CardMaintenanceService {
         )
         .map(encodeGrant);
       operation.grantsChecksum = grantsChecksum(operation.grants);
+      if (!replacesStorage) {
+        operation.previousGrantTokens = Object.fromEntries(
+          grants.map(grant => [
+            uint8ArrayToHex(grant.aid),
+            uint8ArrayToHex(grant.tokenHash),
+          ]),
+        );
+        operation.previousGrantTokensChecksum = sha256(
+          toUtf8Bytes(JSON.stringify(operation.previousGrantTokens)),
+        );
+      }
 
       if (replacesStorage && hello.bundle) {
         return operation;
@@ -370,35 +443,74 @@ export class CardMaintenanceService {
           'Continue the existing card maintenance first',
         );
       }
-      assertGrants(current);
-      assertCardMaintenanceBundleRecovery(current.card, recovery);
-      assertGrantSources(decodeGrants(current), recovery.items);
-      const source = {
-        id: recovery.source.id.toLowerCase(),
-        publicKey: recovery.source.publicKey.toLowerCase(),
-        bundle: recovery.source.bundle.toLowerCase(),
-      };
-      const items = recovery.items
-        .map(({index, key, alias, secret, data, plaintext}) => ({
-          index: index.toLowerCase(),
-          key: key?.toLowerCase(),
-          alias,
-          secret,
-          data: data.toLowerCase(),
-          ...(plaintext !== undefined && {plaintext: plaintext.toLowerCase()}),
-        }))
-        .sort((left, right) => left.index.localeCompare(right.index));
-      const next: CardMaintenanceOperation = {
-        ...current,
-        phase: saved ? 'restore' : 'ready',
-        archive: {source, items, checksum: archiveChecksum(items, source)},
-      };
+      const next = withBundleRecovery(
+        {...current, phase: saved ? 'restore' : 'ready'},
+        recovery,
+      );
 
       if (!saved) return this.savePrepared(next, signal);
 
       // A failed recovery save must not discard the previous operation or grants.
       await this.save(next);
       return this.require(next.id);
+    });
+  }
+
+  /** Commit the entire set together: no target is replaceable with a partial batch. */
+  async saveBundleRecoveryBatch(
+    preparations: readonly {
+      operation: CardMaintenanceOperation;
+      recovery: CardMaintenanceBundleRecovery;
+    }[],
+    signal?: AbortSignal,
+  ): Promise<CardMaintenanceBatch> {
+    return this.exclusive(async () => {
+      signal?.throwIfAborted();
+      if (preparations.length < 2)
+        throw new MonoidCardError('Select at least two maintenance targets');
+      const id = preparations[0].operation.id;
+      const bundle = preparations[0].operation.card.bundle;
+      const keys = new Set<string>();
+      const fingerprints = new Set<string>();
+      const operations = preparations.map(({operation, recovery}) => {
+        const {publicKey, fingerprint} = operation.card;
+        if (
+          !publicKey ||
+          !bundle ||
+          operation.card.bundle !== bundle ||
+          !isPreparedOnly(operation) ||
+          operation.mode === 'fresh' ||
+          !replacesMonoid(operation) ||
+          operation.archive ||
+          operation.batchId ||
+          keys.has(publicKey) ||
+          fingerprints.has(fingerprint) ||
+          this.operations.some(
+            saved =>
+              saved.card.publicKey === publicKey ||
+              saved.card.fingerprint === fingerprint,
+          )
+        )
+          throw new MonoidCardError('Invalid maintenance batch');
+        keys.add(publicKey);
+        fingerprints.add(fingerprint);
+        return withBundleRecovery({...operation, batchId: id}, recovery);
+      });
+      const batch: CardMaintenanceBatch = {
+        id,
+        targets: operations.map(operation => ({
+          operationId: operation.id,
+          card: operation.card,
+          complete: false,
+        })),
+      };
+      // write() reads back the whole batch, archives and grants before publishing it.
+      await this.write(current => ({
+        ...current,
+        operations: [...current.operations, ...operations],
+        batches: [...(current.batches ?? []), batch],
+      }));
+      return this.batches.find(saved => saved.id === id)!;
     });
   }
 
@@ -411,6 +523,14 @@ export class CardMaintenanceService {
   ): Promise<CardMaintenanceOperation> {
     return this.exclusive(async () => {
       signal?.throwIfAborted();
+      if (
+        this.operations.some(
+          operation =>
+            operation.batchId &&
+            operation.card.fingerprint === cardFingerprint(cardInformation),
+        )
+      )
+        throw new MonoidCardError('Finish the maintenance batch first');
       const existing = this.operations.find(
         operation =>
           operation.mode === 'fresh' &&
@@ -458,6 +578,20 @@ export class CardMaintenanceService {
   ): Promise<MonoidAppletHello> {
     return this.exclusive(async () => {
       let operation = this.require(id);
+      if (operation.batchId) {
+        const batch = this.batches.find(
+          batch => batch.id === operation.batchId,
+        );
+        if (batch?.targets.find(target => !target.complete)?.operationId !== id)
+          throw new MonoidCardError('Restore the previous card first');
+        for (const target of batch.targets.filter(target => !target.complete)) {
+          const pending = this.require(target.operationId);
+          if (!pending.archive)
+            throw new MonoidCardError('The card recovery archive is missing');
+          assertArchive(pending.archive, pending.card);
+          assertGrants(pending);
+        }
+      }
       try {
         signal?.throwIfAborted();
         if (!['ready', 'replacing'].includes(operation.phase)) {
@@ -540,7 +674,10 @@ export class CardMaintenanceService {
         });
         // PIN setup is inferred from Hello. Empty automatic recovery tasks
         // likewise need no continuation after installation is verified.
-        if (operation.mode === 'fresh' || isEmptyRestore(operation)) {
+        if (
+          operation.mode === 'fresh' ||
+          (!operation.batchId && isEmptyRestore(operation))
+        ) {
           await this.remove(id);
         }
         return hello;
@@ -561,7 +698,8 @@ export class CardMaintenanceService {
     onProgress: (progress: CardMaintenanceProgress) => void = () => {},
     signal?: AbortSignal,
     installedAppletAids?: readonly string[],
-  ): Promise<CardItemIssue[]> {
+    finishWithout?: readonly string[],
+  ): Promise<CardMaintenanceRestoreResult> {
     return this.exclusive(async () => {
       const operation = this.require(id);
       if (
@@ -576,6 +714,19 @@ export class CardMaintenanceService {
       if (operation.archive !== undefined)
         assertArchive(operation.archive, operation.card);
       assertGrants(operation);
+      const omitted = new Set(finishWithout);
+      const skipped = operation.rejectedItems ?? [];
+      if (
+        finishWithout &&
+        (!operation.archive ||
+          !skipped.length ||
+          omitted.size !== skipped.length ||
+          skipped.some(item => !omitted.has(item.index)))
+      )
+        throw new MonoidCardError('Retry item recovery before finishing');
+      // A failed or cancelled attempt invalidates the previous finish offer.
+      if (operation.rejectedItems)
+        await this.save({...operation, rejectedItems: undefined});
       signal?.throwIfAborted();
       assertIdentity(operation, await monoid.hello({}), monoid);
       const items = operation.archive?.items ?? [];
@@ -583,11 +734,13 @@ export class CardMaintenanceService {
         onProgress({stage: 'restore', completed: 0, total: items.length});
 
       const issues: CardItemIssue[] = [];
+      let definiteRejections = true;
 
       // Explicit retries read actual state, including imports whose ACK was lost.
       for (let index = 0; index < items.length; index++) {
         signal?.throwIfAborted();
         const item = items[index];
+        if (omitted.has(item.index)) continue;
         const request = importRequest(operation, item);
         const expected = {
           index: request.index,
@@ -611,6 +764,9 @@ export class CardMaintenanceService {
           const issue = cardItemIssue(item.index, error);
           if (!issue) throw error;
           issues.push(issue);
+          definiteRejections &&=
+            error instanceof CBORAppletError ||
+            error instanceof CardItemConflictError;
         }
         signal?.throwIfAborted();
         onProgress({
@@ -621,18 +777,35 @@ export class CardMaintenanceService {
       }
 
       signal?.throwIfAborted();
-      // Retain the complete archive and grants until every item is restored.
-      if (issues.length) return issues;
+      if (issues.length) {
+        await this.save({
+          ...operation,
+          rejectedItems: definiteRejections ? issues : undefined,
+        });
+        return {complete: false, issues, droppedGrants: []};
+      }
       onProgress({stage: 'verifying-restore'});
       assertIdentity(operation, await monoid.hello({}), monoid);
       const manifest =
         operation.archive || operation.grants?.length
           ? normalizeItems((await monoid.list({})).items)
           : [];
-      if (operation.archive) assertManifest(items, manifest);
+      // Conflicting on-card items are preserved, but cannot supply restored grants.
+      const restoredItems = manifest.filter(item => !omitted.has(item.index));
+      if (operation.archive)
+        assertManifest(
+          items.filter(item => !omitted.has(item.index)),
+          restoredItems,
+        );
+      const droppedGrants: string[] = [];
       if (operation.grants?.length) {
-        const grants = decodeGrants(operation);
-        assertGrantSources(grants, manifest);
+        const grants = decodeGrants(operation).filter(grant => {
+          if (!grantSources(grant).some(index => omitted.has(index)))
+            return true;
+          droppedGrants.push(uint8ArrayToHex(grant.aid));
+          return false;
+        });
+        assertGrantSources(grants, restoredItems);
         for (const grant of grants) {
           if (
             installedAppletAids &&
@@ -644,18 +817,42 @@ export class CardMaintenanceService {
           }
         }
         const total = grants.length;
+        const existing = (await monoid.listAppletGrants({})).grants;
         onProgress({stage: 'restoring-grants', completed: 0, total});
         for (const [index, grant] of grants.entries()) {
           signal?.throwIfAborted();
-          await monoid.setAppletGrant(grant);
+          const previous = existing.find(
+            item => uint8ArrayToHex(item.aid) === uint8ArrayToHex(grant.aid),
+          );
+          if (
+            !previous ||
+            encodeGrant(previous) !== encodeGrant(grant) ||
+            (operation.previousGrantTokens !== undefined &&
+              operation.previousGrantTokens[uint8ArrayToHex(grant.aid)] ===
+                uint8ArrayToHex(previous.tokenHash))
+          )
+            await monoid.setAppletGrant(grant);
           onProgress({stage: 'restoring-grants', completed: index + 1, total});
         }
         signal?.throwIfAborted();
         onProgress({stage: 'verifying-grants'});
-        const restored = (await monoid.listAppletGrants({})).grants.map(
-          encodeGrant,
-        );
-        if (operation.grants.some(grant => !restored.includes(grant))) {
+        const restoredGrants = (await monoid.listAppletGrants({})).grants;
+        const restored = restoredGrants.map(encodeGrant);
+        if (
+          grants.some(grant => !restored.includes(encodeGrant(grant))) ||
+          restoredGrants.some(grant =>
+            droppedGrants.includes(uint8ArrayToHex(grant.aid)),
+          ) ||
+          restoredGrants.some(
+            grant =>
+              operation.previousGrantTokens !== undefined &&
+              grants.some(
+                expected => encodeGrant(expected) === encodeGrant(grant),
+              ) &&
+              operation.previousGrantTokens[uint8ArrayToHex(grant.aid)] ===
+                uint8ArrayToHex(grant.tokenHash),
+          )
+        ) {
           throw new MonoidCardError('Could not verify applet access');
         }
       }
@@ -665,11 +862,16 @@ export class CardMaintenanceService {
           ...operation,
           grants: [],
           grantsChecksum: grantsChecksum([]),
+          rejectedItems: undefined,
         });
       } else {
         await this.remove(id);
       }
-      return [];
+      return {
+        complete: true,
+        issues: finishWithout ? skipped : [],
+        droppedGrants,
+      };
     });
   }
 
@@ -803,7 +1005,18 @@ export class CardMaintenanceService {
         throw new Error('The saved card maintenance data is invalid');
       }
     }
-    const retained = operations.filter(operation => !isEmptyRestore(operation));
+    const retained = operations.filter(
+      operation => operation.batchId || !isEmptyRestore(operation),
+    );
+    for (const batch of state?.batches ?? []) {
+      for (const target of batch.targets.filter(target => !target.complete)) {
+        const operation = retained.find(
+          operation => operation.id === target.operationId,
+        );
+        if (!operation || operation.batchId !== batch.id || !operation.archive)
+          throw new Error('The saved maintenance batch is incomplete');
+      }
+    }
     const service = new CardMaintenanceService(
       storage,
       state ?? {version: 1, operations: []},
@@ -885,6 +1098,12 @@ export class CardMaintenanceService {
       ...current,
       version: 1,
       operations: current.operations.filter(operation => operation.id !== id),
+      batches: current.batches?.map(batch => ({
+        ...batch,
+        targets: batch.targets.map(target =>
+          target.operationId === id ? {...target, complete: true} : target,
+        ),
+      })),
     }));
   }
 
@@ -995,6 +1214,12 @@ function assertGrants(operation: CardMaintenanceOperation): void {
   ) {
     throw new MonoidCardError('Applet access recovery data is invalid');
   }
+  if (
+    operation.previousGrantTokens &&
+    sha256(toUtf8Bytes(JSON.stringify(operation.previousGrantTokens))) !==
+      operation.previousGrantTokensChecksum
+  )
+    throw new MonoidCardError('Applet access recovery data is invalid');
 }
 
 function decodeGrants(
@@ -1014,11 +1239,7 @@ function assertGrantSources(
 ): void {
   const indexes = new Set(items.map(item => item.index.toLowerCase()));
   for (const grant of grants) {
-    const sources = [
-      ...(grant.keys?.map(key => key.index) ?? []),
-      ...(grant.seed ? [grant.seed.index] : []),
-    ];
-    if (sources.some(index => !indexes.has(uint8ArrayToHex(index)))) {
+    if (grantSources(grant).some(index => !indexes.has(index))) {
       throw new MonoidCardError('Restore applet keys first');
     }
     for (const key of grant.keys ?? []) {
@@ -1030,6 +1251,15 @@ function assertGrantSources(
       }
     }
   }
+}
+
+function grantSources(
+  grant: Parameters<MonoidApplet['setAppletGrant']>[0],
+): string[] {
+  return [
+    ...(grant.keys?.map(key => key.index) ?? []),
+    ...(grant.seed ? [grant.seed.index] : []),
+  ].map(index => uint8ArrayToHex(index));
 }
 
 function newOperation(
@@ -1104,6 +1334,34 @@ function assertIdentity(
   if (uint8ArrayToHex(monoid.aid) !== operation.card.appletAid) {
     throw new Error('Wrong card');
   }
+}
+
+function withBundleRecovery(
+  operation: CardMaintenanceOperation,
+  recovery: CardMaintenanceBundleRecovery,
+): CardMaintenanceOperation {
+  assertGrants(operation);
+  assertCardMaintenanceBundleRecovery(operation.card, recovery);
+  assertGrantSources(decodeGrants(operation), recovery.items);
+  const source = {
+    id: recovery.source.id.toLowerCase(),
+    publicKey: recovery.source.publicKey.toLowerCase(),
+    bundle: recovery.source.bundle.toLowerCase(),
+  };
+  const items = recovery.items
+    .map(({index, key, alias, secret, data, plaintext}) => ({
+      index: index.toLowerCase(),
+      key: key?.toLowerCase(),
+      alias,
+      secret,
+      data: data.toLowerCase(),
+      ...(plaintext !== undefined && {plaintext: plaintext.toLowerCase()}),
+    }))
+    .sort((left, right) => left.index.localeCompare(right.index));
+  return {
+    ...operation,
+    archive: {source, items, checksum: archiveChecksum(items, source)},
+  };
 }
 
 function archiveChecksum(

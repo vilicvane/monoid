@@ -6,15 +6,21 @@ import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../../../@entrances.js';
+import {readCardInformation} from '../../../../@lib/global-platform/card-information.js';
 import {
+  type AppletStage,
   type CardBackupIdentity,
   type MonoidAppletHello,
   MonoidCardError,
   assertSameCardWithBundle,
+  createMonoidApplet,
   readBackupCardIdentity,
+  readMonoidAppletInstallation,
+  resolveMonoidAppletMaintenanceAid,
 } from '../../../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
+import {hexToUint8Array} from '../../../../@utils/index.js';
 import {KeyListItem, KeyListPlaceholder} from '../../../@key/key-list.js';
 import {
   CardGrid,
@@ -40,6 +46,7 @@ import {InfoMessage, WarningMessage} from '../../../@ui/message-content.js';
 import {OperationComplete} from '../../../@ui/operation-complete.js';
 import {OperationSteps, Step} from '../../../@ui/step.js';
 import {useToast} from '../../../@ui/toast.js';
+import {Toggle} from '../../../@ui/toggle.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 import {
   View,
@@ -121,12 +128,9 @@ export const SyncCardsView = observer(
     const maintenanceTarget =
       maintenance &&
       session.cards.find(card => card.publicKey === maintenance.card.publicKey);
-    const maintenancePeers = maintenance
-      ? session.cards.filter(
-          card => card.publicKey !== maintenance.card.publicKey,
-        )
-      : [];
-    const pendingPeers = maintenancePeers.filter(card => !card.complete);
+    const pendingPeers = flow.pendingMaintenanceCards;
+    const allMaintenanceTargets =
+      !!maintenance && flow.maintenanceTargets.length === session.cards.length;
     const collecting = session.phase === 'collect';
     const needsRecoveryExport =
       !!maintenance &&
@@ -247,9 +251,13 @@ export const SyncCardsView = observer(
           : collecting
             ? []
             : maintenance
-              ? pendingPeers.length
+              ? pendingPeers.length && !allMaintenanceTargets
                 ? pendingPeers
-                : maintenancePeers
+                : session.cards.filter(
+                    card =>
+                      flow.needsExport(card.publicKey) ||
+                      pendingPeers.includes(card),
+                  )
               : session.cards.filter(card => !card.complete),
         (card, pinSignal) =>
           showPINInput(
@@ -297,7 +305,11 @@ export const SyncCardsView = observer(
               if (
                 !collecting &&
                 session.series.hasFinished(identity.publicKey) &&
-                !needsRecoveryExport
+                !(
+                  maintenance &&
+                  flow.needsExport(identity.publicKey) &&
+                  (needsRecoveryExport || allMaintenanceTargets)
+                )
               ) {
                 return {message: 'Already synced'};
               }
@@ -343,6 +355,55 @@ export const SyncCardsView = observer(
                     },
                     onAuthenticated,
                   );
+                  if (maintenance && maintenance.phase !== 'manual-restore') {
+                    const sessionId = applet.activeSessionId;
+                    const information = await readCardInformation(
+                      sessionId,
+                      activeSignal,
+                    );
+                    const installed = await readMonoidAppletInstallation(
+                      sessionId,
+                      activeSignal,
+                      {authenticateRegistry: true},
+                    );
+                    const appletAid = await resolveMonoidAppletMaintenanceAid(
+                      sessionId,
+                      installed,
+                      activeSignal,
+                    );
+                    const maintenanceApplet = await createMonoidApplet(
+                      hexToUint8Array(appletAid),
+                    ).openSession(sessionId);
+                    await authenticateCardSync(
+                      maintenanceApplet,
+                      hello,
+                      pin,
+                      activeSignal,
+                    );
+                    const candidate = await cardMaintenanceService.prepare(
+                      maintenanceApplet,
+                      {
+                        mode:
+                          maintenance.mode === 'update'
+                            ? 'update'
+                            : 'reinstall',
+                        appletAid,
+                        cardInformation: information,
+                        selectedOptionalStages: Object.entries(
+                          installed.optional,
+                        ).flatMap(([stage, state]) =>
+                          state?.installed || state?.loaded
+                            ? [stage as AppletStage]
+                            : [],
+                        ),
+                        signal: activeSignal,
+                      },
+                    );
+                    flow.addMaintenanceCard(
+                      candidate,
+                      cardMaintenanceService.isUpdateAvailable(hello),
+                    );
+                  }
                   flow.consumeSource();
                 } else {
                   // Completed peers still need a fresh authenticated export;
@@ -369,25 +430,51 @@ export const SyncCardsView = observer(
                   if (
                     maintenance &&
                     maintenanceTarget &&
-                    session.cards.every(
-                      card =>
-                        card.publicKey === maintenanceTarget.publicKey ||
-                        card.complete,
-                    )
+                    (!flow.pendingMaintenanceCards.length ||
+                      allMaintenanceTargets) &&
+                    flow.needsExport(identity.publicKey)
                   ) {
+                    const target = flow.maintenanceTargets.find(
+                      target =>
+                        target.card.publicKey !== identity.publicKey &&
+                        !flow.recoveries.has(target.id),
+                    )!;
                     const archive = await session.exportRecovery(
                       applet,
                       hello,
-                      maintenanceTarget,
+                      session.cards.find(
+                        card => card.publicKey === target.card.publicKey,
+                      )!,
                       activeSignal,
                       progress => setState(progressContent(progress)),
+                      session.cards,
                     );
-                    await cardMaintenanceService.saveBundleRecovery(
-                      maintenance,
-                      archive,
-                      activeSignal,
-                    );
-                    flow.finishMaintenance();
+                    flow.acceptRecovery(archive);
+                    const targets = flow.maintenanceTargets;
+                    if (
+                      targets.every(target => flow.recoveries.has(target.id))
+                    ) {
+                      try {
+                        if (targets.length === 1)
+                          await cardMaintenanceService.saveBundleRecovery(
+                            maintenance,
+                            flow.recoveries.get(maintenance.id)!,
+                            activeSignal,
+                          );
+                        else
+                          await cardMaintenanceService.saveBundleRecoveryBatch(
+                            targets.map(operation => ({
+                              operation,
+                              recovery: flow.recoveries.get(operation.id)!,
+                            })),
+                            activeSignal,
+                          );
+                        flow.finishMaintenance();
+                      } catch (error) {
+                        flow.recoveries.clear();
+                        throw error;
+                      }
+                    }
                   }
                 }
               } catch (error) {
@@ -455,7 +542,13 @@ export const SyncCardsView = observer(
               if (expected) assertSyncCard(hello, expected);
               if (maintenance && maintenanceTarget) {
                 const identity = readBackupCardIdentity(hello);
-                if (identity.publicKey === maintenanceTarget.publicKey)
+                if (
+                  (collecting &&
+                    identity.publicKey === maintenanceTarget.publicKey) ||
+                  (!collecting &&
+                    flow.deferredCards.has(identity.publicKey) &&
+                    !flow.needsExport(identity.publicKey))
+                )
                   throw new MonoidCardError('Scan another card in this bundle');
                 if (identity.bundle !== maintenanceTarget.bundle)
                   throw new MonoidCardError('Scan a card in the same bundle');
@@ -483,7 +576,7 @@ export const SyncCardsView = observer(
     };
     const prepare = (): void => {
       void run(async () => {
-        session.prepare();
+        flow.prepare();
       });
     };
     const placeholders = collecting
@@ -510,13 +603,33 @@ export const SyncCardsView = observer(
           >
             <CardPreview
               id={card.id}
-              subtitle={bundleLabel(card.bundle)}
+              subtitle={
+                collecting &&
+                maintenance &&
+                flow.maintenanceCards.get(card.publicKey)?.target
+                  ? maintenance.mode === 'update'
+                    ? 'update'
+                    : 'reinstall'
+                  : bundleLabel(card.bundle)
+              }
               description={
                 collecting
-                  ? `items ${formatCardResourceCount(getCardResourceGroups(card.items))}`
-                  : maintenance && card === maintenanceTarget
+                  ? maintenance?.mode === 'update' && card !== maintenanceTarget
+                    ? flow.maintenanceCards.get(card.publicKey)
+                        ?.updateAvailable === true
+                      ? 'update available'
+                      : flow.maintenanceCards.get(card.publicKey)
+                            ?.updateAvailable === false
+                        ? 'up to date'
+                        : 'installed version unknown'
+                    : `items ${formatCardResourceCount(getCardResourceGroups(card.items))}`
+                  : maintenance &&
+                      flow.deferredCards.has(card.publicKey) &&
+                      !flow.needsExport(card.publicKey)
                     ? 'restore later'
-                    : needsRecoveryExport
+                    : (needsRecoveryExport ||
+                          (allMaintenanceTargets && card.complete)) &&
+                        flow.needsExport(card.publicKey)
                       ? 'scan to export'
                       : card.complete
                         ? card.issues?.length
@@ -526,9 +639,11 @@ export const SyncCardsView = observer(
               }
               // Dimmed while this card still needs a scan in the current step.
               $pending={
-                needsRecoveryExport
-                  ? card !== maintenanceTarget
-                  : !collecting && !card.completed && !card.complete
+                needsRecoveryExport || (!collecting && allMaintenanceTargets)
+                  ? flow.needsExport(card.publicKey)
+                  : !collecting &&
+                    !flow.deferredCards.has(card.publicKey) &&
+                    !card.complete
               }
               $interrupted={
                 flow.interruptedCards.has(card.publicKey) ||
@@ -646,7 +761,7 @@ export const SyncCardsView = observer(
                     <InfoMessage>
                       {maintenance.phase === 'manual-restore'
                         ? 'Add cards from this bundle to restore items.'
-                        : 'Add cards from this bundle. This card will be restored after installation.'}
+                        : 'Choose the bundle cards to maintain. All recovery archives are saved before installation.'}
                     </InfoMessage>
                   ) : (
                     bundles.length > 0 && (
@@ -687,6 +802,41 @@ export const SyncCardsView = observer(
                 ? `Bundle · ${selectedCard.bundle.slice(0, 8)}`
                 : 'Not in a bundle'}
             </Description>
+            {collecting &&
+              maintenance &&
+              maintenance.phase !== 'manual-restore' &&
+              selectedCard !== maintenanceTarget &&
+              flow.maintenanceCards.has(selectedCard.publicKey) && (
+                <>
+                  {maintenance.mode === 'update' && (
+                    <Description>
+                      {flow.maintenanceCards.get(selectedCard.publicKey)!
+                        .updateAvailable === true
+                        ? 'Update available'
+                        : flow.maintenanceCards.get(selectedCard.publicKey)!
+                              .updateAvailable === false
+                          ? 'Up to date'
+                          : 'Installed version unknown'}
+                    </Description>
+                  )}
+                  <Toggle
+                    checked={
+                      flow.maintenanceCards.get(selectedCard.publicKey)!.target
+                    }
+                    disabled={busy}
+                    onChange={selected =>
+                      flow.selectMaintenanceCard(
+                        selectedCard.publicKey,
+                        selected,
+                      )
+                    }
+                  >
+                    {maintenance.mode === 'update'
+                      ? 'Update too'
+                      : 'Reinstall too'}
+                  </Toggle>
+                </>
+              )}
             {!!selectedCard.issues?.length && (
               <WarningMessage>
                 {selectedCard.issues
@@ -709,10 +859,15 @@ export const SyncCardsView = observer(
               )}
             </CardResourceList>
             <Buttons data-popup-animation-group>
-              {selectedCard !== maintenanceTarget &&
+              {(collecting
+                ? selectedCard !== maintenanceTarget
+                : !flow.deferredCards.has(selectedCard.publicKey) ||
+                  flow.needsExport(selectedCard.publicKey)) &&
                 (collecting ||
                   !selectedCard.complete ||
-                  needsRecoveryExport) && (
+                  needsRecoveryExport ||
+                  (allMaintenanceTargets &&
+                    flow.needsExport(selectedCard.publicKey))) && (
                   <Button
                     color="primary"
                     disabled={busy}
@@ -721,7 +876,12 @@ export const SyncCardsView = observer(
                       readCard(selectedCard);
                     }}
                   >
-                    {collecting ? 'Read card' : 'Sync card'}
+                    {collecting
+                      ? 'Read card'
+                      : selectedCard.complete &&
+                          flow.needsExport(selectedCard.publicKey)
+                        ? 'Export items'
+                        : 'Sync card'}
                   </Button>
                 )}
               {collecting && selectedCard !== maintenanceTarget && (

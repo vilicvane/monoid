@@ -19,6 +19,13 @@ export abstract class Applet<TCommandDefinitions> {
 
   constructor(readonly aid: Uint8Array) {}
 
+  /** Borrow this connection for GP work; the scan owner still closes it. */
+  get activeSessionId(): string {
+    if (this.sessionId === undefined)
+      throw new Error('Applet commands require an open NFC session.');
+    return this.sessionId;
+  }
+
   /** Select another applet without closing the caller's NFC connection. */
   async useSession(source: Applet<unknown>): Promise<this> {
     const applet = this.attachSession(source);

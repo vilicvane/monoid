@@ -10,7 +10,12 @@ import {styled} from 'styled-components';
 
 import type {CardInformation} from '../../../@lib/global-platform/card-information.js';
 import {APPLET_NAMES, type AppletStage} from '../../../@lib/monoid/index.js';
-import {CardPlaceholder, CardPreview} from '../../@monoid/card-preview.js';
+import {
+  CardGrid,
+  CardPlaceholder,
+  CardPreview,
+  CardPreviewButton,
+} from '../../@monoid/card-preview.js';
 import {AppIcon} from '../../@ui/app-icon.js';
 import {AppletIcon} from '../../@ui/feature-icons.js';
 import {InfoSection} from '../../@ui/info-section.js';
@@ -146,6 +151,43 @@ export type AppletDisplay = {
   update?: boolean;
   selectable?: boolean;
 };
+
+export function CardMaintenanceCards({
+  cards,
+  onSelect,
+  disabled = false,
+}: {
+  cards: readonly {
+    publicKey: string;
+    id?: string;
+    complete: boolean;
+    pending?: boolean;
+    status: string;
+    interrupted?: boolean;
+  }[];
+  onSelect?: (publicKey: string) => void;
+  disabled?: boolean;
+}): ReactNode {
+  return (
+    <CardGrid>
+      {cards.map(card => (
+        <CardPreviewButton
+          key={card.publicKey}
+          disabled={disabled || !onSelect || card.complete || !card.id}
+          onClick={() => onSelect?.(card.publicKey)}
+          aria-label={`Card ${card.id ?? 'unknown'}`}
+        >
+          <CardPreview
+            id={card.id}
+            description={card.status}
+            $pending={card.pending ?? !card.complete}
+            $interrupted={card.interrupted}
+          />
+        </CardPreviewButton>
+      ))}
+    </CardGrid>
+  );
+}
 
 export function CardAppletsContent({
   id,

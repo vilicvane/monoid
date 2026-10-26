@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
 import {CardSyncSession} from '../.bld/app/@components/views/safe/@card/card-sync-session.js';
+import {SyncCardsState} from '../.bld/app/@components/views/safe/@card/sync-cards-state.js';
 import {
   decodeCardDerivationRecord,
   encodeCardDerivationRecord,
@@ -1491,4 +1492,103 @@ test('recovery export names the unexportable item and never returns a partial ar
     new RegExp(`${unknownIndex}: cannot export recovery`),
   );
   assert.equal(peer.calls.filter(([kind]) => kind === 'export').length, 2);
+});
+
+for (const [count, targets] of [
+  [2, 2],
+  [3, 3],
+  [3, 2],
+]) {
+  test(`${count}-card maintenance with ${targets} targets exports the complete merged result at most twice`, async () => {
+    const cards = Array.from({length: count}, (_, index) =>
+      recoveryCard(index + 1, 1, [
+        root({
+          index: `0301000000000000000${index + 1}`,
+          alias: `Card ${index + 1}`,
+        }),
+        plain(),
+      ]),
+    );
+    const operations = cards.map((card, index) => ({
+      id: `operation-${index}`,
+      mode: 'reinstall',
+      card: identity(card),
+    }));
+    const flow = new SyncCardsState(undefined, operations[0]);
+    for (const [index, card] of cards.entries()) {
+      await add(flow.session, card);
+      if (index) {
+        flow.addMaintenanceCard(operations[index], true);
+        flow.selectMaintenanceCard(identity(card).publicKey, index < targets);
+      }
+    }
+    flow.prepare();
+    for (const card of cards) {
+      if (!flow.deferredCards.has(identity(card).publicKey))
+        await write(flow.session, card);
+    }
+    assert.equal(flow.pendingMaintenanceCards.length, 0);
+    let exports = 0;
+    for (const card of cards) {
+      if (!flow.needsExport(identity(card).publicKey)) continue;
+      const target = flow.maintenanceTargets.find(
+        target =>
+          target.card.publicKey !== identity(card).publicKey &&
+          !flow.recoveries.has(target.id),
+      );
+      const recovery = await flow.session.exportRecovery(
+        card,
+        card.hello,
+        target.card,
+        signal(),
+        undefined,
+        flow.session.cards,
+      );
+      flow.acceptRecovery(recovery);
+      exports++;
+    }
+    assert.equal(exports, count === targets ? 2 : 1);
+    assert.equal(flow.recoveries.size, targets);
+    for (const [index, target] of operations.slice(0, targets).entries()) {
+      const archive = flow.recoveries.get(target.id);
+      assert.notEqual(archive.source.publicKey, target.card.publicKey);
+      const restored = recoveryCard(index + 1, 1);
+      for (const item of archive.items)
+        await restored.importItem({
+          index: bytes(item.index),
+          metadata: item.key === undefined ? undefined : bytes(item.key),
+          alias: item.alias,
+          data: bytes(item.data),
+        });
+      assert.equal(restored.records.size, count + 1);
+    }
+    for (const card of cards.filter(card =>
+      flow.deferredCards.has(identity(card).publicKey),
+    ))
+      assert.deepEqual(mutationCalls(card), []);
+  });
+}
+
+test('maintenance refuses an archive missing an item from a third participant', async () => {
+  const first = recoveryCard(1, 1, [plain()]);
+  const peer = recoveryCard(2, 1, [plain()]);
+  const third = recoveryCard(3, 1, [root()]);
+  const session = new CardSyncSession();
+  for (const card of [first, peer, third]) await add(session, card);
+  peer.importItem = async () => {
+    throw new CBORAppletError({code: 'INVALID_PARAMETER'});
+  };
+  session.prepare();
+  await write(session, peer);
+  await assert.rejects(
+    session.exportRecovery(
+      peer,
+      peer.hello,
+      identity(first),
+      signal(),
+      undefined,
+      session.cards,
+    ),
+    /incomplete recovery/,
+  );
 });

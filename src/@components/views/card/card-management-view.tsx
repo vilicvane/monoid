@@ -1,4 +1,8 @@
-import {Ellipsis as ellipsis, Info as info} from 'lucide-react';
+import {
+  ArrowLeft as arrowLeft,
+  Ellipsis as ellipsis,
+  Info as info,
+} from 'lucide-react';
 import {reaction, runInAction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useRef, useState} from 'react';
@@ -16,7 +20,6 @@ import {getCardInstallationChecks} from '../../../@lib/global-platform/installat
 import {
   APPLET_NAMES,
   type AppletStage,
-  type CardItemIssue,
   type IdentityInstallationOptions,
   type MonoidApplet,
   type MonoidAppletHello,
@@ -38,7 +41,9 @@ import {isOperationCancelled} from '../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../@routes.js';
 import {
   type CardMaintenanceMode,
+  type CardMaintenanceOperation,
   type CardMaintenanceProgress,
+  type CardMaintenanceRestoreResult,
   cardFingerprint,
 } from '../../../@services/index.js';
 import {
@@ -61,7 +66,7 @@ import {
   DetailsPopupDivider,
   DetailsPopupTitle,
 } from '../../@ui/details-popup.js';
-import {InfoMessage} from '../../@ui/message-content.js';
+import {InfoMessage, WarningMessage} from '../../@ui/message-content.js';
 import {OperationComplete} from '../../@ui/operation-complete.js';
 import {useToast} from '../../@ui/toast.js';
 import {useInputModal} from '../../@ui/use-input-modal.js';
@@ -80,6 +85,7 @@ import type {CardAppletSnapshot} from './card-applet-snapshot.js';
 import {
   CardAppletsContent,
   CardInformationContent,
+  CardMaintenanceCards,
   CardScanPlaceholder,
 } from './card-management-content.js';
 type Action =
@@ -157,9 +163,20 @@ export const CardManagementView = observer(
           : undefined) ?? {information: view.cardInformation},
     );
     const [complete, setComplete] = useState(false);
+    const [restoreReport, setRestoreReport] = useState<{
+      operationId: string;
+      result: CardMaintenanceRestoreResult;
+      canFinish: boolean;
+    }>();
     const [busy, setBusy] = useState(false);
     const [popup, setPopup] = useState<
-      'details' | 'menu' | 'install' | 'fresh' | 'restart' | AppletStage
+      | 'details'
+      | 'menu'
+      | 'install'
+      | 'fresh'
+      | 'restart'
+      | 'finish'
+      | AppletStage
     >();
     const [selectedOptional, setSelectedOptional] = useState<AppletStage[]>([]);
     const [confirm, setConfirm] = useState<{
@@ -213,7 +230,19 @@ export const CardManagementView = observer(
       hello,
       cardInformation: card.information,
     });
+    const [batchId, setBatchId] = useState<string>();
+    const batch =
+      (maintenance.batches ?? []).find(
+        batch => batch.id === batchId || batch.id === pending?.batchId,
+      ) ??
+      (maintenance.batches ?? []).find(batch =>
+        batch.targets.some(target => !target.complete),
+      ) ??
+      (maintenance.batches ?? []).at(-1);
+    const batchComplete =
+      !!batch && batch.targets.every(target => target.complete);
     const appletsPage =
+      !!batch ||
       !!installation?.monoid.installed ||
       (installation?.identity.installed &&
         installation.monoid.installed !== false) ||
@@ -292,6 +321,7 @@ export const CardManagementView = observer(
       if (!isActive() || busy) return;
       setBusy(true);
       setComplete(false);
+      setRestoreReport(undefined);
       try {
         await scan('Scan a card', async (sessionId, setState, signal) => {
           setState('Reading card, hold tight...');
@@ -348,20 +378,27 @@ export const CardManagementView = observer(
         replaceStages?: readonly AppletStage[];
         operationId?: string;
         identityOptions?: IdentityInstallationOptions;
+        batchOperation?: CardMaintenanceOperation;
+        finishWithout?: readonly string[];
       } = {},
     ): Promise<void> {
       if (!isActive() || controller.current || !hasAppletBundle) return;
+      const pending =
+        options.batchOperation ??
+        maintenance.matchOperation({hello, cardInformation: card.information});
+      const expectedHello = options.batchOperation ? undefined : hello;
       const operation = new AbortController();
       controller.current = operation;
       setBusy(true);
       setPopup(undefined);
       setConfirm(undefined);
+      setRestoreReport(undefined);
       let pin: MonoidPIN | undefined;
       let requestedPINs: CardSetupPINs | undefined;
       let accessPINId: MonoidIdHex | undefined;
       let appletsChanged = false;
       let syncId: string | undefined;
-      const restoreIssues: CardItemIssue[] = [];
+      let restoration: typeof restoreReport;
       let result:
         | {hello: MonoidAppletHello; snapshot: CardAppletSnapshot}
         | undefined;
@@ -379,12 +416,14 @@ export const CardManagementView = observer(
           ['install', 'verify'].includes(pending?.checkpoint ?? '') &&
           !!hello &&
           uint8ArrayToHex(hello.publicKey) !== pending?.card.publicKey;
-        const secretSet = fresh
-          ? freshAlreadyInstalled && hello!.pins.secret !== false
-          : hello
-            ? hello.pins.secret !== false
-            : installation?.identity.installed === true ||
-              !!pending?.card.publicKey;
+        const secretSet = options.batchOperation
+          ? true
+          : fresh
+            ? freshAlreadyInstalled && hello!.pins.secret !== false
+            : hello
+              ? hello.pins.secret !== false
+              : installation?.identity.installed === true ||
+                !!pending?.card.publicKey;
         const stages = options.replaceStages ??
           pending?.replaceStages ?? ['library', 'monoid'];
         const collectingBundle =
@@ -398,8 +437,12 @@ export const CardManagementView = observer(
           (stages.includes('monoid') || stages.includes('library'));
         const accessSet = fresh
           ? freshAlreadyInstalled && hello!.pins.access !== false
-          : !replacingMonoid && hello?.pins.access !== false && !!hello;
-        const id = hello ? uint8ArrayToHex(hello.id) : pending?.card.id;
+          : !replacingMonoid &&
+            expectedHello?.pins.access !== false &&
+            !!expectedHello;
+        const id = expectedHello
+          ? uint8ArrayToHex(expectedHello.id)
+          : pending?.card.id;
         requestedPINs = await requestCardPINs(
           showPIN,
           {
@@ -444,6 +487,7 @@ export const CardManagementView = observer(
           setState('Reading card, hold tight...');
           const information = await readCardInformation(sessionId, signal);
           if (
+            !options.batchOperation &&
             card.information?.cplc &&
             cardFingerprint(information) !== cardFingerprint(card.information)
           ) {
@@ -656,15 +700,19 @@ export const CardManagementView = observer(
             setState('Authenticating, hold tight...');
             await applet.authenticate({secret: true, pin: pin!});
             signal.throwIfAborted();
-            restoreIssues.push(
-              ...(await maintenance.restore(
-                applet,
-                saved.id,
-                progress,
-                signal,
-                installedAppletAids,
-              )),
+            const restored = await maintenance.restore(
+              applet,
+              saved.id,
+              progress,
+              signal,
+              installedAppletAids,
+              options.finishWithout,
             );
+            restoration = {
+              operationId: saved.id,
+              result: restored,
+              canFinish: !!maintenance.get(saved.id)?.rejectedItems?.length,
+            };
           }
           if (action !== 'setup' || saved) setState('Reading card...');
           const latest =
@@ -703,15 +751,16 @@ export const CardManagementView = observer(
         // already verified as complete must still reach its originating flow.
         if (result) {
           try {
-            if (restoreIssues?.length) {
+            setRestoreReport(restoration);
+            if (restoration && !restoration.result.complete) {
               setCard(result.snapshot);
-              toast({
-                message: `Skipped: ${restoreIssues
-                  .map(issue => `${issue.index} (${issue.reason})`)
-                  .join(', ')}`,
-                color: 'warning',
-              });
-            } else await finishSetup(result.hello, result.snapshot);
+            } else {
+              await finishSetup(result.hello, result.snapshot);
+              if (pending?.batchId) {
+                setBatchId(pending.batchId);
+                setComplete(false);
+              }
+            }
           } catch (error) {
             errorService.catch(Promise.reject(error));
           }
@@ -769,6 +818,25 @@ export const CardManagementView = observer(
           operationId: pending.id,
         });
       }
+    }
+
+    function resumeBatch(): void {
+      const target = batch?.targets.find(target => !target.complete);
+      if (!target) return;
+      const operation = maintenance.get(target.operationId)!;
+      setBatchId(batch!.id);
+      if (operation.phase === 'ready' || operation.phase === 'replacing') {
+        setSelectedOptional([...(operation.selectedOptionalStages ?? [])]);
+        setConfirm({
+          mode: operation.mode,
+          replaceStages: operation.replaceStages,
+          operationId: operation.id,
+        });
+      } else
+        void perform('restore', {
+          operationId: operation.id,
+          batchOperation: operation,
+        });
     }
 
     async function startOver(): Promise<void> {
@@ -858,6 +926,9 @@ export const CardManagementView = observer(
     const replacesStorage = affectedStages.includes('monoid');
     const affectsOTP =
       affectedStages.includes('otp') && installedOptional.includes('otp');
+    const confirmationOperation = confirm?.operationId
+      ? maintenance.get(confirm.operationId)
+      : pending;
 
     return (
       <>
@@ -867,6 +938,15 @@ export const CardManagementView = observer(
               {appletsPage ? 'Card applets' : 'Card information'}
             </ViewHeaderTitle>
             <HeaderActions>
+              <ViewHeaderButton
+                aria-label="Back"
+                onClick={() => {
+                  controller.current?.abort();
+                  router.$back();
+                }}
+              >
+                <AppIcon icon={arrowLeft} />
+              </ViewHeaderButton>
               {card.information && (
                 <ViewHeaderButton
                   aria-label="Card information"
@@ -876,7 +956,7 @@ export const CardManagementView = observer(
                   <AppIcon icon={info} />
                 </ViewHeaderButton>
               )}
-              {appletsPage && !card.unsupported && !complete && (
+              {appletsPage && !batch && !card.unsupported && !complete && (
                 <ViewHeaderButton
                   aria-label="Card menu"
                   disabled={busy}
@@ -889,7 +969,28 @@ export const CardManagementView = observer(
           </ViewHeader>
           <ViewContent
             footer={
-              complete ? (
+              batch ? (
+                <Button
+                  disabled={busy}
+                  onClick={() => {
+                    if (batchComplete)
+                      void maintenance
+                        .dismissBatch(batch.id)
+                        .then(() => {
+                          setBatchId(undefined);
+                          setComplete(false);
+                        })
+                        .catch(error =>
+                          errorService.catch(Promise.reject(error)),
+                        );
+                    else resumeBatch();
+                  }}
+                >
+                  {batchComplete
+                    ? 'Back to Card Applets'
+                    : `Continue card ${batch.targets.find(target => !target.complete)?.card.id}`}
+                </Button>
+              ) : complete ? (
                 <Button
                   color="neutral"
                   onClick={() => {
@@ -954,7 +1055,29 @@ export const CardManagementView = observer(
               )
             }
           >
-            {complete ? (
+            {batch ? (
+              <>
+                {batchComplete && <OperationComplete />}
+                <CardMaintenanceCards
+                  disabled={busy}
+                  cards={batch.targets.map(target => {
+                    const operation = maintenance.get(target.operationId);
+                    return {
+                      publicKey: target.card.publicKey!,
+                      id: target.card.id,
+                      complete: target.complete,
+                      status: target.complete
+                        ? 'complete'
+                        : operation?.phase === 'restore'
+                          ? 'restore items'
+                          : operation?.phase === 'replacing'
+                            ? 'resume installation'
+                            : 'scan to install',
+                    };
+                  })}
+                />
+              </>
+            ) : complete ? (
               <>
                 <OperationComplete />
                 {manualRestore && (
@@ -1009,9 +1132,64 @@ export const CardManagementView = observer(
             ) : (
               <CardScanPlaceholder />
             )}
+            {!!restoreReport?.result.issues.length && (
+              <WarningMessage>
+                Skipped:{' '}
+                {restoreReport.result.issues
+                  .map(issue => `${issue.index} (${issue.reason})`)
+                  .join(', ')}
+              </WarningMessage>
+            )}
+            {!!restoreReport?.result.droppedGrants.length && (
+              <WarningMessage>
+                Applet access not restored (skipped required items):{' '}
+                {restoreReport.result.droppedGrants
+                  .map(aid => {
+                    const applet = getAppletCatalog().find(
+                      applet =>
+                        (
+                          applet.instanceAid ?? applet.appletAid
+                        )?.toLowerCase() === aid,
+                    );
+                    return applet ? APPLET_NAMES[applet.stage] : aid;
+                  })
+                  .join(', ')}
+              </WarningMessage>
+            )}
+            {restoreReport?.canFinish && !restoreReport.result.complete && (
+              <Button
+                color="warning"
+                disabled={busy}
+                onClick={() => setPopup('finish')}
+              >
+                {`Finish without ${restoreReport.result.issues.length} items`}
+              </Button>
+            )}
           </ViewContent>
         </View>
         {pinContent}
+        {popup === 'finish' && restoreReport && (
+          <ConfirmPopup
+            title={`Finish without ${restoreReport.result.issues.length} items?`}
+            confirmText={`Finish without ${restoreReport.result.issues.length} items`}
+            confirmColor="warning"
+            onCancel={() => setPopup(undefined)}
+            onConfirm={() =>
+              void perform('restore', {
+                operationId: restoreReport.operationId,
+                batchOperation: batch
+                  ? maintenance.get(restoreReport.operationId)
+                  : undefined,
+                finishWithout: restoreReport.result.issues.map(
+                  issue => issue.index,
+                ),
+              })
+            }
+          >
+            The skipped items and applet access that requires them will not be
+            restored. The recovery archive will be discarded after verification.
+          </ConfirmPopup>
+        )}
         {popup === 'details' && card.information && (
           <CardInformationPopup
             information={card.information}
@@ -1177,6 +1355,10 @@ export const CardManagementView = observer(
                 selectedOptionalStages: selectedOptional,
                 replaceStages: confirm.replaceStages,
                 operationId: confirm.operationId,
+                batchOperation:
+                  batch && confirm.operationId
+                    ? maintenance.get(confirm.operationId)
+                    : undefined,
                 identityOptions: confirm.identityOptions,
               })
             }
@@ -1187,9 +1369,10 @@ export const CardManagementView = observer(
                 <p>Card keys will be regenerated.</p>
                 {(hello || pending?.card.id) && <p>Card ID will be kept.</p>}
               </>
-            ) : replacesStorage && (hello?.bundle || pending?.card.bundle) ? (
+            ) : replacesStorage &&
+              (hello?.bundle || confirmationOperation?.card.bundle) ? (
               <>
-                {!pending?.archive && (
+                {!confirmationOperation?.archive && (
                   <p>Sync items with another bundle card first.</p>
                 )}
                 <p>
@@ -1210,7 +1393,7 @@ export const CardManagementView = observer(
                 {confirm.mode === 'fresh' &&
                 !selectedOptional.includes('security-key')
                   ? 'Monoid Security Key Applet and its FIDO PIN will be removed.'
-                  : 'Monoid Security Key Applet will be reinstalled. Its FIDO PIN will be reset.'}
+                  : 'Monoid Security Key Applet will be reinstalled. Its FIDO PIN will be reset. Set it again from a FIDO client.'}
               </p>
             )}
             {affectsOTP && (

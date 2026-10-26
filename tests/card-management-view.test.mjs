@@ -57,7 +57,7 @@ mock.module('mobx-react-lite', {
   namedExports: {observer: component => component},
 });
 mock.module('lucide-react', {
-  namedExports: {Ellipsis: 'ellipsis', Info: 'info'},
+  namedExports: {ArrowLeft: 'arrow-left', Ellipsis: 'ellipsis', Info: 'info'},
 });
 mock.module('styled-components', {
   namedExports: {
@@ -221,12 +221,17 @@ for (const [path, names] of [
     '@ui/details-popup',
     ['DetailsPopup', 'DetailsPopupDivider', 'DetailsPopupTitle'],
   ],
-  ['@ui/message-content', ['InfoMessage']],
+  ['@ui/message-content', ['InfoMessage', 'WarningMessage']],
   ['@ui/operation-complete', ['OperationComplete']],
   ['views/safe/index', ['CardInformationPopup']],
   [
     'views/card/card-management-content',
-    ['CardAppletsContent', 'CardInformationContent', 'CardScanPlaceholder'],
+    [
+      'CardAppletsContent',
+      'CardInformationContent',
+      'CardScanPlaceholder',
+      'CardMaintenanceCards',
+    ],
   ],
   ['views/card/applet-selection-popup', ['AppletSelectionPopup']],
   [
@@ -497,7 +502,7 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     restore: async () => {
       state.events.push({type: 'restore'});
       state.pending = undefined;
-      return [];
+      return {complete: true, issues: [], droppedGrants: []};
     },
   };
   const safe = {
@@ -517,6 +522,7 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
         }),
         {$exact: 'securityKey'},
       ),
+      $back: () => state.backs.push('previous'),
       $backTo: route =>
         returnTo === route ? () => state.backs.push(route) : undefined,
     },
@@ -2167,4 +2173,205 @@ test('failed Start over keeps the recovery action and card visible', async () =>
   assert.equal(state.node('ViewContent').props.footer.props.disabled, false);
   assert.deepEqual(state.errors, [state.discardError]);
   assert.equal(state.scans.length, 1);
+});
+
+test('Card Applets resumes the first unfinished batch target after navigation and shows completion for the batch', async () => {
+  const state = mount({cardInformation: false});
+  const card = {
+    id: '01020304',
+    publicKey: `04${'11'.repeat(64)}`,
+    bundle: 'ab'.repeat(32),
+    appletAid: AID,
+  };
+  const next = {
+    id: 'next',
+    batchId: 'batch',
+    mode: 'reinstall',
+    phase: 'restore',
+    card,
+    archive: {items: []},
+  };
+  const batch = {
+    id: 'batch',
+    targets: [
+      {operationId: 'done', card: {...card, id: '11111111'}, complete: true},
+      {operationId: 'next', card, complete: false},
+    ],
+  };
+  state.maintenance.batches = [batch];
+  state.maintenance.get = id => (id === 'next' ? next : undefined);
+  state.maintenance.matchOperation = () => undefined;
+  state.render();
+  assert.deepEqual(
+    state.node('CardMaintenanceCards').props.cards.map(card => card.complete),
+    [true, false],
+  );
+  assert.equal(state.node('OperationComplete'), undefined);
+  state.click('Continue card 01020304');
+  await state.answer();
+  assert.equal(
+    state.scans.length,
+    1,
+    'restore can start without scanning a different target first',
+  );
+  state.scans[0].finished.reject(
+    Object.assign(new Error('cancelled'), {code: 'CANCELLED'}),
+  );
+  await state.flush();
+  state.unmount();
+  state.render();
+  assert.equal(
+    state.node('CardMaintenanceCards').props.cards[1].status,
+    'restore items',
+  );
+  batch.targets[1].complete = true;
+  state.render();
+  assert.ok(state.node('OperationComplete'));
+  assert.ok(
+    state.node('CardMaintenanceCards').props.cards.every(card => card.complete),
+  );
+});
+
+async function mountRejectedRestore(batch = false) {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  const operation = {
+    id: 'rejected',
+    mode: 'update',
+    phase: 'restore',
+    card: {
+      ...readCardIdentity(state.initialized),
+      appletAid: AID,
+      bundle: false,
+    },
+    archive: {items: []},
+  };
+  state.pending = operation;
+  if (batch) {
+    operation.batchId = 'batch';
+    state.maintenance.batches = [
+      {
+        id: 'batch',
+        targets: [
+          {operationId: operation.id, card: operation.card, complete: false},
+          {
+            operationId: 'next',
+            card: {...operation.card, id: '11111111'},
+            complete: false,
+          },
+        ],
+      },
+    ];
+  }
+  const issues = [
+    {index: 'f2010000000000000001', reason: 'INVALID_PARAMETER'},
+    {index: '05140000000000000002', reason: 'Conflict'},
+  ];
+  state.maintenance.restore = async (
+    _applet,
+    id,
+    _progress,
+    _signal,
+    _aids,
+    skipped,
+  ) => {
+    assert.equal(id, operation.id);
+    state.finishWithout = skipped;
+    if (skipped) {
+      assert.deepEqual(
+        skipped,
+        issues.map(issue => issue.index),
+      );
+      state.pending = undefined;
+      if (batch) state.maintenance.batches[0].targets[0].complete = true;
+      return {complete: true, issues, droppedGrants: ['f06d6f6e6f69640501']};
+    }
+    operation.rejectedItems = issues;
+    return {complete: false, issues, droppedGrants: []};
+  };
+  state.click(batch ? `Continue card ${operation.card.id}` : 'Restore items');
+  await state.answer();
+  await state.tap();
+  return state;
+}
+
+for (const batch of [false, true]) {
+  test(`${batch ? 'batch' : 'single-card'} rejected recovery lists issues and requires explicit confirmation to finish`, async () => {
+    const state = await mountRejectedRestore(batch);
+    assert.match(
+      text(state.node('WarningMessage')),
+      /f2010000000000000001 \(INVALID_PARAMETER\)/,
+    );
+    assert.match(
+      text(state.node('WarningMessage')),
+      /05140000000000000002 \(Conflict\)/,
+    );
+    assert.equal(state.node('OperationComplete'), undefined);
+    state.click('Finish without 2 items');
+    assert.match(text(state.node('ConfirmPopup')), /archive will be discarded/);
+    state.node('ConfirmPopup').props.onCancel();
+    assert.ok(state.pending);
+    assert.equal(state.finishWithout, undefined);
+    state.click('Finish without 2 items');
+    state.node('ConfirmPopup').props.onConfirm();
+    await state.answer();
+    await state.tap();
+    assert.deepEqual(state.errors, []);
+    assert.equal(state.pending, undefined);
+    assert.match(text(state.render()), /Applet access not restored/);
+    assert.match(text(state.render()), /f06d6f6e6f69640501/);
+    if (batch) {
+      assert.equal(
+        text(state.node('ViewContent').props.footer),
+        'Continue card 11111111',
+      );
+      assert.deepEqual(
+        state
+          .node('CardMaintenanceCards')
+          .props.cards.map(card => card.complete),
+        [true, false],
+      );
+    } else assert.ok(state.node('OperationComplete'));
+  });
+}
+
+test('Back exits unfinished recovery without discarding it and a fresh page can resume', async () => {
+  const state = await mountRejectedRestore();
+  const saved = state.pending;
+  state.click('Back');
+  assert.deepEqual(state.backs, ['previous']);
+  assert.equal(state.pending, saved);
+  state.unmount();
+  state.render();
+  assert.equal(text(state.node('ViewContent').props.footer), 'Restore items');
+  assert.equal(state.pending.archive, saved.archive);
+  state.click('Restore items');
+  await state.answer();
+  await state.tap();
+  assert.match(text(state.node('WarningMessage')), /INVALID_PARAMETER/);
+});
+
+test('a transport failure removes a stale finish offer and keeps retry and exit available', async () => {
+  const state = await mountRejectedRestore();
+  const failure = new Error('Tag lost');
+  state.maintenance.restore = async () => {
+    throw failure;
+  };
+  state.click('Restore items');
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, [failure]);
+  assert.equal(
+    find(
+      state.render(),
+      node => node.type === 'Button' && text(node).startsWith('Finish without'),
+    ),
+    undefined,
+  );
+  assert.equal(text(state.node('ViewContent').props.footer), 'Restore items');
+  assert.ok(state.pending.archive);
+  state.click('Back');
+  assert.deepEqual(state.backs, ['previous']);
 });

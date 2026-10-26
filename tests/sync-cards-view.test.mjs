@@ -9,6 +9,7 @@ import {
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
 import {readBackupCardIdentity} from '../.bld/app/@lib/monoid/card-identity.js';
+import * as monoid from '../.bld/app/@lib/monoid/index.js';
 import {assertCardMaintenanceBundleRecovery} from '../.bld/app/@services/card-maintenance-service.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
 import {
@@ -20,6 +21,24 @@ let fixture;
 let rendering;
 const owners = [];
 const PIN = 'Sync-42';
+
+mock.module('../.bld/app/@lib/global-platform/card-information.js', {
+  namedExports: {
+    readCardInformation: async () => ({cplc: {icSerialNumber: 'card'}}),
+  },
+});
+mock.module('../.bld/app/@lib/monoid/index.js', {
+  namedExports: {
+    ...monoid,
+    readMonoidAppletInstallation: async () => ({
+      optional: fixture.optionalInstallation ?? {},
+    }),
+    resolveMonoidAppletMaintenanceAid: async () => 'f06d6f6e6f69640201',
+    createMonoidApplet: () => ({
+      openSession: async () => fixture.scannedApplet,
+    }),
+  },
+});
 
 mock.module('react', {
   namedExports: {
@@ -158,6 +177,7 @@ for (const [path, names] of [
   ['@key/key-list', ['KeyListItem', 'KeyListPlaceholder']],
   ['@ui/app-icon', ['AppIcon']],
   ['@ui/button', ['Button', 'Buttons']],
+  ['@ui/toggle', ['Toggle']],
   ['@ui/confirm-popup', ['ConfirmPopup']],
   [
     '@ui/details-popup',
@@ -356,6 +376,8 @@ function mount({
       await state.startScan('Scan a pending card');
     },
     async tap(cardHello, applet = emptyCard) {
+      state.scannedHello = cardHello;
+      state.scannedApplet = applet;
       const scan = state.scans.at(-1);
       try {
         scan.validate?.(cardHello);
@@ -417,6 +439,14 @@ function mount({
     cardStore,
     syncCardsStore: store,
     cardMaintenanceService: {
+      isUpdateAvailable: () => false,
+      prepare: async (_applet, options) => ({
+        selectedOptionalStages: options.selectedOptionalStages,
+        id: hex(state.scannedHello.id),
+        mode: 'reinstall',
+        phase: 'ready',
+        card: readBackupCardIdentity(state.scannedHello),
+      }),
       async saveBundleRecovery(draft, recovery, activeSignal) {
         activeSignal.throwIfAborted();
         if (state.saveRecovery)
@@ -1171,7 +1201,7 @@ async function mountMaintenance({
   peerCount = 1,
 } = {}) {
   const bundle = new Uint8Array(32).fill(1);
-  const target = publicCard(1);
+  const target = maintenancePeer(1);
   target.hello = hello(1, bundle);
   const peers = Array.from({length: peerCount}, (_, index) =>
     maintenancePeer(index + 2, identical ? 1 : index + 2),
@@ -1190,8 +1220,18 @@ async function mountMaintenance({
   const flow = new SyncCardsState(undefined, draft);
   await flow.session.add(target.applet, target.hello, signal(), PIN);
   if (addPeer)
-    for (const peer of peers)
+    for (const peer of peers) {
       await flow.session.add(peer.applet, peer.hello, signal(), PIN);
+      flow.addMaintenanceCard(
+        {
+          id: hex(peer.hello.id),
+          mode: 'reinstall',
+          phase: 'ready',
+          card: readBackupCardIdentity(peer.hello),
+        },
+        false,
+      );
+    }
   const store = new SyncCardsStore();
   store.getOrCreate('maintenance-sync', () => flow);
   const state = mount({store, syncId: 'maintenance-sync'});
@@ -1246,6 +1286,32 @@ test('maintenance keeps the target fixed while allowing multiple other Bundle ca
   }
   assert.ok(state.button('Continue'));
   assert.equal(state.button('Back to Card Applets'), undefined);
+});
+
+test('maintenance collection records each peer own optional applets independently of the starter', async () => {
+  const state = await mountMaintenance({addPeer: false, peerCount: 2});
+  state.flow.addMaintenanceCard(
+    {...state.draft, selectedOptionalStages: ['otp']},
+    true,
+  );
+  for (const [index, peer] of state.peers.entries()) {
+    state.optionalInstallation =
+      index === 0
+        ? {
+            'security-key': {installed: true, loaded: true},
+            otp: {installed: false, loaded: false},
+          }
+        : {};
+    await state.startScan('Add another card');
+    const scan = await state.tap(peer.hello, peer.applet);
+    assert.equal(scan.error, undefined);
+    await state.finishScan();
+    state.flow.selectMaintenanceCard(hex(peer.hello.publicKey), true);
+  }
+  assert.deepEqual(
+    state.flow.maintenanceTargets.map(target => target.selectedOptionalStages),
+    [['otp'], ['security-key'], []],
+  );
 });
 
 for (const written of [false, true]) {
@@ -1719,3 +1785,111 @@ for (const leavingAt of ['PIN', 'authentication', 'NFC cleanup']) {
     }
   });
 }
+
+for (const count of [2, 3]) {
+  test(`all ${count} targets export during their two writer scans before one durable batch save`, async () => {
+    const state = await mountMaintenance({
+      peerCount: count - 1,
+      identical: false,
+    });
+    for (const peer of state.peers)
+      state.flow.selectMaintenanceCard(hex(peer.hello.publicKey), true);
+    const batches = [];
+    state.entrances.cardMaintenanceService.saveBundleRecoveryBatch =
+      async preparations => batches.push(preparations);
+    state.click('Continue');
+    await state.flush();
+    assert.equal(state.flow.deferredCards.size, count - 2);
+    for (const [index, card] of [state.target, state.peers[0]].entries()) {
+      await state.startMaintenanceScan();
+      const scan = await state.tap(card.hello, card.applet);
+      assert.equal(scan.error, undefined);
+      assert.equal(card.exports.length, count);
+      assert.equal(batches.length, index === 0 ? 0 : 1);
+      await state.finishScan();
+    }
+    assert.equal(state.scans.length, 2);
+    assert.equal(state.flow.maintenanceSaved, true);
+    assert.equal(batches[0].length, count);
+    assert.ok(
+      batches[0].every(
+        ({operation, recovery}) =>
+          operation.card.publicKey !== recovery.source.publicKey &&
+          recovery.items.length === count,
+      ),
+    );
+    assert.deepEqual(state.backs, [state.entrances.router.cardApplets.$exact]);
+  });
+}
+
+test('maintenance Update defaults only known outdated peers on, and target choices lock at Continue', async () => {
+  const state = await mountMaintenance({peerCount: 2});
+  state.draft.mode = 'update';
+  for (const [index, peer] of state.peers.entries()) {
+    state.flow.maintenanceCards.delete(hex(peer.hello.publicKey));
+    state.flow.addMaintenanceCard(
+      {
+        id: hex(peer.hello.id),
+        mode: 'update',
+        card: readBackupCardIdentity(peer.hello),
+      },
+      index === 0 ? true : undefined,
+    );
+  }
+  assert.deepEqual(
+    state.flow.maintenanceTargets.map(target => target.id),
+    [state.draft.id, hex(state.peers[0].hello.id)],
+  );
+  assert.throws(
+    () =>
+      state.flow.selectMaintenanceCard(
+        hex(state.target.hello.publicKey),
+        false,
+      ),
+    /fixed/,
+  );
+  state.click('Continue');
+  await state.flush();
+  assert.throws(
+    () =>
+      state.flow.selectMaintenanceCard(
+        hex(state.peers[1].hello.publicKey),
+        true,
+      ),
+    /fixed/,
+  );
+});
+
+test('a no-op target can replace a failed exporter without writing or replaying another card', async () => {
+  const state = await mountMaintenance({peerCount: 2});
+  for (const peer of state.peers)
+    state.flow.selectMaintenanceCard(hex(peer.hello.publicKey), true);
+  const batches = [];
+  state.entrances.cardMaintenanceService.saveBundleRecoveryBatch =
+    async preparations => batches.push(preparations);
+  state.click('Continue');
+  await state.flush();
+  assert.equal(state.session.phase, 'complete');
+  state.target.applet.exportItem = async () => {
+    throw new Error('Export interrupted');
+  };
+  await state.startMaintenanceScan();
+  const failed = await state.tap(state.target.hello, state.target.applet);
+  assert.match(failed.error.message, /cannot export recovery/);
+  for (const peer of [...state.peers].reverse()) {
+    await state.startMaintenanceScan();
+    let scan = await state.tap(peer.hello, peer.applet);
+    if (scan.error?.message === 'Enter Secret PIN') {
+      state.inputs.at(-1).finished.resolve(PIN);
+      await state.flush();
+      scan = await state.tap(peer.hello, peer.applet);
+    }
+    assert.equal(scan.error, undefined);
+    await state.finishScan();
+  }
+  assert.equal(batches.length, 1);
+  assert.equal(batches[0].length, 3);
+  assert.ok(
+    [state.target, ...state.peers].every(card => card.requests.length === 0),
+  );
+});

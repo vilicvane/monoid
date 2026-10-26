@@ -72,16 +72,53 @@ The persisted recovery format keeps its existing `key` field for item metadata
 so saved archives and their checksums remain intact. The card protocol uses
 `metadata`; the maintenance service maps it at the storage boundary.
 
-Restoration imports the complete archive, then verifies identity and the complete
-inventory. Only that successful verification removes the matching archive.
+Restoration imports the complete archive and lists skipped items with their reasons.
+After a complete pass containing only deterministic card rejections (for example
+INVALID_PARAMETER) or conflicts, **Finish without N items** asks for explicit
+confirmation. It verifies identity and the inventory against the archive minus
+the confirmed omissions, restores original grants whose required Seed/Key items
+were restored, and lists grants dropped because they required an omitted item.
+Type-only grants still restore. Existing conflicting items stay on the card but
+cannot supply a restored grant. Only successful item and grant verification removes
+the archive. Transport, PIN, cancellation and uncertain writes never enable this
+finish path; they retain recovery and require an explicit retry that reconciles
+actual card state. A failed attempt clears an earlier finish offer. The header
+Back action always exits to the previous page without discarding unfinished work;
+Card Applets can resume it.
 Interrupted work survives navigation and application restart. Physical production
 information locates an interrupted installation while Monoid is absent; it does
 not authorize importing an archive into another Identity.
 
-Bundle members cannot recover their own exported envelopes. Ordinary replacement
-therefore requires confirmation that the user has copied data to another member.
-The app retains a reminder to restore from that member afterward. This workflow
-does not automate bundle data recovery.
+Bundle members cannot recover their own exported envelopes. Update and Reinstall
+open maintenance Sync, with the starting card always selected. Each added bundle
+card offers Update too (selected when its recorded installed hash differs from
+the bundled hash) or Reinstall too (initially unselected). Unknown installed
+hashes remain unknown. Fresh install remains single-card.
+
+Sync saves complete recovery archives for every target before any replacement.
+A non-target holding the merged result can export for all targets; when every
+card is a target, two members first receive the merged result and export for each
+other. This needs at most two complete export scans. Remaining targets defer
+their writes until restoration. Every archive covers all participating cards,
+including opaque items; conflicts, missing content or failed exports block
+replacement. An explicit retry may use another processed member.
+
+Card Applets displays the persisted target batch. Cards remain dimmed until their
+installation, item restoration and original grant verification finish (including
+explicitly confirmed omissions). Each target reinstalls its own original optional
+applet list and restores its own grants, independently of the starting card. The
+service permits only the first unfinished target to proceed, including after
+navigation or restart. An interrupted card must finish restoration before the
+next can be emptied. All archives are written and read back together. Completed
+cards retain their batch status, while their recovery material is removed only
+after verification. Start over discards a whole batch only before any target
+has started replacement. Fresh install cannot bypass an unfinished batch.
+
+Optional OTP and Security Key installation stays per card through **Install
+applets**. Optional-only updates and reinstalls also stay per card. Monoid and
+its library remain installed, so no items move. Grant recovery reconciles scopes
+and the previous public token hash before repeating a write. Set a newly
+installed Security Key's FIDO PIN again through a FIDO client.
 
 Fresh install does not delete an existing recovery archive. An archive belonging
 to the former Identity cannot be restored into the new Identity. Unknown APDU

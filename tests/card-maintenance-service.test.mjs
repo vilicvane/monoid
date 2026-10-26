@@ -17,6 +17,12 @@ const catalog = [
   {stage: 'identity', appletAid: 'f06d6f6e6f69640001'},
   {stage: 'library'},
   {
+    stage: 'otp',
+    appletAid: 'f06d6f6e6f69640501',
+    optional: true,
+    dependencies: ['library', 'monoid'],
+  },
+  {
     stage: 'monoid',
     appletAid: 'f06d6f6e6f69640201',
     dependencies: ['identity', 'library'],
@@ -614,6 +620,7 @@ test('grant failure retains the archive and original domain until explicit recov
   });
   await service.replace('session', operation.id);
   card.failGrant = true;
+  card.grants = [];
   await assert.rejects(
     service.restore(card, operation.id),
     /Grant interrupted/,
@@ -679,8 +686,8 @@ test('grant progress counts only acknowledged writes and verification failure re
   card.setAppletGrant = setGrant;
   const listGrants = card.listAppletGrants.bind(card);
   card.listAppletGrants = async request => {
-    assert.deepEqual(progress.at(-1), {stage: 'verifying-grants'});
     const result = await listGrants(request);
+    if (progress.at(-1).stage === 'verifying-restore') return result;
     return {grants: result.grants.slice(1)};
   };
   progress.length = 0;
@@ -2397,7 +2404,7 @@ test('recovery import reports each rejection or conflict, restores others and re
     hex(request.index) === hex(second.index)
       ? Promise.reject(new CBORAppletError({code: 'INVALID_PARAMETER'}))
       : importItem(request);
-  const issues = await service.restore(card, operation.id);
+  const {issues} = await service.restore(card, operation.id);
   assert.deepEqual(issues, [
     {index: hex(first.index), reason: 'Conflict'},
     {index: hex(second.index), reason: 'INVALID_PARAMETER'},
@@ -2407,7 +2414,11 @@ test('recovery import reports each rejection or conflict, restores others and re
   assert.equal(service.get(operation.id).phase, 'restore');
   card.restored.set(hex(first.index), first);
   card.importItem = importItem;
-  assert.deepEqual(await service.restore(card, operation.id), []);
+  assert.deepEqual(await service.restore(card, operation.id), {
+    complete: true,
+    issues: [],
+    droppedGrants: [],
+  });
   assert.equal(service.get(operation.id), undefined);
   assert.equal(
     card.imports.filter(request => hex(request.index) === hex(third.index))
@@ -2427,7 +2438,7 @@ test('recovery compares readable opaque data and keeps conflicting contents', as
   await service.replace('session', operation.id);
   const item = card.items[1];
   card.restored.set(hex(item.index), {...item, data: bytes('ffff')});
-  const issues = await service.restore(card, operation.id);
+  const {issues} = await service.restore(card, operation.id);
   assert.deepEqual(issues, [{index: hex(item.index), reason: 'Conflict'}]);
   assert.equal(hex(card.restored.get(hex(item.index)).data), 'ffff');
   assert.equal(card.restored.size, 3);
@@ -2455,4 +2466,450 @@ test('an item-local backup rejection still exports later items but never saves a
     [hex(card.items[0].index), hex(card.items[2].index)],
   );
   assert.deepEqual(service.operations, []);
+});
+
+async function batchFixture(
+  service,
+  count = 2,
+  mode = 'reinstall',
+  optional = [],
+) {
+  const cards = Array.from({length: count}, (_, index) => {
+    const card = cardFixture();
+    card.state.id = bytes(`0000000${index + 1}`);
+    card.state.publicKey = bytes(
+      `04${(index + 3).toString(16).padStart(2, '0').repeat(64)}`,
+    );
+    card.state.bundle = new Uint8Array(32).fill(4);
+    return card;
+  });
+  const preparations = [];
+  for (const [index, card] of cards.entries()) {
+    const operation = await service.prepare(card, {
+      mode,
+      selectedOptionalStages: optional[index],
+      cardInformation: {
+        ...information,
+        cplc: {...information.cplc, icSerialNumber: `card-${index}`},
+      },
+      appletAid: hex(aid),
+    });
+    preparations.push({operation, recovery: bundleRecovery(card)});
+  }
+  return {cards, preparations};
+}
+
+test('a batch persists every archive before replacement and resumes with at most one unrestored card', async () => {
+  const storage = storageFixture();
+  let service = await CardMaintenanceService.create(storage);
+  const {cards, preparations} = await batchFixture(service, 3);
+  const batch = await service.saveBundleRecoveryBatch(preparations);
+  assert.equal(storage.writes.length, 1);
+  assert.equal(
+    storage.writes[0].operations.filter(item => item.archive).length,
+    3,
+  );
+  const empty = new Set();
+  replacement = async (_session, options) => {
+    assert.equal(empty.size, 0);
+    empty.add(options.expectedPublicKey);
+    await options.onCheckpoint('verify');
+    return structuredClone(
+      cards.find(
+        card => hex(card.state.publicKey) === options.expectedPublicKey,
+      ).state,
+    );
+  };
+  const first = preparations[0].operation.id;
+  const second = preparations[1].operation.id;
+  await assert.rejects(service.replace('session', second), /previous card/);
+  await service.replace('session', first);
+  cards[0].failImport = 1;
+  await assert.rejects(service.restore(cards[0], first), /Tag lost/);
+  service = await CardMaintenanceService.create(storage);
+  await assert.rejects(service.replace('session', second), /previous card/);
+  await assert.rejects(service.discardPrepared(second), /already started/);
+  cards[0].failImport = -1;
+  await service.restore(cards[0], first);
+  empty.clear();
+  assert.equal(
+    cards[0].imports.length,
+    sourceItems.length,
+    'lost import ACK was reconciled without replay',
+  );
+  assert.equal(service.batches[0].targets[0].complete, true);
+  service = await CardMaintenanceService.create(storage);
+  for (let index = 1; index < 3; index++) {
+    const id = preparations[index].operation.id;
+    await service.replace('session', id);
+    await service.restore(cards[index], id);
+    empty.clear();
+  }
+  assert.equal(service.operations.length, 0);
+  assert.ok(service.batches[0].targets.every(target => target.complete));
+  await service.dismissBatch(batch.id);
+  assert.equal(service.batches.length, 0);
+});
+
+test('a partial or unverified batch is never published for replacement', async () => {
+  const storage = storageFixture();
+  const service = await CardMaintenanceService.create(storage);
+  const {preparations} = await batchFixture(service);
+  const invalid = structuredClone(preparations);
+  invalid[1].recovery.source.publicKey = invalid[1].operation.card.publicKey;
+  await assert.rejects(service.saveBundleRecoveryBatch(invalid), /same Bundle/);
+  assert.equal(storage.writes.length, 0);
+  storage.corruptRead = true;
+  await assert.rejects(service.saveBundleRecoveryBatch(preparations), /verify/);
+  assert.equal(service.operations.length, 0);
+  assert.equal(service.batches.length, 0);
+});
+
+test('an empty target still has to verify restoration before the next target is replaceable', async () => {
+  const storage = storageFixture();
+  let service = await CardMaintenanceService.create(storage);
+  const {cards, preparations} = await batchFixture(service);
+  for (const card of cards) card.items = [];
+  for (const item of preparations) item.recovery.items = [];
+  await service.saveBundleRecoveryBatch(preparations);
+  replacement = async () => structuredClone(cards[0].state);
+  await service.replace('session', preparations[0].operation.id);
+  service = await CardMaintenanceService.create(storage);
+  await assert.rejects(
+    service.replace('session', preparations[1].operation.id),
+    /previous card/,
+  );
+  await service.restore(cards[0], preparations[0].operation.id);
+  assert.equal(service.batches[0].targets[0].complete, true);
+});
+
+test('optional recovery verifies the new token and protects its saved comparison from corruption', async () => {
+  const storage = storageFixture();
+  const service = await CardMaintenanceService.create(storage);
+  const card = cardFixture();
+  card.grants = [
+    {
+      aid: bytes('a0000006472f0001'),
+      types: [[-3839, true]],
+      tokenHash: new Uint8Array(32),
+    },
+  ];
+  const operation = await service.prepare(card, {
+    mode: 'reinstall',
+    cardInformation: information,
+    appletAid: hex(aid),
+    selectedOptionalStages: ['security-key'],
+    replaceStages: ['security-key'],
+  });
+  replacement = async () => structuredClone(card.state);
+  await service.replace('session', operation.id);
+  card.setAppletGrant = async () => {};
+  await assert.rejects(
+    service.restore(card, operation.id),
+    /Could not verify applet access/,
+  );
+  assert.ok(service.get(operation.id));
+  storage.mutate(
+    state =>
+      (state.operations[0].previousGrantTokens['a0000006472f0001'] =
+        'ff'.repeat(32)),
+  );
+  await assert.rejects(
+    CardMaintenanceService.create(storage),
+    /recovery data is invalid/,
+  );
+});
+
+for (const mode of ['update', 'reinstall']) {
+  test(`${mode} restores each batch target's own optional applet list after restart`, async () => {
+    const storage = storageFixture();
+    let service = await CardMaintenanceService.create(storage);
+    const optional = [['otp'], ['security-key'], []];
+    const {cards, preparations} = await batchFixture(
+      service,
+      3,
+      mode,
+      optional,
+    );
+    await service.saveBundleRecoveryBatch(preparations);
+    for (const [index, card] of cards.entries()) {
+      service = await CardMaintenanceService.create(storage);
+      replacement = async (_session, options) => {
+        assert.deepEqual(options.selectedOptionalStages, optional[index]);
+        await options.onCheckpoint('verify');
+        return structuredClone(card.state);
+      };
+      const id = preparations[index].operation.id;
+      await service.replace('session', id);
+      await service.restore(card, id);
+    }
+    assert.ok(service.batches[0].targets.every(target => target.complete));
+  });
+}
+
+async function rejectedRecovery({bundle = false} = {}) {
+  const storage = storageFixture();
+  const service = await CardMaintenanceService.create(storage);
+  const card = cardFixture();
+  const missingKey = bytes('05140000000000000001');
+  card.items.push({index: missingKey, secret: true});
+  const securityKeyAid = bytes('a0000006472f0001');
+  const otpAid = bytes('f06d6f6e6f69640501');
+  card.grants = [
+    {
+      aid: securityKeyAid,
+      seed: {index: card.items[0].index, domain: bytes('aabb')},
+    },
+    {aid: otpAid, keys: [{index: missingKey, type: 'hmac'}]},
+    {aid: bytes('f06d6f6e6f69640601'), types: [[-3583, false]]},
+  ];
+  if (bundle) card.state.bundle = new Uint8Array(32).fill(9);
+  let operation = await service.prepare(card, {
+    mode: 'update',
+    cardInformation: information,
+    appletAid: hex(aid),
+    selectedOptionalStages: ['otp', 'security-key'],
+  });
+  if (bundle) {
+    const next = cardFixture();
+    next.state.bundle = card.state.bundle;
+    next.state.publicKey = bytes(`04${'33'.repeat(64)}`);
+    next.state.id = bytes('33445566');
+    const nextOperation = await service.prepare(next, {
+      mode: 'update',
+      appletAid: hex(aid),
+      cardInformation: {...information, cplc: {icSerialNumber: 'next'}},
+    });
+    await service.saveBundleRecoveryBatch([
+      {operation, recovery: bundleRecovery(card)},
+      {operation: nextOperation, recovery: bundleRecovery(next)},
+    ]);
+    operation = service.get(operation.id);
+  }
+  replacement = async () => structuredClone(card.state);
+  await service.replace('session', operation.id);
+  card.grants = [];
+  // A list after replacement reflects only actual imported records.
+  card.list = async () => ({items: [...card.restored.values()]});
+  const rejected = [hex(card.items[1].index), hex(missingKey)];
+  const importItem = card.importItem.bind(card);
+  card.importItem = request =>
+    rejected.includes(hex(request.index))
+      ? Promise.reject(new CBORAppletError({code: 'INVALID_PARAMETER'}))
+      : importItem(request);
+  return {storage, service, card, operation, rejected, securityKeyAid, otpAid};
+}
+
+for (const bundle of [false, true]) {
+  test(`explicit finish omits rejected items, restores valid grants and discards the ${bundle ? 'batch' : 'single-card'} archive`, async () => {
+    const {
+      storage,
+      card,
+      operation,
+      rejected,
+      securityKeyAid,
+      otpAid,
+      ...fixture
+    } = await rejectedRecovery({bundle});
+    let {service} = fixture;
+    const result = await service.restore(card, operation.id);
+    assert.equal(result.complete, false);
+    assert.deepEqual(
+      new Set(result.issues.map(item => item.index)),
+      new Set(rejected),
+    );
+    assert.deepEqual(card.grants, []);
+    assert.ok(service.get(operation.id).archive);
+    if (bundle) {
+      await assert.rejects(
+        service.replace('session', service.batches[0].targets[1].operationId),
+        /previous card/,
+      );
+    }
+    service = await CardMaintenanceService.create(storage);
+    card.importItem = () =>
+      assert.fail('Finish must not repeat rejected imports');
+    const finished = await service.restore(
+      card,
+      operation.id,
+      undefined,
+      undefined,
+      undefined,
+      rejected,
+    );
+    assert.deepEqual(finished, {
+      complete: true,
+      issues: result.issues,
+      droppedGrants: [hex(otpAid)],
+    });
+    assert.deepEqual(
+      card.grants.map(grant => hex(grant.aid)),
+      [hex(securityKeyAid), 'f06d6f6e6f69640601'],
+    );
+    assert.equal(service.get(operation.id), undefined);
+    const persisted = await storage.get();
+    assert.equal(
+      persisted.operations.some(item => item.id === operation.id),
+      false,
+    );
+    if (bundle) {
+      assert.equal(service.batches[0].targets[0].complete, true);
+      const next = service.get(service.batches[0].targets[1].operationId);
+      replacement = async () => ({
+        ...card.state,
+        publicKey: bytes(next.card.publicKey),
+        id: bytes(next.card.id),
+      });
+      await service.replace('session', next.id);
+      assert.equal(service.get(next.id).phase, 'restore');
+    }
+  });
+}
+
+test('finishing a conflict preserves the on-card item and drops grants requiring its archived version', async () => {
+  const {service, card, operation, rejected, securityKeyAid, otpAid} =
+    await rejectedRecovery();
+  const seed = card.items[0];
+  card.restored.set(hex(seed.index), {...seed, alias: 'Keep this conflict'});
+  const result = await service.restore(card, operation.id);
+  const skipped = [hex(seed.index), ...rejected];
+  assert.deepEqual(
+    result.issues.map(issue => issue.index),
+    skipped,
+  );
+  const finished = await service.restore(
+    card,
+    operation.id,
+    undefined,
+    undefined,
+    undefined,
+    skipped,
+  );
+  assert.equal(finished.complete, true);
+  assert.deepEqual(finished.droppedGrants, [hex(securityKeyAid), hex(otpAid)]);
+  assert.equal(card.restored.get(hex(seed.index)).alias, 'Keep this conflict');
+});
+
+for (const failure of [
+  new Error('Tag lost'),
+  new CBORAppletError({code: 'INVALID_PIN'}),
+  Object.assign(new Error('Cancelled'), {code: 'CANCELLED'}),
+]) {
+  test(`${failure.message} invalidates a previous finish offer and retains recovery`, async () => {
+    const {service, card, operation, rejected} = await rejectedRecovery();
+    await service.restore(card, operation.id);
+    assert.ok(service.get(operation.id).rejectedItems);
+    card.hello = async () => {
+      throw failure;
+    };
+    await assert.rejects(
+      service.restore(card, operation.id),
+      error => error === failure,
+    );
+    assert.equal(service.get(operation.id).rejectedItems, undefined);
+    await assert.rejects(
+      service.restore(
+        card,
+        operation.id,
+        undefined,
+        undefined,
+        undefined,
+        rejected,
+      ),
+      /Retry item recovery/,
+    );
+    assert.ok(service.get(operation.id).archive);
+  });
+}
+
+test('finish verifies the remaining inventory before restoring grants or discarding recovery', async () => {
+  const {service, card, operation, rejected} = await rejectedRecovery();
+  await service.restore(card, operation.id);
+  card.restored.set('ffff0000000000000099', {
+    index: bytes('ffff0000000000000099'),
+    secret: false,
+  });
+  await assert.rejects(
+    service.restore(
+      card,
+      operation.id,
+      undefined,
+      undefined,
+      undefined,
+      rejected,
+    ),
+    /does not match/,
+  );
+  assert.deepEqual(card.grants, []);
+  assert.ok(service.get(operation.id).archive);
+});
+
+test('an uncertain grant after confirmation is reconciled on explicit retry without replay', async () => {
+  const {service, card, operation, rejected} = await rejectedRecovery();
+  await service.restore(card, operation.id);
+  const setGrant = card.setAppletGrant.bind(card);
+  let writes = 0;
+  card.setAppletGrant = async request => {
+    writes++;
+    await setGrant(request);
+    throw new Error('Grant ACK lost');
+  };
+  await assert.rejects(
+    service.restore(
+      card,
+      operation.id,
+      undefined,
+      undefined,
+      undefined,
+      rejected,
+    ),
+    /ACK lost/,
+  );
+  assert.ok(service.get(operation.id).archive);
+  assert.equal(service.get(operation.id).rejectedItems, undefined);
+  await service.restore(card, operation.id);
+  card.setAppletGrant = async request => {
+    writes++;
+    await setGrant(request);
+  };
+  const result = await service.restore(
+    card,
+    operation.id,
+    undefined,
+    undefined,
+    undefined,
+    rejected,
+  );
+  assert.equal(result.complete, true);
+  assert.equal(
+    writes,
+    2,
+    'one write for each retained grant, with no replay of the lost ACK',
+  );
+});
+
+test('an uncertain import after a definite rejection cannot authorize finishing', async () => {
+  const {service, card, operation, rejected} = await rejectedRecovery();
+  card.failImport = 2;
+  await assert.rejects(service.restore(card, operation.id), /Tag lost/);
+  assert.equal(service.get(operation.id).rejectedItems, undefined);
+  await assert.rejects(
+    service.restore(
+      card,
+      operation.id,
+      undefined,
+      undefined,
+      undefined,
+      rejected,
+    ),
+    /Retry item recovery/,
+  );
+  assert.ok(service.get(operation.id).archive);
+  card.failImport = -1;
+  await service.restore(card, operation.id);
+  assert.equal(
+    card.imports.length,
+    2,
+    'acknowledged and uncertain imports are both reconciled without replay',
+  );
 });

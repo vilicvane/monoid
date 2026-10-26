@@ -683,6 +683,7 @@ export class CardSyncSession {
     target: CardSyncIdentity,
     signal: AbortSignal,
     onProgress?: ProgressCallback,
+    coverage: readonly CardSyncIdentity[] = [target],
   ): Promise<CardMaintenanceBundleRecovery> {
     return this.exclusive(async () => {
       cancelled(signal);
@@ -711,21 +712,30 @@ export class CardSyncSession {
 
       // A peer archive must cover every original target item before deletion.
       // A completed partial sync alone is not proof of a complete recovery.
-      for (const item of destination.items) {
-        const peer = source.items.find(
-          candidate => candidate.index === item.index,
+      for (const required of coverage) {
+        const member = this.cards.find(
+          card => card.publicKey === required.publicKey,
         );
-        try {
-          if (
-            !peer ||
-            (!item.secret && item.data === undefined) ||
-            mergeCardItemData(peer, item).data !== peer.data
-          )
-            throw new CardItemConflictError(item.index);
-        } catch (cause) {
-          throw new MonoidCardError(`Item ${item.index}: incomplete recovery`, {
-            cause,
-          });
+        if (!member || member.bundle !== target.bundle) changed();
+        for (const item of member.items) {
+          const peer = source.items.find(
+            candidate => candidate.index === item.index,
+          );
+          try {
+            if (
+              !peer ||
+              (!item.secret && item.data === undefined) ||
+              mergeCardItemData(peer, item).data !== peer.data
+            )
+              throw new CardItemConflictError(item.index);
+          } catch (cause) {
+            throw new MonoidCardError(
+              `Item ${item.index}: incomplete recovery`,
+              {
+                cause,
+              },
+            );
+          }
         }
       }
 
