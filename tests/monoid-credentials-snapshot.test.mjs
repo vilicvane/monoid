@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {mock, test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
 
+import {pinClock} from './helpers/held-pins.mjs';
+
 mock.module('capacitor-biometric-vault', {
   namedExports: {BiometricVault: {}},
 });
@@ -15,6 +17,69 @@ const OTHER_CARD = '05060708';
 const THIRD_CARD = '090a0b0c';
 const PIN = 'Test PIN 1';
 const OTHER_PIN = 'Test PIN 2';
+
+test('Access snapshots and typed PINs expire together and require a fresh vault unlock', async t => {
+  const clock = pinClock(t);
+  const state = fixture({[CARD]: PIN});
+  const session = state.store.createPINSession();
+  t.after(() => session[Symbol.asyncDispose]());
+  await session.getPINs();
+  session.rememberPIN(OTHER_CARD, OTHER_PIN);
+  clock.elapse(4 * 60_000);
+  assert.equal(session.hasUnsavedPIN(OTHER_CARD, OTHER_PIN), true);
+  clock.elapse(4 * 60_000);
+  assert.equal((await session.getPINs())[OTHER_CARD], OTHER_PIN);
+  assert.equal(state.authentications.length, 1);
+  clock.elapse(5 * 60_000);
+  assert.deepEqual(await session.getPINs(), {[CARD]: PIN});
+  assert.equal(state.authentications.length, 2);
+  assert.equal(state.authentications[0].signal.aborted, true);
+});
+
+test('vault preauthorization alone has no JavaScript expiry or visibility listener', async t => {
+  const clock = pinClock(t);
+  const state = fixture({[CARD]: PIN});
+  const session = state.store.createPINSession();
+  t.after(() => session[Symbol.asyncDispose]());
+  await session.authenticate();
+  assert.equal(clock.timers.size, 0);
+  assert.equal(clock.listeners.size, 0);
+  clock.tick(10 * 60_000);
+  assert.equal(state.authentications[0].signal.aborted, false);
+  await session.getPINs();
+  assert.equal(clock.timers.size, 1);
+  assert.equal(clock.listeners.size, 1);
+  clock.visibility('hidden');
+  assert.equal(state.authentications[0].signal.aborted, true);
+  assert.equal(clock.listeners.size, 0);
+});
+
+for (const drop of ['idle expiry', 'hiding']) {
+  test(`${drop} prevents a pending vault save from refilling the holder`, async t => {
+    const clock = pinClock(t);
+    const state = fixture({[CARD]: PIN});
+    const session = state.store.createPINSession();
+    t.after(() => session[Symbol.asyncDispose]());
+    await session.getPINs();
+    const pending = Promise.withResolvers();
+    state.onSet = () => pending.promise;
+    const saving = session.setPIN(OTHER_CARD, OTHER_PIN);
+    await setImmediate();
+    if (drop === 'hiding') clock.visibility('hidden');
+    else clock.tick(5 * 60_000);
+    assert.equal(state.authentications[0].signal.aborted, true);
+    clock.visibility('visible');
+    pending.resolve();
+    await saving;
+    // A committed local write remains saved, but reading it needs new authorization.
+    assertSaved(state, {[CARD]: PIN, [OTHER_CARD]: OTHER_PIN});
+    assert.deepEqual(await session.getPINs(), {
+      [CARD]: PIN,
+      [OTHER_CARD]: OTHER_PIN,
+    });
+    assert.equal(state.authentications.length, 2);
+  });
+}
 
 function fixture(pins = {}) {
   const state = {

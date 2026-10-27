@@ -6,6 +6,7 @@ import {observable, runInAction} from 'mobx';
 
 import {SyncCardsState} from '../.bld/app/@components/views/safe/@card/sync-cards-state.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {HeldPINs} from '../.bld/app/@lib/held-pins.js';
 import {
   MonoidCardError,
   MonoidWrongCardError,
@@ -18,6 +19,8 @@ import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
 import * as monoid from '../.bld/app/@lib/monoid/index.js';
 import {SyncCardsStore} from '../.bld/app/@services/sync-cards-store.js';
+
+import {pinClock} from './helpers/held-pins.mjs';
 
 let fixture;
 let rendering;
@@ -332,7 +335,7 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     scans: [],
     events: [],
     recordedInstallations: [],
-    heldPINs: new Map(),
+    heldPINs: new HeldPINs(),
     errors: [],
     toasts: [],
     progress: [],
@@ -458,8 +461,13 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
       state.events.push({type: 'finish-fresh-alias', id});
       state.pending = undefined;
     },
+    secretPINWriter: () => {
+      const owner = state.heldPINs.signal;
+      return (card, pin) => state.heldPINs.set(card.publicKey, pin, owner);
+    },
     secretPIN: card => state.heldPINs.get(card.publicKey),
-    holdSecretPIN: (card, pin) => state.heldPINs.set(card.publicKey, pin),
+    holdSecretPIN: (card, pin, owner) =>
+      state.heldPINs.set(card.publicKey, pin, owner),
     dropSecretPIN: card => state.heldPINs.delete(card.publicKey),
     matchOperation: () => state.pending,
     get: () => state.pending,
@@ -1841,6 +1849,37 @@ test('a held maintenance Secret PIN spans installation and a later restore attem
 });
 
 for (const phase of ['ready', 'restore']) {
+  test(`maintenance in ${phase} re-prompts after idle expiry and keeps its recovery plan`, async t => {
+    const clock = pinClock(t);
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    const card = {...readCardIdentity(state.initialized), appletAid: AID};
+    state.savedPINs = {[card.id]: 'Access-43'};
+    state.maintenance.holdSecretPIN(card, PIN);
+    state.pending = {
+      id: 'expired',
+      mode: 'reinstall',
+      phase,
+      card,
+      archive: {items: []},
+    };
+    const operation = state.pending;
+    clock.elapse(5 * 60_000);
+    state.click(phase === 'ready' ? 'Continue installation' : 'Restore items');
+    if (phase === 'ready') state.node('ConfirmPopup').props.onConfirm();
+    await state.flush();
+    assert.equal(state.inputs.length, 1);
+    assert.equal(state.inputs[0].options.placeholder, 'Enter Secret PIN');
+    assert.equal(state.pending, operation);
+    await state.answer();
+    await state.tap();
+    assert.deepEqual(state.errors, []);
+    assert.ok(state.events.some(event => event.type === 'restore'));
+    state.heldPINs.clear();
+  });
+
   test(`a rejected held Secret during ${phase} is dropped without retry and the next attempt prompts`, async () => {
     const state = mount({cardInformation: false});
     state.installation = installed(state.initialized);

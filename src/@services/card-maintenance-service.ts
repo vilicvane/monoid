@@ -13,6 +13,7 @@ import {
   type CardInformation,
   readCardInformation,
 } from '../@lib/global-platform/card-information.js';
+import {HeldPINs} from '../@lib/held-pins.js';
 import {
   type AppletInstallProgress,
   type AppletReplacementCheckpoint,
@@ -165,7 +166,7 @@ type PrepareOptions = {
 /** Only card-encrypted item envelopes and public metadata are persisted here. */
 export class CardMaintenanceService {
   /** Verified procedure credentials only; never part of persisted state. */
-  private readonly secretPINs = new Map<string, MonoidPIN>();
+  private readonly secretPINs = new HeldPINs<string, MonoidPIN>();
   private readonly state = observable.box<MaintenanceStorage>({
     version: 1,
     operations: [],
@@ -187,8 +188,18 @@ export class CardMaintenanceService {
   holdSecretPIN(
     card: Pick<CardMaintenanceOperation['card'], 'publicKey'>,
     pin: MonoidPIN,
+    owner?: AbortSignal,
   ): void {
-    if (card.publicKey) this.secretPINs.set(card.publicKey, pin);
+    if (card.publicKey) this.secretPINs.set(card.publicKey, pin, owner);
+  }
+
+  /** Capture the owner before awaiting authentication or other card work. */
+  secretPINWriter(): (
+    card: Pick<CardMaintenanceOperation['card'], 'publicKey'>,
+    pin: MonoidPIN,
+  ) => void {
+    const owner = this.secretPINs.signal;
+    return (card, pin) => this.holdSecretPIN(card, pin, owner);
   }
 
   secretPIN(

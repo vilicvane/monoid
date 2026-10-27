@@ -1,5 +1,6 @@
 import {MonoidPIN} from '../../../../@atomics.js';
 import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
+import {HeldPINs} from '../../../../@lib/held-pins.js';
 import {
   type CardBackupIdentity,
   MonoidAppletInvalidPINError,
@@ -13,8 +14,8 @@ type Identity = Pick<
 >;
 type Credentials = {pin: MonoidPIN; onAuthenticated: () => void};
 type ProcedurePINs = {
+  secretPINWriter(): (card: Identity, pin: MonoidPIN) => void;
   secretPIN(card: Identity): MonoidPIN | undefined;
-  holdSecretPIN(card: Identity, pin: MonoidPIN): void;
   dropSecretPIN(card: Identity): void;
 };
 
@@ -31,33 +32,38 @@ const key = (card: Identity): string =>
 
 /** Verified Secret PINs for one visible page flow; never stored in the vault. */
 export class CardSecretPINSession {
-  private readonly pins = new Map<string, MonoidPIN>();
-  private owner = new AbortController();
+  private readonly pins = new HeldPINs<string, MonoidPIN>();
 
   constructor(private readonly procedure?: ProcedurePINs) {}
 
   private pin(card: Identity): MonoidPIN | undefined {
-    return this.pins.get(key(card)) ?? this.procedure?.secretPIN(card);
+    return this.procedure
+      ? this.procedure.secretPIN(card)
+      : this.pins.get(key(card));
   }
 
   get signal(): AbortSignal {
-    return this.owner.signal;
+    return this.pins.signal;
   }
 
   clear(): void {
-    this.owner.abort();
-    this.owner = new AbortController();
     this.pins.clear();
   }
 
-  onAuthenticated(card: Identity, pin: MonoidPIN): () => void {
-    const {signal} = this.owner;
-    return () => {
+  private writer(): (card: Identity, pin: MonoidPIN) => void {
+    const signal = this.signal;
+    const hold = this.procedure?.secretPINWriter();
+    return (card, pin) => {
       if (!signal.aborted) {
-        this.pins.set(key(card), pin);
-        this.procedure?.holdSecretPIN(card, pin);
+        if (hold) hold(card, pin);
+        else this.pins.set(key(card), pin, signal);
       }
     };
+  }
+
+  onAuthenticated(card: Identity, pin: MonoidPIN): () => void {
+    const hold = this.writer();
+    return () => hold(card, pin);
   }
 
   async run(
@@ -71,7 +77,8 @@ export class CardSecretPINSession {
       signal: AbortSignal,
     ) => Promise<void>,
   ): Promise<void> {
-    const {signal} = this.owner;
+    const signal = this.signal;
+    const hold = this.writer();
     let entered: MonoidPIN | undefined;
     let expected: Identity | undefined;
     let attempted: Identity | undefined;
@@ -104,7 +111,10 @@ export class CardSecretPINSession {
             // the first validated identity. It must never follow another tap.
             if (entered !== undefined) expected ??= card;
             attempted = card;
-            return {pin, onAuthenticated: this.onAuthenticated(card, pin)};
+            return {
+              pin,
+              onAuthenticated: () => hold(card, pin),
+            };
           }, signal);
           return;
         } catch (error) {

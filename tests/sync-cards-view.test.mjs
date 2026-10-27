@@ -4,6 +4,7 @@ import {setImmediate} from 'node:timers/promises';
 
 import {observable, runInAction} from 'mobx';
 
+import {HeldPINs} from '../.bld/app/@lib/held-pins.js';
 import {
   MonoidCardError,
   MonoidWrongCardError,
@@ -17,6 +18,8 @@ import {
   getWalletReference,
   matchesWalletReference,
 } from '../.bld/app/@services/wallet-storage-service.js';
+
+import {pinClock} from './helpers/held-pins.mjs';
 
 let fixture;
 let rendering;
@@ -348,7 +351,7 @@ function mount({
     localKeys: [],
     progress: [],
     savedRecoveries: [],
-    heldPINs: new Map(),
+    heldPINs: new HeldPINs(),
     mounted: true,
     slot: create => (state.slots[state.index++] ??= create()),
     render() {
@@ -454,8 +457,13 @@ function mount({
     cardStore,
     syncCardsStore: store,
     cardMaintenanceService: {
+      secretPINWriter: () => {
+        const owner = state.heldPINs.signal;
+        return (card, pin) => state.heldPINs.set(card.publicKey, pin, owner);
+      },
       secretPIN: card => state.heldPINs.get(card.publicKey),
-      holdSecretPIN: (card, pin) => state.heldPINs.set(card.publicKey, pin),
+      holdSecretPIN: (card, pin, owner) =>
+        state.heldPINs.set(card.publicKey, pin, owner),
       dropSecretPIN: card => state.heldPINs.delete(card.publicKey),
       isUpdateAvailable: () =>
         'updateAvailable' in state ? state.updateAvailable : false,
@@ -1415,6 +1423,29 @@ test('Sync names its known source in the scan prompt without reading it again', 
   assert.equal(state.scans[0].content, 'Scan card Travel (00000001)');
 });
 
+test('expiry before Continue to installation keeps saved recovery and requires a fresh procedure PIN', async t => {
+  const clock = pinClock(t);
+  const state = await mountMaintenance();
+  const target = state.draft.card;
+  state.entrances.cardMaintenanceService.holdSecretPIN(target, PIN);
+  state.click('Continue');
+  await state.flush();
+  await state.startMaintenanceScan();
+  await state.tap(state.peer.hello, state.peer.applet);
+  await state.finishScan();
+  assert.equal(state.flow.maintenanceSaved, true);
+  assert.equal(state.entrances.cardMaintenanceService.secretPIN(target), PIN);
+  clock.tick(5 * 60_000);
+  assert.equal(
+    state.entrances.cardMaintenanceService.secretPIN(target),
+    undefined,
+  );
+  assert.equal(state.flow.maintenanceSaved, true);
+  assert.equal(state.savedRecoveries.length, 1);
+  continueToInstallation(state);
+  assert.deepEqual(state.errors, []);
+});
+
 test('maintenance keeps the target fixed while allowing multiple other Bundle cards', async () => {
   const state = await mountMaintenance({addPeer: false});
   const targetButton = find(
@@ -1942,8 +1973,8 @@ for (const leavingAt of ['PIN', 'authentication', 'NFC cleanup']) {
       assert.deepEqual(state.exports, []);
     }
     assert.equal(
-      state.heldPINs.size,
-      0,
+      state.heldPINs.get(state.flow.maintenance.card.publicKey),
+      undefined,
       'aborted authentication must not hold a late PIN',
     );
   });

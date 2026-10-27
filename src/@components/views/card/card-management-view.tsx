@@ -433,6 +433,7 @@ export const CardManagementView = observer(
             (expectedHello && readCardIdentity(expectedHello)))
           : undefined;
       const operation = new AbortController();
+      const holdSecretPIN = maintenance.secretPINWriter();
       controller.current = operation;
       setBusy(true);
       setPopup(undefined);
@@ -537,7 +538,7 @@ export const CardManagementView = observer(
               requestedPINs?.access,
             ).catch(rejectSecretPIN);
             if (procedureCard && pending && maintenance.get(pending.id))
-              maintenance.holdSecretPIN(procedureCard, pin!);
+              holdSecretPIN(procedureCard, pin!);
             if (accessUnset) {
               await applet.authenticate({pin: requestedPINs!.access!});
               signal.throwIfAborted();
@@ -643,7 +644,7 @@ export const CardManagementView = observer(
               onProgress: progress,
               signal,
             });
-            maintenance.holdSecretPIN(saved.card, pin!);
+            holdSecretPIN(saved.card, pin!);
           }
 
           // Bundle envelopes cannot be restored to their own sender. Sync to
@@ -786,7 +787,7 @@ export const CardManagementView = observer(
               .authenticate({secret: true, pin: pin!})
               .catch(rejectSecretPIN);
             signal.throwIfAborted();
-            maintenance.holdSecretPIN(saved.card, pin!);
+            holdSecretPIN(saved.card, pin!);
             const restored = await maintenance.restore(
               applet,
               saved.id,

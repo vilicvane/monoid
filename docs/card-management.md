@@ -162,13 +162,33 @@ Another eligible card may still supply the archive. Once all recoveries are save
 the steps stay visible with **Continue to installation**. This explicit action
 returns to Card Applets, where installation proceeds one card at a time.
 
-Verified Secret PINs stay only in memory for this maintenance procedure, keyed by
-card public key, across Sync and installation/restoration. Each scan still
-authenticates the card. Wrong PINs are dropped without an automatic retry. Saving
+Verified Secret PINs can be reused in memory across Sync and
+installation/restoration, keyed by card public key. All held PINs expire after
+five minutes without a read or write to their holder, or immediately when the app
+is hidden: `document.visibilityState === 'hidden'` on all platforms, plus
+Android's `appStateChange` with `isActive: false` (Activity `onStop`, including
+lock, home and app switching). Android can leave the document visible while
+stopped. Resume or a visible event resets the Android stopped state. Activity on
+any card refreshes the whole holder. Each scan still authenticates the card. Wrong PINs are dropped
+without an automatic retry. Saving
 recovery retains only target PINs; leaving Sync before saving or starting over
 drops its PINs. Completing or discarding an operation drops that card's PIN.
 App restart retains no Secret PINs. Fresh install and other actions still prompt
-as before, and Access PIN handling is unchanged.
+as before.
+
+The same expiry rule covers page-owned Access PIN snapshots and typed PINs,
+page-owned Secret PINs in Copy/Sync/Setup/Extend bundle, and procedure-owned
+maintenance Secret PINs. There is no in-flight exemption: each PIN read or write
+refreshes the idle clock, and a drop invalidates late writes.
+Reads check wall time even if a suspended WebView missed its timer. Expiry drops
+credentials, not recovery archives or progress: the next operation uses the
+existing PIN/unlock prompt, including after **Continue to installation**.
+iOS/web Capacitor inactivity alone does not clear PINs; Face ID and NFC overlays
+must not end their lifetime. One shared Android listener serves all holders,
+which subscribe only while holding data. The existing inactive handlers
+still close OTP secret/QR popups and abort active scans for privacy. Vault access
+alone has no JavaScript expiry; its native lifetime and background revocation
+remain in effect.
 
 Card Applets displays the persisted target batch. Cards are dimmed once their
 installation, item restoration and original grant verification finish (including
@@ -250,7 +270,8 @@ input matching, not another on-card authentication attempt.
 - Both PINs already set: do not set either again. Ask existing Secret PIN only
   for operations requiring that authorization; ordinary Access authentication
   uses the saved PIN or one manual entry. Verified Secret PINs are reused only
-  within their owning visible flow and are never persistently stored.
+  within their owning visible flow, subject to the five-minute idle/hidden rule,
+  and are never persistently stored.
 - Update Secret PIN: enter the current Secret PIN once, then the new Secret PIN
   twice. Access PIN is unchanged and the separate-PIN checkbox is absent.
 - Update Access PIN: enter the current Secret PIN once, then the new Access PIN

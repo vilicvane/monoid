@@ -3,7 +3,10 @@ import {test} from 'node:test';
 
 import {CardSecretPINSession} from '../.bld/app/@components/views/safe/@card/card-secret-pin-session.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {HeldPINs} from '../.bld/app/@lib/held-pins.js';
 import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
+
+import {pinClock} from './helpers/held-pins.mjs';
 
 const first = {id: '00000001', publicKey: 'first', bundle: false};
 const second = {id: '00000002', publicKey: 'second', bundle: false};
@@ -11,12 +14,55 @@ const PIN = 'First-42';
 const OTHER_PIN = 'Second-42';
 const noPrompt = () => assert.fail('A verified card must reuse its PIN');
 
+for (const backed of [false, true]) {
+  test(`${backed ? 'procedure' : 'page'} Secret PIN expiry re-prompts without losing the selected cards`, async t => {
+    const clock = pinClock(t);
+    const session = new CardSecretPINSession(
+      backed ? procedureFixture() : undefined,
+    );
+    await remember(session);
+    clock.elapse(5 * 60_000);
+    let prompts = 0;
+    await session.run(
+      [first],
+      async card => {
+        assert.equal(card, first);
+        prompts++;
+        return PIN;
+      },
+      async credentials => {
+        credentials(first).onAuthenticated();
+      },
+    );
+    assert.equal(prompts, 1);
+    const late = session.onAuthenticated(second, OTHER_PIN);
+    clock.visibility('hidden');
+    clock.visibility('visible');
+    late();
+    await session.run(
+      [second],
+      async card => {
+        assert.equal(card, second);
+        prompts++;
+        return OTHER_PIN;
+      },
+      async credentials => assert.equal(credentials(second).pin, OTHER_PIN),
+    );
+    assert.equal(prompts, 2);
+    session.clear();
+  });
+}
+
 function procedureFixture() {
-  const pins = new Map();
+  const pins = new HeldPINs();
   return {
     pins,
+    secretPINWriter: () => {
+      const owner = pins.signal;
+      return (card, pin) => pins.set(card.publicKey, pin, owner);
+    },
     secretPIN: card => pins.get(card.publicKey),
-    holdSecretPIN: (card, pin) => pins.set(card.publicKey, pin),
+    holdSecretPIN: (card, pin, owner) => pins.set(card.publicKey, pin, owner),
     dropSecretPIN: card => pins.delete(card.publicKey),
   };
 }
@@ -52,26 +98,62 @@ test('procedure PINs are reused and only verified credentials are forwarded', as
   );
   session.clear();
   late();
-  assert.equal(procedure.pins.has('late'), false);
+  assert.equal(procedure.pins.get('late'), undefined);
+});
+
+test('a procedure drop during PIN input prevents its late authentication from refilling', async t => {
+  const clock = pinClock(t);
+  const procedure = procedureFixture();
+  procedure.holdSecretPIN(first, PIN);
+  const session = new CardSecretPINSession(procedure);
+  let scans = 0;
+  await session.run(
+    [first],
+    async card => {
+      assert.equal(card, second);
+      clock.visibility('hidden');
+      clock.visibility('visible');
+      return OTHER_PIN;
+    },
+    async credentials => {
+      scans++;
+      credentials(second).onAuthenticated();
+    },
+  );
+  assert.equal(
+    scans,
+    2,
+    'the PIN handoff completes without repeating a mutation',
+  );
+  assert.equal(procedure.secretPIN(first), undefined);
+  assert.equal(procedure.secretPIN(second), undefined);
 });
 
 test('rejected procedure PIN is dropped and an explicit retry prompts', async () => {
   const procedure = procedureFixture();
   procedure.holdSecretPIN(first, PIN);
   const session = new CardSecretPINSession(procedure);
+  const owner = session.signal;
+  const procedureOwner = procedure.pins.signal;
+  const authenticateSecond = session.onAuthenticated(second, OTHER_PIN);
+  const failure = new MonoidCardError('Incorrect Secret PIN', {
+    cause: new CBORAppletError({code: 'INVALID_PIN', tries: 4}),
+  });
   let attempts = 0;
   await assert.rejects(
     session.run([first], noPrompt, async credentials => {
       credentials(first);
       attempts++;
-      throw new MonoidCardError('Incorrect Secret PIN', {
-        cause: new CBORAppletError({code: 'INVALID_PIN', tries: 4}),
-      });
+      throw failure;
     }),
-    /Incorrect Secret PIN/,
+    error => error === failure,
   );
   assert.equal(attempts, 1);
+  assert.equal(owner.aborted, false);
+  assert.equal(procedureOwner.aborted, false);
   assert.equal(procedure.secretPIN(first), undefined);
+  authenticateSecond();
+  assert.equal(procedure.secretPIN(second), OTHER_PIN);
   let prompts = 0;
   await session.run(
     [first],
@@ -136,6 +218,8 @@ test('an uncached card closes its discovery before requesting a PIN bound to tha
 test('a rejected cached PIN is discarded and neither authentication nor writes are retried', async () => {
   const session = new CardSecretPINSession();
   await remember(session);
+  const owner = session.signal;
+  const authenticateSecond = session.onAuthenticated(second, OTHER_PIN);
   let attempts = 0;
   const failure = new MonoidCardError('Incorrect Secret PIN, 4 tries left', {
     cause: new CBORAppletError({code: 'INVALID_PIN', tries: 4}),
@@ -149,6 +233,12 @@ test('a rejected cached PIN is discarded and neither authentication nor writes a
     error => error === failure,
   );
   assert.equal(attempts, 1);
+  assert.equal(owner.aborted, false);
+  assert.equal(session.signal, owner);
+  authenticateSecond();
+  await session.run([second], noPrompt, async credentials => {
+    assert.equal(credentials(second).pin, OTHER_PIN);
+  });
   let prompts = 0;
   await session.run(
     [first],

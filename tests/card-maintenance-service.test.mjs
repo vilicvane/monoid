@@ -10,6 +10,8 @@ import {
   CardItemNotFoundError,
 } from '../.bld/app/@lib/cbor-applet.js';
 
+import {pinClock} from './helpers/held-pins.mjs';
+
 let replacement;
 let scannedHello;
 const bundleHashes = ['identity-image', 'library-image', 'monoid-image'];
@@ -292,6 +294,30 @@ test('procedure Secret PINs are isolated by public key and never persisted or re
   await service.restore(card, operation.id);
   assert.equal(service.secretPIN(first), undefined);
   assert.equal(service.secretPIN(other), 'Other-43');
+});
+
+test('maintenance expiry clears PINs without changing saved operations; hiding cancels late holds', async t => {
+  const clock = pinClock(t);
+  const storage = storageFixture();
+  const service = await CardMaintenanceService.create(storage);
+  const {preparations} = await batchFixture(service);
+  await service.saveBundleRecoveryBatch(preparations);
+  const saved = await storage.get();
+  for (const {operation} of preparations)
+    service.holdSecretPIN(operation.card, 'Secret-42');
+  clock.elapse(5 * 60_000);
+  for (const {operation} of preparations)
+    assert.equal(service.secretPIN(operation.card), undefined);
+  const hold = service.secretPINWriter();
+  const card = preparations[0].operation.card;
+  hold(card, 'Secret-42');
+  assert.equal(service.secretPIN(card), 'Secret-42');
+  clock.visibility('hidden');
+  clock.visibility('visible');
+  hold(card, 'Secret-42');
+  assert.equal(service.secretPIN(card), undefined);
+  assert.deepEqual(await storage.get(), saved);
+  assert.equal(service.operations.length, 2);
 });
 
 test('discarding a prepared batch drops all target PINs but preserves unrelated cards', async () => {

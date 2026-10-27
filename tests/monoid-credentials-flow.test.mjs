@@ -24,6 +24,11 @@ const mounted = [];
 mock.module('@capacitor/core', {
   namedExports: {Capacitor: {getPlatform: () => platform}},
 });
+mock.module('@capacitor/app', {
+  namedExports: {
+    App: {addListener: async () => ({remove: async () => {}})},
+  },
+});
 const sameDependencies = (left, right) =>
   left?.length === right?.length &&
   left.every((value, index) => Object.is(value, right[index]));

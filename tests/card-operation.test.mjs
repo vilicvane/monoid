@@ -273,7 +273,7 @@ test('leaving or unmounting during unlock prevents late NFC and clears the sessi
   }
 });
 
-test('background and visibility preserve biometric unlock, then abort NFC without restarting on foreground', async () => {
+test('inactivity and visibility notify privacy handlers and abort NFC, leaving PIN clearing to the holder', async () => {
   for (const event of ['background', 'visibility']) {
     const state = mount({background: true});
     state.unlock = deferred();
@@ -299,7 +299,7 @@ test('background and visibility preserve biometric unlock, then abort NFC withou
     await setImmediate();
     assert.equal(state.scans.length, 1);
     background();
-    assert.equal(state.options.pinSession.clear.mock.callCount(), 1);
+    assert.equal(state.options.pinSession.clear.mock.callCount(), 0);
     assert.equal(state.options.onBackground.mock.callCount(), 3);
     state.unmount();
     await setImmediate();

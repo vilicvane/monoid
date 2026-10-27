@@ -49,7 +49,7 @@ Secret 正文不能读取时只比较可观察字段，不比较随机加密信�
 
 ## 执行、单项结果与中断
 
-收集和写入前输入 Secret PIN，每次刷卡重新认证；PIN 不持久化。Card 页的列表快照不等于已读取 Sync 所需的正文和导出包。
+收集和写入前输入 Secret PIN，每次刷卡重新认证；PIN 不持久化。内存中的 PIN 持有者在五分钟内没有读写，或应用隐藏时清空：所有平台监听 `document.visibilityState === 'hidden'`，Android 还监听 `appStateChange` 的 `isActive: false`（Activity `onStop`，包括锁屏、回到主屏和切换应用，即使 WebView 仍报告 visible）。Android 恢复 active 或页面触发 visible 后可重新持有 PIN。同一持有者内任一卡片的读写都会刷新空闲时间。进行中的请求不暂停空闲过期，迟到回调不能重新存入 PIN。iOS/web 的原生 inactive 状态不会清空 PIN，原有的敏感内容隐藏和 NFC 中止仍执行。过期保留 Sync 计划和恢复档案，下次操作重新询问 PIN。Card 页的列表快照不等于已读取 Sync 所需的正文和导出包。
 
 读取失败、单项冲突或目标明确拒绝（例如旧格式 `0xf201` 被新固件以 `INVALID_PARAMETER` 拒绝）都记为该项结果，其余项继续。详情显示 index 和原因；处理结束后仍能查看，不以完成动画隐藏失败。被跳过的条目不计作成功写入，也不自动重试。
 

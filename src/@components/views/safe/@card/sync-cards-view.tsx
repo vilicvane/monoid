@@ -173,9 +173,12 @@ export const SyncCardsView = observer(
           maintenance
             ? {
                 secretPIN: card => cardMaintenanceService.secretPIN(card),
-                holdSecretPIN: (card, pin) => {
-                  heldPINCards.current.add(card.publicKey);
-                  cardMaintenanceService.holdSecretPIN(card, pin);
+                secretPINWriter: () => {
+                  const hold = cardMaintenanceService.secretPINWriter();
+                  return (card, pin) => {
+                    heldPINCards.current.add(card.publicKey);
+                    hold(card, pin);
+                  };
                 },
                 dropSecretPIN: card =>
                   cardMaintenanceService.dropSecretPIN(card),

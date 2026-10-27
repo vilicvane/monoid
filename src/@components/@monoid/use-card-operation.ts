@@ -59,7 +59,6 @@ export function useCardOperation({
       // Biometric unlock can deactivate the app before NFC starts.
       if (operation.current?.scanning) operation.current.controller.abort();
       handlers.current.onBackground?.();
-      if (!operation.current) pinSession.clear();
     };
     const visibility = (): void => {
       if (document.hidden) background();
