@@ -19,6 +19,24 @@ test('browser fetch keeps its global receiver when called from the client', asyn
   assert.deepEqual(await client.request('/v1/metadata'), {ok: true});
 });
 
+test('diagnostic login submits the selected method with the provider credential', async () => {
+  for (const method of ['wallet', 'email', 'social']) {
+    const client = new AuthorityClient(
+      'https://authority.test',
+      async (url, init) => {
+        assert.equal(url, 'https://authority.test/auth/reown');
+        assert.deepEqual(JSON.parse(init.body), {
+          token: 'provider-token',
+          method,
+          ...(method === 'social' ? {provider: 'google'} : {}),
+        });
+        return Response.json({accessToken: 'session'});
+      },
+    );
+    await client.login('provider-token', method, 'google');
+  }
+});
+
 test('logout during login revokes late session without restoring it', async () => {
   const pending = deferred();
   const revoked = [];
@@ -30,7 +48,7 @@ test('logout during login revokes late session without restoring it', async () =
       return new Response(null, {status: 204});
     },
   );
-  const login = client.login('provider-token');
+  const login = client.login('provider-token', 'email');
   await client.logout();
   pending.resolve(Response.json({accessToken: 'late-session'}));
   assert.equal(await login, undefined);
@@ -53,8 +71,8 @@ test('newer identity wins when provider exchanges complete out of order', async 
       return new Response(null, {status: 204});
     },
   );
-  const old = client.login('first');
-  const current = client.login('second');
+  const old = client.login('first', 'wallet');
+  const current = client.login('second', 'social');
   second.resolve(Response.json({accessToken: 'current'}));
   await current;
   first.resolve(Response.json({accessToken: 'old'}));

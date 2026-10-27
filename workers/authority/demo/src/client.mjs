@@ -30,12 +30,16 @@ export class AuthorityClient {
       throw new ApiError(response.status, result.error || 'request_failed');
     return result;
   }
-  async login(providerToken) {
+  async login(providerToken, method, provider) {
     const revision = ++this.revision;
     const previous = this.token;
     this.token = undefined;
     if (previous) await this.request('/auth/logout', {}, previous);
-    const session = await this.request('/auth/reown', {token: providerToken});
+    const session = await this.request('/auth/reown', {
+      token: providerToken,
+      method,
+      ...(method === 'social' ? {provider} : {}),
+    });
     if (revision !== this.revision) {
       await this.request('/auth/logout', {}, session.accessToken);
       return undefined;

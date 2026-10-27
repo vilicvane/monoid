@@ -2,64 +2,135 @@ import {setupIonicReact} from '@ionic/react';
 import {createRoot} from 'react-dom/client';
 import {useEffect, useRef, useState, type ReactNode} from 'react';
 import {styled} from 'styled-components';
+import {Lock} from 'lucide-react';
 import '@ionic/react/css/core.css';
 import '@ionic/react/css/normalize.css';
 import '@ionic/react/css/structure.css';
 import '@ionic/react/css/typography.css';
 import '../../../../src/@styles/variables.css';
 import {Button, Buttons} from './button.js';
+import monoidLogo from '../../../../src/@assets/monoid.svg';
+import {AppIcon} from '../../../../src/@components/@ui/app-icon.js';
 import {
-  InfoFieldset,
-  InfoLegend,
-  InfoSection,
-  InfoSectionItemContent,
-} from '../../../../src/@components/@ui/info-section.js';
+  IconTag,
+  IconTagName,
+} from '../../../../src/@components/@ui/icon-tag.js';
+import {WhiteTag} from '../../../../src/@components/@ui/tag.js';
+import {InfoSectionItemLabel} from '../../../../src/@components/@ui/info-section.js';
+import {StandaloneLoadingSpinner} from '../../../../src/@components/@ui/loading-spinner.js';
 import {
-  ViewHeader,
-  ViewHeaderTitle,
-} from '../../../../src/@components/@view/view-header.js';
-import {ViewContext} from '../../../../src/@components/@view/@view-context.js';
+  InfoMessage,
+  WarningMessage,
+} from '../../../../src/@components/@ui/message-content.js';
+import {OperationComplete} from './operation-complete.js';
+import {ViewHeaderTitle} from '../../../../src/@components/@view/view-header.js';
+import {AccountCard} from './account.js';
 import {BrowserFlow, LoginError, restoreFlow} from './flow.mjs';
 import type {Identity, ReownLogin} from './reown.js';
 import './style.css';
 
 setupIonicReact();
 
-const Page = styled.main`
-  --view-padding: 16px;
-  --view-padding-top: calc(var(--view-inset-top) + var(--view-padding));
-  width: 100%;
-  max-width: 480px;
-  min-height: 100dvh;
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  background: var(--ion-color-primary-contrast);
-`;
-
 const Content = styled.div`
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 8px var(--view-padding) 24px;
-`;
-
-const Description = styled.p`
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: 14px;
-  line-height: 1.5;
-`;
-
-const Status = styled(Description)<{$error?: boolean}>`
-  color: ${props =>
-    props.$error ? 'var(--color-text-danger)' : 'var(--color-text-secondary)'};
+  gap: 24px;
 `;
 
 const Actions = styled(Buttons)`
   flex: 0 0 auto;
-  padding: 0 16px calc(16px + var(--view-inset-bottom));
+`;
+
+const IdentityBlock = styled.header`
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  text-align: center;
+`;
+
+const Logo = styled.img`
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: var(--ion-color-primary);
+`;
+
+const Title = styled(ViewHeaderTitle)`
+  font-size: 24px;
+  line-height: 32px;
+`;
+
+const AuthorityTag = styled(IconTag)`
+  align-self: center;
+`;
+
+const LockTag = styled(WhiteTag).attrs({as: 'span'})`
+  padding: 0;
+  font-size: 14px;
+`;
+
+const Secondary = styled(InfoSectionItemLabel).attrs({as: 'p'})`
+  --color-text-label: var(--color-text-secondary);
+  margin: 0;
+  line-height: 1.5;
+  text-align: center;
+`;
+
+const Preparing = styled.div`
+  display: flex;
+  justify-content: center;
+  padding: 16px 0;
+`;
+
+const Completed = styled.div`
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 16px;
+
+  > :first-child {
+    flex: none;
+  }
+`;
+
+const Page = styled.main`
+  --view-padding: 16px;
+  width: 100%;
+  max-width: 400px;
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: calc(48px + var(--view-inset-top)) 16px
+    calc(16px + var(--view-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  background: var(--ion-color-primary-contrast);
+
+  @media (min-width: 600px) {
+    padding-top: calc(16px + var(--view-inset-top));
+    justify-content: center;
+    gap: 0;
+
+    ${Content} {
+      flex: 0 0 auto;
+    }
+
+    ${IdentityBlock} + ${Content}:not(:empty) {
+      margin-top: 32px;
+    }
+
+    ${Actions} {
+      margin: var(--view-section-gap, 16px) 0 0;
+
+      &:empty {
+        display: none;
+      }
+    }
+  }
 `;
 
 function errorText(error: unknown): string {
@@ -172,26 +243,22 @@ function LoginPage(): ReactNode {
     setError(false);
     setMessage(cancelled ? 'Returning to Monoid…' : 'Signing in…');
     try {
-      const token = cancelled ? null : await login.current?.credential();
-      if (!cancelled && !token) {
+      const credential = cancelled ? null : await login.current?.credential();
+      if (!cancelled && !credential) {
         setIdentity(null);
         setMessage('Please confirm your account and sign in again.');
         return;
       }
       const url = await browserFlow.finish(
         cancelled ? 'cancel' : 'complete',
-        token,
+        credential,
       );
       if (!url) return;
       clearTimeout(expiryTimer.current);
-      login.current?.stop();
+      // Erase local credentials now; async SDK sign-out must not delay return.
+      void login.current?.signOut();
       setReady(false);
       setReturned({url, cancelled});
-      setMessage(
-        cancelled
-          ? 'Sign-in cancelled.'
-          : 'Return to Monoid to finish signing in.',
-      );
       location.assign(url);
     } catch (error) {
       showError(error);
@@ -216,74 +283,77 @@ function LoginPage(): ReactNode {
   };
 
   return (
-    <ViewContext.Provider value={{scrolled: false}}>
-      <Page>
-        <ViewHeader>
-          <ViewHeaderTitle>Monoid</ViewHeaderTitle>
-        </ViewHeader>
-        <Content>
-          <InfoSection>
-            <h2 className="login-heading">
-              {returned
-                ? returned.cancelled
-                  ? 'Sign-in cancelled'
-                  : 'Sign-in approved'
-                : 'Sign in'}
-            </h2>
-            <Status
-              role={error ? 'alert' : 'status'}
-              aria-live="polite"
-              $error={error}
-            >
-              {message}
-            </Status>
-          </InfoSection>
-          {identity && !returned && (
-            <InfoFieldset>
-              <InfoLegend>Account</InfoLegend>
-              <InfoSectionItemContent>
-                {identity.email || 'Connected account'}
-              </InfoSectionItemContent>
-            </InfoFieldset>
-          )}
-        </Content>
-        <Actions>
-          {returned ? (
-            <Button onClick={() => location.assign(returned.url)}>
-              Return to Monoid
-            </Button>
-          ) : ready ? (
-            <>
-              {identity ? (
-                <>
-                  <Button loading={busy} onClick={() => void finish(false)}>
-                    Continue
-                  </Button>
-                  <Button
-                    color="neutral"
-                    disabled={busy}
-                    onClick={() => void openLogin(true)}
-                  >
-                    Use another account
-                  </Button>
-                </>
-              ) : (
-                <Button loading={busy} onClick={() => void openLogin()}>
-                  Sign in
-                </Button>
-              )}
-              <Button
-                color="neutral"
-                disabled={busy}
-                onClick={() => void finish(true)}
-              >
-                Cancel
+    <Page>
+      {!(returned && !returned.cancelled) && (
+        <IdentityBlock>
+          <Logo src={monoidLogo} alt="Monoid" />
+          <Title>Sign in to Monoid</Title>
+          <AuthorityTag>
+            <LockTag>
+              <AppIcon icon={Lock} aria-hidden="true" />
+            </LockTag>
+            <IconTagName>{location.host}</IconTagName>
+          </AuthorityTag>
+          <Secondary>
+            Monoid uses this account to issue Authority bundles for your cards.
+          </Secondary>
+        </IdentityBlock>
+      )}
+      <Content>
+        {returned ? (
+          returned.cancelled ? (
+            <InfoMessage>Sign-in cancelled.</InfoMessage>
+          ) : (
+            <Completed>
+              <OperationComplete label="Signed in" />
+              <Secondary>Return to Monoid to continue.</Secondary>
+            </Completed>
+          )
+        ) : error ? (
+          <WarningMessage role="alert">{message}</WarningMessage>
+        ) : identity ? (
+          <AccountCard
+            account={identity}
+            busy={busy}
+            onChange={() => void openLogin(true)}
+          />
+        ) : browserFlow && !ready ? (
+          <Preparing role="status" aria-label="Preparing sign-in">
+            <StandaloneLoadingSpinner />
+          </Preparing>
+        ) : !browserFlow ||
+          busy ||
+          message !== 'Choose an account to sign in.' ? (
+          <InfoMessage aria-live="polite">{message}</InfoMessage>
+        ) : null}
+      </Content>
+      <Actions>
+        {returned ? (
+          <Button color="neutral" onClick={() => location.assign(returned.url)}>
+            Back to Monoid
+          </Button>
+        ) : ready ? (
+          <>
+            {identity ? (
+              <Button loading={busy} onClick={() => void finish(false)}>
+                Continue
               </Button>
-            </>
-          ) : null}
-        </Actions>
-      </Page>
-    </ViewContext.Provider>
+            ) : (
+              <Button loading={busy} onClick={() => void openLogin()}>
+                Sign in
+              </Button>
+            )}
+            <Button
+              color="neutral"
+              disabled={busy}
+              onClick={() => void finish(true)}
+            >
+              Cancel
+            </Button>
+          </>
+        ) : null}
+      </Actions>
+    </Page>
   );
 }
 

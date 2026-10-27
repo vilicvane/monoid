@@ -1,5 +1,7 @@
 import {concat, decode, encode, utf8} from './encoding.js';
 
+export const SESSION_IDLE_TTL = 5 * 60 * 1000;
+
 export async function createSessionKey(master: Uint8Array): Promise<CryptoKey> {
   const key = await crypto.subtle.importKey('raw', master, 'HKDF', false, [
     'deriveKey',

@@ -14,6 +14,31 @@ test('atomic consumption rejects wrong proof, expiry and replay', context => {
   assert.equal(store.clean(100), false);
 });
 
+test('idle touches only extend live sessions, never resurrect logout/expiry, and obey the cap', context => {
+  const store = database(context);
+  const minute = 60000;
+  const cap = 15 * minute;
+  store.put('session:live', 'secret', '', 5 * minute);
+  assert.equal(store.touchSession('session:live', cap, 4 * minute), true);
+  assert.equal(store.get('session:live', 8 * minute), 'secret');
+  // A stale concurrent touch must not shorten the newer idle deadline.
+  assert.equal(store.touchSession('session:live', cap, 3 * minute), true);
+  assert.equal(store.get('session:live', 9 * minute - 1), 'secret');
+  assert.equal(store.get('session:live', 9 * minute), null);
+  assert.equal(store.touchSession('session:live', cap, 9 * minute), false);
+
+  store.put('session:revoked', 'secret', '', 5 * minute);
+  store.remove('session:revoked');
+  assert.equal(store.touchSession('session:revoked', cap, minute), false);
+  assert.equal(store.get('session:revoked', minute), null);
+
+  store.put('session:capped', 'secret', '', 14 * minute);
+  assert.equal(store.touchSession('session:capped', cap, 13 * minute), true);
+  assert.equal(store.get('session:capped', cap - 1), 'secret');
+  assert.equal(store.touchSession('session:capped', cap, cap), false);
+  assert.equal(store.get('session:capped', cap), null);
+});
+
 test('first policy persists; groups are owner scoped and paginated', context => {
   const store = database(context);
   const owner = {source: 'reown', id: '1'};

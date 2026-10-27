@@ -5,7 +5,7 @@ time proofs. AppKit / ReownAuthentication is the primary login. Optional GitHub
 OAuth connects organization permissions to the current session.
 
 This implementation includes the Worker, hosted sign-in page, authorization-code
-and PKCE interfaces, protocol/OAuth tests and workerd tests. The current deployment
+and PKCE interfaces, protocol/OAuth tests and workerd tests. The last deployment recorded here
 at `https://authority.monoid.app` is version
 `482cd348-5e3a-41bd-9c68-8757c2836b67` (2026-10-25). Both Authority secrets were
 replaced by keys generated inside the Durable Object; the old Worker Secrets and
@@ -15,10 +15,11 @@ creation/cancellation without key environment bindings. The public key SHA-256 i
 `670715b03702f37aea1ec44d97699b0428d87c8ccb2874e2bb6a04419265550d`.
 Earlier HTTPS/asset and fresh-Chrome GitHub navigation checks also passed. A complete
 authenticated production login remains unverified.
-APP integration is a future step: no APP entry, Authority service, native callback
-handler or platform registration is included. The optional demo remains a
-diagnostic tool. Card trusted-time support and APP Bundle enrollment are also
-future work. The Bundle format follows the
+The APP now uses this hosted login with PKCE and
+`app.monoid://authority/callback` for Authority bundle enrollment (see
+[APP design record 84](../../.agents/project-memory/84.md)). This package owns the
+Worker and hosted page; native callback/device acceptance is a separate check.
+The optional demo remains a diagnostic tool. The Bundle format follows the
 current sibling Java Card
 [`authority.md`](../../../monoid-javacard/doc/authority.md).
 
@@ -29,14 +30,15 @@ remains separate. Changing the Authority configuration does not change the APP's
 WalletKit project. Reown personal namespace IDs include the AppKit project ID,
 so retain this choice for production identity continuity.
 
-## Identity and groups
+## Identity and bundles
 
 - Reown owner: `{source: "reown", id: "<Reown project ID>:<profileUuid>"}`.
   The Worker obtains this from Reown's authenticated `/auth/v1/me` endpoint;
   it never accepts client identity claims or an unverified decoded JWT.
 - Wallet owner: `{source: "wallet", id: "<chainNamespace>:<address>"}`. Only the
-  wallet verified by the current Reown SIWX session is authorized, not arbitrary
-  linked-wallet metadata. EVM addresses are lowercase; other address encodings
+  wallet verified by the current Reown SIWX session is eligible, and only when
+  the session method is `wallet`; never for `email` or `social`. Linked-wallet
+  metadata does not authorize an owner. EVM addresses are lowercase; other address encodings
   preserve case. The chain namespace separates networks with different address
   semantics; EVM networks intentionally share the same address identity.
 - GitHub personal owner: `{source: "github-user", id: "<GitHub numeric user ID>"}`.
@@ -44,16 +46,16 @@ so retain this choice for production identity continuity.
 - Organization owner: `{source: "github-organization", id: "<GitHub numeric org ID>"}`.
   Current active organization **Owner** membership (`role=admin`) is required.
   Ordinary membership is insufficient. GitHub identity and membership are
-  checked again for every organization issuance or group listing.
+  checked again for every organization issuance or bundle listing.
 - Under each owner, the user chooses `groupName`: case sensitive, NFC Unicode,
   1–128 UTF-8 bytes, no surrounding whitespace, control or format characters.
 - The first issuance fixes `allowPeerExtension` for that owner/name. A different
-  policy returns 409; use another subgroup name for another policy.
+  policy returns 409; use another bundle name for another policy.
 
 The permanent namespace identity is the pair `(source, id)`, not its display
 name. `GET /v1/namespaces` discovers currently authorized namespaces, including
 their `displayName`. `POST /v1/namespaces/name {owner, displayName}` changes only
-the stored label (same text validation as subgroup names), never root derivation
+the stored label (same text validation as bundle names), never root derivation
 or policy. Identical names are allowed across different identities and confer no
 rights. Display the source alongside the name in the APP. Names of shared wallet
 and organization namespaces are shared: any currently authorized controller can
@@ -70,12 +72,76 @@ continuity across wallet changes, social-account linking and project migration
 must be verified with the configured project before production enrollment.
 Losing that profile identity can prevent reissuance of a personal Bundle.
 
-## Hosted login protocol and future APP integration
+## Hosted login protocol and APP integration
 
-The Worker and hosted page implement the following protocol. The APP actions
-below describe the intended client integration, not existing APP code.
+The Worker and hosted page implement the following protocol used by the APP.
+The APP calls Authority groups **bundles**; wire names such as `groupName`,
+`groups` and `/v1/groups/list` remain unchanged.
 
-1. The future client creates random state and a PKCE verifier, then POSTs
+Use the same account row in the hosted page and APP. The implementation is
+[`web/src/account.tsx`](web/src/account.tsx): copy its `PROVIDER_NAMES`,
+`AccountRow`, `Symbol` and `AccountCard` verbatim, changing only imports to the
+APP's local UI leaves and the account type. The row uses the Card Applets pattern
+from `src/@components/views/card/card-management-content.tsx`. `Symbol` is private
+there, so this package copies that exact style: 36×36px, 9px radius, primary
+background, white 28px `AppIcon`. The remaining pieces are imported shared
+components, including the trailing `IconButton` (32px hit area).
+
+`AccountRow` uses `ListItem` with `align-items: center`, a 12px item gap, 2px
+content gap and 20px name line height. Row padding is zero inside the fieldset's
+own padding. Names have `min-width: 0`, `overflow-wrap: anywhere` and
+`text-wrap: pretty`; `Address` has `width: 100%`. Long email values wrap; wallet
+addresses use the shared middle ellipsis with the full value in `title` and
+`aria-label`. The APP must retain these styles with the markup below.
+
+| Method | Icon        | Name                                           | Description           |
+| ------ | ----------- | ---------------------------------------------- | --------------------- |
+| email  | `Mail`      | verified email; `Signed in.` if absent         | Email                 |
+| social | `UserRound` | verified email; `<Provider> account` if absent | provider display name |
+| wallet | `Wallet`    | verified login in `Address`                    | Wallet                |
+
+Provider display names are Google, X, GitHub, Discord, Apple, Facebook and
+Farcaster. Neither embedded method ever falls back to the wallet address.
+`icon`, `name` and `description` below follow that table. Exact shared markup:
+
+```tsx
+<InfoFieldset>
+  <InfoLegend>Signed in as</InfoLegend>
+  <AccountRow>
+    <Symbol>
+      <AppIcon icon={icon} aria-hidden="true" />
+    </Symbol>
+    <ListItemContent>
+      <ListItemName>
+        {account.method === 'wallet' ? (
+          <Address title={account.login} aria-label={account.login}>
+            {account.login}
+          </Address>
+        ) : (
+          name
+        )}
+      </ListItemName>
+      <ListItemDescription>{description}</ListItemDescription>
+    </ListItemContent>
+    <IconButton
+      aria-label="Use another account"
+      disabled={busy}
+      onClick={onChange}
+    >
+      <AppIcon icon={ArrowLeftRight} aria-hidden="true" />
+    </IconButton>
+  </AccountRow>
+</InfoFieldset>
+```
+
+Cancellation immediately returns to Monoid. If the browser stays open, show
+`<InfoMessage>Sign-in cancelled.</InfoMessage>` and one neutral `Back to Monoid`
+button, with no completion graphic. Only approval shows `OperationComplete`
+with `label="Signed in"`, followed by `Return to Monoid to continue.`. The
+optional label belongs only to this page's completion adapter; the APP's
+component is unchanged.
+
+1. The client creates random state and a PKCE verifier, then POSTs
    `/auth/login/start` with
    `{redirectUri, state, codeChallenge: base64url(SHA256(verifier)),
 codeChallengeMethod: "S256"}`. The redirect must exactly match the allowlist.
@@ -92,30 +158,57 @@ codeChallengeMethod: "S256"}`. The redirect must exactly match the allowlist.
    The browser sends the Reown credential directly to the Worker, which verifies
    it remotely. Provider credentials never cross the APP callback.
 4. The browser returns to the original allowlisted callback with only a one-use
-   code and state. `app.monoid://authority/callback` is a proposed native callback.
+   code and state. `app.monoid://authority/callback` is the APP callback.
    The client must check the exact callback and state, then POST
    `/auth/login/token {code, codeVerifier, redirectUri}` within 60 seconds.
    Code redemption is atomic and bound to both PKCE and the original redirect.
    The client must reject cancelled, expired, duplicate and unrelated callbacks.
 5. The client receives an opaque Authority bearer and can call `/v1/namespaces`.
-   A session lasts at most 15 minutes and never beyond the provider expiry.
-   The proposed APP implementation should keep the bearer in memory and clear
+   A session expires after five minutes without an authenticated request.
+   Successful bearer authentication renews that idle window, within a fixed
+   cap of 15 minutes from verified sign-in or the provider expiry, whichever
+   comes first. Token response `expiresIn` is the remaining idle window in
+   seconds (at most 300), not the full absolute lifetime. Renewal and GitHub
+   token rotation never reset the absolute cap. Public requests and failed
+   authentication do not renew it; expired sessions return 401.
+   The APP keeps the bearer in memory and clears
    pending-login metadata after completion or cancellation.
-6. Client sign-out should clear its local session and call `/auth/logout`.
-   The system browser has a separate Reown session, which may still be present
-   on a later sign-in. Protected operations revalidate Reown remotely and fail
+6. The APP clears its bearer and calls `/auth/logout` on completion, leaving
+   the flow, hiding the app and after five idle minutes. Logout removes the
+   server session; an in-flight provider verification cannot restore a revoked
+   or expired session. Protected operations revalidate Reown remotely and fail
    closed on provider errors.
 
-Future APP work includes a chosen entry point, system-browser launch, warm/cold
-callback handling, secure pending-flow storage, platform callback registration,
-and cancellation/late-response handling. No native callback scheme or HTTPS app
-link is registered by this Worker. Prefer verified HTTPS app links when domain
-associations are available; allowlist entries alone do not create a callback
-handler or establish native acceptance.
+The browser sign-in also ends on approval or cancellation. After obtaining the
+redirect URL, the page immediately clears its project-scoped SIWX auth/nonce
+keys and stops accepting account updates, starts `siwx.setSessions([])` and
+`appkit.disconnect()` (after `appkit.ready()`), then returns to Monoid **without
+awaiting** SDK cleanup. Late SIWX session events erase credentials again. If the
+browser suspends before disconnect finishes, the next flow clears these keys
+again and uses `enableReconnect: false`, which disconnects cached connections
+instead of restoring them. Other projects' SIWX keys are untouched.
 
-Future Bundle UI integration should use the selected `{source, id}` as `owner`,
-choose a subgroup and its immutable peer-extension policy, and complete login
-before starting NFC. It must read the card's Identity public key, request
+These calls were checked in the installed AppKit **1.8.24** source:
+
+- `web/node_modules/@reown/appkit-controllers/dist/esm/src/features/siwx/reown-authentication/ReownAuthentication.js`:
+  `setSessions([])` clears the configured auth/nonce keys and OTP state. It does
+  not revoke the provider JWT needed for the pending Authority code exchange.
+- `web/node_modules/@reown/appkit/dist/esm/src/client/appkit-base-client.js`:
+  public `ready()` waits for initialization; `disconnect()` uses the active
+  connector, and `enableReconnect: false` clears existing connections at startup.
+- `web/node_modules/@reown/appkit-adapter-ethers/dist/esm/src/client.js` and
+  `web/node_modules/@reown/appkit-wallet/dist/esm/src/W3mFrameProvider.js`:
+  an AUTH connector disconnect clears embedded-wallet login caches and sends
+  `APP_SIGN_OUT` to its frame. Its response can take up to three seconds, so it
+  must not delay the callback. SIWX cleanup is explicit because disconnect alone
+  does not always clear ReownAuthentication credentials.
+
+Native system-browser launch, warm/cold callback handling, pending-flow storage
+and platform callback registration belong to the APP. Allowlist entries alone
+do not register a handler or establish device acceptance.
+
+Bundle enrollment uses the selected `{source, id}` as `owner`, chooses a bundle
+name and its immutable peer-extension policy, and completes login before NFC. It must read the card's Identity public key, request
 `/v1/bundle`, authenticate the Secret PIN, pass decoded `{publicKey, data}` to
 Join Bundle `0x24`, and verify the returned Bundle SHA-256. The card must already
 trust this Authority key. Never automatically replay an uncertain card operation.
@@ -157,6 +250,85 @@ References: [AppKit SIWX](https://docs.reown.com/appkit/react/core/siwx),
 
 ## HTTP API
 
+### Account and sign-in method
+
+`POST /auth/login/complete` requires exactly
+`{flow: string, token: string, method: "wallet" | "email" | "social", provider?: string}`.
+Missing or invalid methods return `400 invalid_sign_in_method`; extra fields
+(including email, address or profile claims) return `400 invalid_login_request`.
+`provider` is **required for social** and must be one of `google`, `github`,
+`apple`, `facebook`, `x`, `discord`, `farcaster`. It must be **absent for email
+and wallet**. Missing, wrong-case, unknown or non-string social providers, and
+any provider on another method (including null), return
+`400 invalid_sign_in_provider` without consuming the flow. The list matches
+AppKit 1.8.24's `SocialProvider` union in
+`web/node_modules/@reown/appkit-common/dist/types/src/utils/TypeUtil.d.ts` and
+`DEFAULT_SOCIALS` in `@reown/appkit-controllers/dist/esm/src/utils/ConstantsUtil.js`;
+a contract test checks it against the installed SDK. The hosted chooser retains
+its configured Google/GitHub/Apple choices; the API accepts all seven SDK values.
+The diagnostic `/auth/reown` exchange uses `{token, method, provider?}` with the
+same validation.
+Neither endpoint accepts an email as an identity claim.
+
+`POST /auth/login/token` returns
+`{accessToken, tokenType: "Bearer", expiresIn, account}`; `GET /v1/me` returns
+`{account}`. Both use this exact account shape:
+
+```ts
+{
+  id: string; // unchanged: <Reown project ID>:<verified profile UUID>
+  login: string; // unchanged: verified SIWX address, including for embedded wallets
+  method: 'wallet' | 'email' | 'social';
+  email?: string; // nonempty string from the verified Reown /auth/v1/me response
+  provider?: 'google' | 'github' | 'apple' | 'facebook' | 'x' | 'discord' | 'farcaster'; // social only
+}
+```
+
+Do not display `login` for email/social sign-ins. Display the verified `email`;
+if Reown supplies none, use the shared row's fallback above without falling back
+to the embedded address. Wallet sign-ins display `login`, even if an email is also
+present. Revalidation refreshes `login` and `email` from Reown while retaining
+the session's method and provider. Email/provider never determines identity,
+namespace IDs or roots.
+
+The hosted page reads AppKit 1.8.24's `getAccount('eip155')` and subscribes with
+`subscribeAccount(..., 'eip155')`. Verified against the installed source:
+`web/node_modules/@reown/appkit/dist/esm/src/client/appkit-base-client.js`,
+`getAccount()` (lines 1820–1868), and the `UseAppKitAccountReturn` type in
+`@reown/appkit-controllers/dist/types/src/utils/TypeUtil.d.ts`.
+`embeddedWalletInfo` is supplied only for the active `AUTH` connector;
+`embeddedWalletInfo.authProvider === 'email'` selects `email`, other social
+provider strings select `social`, and a connected account without that metadata
+selects `wallet`. An incomplete embedded provider is not classified as a wallet.
+The social provider is read from that same `embeddedWalletInfo.authProvider`.
+Address, method or provider changes invalidate pending profile verification; Continue
+rechecks the current selection and credential before submission.
+
+**Method/provider are client-asserted presentation and eligibility metadata, not
+verified proof of a sign-in mechanism or a social identity.** They only change how the signed-in user's own
+namespaces are presented and offered; it grants no identity or additional
+ownership. A caller asserting `wallet` still has to prove that exact wallet via
+the existing remote SIWX validation and cannot choose someone else's wallet.
+Do not use this field as an attestation that a wallet is externally held.
+Provider only chooses the row's label; it does not grant GitHub organization
+access, change ownership or authorize anything. Social sessions/pending codes
+without a valid stored provider require a fresh sign-in (`401
+reown_reauthentication_required`); none is inferred from an email or address.
+
+Only `wallet` sessions list or authorize a Wallet owner, including bundle
+listing, namespace renaming and bundle issuance. Email/social sessions retain
+the same Reown owner; its default label is the verified email, or `Account`
+when absent. User-assigned namespace labels remain intact. Profile UUID,
+project/origin/expiry checks, SIWX address verification, PKCE, cookies and root
+derivation are unchanged. No accounts are merged by email or method.
+
+Sessions or pending codes created before method metadata require a new sign-in
+(`401 reown_reauthentication_required`); no method is inferred for them. Durable
+namespace labels and bundle policies are not migrated or removed.
+Sessions or pending codes created before the idle policy also require a new
+sign-in (`401 unauthorized`): they lack the internal fixed `absoluteExpiresAt`
+cap and are not renewed. That field is not part of the HTTP account shape.
+
 Production base: `https://authority.monoid.app`, with API and login endpoints at
 the origin root, for example `/v1/metadata`, `/auth/login/start` and `/login`.
 Local development retains the base `http://localhost:8787/api/authority`.
@@ -169,14 +341,14 @@ Unknown internal failures return sanitized 500 without credential logging.
 | --------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | GET `/v1/metadata`          | Public                       | Authority public key, Bundle algorithm and `time: {protocol, version, algorithm}`                                                |
 | POST `/v1/time`             | Public, rate limited         | `{challenge}` → `{publicKey, data, signature}`                                                                                   |
-| POST `/auth/reown`          | Reown JWT in body            | `{token}` → `{accessToken, tokenType, expiresIn, account}`                                                                       |
+| POST `/auth/reown`          | Reown JWT in body            | `{token, method, provider?}` → `{accessToken, tokenType, expiresIn, account}`                                                    |
 | POST `/auth/login/start`    | Public, rate limited         | `{redirectUri, state, codeChallenge, codeChallengeMethod: "S256"}` → `{authorizationUrl, expiresIn}`                             |
 | GET `/auth/login`           | One-use request              | Consumes request, sets browser cookie, redirects to hosted `/login`                                                              |
 | GET `/login`                | Public page                  | Production sign-in UI; requires a valid browser-bound flow to authenticate                                                       |
 | GET `/auth/login/context`   | Flow + browser cookie        | `?flow=...` → `{projectId, expiresAt}`                                                                                           |
-| POST `/auth/login/complete` | Same Origin + browser cookie | `{flow, token}` → `{redirectUrl}` containing one-use code/state                                                                  |
+| POST `/auth/login/complete` | Same Origin + browser cookie | `{flow, token, method, provider?}` → `{redirectUrl}` containing one-use code/state                                               |
 | POST `/auth/login/cancel`   | Same Origin + browser cookie | `{flow}` → `{redirectUrl}` containing cancellation/state                                                                         |
-| POST `/auth/login/token`    | Code + PKCE + redirect       | `{code, codeVerifier, redirectUri}` → opaque Authority session                                                                   |
+| POST `/auth/login/token`    | Code + PKCE + redirect       | `{code, codeVerifier, redirectUri}` → `{accessToken, tokenType, expiresIn, account}`                                             |
 | GET `/v1/me`                | Authority bearer             | `{account}`                                                                                                                      |
 | GET `/v1/organizations`     | Bearer + GitHub connection   | `{organizations: [{id, login}]}`                                                                                                 |
 | POST `/v1/groups/list`      | Bearer + owner permission    | `{owner, after?}` → `{owner, groups, next}`; at most 100 rows                                                                    |
@@ -258,7 +430,7 @@ control could change the code to read and disclose the persisted material.
 The transition from the initial imported keys was explicitly approved as a
 replacement of both secrets. It changes the Authority public key and every
 derived Bundle root. Initialization invalidates the old short-lived sessions and
-login grants while preserving namespace labels and group policies. Clients must
+login grants while preserving namespace labels and bundle policies. Clients must
 sign in again; cards that pinned the previous public key need an explicit trust
 update. Existing offline Bundles remain usable under their old roots and are not
 remotely revoked. The old Worker Secrets and local recovery copy are retired as
@@ -273,10 +445,10 @@ Set `GITHUB_CLIENT_ID` when organization support is enabled; callback URL is
 `<AUTHORITY_URL>/auth/github/callback`. GitHub organization OAuth restrictions/SSO
 may require administrator approval; inaccessible membership fails closed.
 Set exact `APP_REDIRECT_URIS`, `APP_ORIGINS` and `REOWN_AUTH_ORIGINS` JSON arrays.
-The checked-in configuration contains proposed callback allowlist entries
+The checked-in configuration contains callback allowlist entries
 `app.monoid://authority/callback` and `https://www.monoid.app/authority`;
-API CORS origins are listed separately in `APP_ORIGINS`. These are protocol configuration,
-not implemented APP handlers; confirm them when the future client is integrated.
+API CORS origins are listed separately in `APP_ORIGINS`. These are protocol configuration; the APP registers and handles its native
+callback separately.
 The hosted page and Worker share `https://authority.monoid.app`, which is the
 Reown authentication origin. The AppKit project must have **Social & Email** and
 **Reown Authentication** enabled and permit that origin. Read-only preflight on
@@ -294,7 +466,7 @@ same origin. Complete production login still requires end-to-end verification.
 Keep the Durable Object namespace, object name and key record stable. Deleting
 the object/storage, changing its namespace or rolling storage back before key
 creation can lose the identity and lead to newly generated keys. A point-in-time
-restore also rewinds group policies and short-lived records, potentially
+restore also rewinds bundle policies and short-lived records, potentially
 restoring previously consumed codes or revoked sessions. Restore the key record
 and related state together, invalidate sessions after recovery, and verify the
 public key against the expected public fingerprint before resuming enrollment.
@@ -312,7 +484,7 @@ SQLite Durable Object `authority` stores policies and short-lived login records.
 Provider tokens are encrypted with AES-GCM under a domain-separated key derived
 from the master. Random bearer/code keys are stored hashed. Proof validation and
 code consumption use one atomic SQL statement; expired login records are cleaned
-by an hourly alarm only while records remain. Group policies remain durable.
+by an hourly alarm only while records remain. Bundle policies remain durable.
 
 ## Validation and rollout
 
@@ -366,7 +538,7 @@ generated authorization URLs and authentication allowlists still use localhost.
 Full login from another device needs a reachable HTTPS development origin,
 matching `AUTHORITY_URL`, exact origin/redirect allowlists and a callback client.
 A phone's `localhost` is not the development computer. Native APP launch and
-callback acceptance remain future integration work.
+callback acceptance must be checked on the target devices.
 
 For a quick check, open `/v1/metadata`. To request a time proof in PowerShell:
 
@@ -454,7 +626,55 @@ and upstream fixes before rollout. No incompatible major-version overrides or
 forced SDK downgrades are applied. Recheck with `npm --prefix web audit` and
 `npm --prefix demo audit` as advisories and upstream releases change.
 
-### Checks
+### Hosted page component mapping
+
+| Hosted element / state             | APP equivalent                                       | Implementation                                                                                                                     |
+| ---------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Monoid mark                        | `src/@assets/monoid.svg`, card logo treatment        | Original white mark, primary background, approved 56px square and 14px radius.                                                     |
+| Sign in to Monoid                  | `ViewHeaderTitle`                                    | Shared heading leaf in the approved centered browser identity block; 24px/32px, no corner header.                                  |
+| Authority host                     | `IconTag`, `IconTagName`, `WhiteTag`, `AppIcon`      | Existing bordered icon/name tag, with `Lock`. Text is the actual `location.host`, so development and custom hosts remain truthful. |
+| Purpose / return line              | `InfoSectionItemLabel`                               | Shared secondary text color, 14px/21px, centered.                                                                                  |
+| Account card                       | Card Applets row + `InfoFieldset` / `InfoLegend`     | Exact app integration markup above, 36px Symbol and shared list name/description.                                                  |
+| Use another account                | `IconButton` + `AppIcon(ArrowLeftRight)`             | Trailing row action, disabled while busy, accessible name; no third footer button.                                                 |
+| Preparing                          | `StandaloneLoadingSpinner` (shared `LoadingSpinner`) | Centered under identity, with a status label.                                                                                      |
+| No flow / busy notice / cancelled  | `InfoMessage`                                        | Existing notice component. Cancellation remains quiet with one neutral back button.                                                |
+| Error                              | `WarningMessage`                                     | Existing warning component and actionable sanitized copy. The shared component supplies `role="status"`.                           |
+| Approved                           | Local `OperationComplete` adapter                    | Existing success graphic/animation, optional `label="Signed in"`, secondary return line and neutral back button.                   |
+| Sign in / Continue / Cancel / Back | Local APP `Button` adapter                           | Existing 40px text-only buttons, primary + neutral; 8px footer gap.                                                                |
+| Theme / AppKit accent              | Shared `variables.css`                               | Primary color read from the app theme.                                                                                             |
+
+The completion adapter retains the app's markup/animations and direct UI-leaf
+imports; its only new option is `label` (default `Complete`). `Symbol` is a
+small copy of the private Card Applets style. These have the same maintenance
+boundary as the Button adapter; no APP services or source are changed.
+
+The approved browser-specific composition has no in-app page equivalent: a
+centered identity block explaining Monoid and this Authority's purpose, 48px top
+inset, 16px identity gaps, 32px separation to content, and a centered column capped
+at 400px with a 16px inset. Below 600px, actions stay at the viewport bottom.
+At the single `min-width: 600px` breakpoint, the identity, content and actions
+center vertically as one group. Actions follow the content by the app's
+`--view-section-gap` (16px default); empty content/actions add no gap. The
+identity-to-content gap stays 32px. The centered title keeps its 24px/32px size
+and inherits `ViewHeaderTitle`'s app typography/weight instead of forcing 600.
+AppKit's provider chooser, email/OTP, social
+consent/signature screens and browser-to-APP callback/retry remain SDK/browser
+behavior. Those are the only elements without direct APP component equivalents.
+
+Rendering validation (2026-10-27): Chrome at **412×915** and **1440×1000**, served
+from the web dev server with synthetic provider/API responses and a locally
+routed production hostname. Screenshots cover no flow, preparing, signed out,
+email, social with/without email, wallet, error, cancelled and approved, plus a
+long email and absent email. Checks include the original logo, tag, 400px column,
+shared row geometry, full-address accessible value, wrapping, button actions,
+non-blocking callback cleanup, and no horizontal overflow. This does not claim
+live OAuth, embedded-wallet sign-out or native callback acceptance.
+
+The source uses the APP's `classNames` import spelling consistently. Mixing it
+with `classnames` gave Vite 8's Windows dependency optimizer two conflicting
+entry names (`classNames2.js`), preventing the dev server from starting.
+
+### Automated checks
 
 Requires Node 24 (tests use `node:sqlite`):
 
@@ -489,12 +709,9 @@ signature binding, PKCE/state/cookie/replay checks, live permission changes,
 policy immutability and owner isolation. Physical Java Card acceptance,
 complete production Reown login and GitHub organization OAuth remain rollout checks.
 
-The hosted page has been checked in Chrome: AppKit displays wallet/email/social
-options and GitHub social sign-in reaches GitHub's login page. The header
-typography and button geometry/colors match the APP's shared components.
-The backend tests verify cancellation responses and single-use code redemption.
-A complete authenticated handoff through this new page remains unverified;
-APP and physical iOS/Android acceptance belong to the future client integration.
+The hosted page's rendering checks are described below. They use synthetic
+provider/API responses for deterministic states and do not establish a live
+Reown sign-in or physical iOS/Android callback acceptance.
 
 The earlier local demo has also been checked in Chrome: AppKit opens its wallet chooser,
 the time proof passes WebCrypto verification with the matching random challenge,

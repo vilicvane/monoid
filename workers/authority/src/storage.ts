@@ -1,4 +1,5 @@
 import type {Group, Namespace, Owner} from './domain.js';
+import {SESSION_IDLE_TTL} from './session.js';
 
 export class AuthorityStore {
   constructor(private readonly storage: Pick<DurableObjectStorage, 'sql'>) {
@@ -53,6 +54,24 @@ export class AuthorityStore {
           now,
         )
         .toArray()[0]?.value ?? null
+    );
+  }
+
+  touchSession(key: string, absoluteExpiresAt: number, now: number): boolean {
+    // Update only a still-live row. Never resurrect logout/expiry or shorten a
+    // newer concurrent touch, and always obey the verified absolute cap.
+    return (
+      this.storage.sql
+        .exec(
+          'UPDATE records SET expires = MIN(?, MAX(expires, ?)) WHERE key = ? AND expires > ? AND ? > ? RETURNING key',
+          absoluteExpiresAt,
+          now + SESSION_IDLE_TTL,
+          key,
+          now,
+          absoluteExpiresAt,
+          now,
+        )
+        .toArray().length > 0
     );
   }
 

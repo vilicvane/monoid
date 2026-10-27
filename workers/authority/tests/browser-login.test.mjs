@@ -20,11 +20,12 @@ function setup(context) {
         put: (...args) => store.put(...args),
         get: key => store.get(key, Date.now()),
         take: (key, proof) => store.take(key, proof, Date.now()),
+        touchSession: (key, cap) => store.touchSession(key, cap, Date.now()),
       }),
     },
     REQUEST_LIMIT: {limit: async () => ({success: true})},
   };
-  const upstream = {status: 200, calls: 0};
+  const upstream = {status: 200, calls: 0, claims: {}};
   const handler = createHandler(async (url, init) => {
     assert.equal(new URL(url).pathname, '/auth/v1/me');
     assert.equal(init.headers.Authorization, 'Bearer provider-token');
@@ -38,6 +39,7 @@ function setup(context) {
         domain: 'www.monoid.app',
         address: '0x' + 'ab'.repeat(20),
         chainNamespace: 'eip155',
+        ...upstream.claims,
       },
       {status: upstream.status},
     );
@@ -81,10 +83,15 @@ function setup(context) {
     };
     return {input, verifier, path, flow, headers, fullCookie};
   };
-  const finish = async flow => {
+  const finish = async (flow, method = 'wallet', provider = 'google') => {
     const response = await call(
       '/auth/login/complete',
-      {flow: flow.flow, token: 'provider-token'},
+      {
+        flow: flow.flow,
+        token: 'provider-token',
+        method,
+        ...(method === 'social' ? {provider} : {}),
+      },
       flow.headers,
     );
     assert.equal(response.status, 200);
@@ -198,7 +205,7 @@ test('hosted login rejects weak requests and browser CSRF without burning the fl
   ]) {
     const response = await f.call(
       '/auth/login/complete',
-      {flow: flow.flow, token: 'provider-token'},
+      {flow: flow.flow, token: 'provider-token', method: 'wallet'},
       headers,
     );
     assert.ok([400, 403].includes(response.status));
@@ -233,7 +240,7 @@ test('racing completions issue only one code; cancellation is bound to the origi
     (
       await f.call(
         '/auth/login/complete',
-        {flow: first.flow, token: 'provider-token'},
+        {flow: first.flow, token: 'provider-token', method: 'wallet'},
         first.headers,
       )
     ).status,
@@ -243,12 +250,12 @@ test('racing completions issue only one code; cancellation is bound to the origi
   const responses = await Promise.all([
     f.call(
       '/auth/login/complete',
-      {flow: second.flow, token: 'provider-token'},
+      {flow: second.flow, token: 'provider-token', method: 'wallet'},
       second.headers,
     ),
     f.call(
       '/auth/login/complete',
-      {flow: second.flow, token: 'provider-token'},
+      {flow: second.flow, token: 'provider-token', method: 'wallet'},
       second.headers,
     ),
   ]);
@@ -265,7 +272,7 @@ test('expiry and provider failures fail closed; unverified browser login remains
     (
       await f.call(
         '/auth/login/complete',
-        {flow: flow.flow, token: 'provider-token'},
+        {flow: flow.flow, token: 'provider-token', method: 'wallet'},
         flow.headers,
       )
     ).status,
@@ -311,4 +318,145 @@ test('a provider revoked before exchange cannot become an Authority session', as
   assert.equal((await f.call('/auth/login/token', input)).status, 401);
   f.upstream.status = 200;
   assert.equal((await f.call('/auth/login/token', input)).status, 400);
+});
+
+for (const method of ['wallet', 'email', 'social']) {
+  for (const provider of method === 'social'
+    ? ['google', 'github', 'apple', 'facebook', 'x', 'discord', 'farcaster']
+    : [undefined]) {
+    for (const email of [undefined, 'verified@example.com']) {
+      test(`hosted ${provider ?? method} token/me account with ${email ? 'verified' : 'no'} email`, async context => {
+        const f = setup(context);
+        f.upstream.claims.email = email;
+        const flow = await f.start();
+        const code = await f.finish(flow, method, provider);
+        const response = await f.call('/auth/login/token', {
+          code,
+          codeVerifier: flow.verifier,
+          redirectUri: flow.input.redirectUri,
+        });
+        assert.equal(response.status, 200);
+        const session = await response.json();
+        assert.ok(session.expiresIn > 0 && session.expiresIn <= 300);
+        const account = {
+          id: 'test-project:11111111-1111-4111-8111-111111111111',
+          login: '0x' + 'ab'.repeat(20),
+          ...(email ? {email} : {}),
+          method,
+          ...(provider ? {provider} : {}),
+        };
+        assert.deepEqual(session.account, account);
+        assert.deepEqual(Object.keys(session).sort(), [
+          'accessToken',
+          'account',
+          'expiresIn',
+          'tokenType',
+        ]);
+        const headers = {Authorization: `Bearer ${session.accessToken}`};
+        const me = await f.call('/v1/me', undefined, headers);
+        assert.equal(me.status, 200);
+        assert.deepEqual(await me.json(), {account});
+        // Revalidation refreshes provider data without losing client method metadata.
+        f.upstream.claims.email = 'updated@example.com';
+        assert.deepEqual(
+          await (await f.call('/v1/me', undefined, headers)).json(),
+          {
+            account: {...account, email: 'updated@example.com'},
+          },
+        );
+        delete f.upstream.claims.email;
+        const withoutEmail = {...account};
+        delete withoutEmail.email;
+        assert.deepEqual(
+          await (await f.call('/v1/me', undefined, headers)).json(),
+          {account: withoutEmail},
+        );
+      });
+    }
+  }
+}
+
+test('complete strictly validates method and rejects identity/email claims without consuming a flow', async context => {
+  const f = setup(context);
+  const flow = await f.start();
+  const input = {flow: flow.flow, token: 'provider-token', method: 'wallet'};
+  for (const method of [
+    undefined,
+    null,
+    '',
+    'Wallet',
+    'google',
+    ' email',
+    1,
+    true,
+    [],
+    {},
+    {kind: 'wallet'},
+  ]) {
+    const response = await f.call(
+      '/auth/login/complete',
+      {...input, method},
+      flow.headers,
+    );
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), {error: 'invalid_sign_in_method'});
+  }
+  for (const extra of [
+    {email: 'forged@example.com'},
+    {address: '0x123'},
+    {id: 'forged'},
+  ]) {
+    const response = await f.call(
+      '/auth/login/complete',
+      {...input, ...extra},
+      flow.headers,
+    );
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), {error: 'invalid_login_request'});
+  }
+  for (const patch of [{flow: null}, {token: null}, {token: ''}]) {
+    assert.equal(
+      (await f.call('/auth/login/complete', {...input, ...patch}, flow.headers))
+        .status,
+      400,
+    );
+  }
+  assert.equal(f.upstream.calls, 0);
+  await f.finish(flow, 'social');
+});
+
+test('complete requires a listed social provider and forbids provider on email/wallet', async context => {
+  const f = setup(context);
+  const flow = await f.start();
+  const invalid = [
+    ...[
+      undefined,
+      null,
+      '',
+      'Google',
+      'twitter',
+      'email',
+      1,
+      true,
+      [],
+      {},
+      ['google'],
+    ].map(provider => ({method: 'social', provider})),
+    ...['email', 'wallet'].flatMap(method =>
+      ['google', null, ''].map(provider => ({method, provider})),
+    ),
+  ];
+  for (const metadata of invalid) {
+    const response = await f.call(
+      '/auth/login/complete',
+      {flow: flow.flow, token: 'provider-token', ...metadata},
+      flow.headers,
+    );
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), {
+      error: 'invalid_sign_in_provider',
+    });
+  }
+  assert.equal(f.upstream.calls, 0);
+  await f.finish(flow, 'social', 'x');
 });

@@ -52,13 +52,21 @@ export class BrowserFlow {
     return this.request(`context?flow=${encodeURIComponent(this.flow)}`);
   }
 
-  async finish(action, token) {
+  async finish(action, credential) {
     if (this.state !== 'active') return null;
     this.state = 'finishing';
     try {
       const result = await this.request(action, {
         flow: this.flow,
-        ...(token ? {token} : {}),
+        ...(action === 'complete'
+          ? {
+              token: credential?.token,
+              method: credential?.method,
+              ...(credential?.method === 'social'
+                ? {provider: credential.provider}
+                : {}),
+            }
+          : {}),
       });
       this.state = 'finished';
       if (this.storage.getItem(FLOW_KEY) === this.flow)
@@ -79,15 +87,40 @@ export function canonicalConnection(value) {
   return `${namespace}:${chain}:${namespace === 'eip155' ? address.toLowerCase() : address}`;
 }
 
+// AppKit 1.8.24 getAccount() exposes this only for the active AUTH connector.
+// This is presentation metadata, never proof of an identity or an email.
+export function signInMethod(account) {
+  if (!account?.isConnected) return undefined;
+  if (!account.embeddedWalletInfo) return 'wallet';
+  const provider = account.embeddedWalletInfo.authProvider;
+  if (provider === 'email') return 'email';
+  return typeof provider === 'string' && provider ? 'social' : undefined;
+}
+
+export function signInProvider(account) {
+  return signInMethod(account) === 'social'
+    ? account.embeddedWalletInfo.authProvider
+    : undefined;
+}
+
 export class AccountSelection {
   connection;
+  method;
+  provider;
   revision = 0;
   stopped = false;
 
-  setConnection(connection) {
+  setConnection(connection, method, provider) {
     const next = canonicalConnection(connection);
-    if (next === this.connection) return false;
+    if (
+      next === this.connection &&
+      method === this.method &&
+      provider === this.provider
+    )
+      return false;
     this.connection = next;
+    this.method = method;
+    this.provider = provider;
     this.revision++;
     return true;
   }

@@ -50,7 +50,9 @@ function options(resourcePersistencePath, script) {
           exp: Math.floor(Date.now() / 1000) + 3600,
           uri: 'https://authority.monoid.app/login',
           domain: 'authority.monoid.app',
-          address: '0x123',
+          address: '0x' + 'ab'.repeat(20),
+          chainNamespace: 'eip155',
+          email: 'verified@example.com',
         });
       },
     }),
@@ -97,7 +99,10 @@ test('workerd keeps generated keys, group roots and sessions across a complete r
   assert.equal(await stub.take('authority-keys:v1', ''), null);
   for (const path of ['/v1/keys', '/v1/keys/export', '/v1/keys/rotate'])
     assert.equal((await call(path, {})).status, 404);
-  const login = await call('/auth/reown', {token: 'test-token'});
+  const login = await call('/auth/reown', {
+    token: 'test-token',
+    method: 'wallet',
+  });
   assert.equal(login.status, 200, await login.clone().text());
   const session = await login.json();
   const recipient = createECDH('prime256v1');
@@ -198,7 +203,7 @@ test('workerd keeps generated keys, group roots and sessions across a complete r
   );
   const completed = await call(
     '/auth/login/complete',
-    {flow, token: 'test-token'},
+    {flow, token: 'test-token', method: 'wallet'},
     undefined,
     {
       Cookie: authorized.headers.get('Set-Cookie').split(';')[0],
@@ -228,6 +233,157 @@ test('workerd keeps generated keys, group roots and sessions across a complete r
     (await call('/v1/bundle', input, hostedSession.accessToken)).status,
     200,
   );
+});
+
+for (const method of ['wallet', 'email', 'social']) {
+  test(`workerd persists hosted ${method} method and enforces wallet eligibility after restart`, async context => {
+    const root = await mkdtemp(join(tmpdir(), 'monoid-authority-runtime-'));
+    let mf = new Miniflare(options(root));
+    context.after(async () => {
+      await mf.dispose();
+      await removePersistence(root);
+    });
+    const call = (path, body, headers = {}) =>
+      mf.dispatchFetch(base + path, {
+        method: body === undefined ? 'GET' : 'POST',
+        headers: {'Content-Type': 'application/json', ...headers},
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    const verifier = randomToken();
+    const redirectUri = 'app.monoid://authority/callback';
+    const start = await call('/auth/login/start', {
+      redirectUri,
+      state: randomToken(),
+      codeChallenge: await tokenHash(verifier),
+      codeChallengeMethod: 'S256',
+    });
+    const authorized = await mf.dispatchFetch(
+      (await start.json()).authorizationUrl,
+      {redirect: 'manual'},
+    );
+    const flow = new URL(authorized.headers.get('Location')).searchParams.get(
+      'flow',
+    );
+    const browserHeaders = {
+      Origin: base,
+      Cookie: authorized.headers.get('Set-Cookie').split(';')[0],
+    };
+    const invalid = await call(
+      '/auth/login/complete',
+      {flow, token: 'test-token', method: {kind: method}},
+      browserHeaders,
+    );
+    assert.equal(invalid.status, 400);
+    const complete = await call(
+      '/auth/login/complete',
+      {
+        flow,
+        token: 'test-token',
+        method,
+        ...(method === 'social' ? {provider: 'github'} : {}),
+      },
+      browserHeaders,
+    );
+    assert.equal(complete.status, 200);
+    const code = new URL((await complete.json()).redirectUrl).searchParams.get(
+      'code',
+    );
+    // The pending code contains the method too, independently of the browser.
+    await mf.dispose();
+    mf = new Miniflare(options(root));
+    const exchanged = await call('/auth/login/token', {
+      code,
+      codeVerifier: verifier,
+      redirectUri,
+    });
+    assert.equal(exchanged.status, 200);
+    const session = await exchanged.json();
+    assert.ok(session.expiresIn > 0 && session.expiresIn <= 300);
+    const account = {
+      id: `${project}:11111111-1111-4111-8111-111111111111`,
+      login: '0x' + 'ab'.repeat(20),
+      email: 'verified@example.com',
+      method,
+      ...(method === 'social' ? {provider: 'github'} : {}),
+    };
+    assert.deepEqual(session.account, account);
+    await mf.dispose();
+    mf = new Miniflare(options(root));
+    const headers = {Authorization: `Bearer ${session.accessToken}`};
+    assert.deepEqual(await (await call('/v1/me', undefined, headers)).json(), {
+      account,
+    });
+    const {namespaces} = await (
+      await call('/v1/namespaces', undefined, headers)
+    ).json();
+    assert.deepEqual(
+      namespaces.map(item => item.source),
+      method === 'wallet' ? ['reown', 'wallet'] : ['reown'],
+    );
+    const owner = {source: 'wallet', id: `eip155:${account.login}`};
+    const recipient = createECDH('prime256v1');
+    recipient.generateKeys();
+    for (const [path, body] of [
+      ['/v1/groups/list', {owner}],
+      ['/v1/namespaces/name', {owner, displayName: 'Wallet'}],
+      [
+        '/v1/bundle',
+        {
+          owner,
+          groupName: 'family',
+          allowPeerExtension: false,
+          recipientPublicKey: recipient.getPublicKey().toString('base64url'),
+        },
+      ],
+    ]) {
+      const response = await call(path, body, headers);
+      assert.equal(
+        response.status,
+        method === 'wallet' ? 200 : 403,
+        await response.clone().text(),
+      );
+    }
+  });
+}
+
+test('workerd never renews an idle-expired, capped or revoked session', async context => {
+  const root = await mkdtemp(join(tmpdir(), 'monoid-authority-runtime-'));
+  const mf = new Miniflare(options(root));
+  context.after(async () => {
+    await mf.dispose();
+    await removePersistence(root);
+  });
+  const response = await mf.dispatchFetch(base + '/auth/reown', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({token: 'test-token', method: 'email'}),
+  });
+  assert.equal(response.status, 200);
+  const session = await response.json();
+  assert.ok(session.expiresIn > 0 && session.expiresIn <= 300);
+  const stub = (
+    await mf.getDurableObjectNamespace('AUTHORITY_STATE')
+  ).getByName('authority');
+  const key = `session:${await tokenHash(session.accessToken)}`;
+  const saved = await stub.get(key);
+  const cap = JSON.parse(await stub.openSession(saved)).absoluteExpiresAt;
+  assert.equal(await stub.touchSession(key, cap), true);
+  assert.equal(await stub.touchSession(key, Date.now() - 1), false);
+  const headers = {Authorization: `Bearer ${session.accessToken}`};
+  assert.equal(
+    (await mf.dispatchFetch(base + '/v1/me', {headers})).status,
+    200,
+  );
+  await stub.remove(key);
+  await stub.put(key, saved, '', Date.now() - 1);
+  assert.equal(await stub.touchSession(key, cap), false);
+  assert.equal(
+    (await mf.dispatchFetch(base + '/v1/me', {headers})).status,
+    401,
+  );
+  await stub.remove(key);
+  assert.equal(await stub.touchSession(key, cap), false);
+  assert.equal(await stub.get(key), null);
 });
 
 test('first internal key generation retires old credentials once while retaining group policy', async context => {

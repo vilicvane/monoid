@@ -12,6 +12,7 @@ async function setup(context) {
     put: (...args) => store.put(...args),
     get: key => store.get(key, Date.now()),
     take: (key, proof) => store.take(key, proof, Date.now()),
+    touchSession: (key, cap) => store.touchSession(key, cap, Date.now()),
     remove: key => store.remove(key),
     group: (...args) => store.group(...args),
     groups: (...args) => store.groups(...args),
@@ -54,6 +55,7 @@ async function setup(context) {
       assert.equal(url.searchParams.get('st'), 'appkit');
       assert.equal(url.searchParams.get('sv'), 'html-ethers-1.8.24');
       assert.equal(init.headers.Authorization, 'Bearer provider-token');
+      await upstream.beforeReown?.();
       return Response.json(upstream.claims, {status: upstream.reownStatus});
     }
     if (url.pathname === '/login/oauth/access_token') {
@@ -90,13 +92,244 @@ async function setup(context) {
       }),
       env,
     );
-  const login = async () => {
-    const response = await call('/auth/reown', {token: 'provider-token'});
+  const login = async (method = 'wallet') => {
+    const response = await call('/auth/reown', {
+      token: 'provider-token',
+      method,
+      ...(method === 'social' ? {provider: 'google'} : {}),
+    });
     assert.equal(response.status, 200);
     return response.json();
   };
   return {env, upstream, call, login, store, stub};
 }
+
+test('authenticated requests slide the five-minute idle window and expiry returns 401', async context => {
+  let now = 1800000000000;
+  context.mock.method(Date, 'now', () => now);
+  const f = await setup(context);
+  const start = now;
+  const session = await f.login();
+  assert.equal(session.expiresIn, 300);
+  now = start + 4 * 60000;
+  assert.equal(
+    (await f.call('/v1/me', undefined, session.accessToken)).status,
+    200,
+  );
+  // This is past the original five-minute expiry, but within the renewed one.
+  now = start + 7 * 60000;
+  assert.equal(
+    (await f.call('/v1/namespaces', undefined, session.accessToken)).status,
+    200,
+  );
+  now = start + 12 * 60000;
+  assert.equal(
+    (await f.call('/v1/me', undefined, session.accessToken)).status,
+    401,
+  );
+  assert.equal(
+    (await f.call('/v1/me', undefined, session.accessToken)).status,
+    401,
+  );
+});
+
+for (const capMinutes of [15, 7, 2]) {
+  test(`idle renewal never passes the ${capMinutes === 15 ? 'absolute' : 'provider'} cap (${capMinutes} minutes)`, async context => {
+    let now = 1800000000000;
+    context.mock.method(Date, 'now', () => now);
+    const f = await setup(context);
+    const start = now;
+    if (capMinutes !== 15)
+      f.upstream.claims.exp = start / 1000 + capMinutes * 60;
+    const session = await f.login();
+    assert.equal(session.expiresIn, Math.min(300, capMinutes * 60));
+    for (let minute = 1; minute < capMinutes; minute += 3) {
+      now = start + minute * 60000;
+      assert.equal(
+        (await f.call('/v1/me', undefined, session.accessToken)).status,
+        200,
+      );
+    }
+    now = start + capMinutes * 60000;
+    assert.equal(
+      (await f.call('/v1/me', undefined, session.accessToken)).status,
+      401,
+    );
+  });
+}
+
+test('failed upstream authentication and public requests do not renew a session', async context => {
+  let now = 1800000000000;
+  context.mock.method(Date, 'now', () => now);
+  const f = await setup(context);
+  const session = await f.login();
+  now += 4 * 60000;
+  f.upstream.reownStatus = 503;
+  assert.equal(
+    (await f.call('/v1/me', undefined, session.accessToken)).status,
+    502,
+  );
+  assert.equal(
+    (await f.call('/v1/metadata', undefined, session.accessToken)).status,
+    200,
+  );
+  f.upstream.reownStatus = 200;
+  now += 60000;
+  assert.equal(
+    (await f.call('/v1/me', undefined, session.accessToken)).status,
+    401,
+  );
+});
+
+for (const end of ['idle expiry', 'absolute expiry', 'logout']) {
+  test(`${end} during upstream validation cannot be undone by a late request`, async context => {
+    let now = 1800000000000;
+    context.mock.method(Date, 'now', () => now);
+    const f = await setup(context);
+    const start = now;
+    const session = await f.login();
+    now += 4 * 60000;
+    f.upstream.beforeReown = async () => {
+      f.upstream.beforeReown = undefined;
+      if (end === 'logout')
+        assert.equal(
+          (await f.call('/auth/logout', {}, session.accessToken)).status,
+          204,
+        );
+      else now = start + (end === 'idle expiry' ? 5 : 15) * 60000;
+    };
+    assert.equal(
+      (await f.call('/v1/me', undefined, session.accessToken)).status,
+      401,
+    );
+    assert.equal(
+      (await f.call('/v1/me', undefined, session.accessToken)).status,
+      401,
+    );
+  });
+}
+
+test('sessions minted before the idle policy must sign in again', async context => {
+  const f = await setup(context);
+  const session = await f.login();
+  const key = `session:${await tokenHash(session.accessToken)}`;
+  const saved = JSON.parse(await f.stub.openSession(await f.stub.get(key)));
+  saved.expiresAt = saved.absoluteExpiresAt;
+  delete saved.absoluteExpiresAt;
+  await f.stub.remove(key);
+  await f.stub.put(
+    key,
+    await f.stub.sealSession(JSON.stringify(saved)),
+    '',
+    saved.expiresAt,
+  );
+  assert.equal(
+    (await f.call('/v1/me', undefined, session.accessToken)).status,
+    401,
+  );
+});
+
+for (const method of ['wallet', 'email', 'social']) {
+  test(`${method} lists and authorizes only eligible namespaces`, async context => {
+    const f = await setup(context);
+    f.upstream.claims.email = 'verified@example.com';
+    const session = await f.login(method);
+    const token = session.accessToken;
+    const response = await f.call('/v1/namespaces', undefined, token);
+    assert.equal(response.status, 200);
+    const {namespaces} = await response.json();
+    assert.deepEqual(
+      namespaces.map(item => item.source),
+      method === 'wallet' ? ['reown', 'wallet'] : ['reown'],
+    );
+    assert.equal(
+      namespaces[0].displayName,
+      method === 'wallet' ? f.upstream.claims.address : 'verified@example.com',
+    );
+    const wallet = {source: 'wallet', id: 'eip155:0x' + 'ab'.repeat(20)};
+    const key = createECDH('prime256v1');
+    key.generateKeys();
+    const bundle = {
+      owner: wallet,
+      groupName: 'family',
+      allowPeerExtension: false,
+      recipientPublicKey: key.getPublicKey().toString('base64url'),
+    };
+    for (const [path, input] of [
+      ['/v1/groups/list', {owner: wallet}],
+      ['/v1/namespaces/name', {owner: wallet, displayName: 'Wallet'}],
+      ['/v1/bundle', bundle],
+    ]) {
+      const result = await f.call(path, input, token);
+      assert.equal(result.status, method === 'wallet' ? 200 : 403);
+      if (method !== 'wallet')
+        assert.deepEqual(await result.json(), {error: 'owner_not_allowed'});
+    }
+    // The method never changes the verified profile or allows another wallet.
+    assert.equal(
+      (await f.call('/v1/bundle', {...bundle, owner: namespaces[0]}, token))
+        .status,
+      200,
+    );
+    assert.equal(
+      (
+        await f.call(
+          '/v1/groups/list',
+          {owner: {...wallet, id: 'eip155:0x' + 'cd'.repeat(20)}},
+          token,
+        )
+      ).status,
+      403,
+    );
+    if (method !== 'wallet') {
+      delete f.upstream.claims.email;
+      const result = await (
+        await f.call('/v1/namespaces', undefined, token)
+      ).json();
+      assert.equal(result.namespaces[0].displayName, 'Account');
+    }
+  });
+}
+
+test('sessions without sign-in metadata require reauthentication', async context => {
+  const f = await setup(context);
+  const session = await f.login();
+  const key = `session:${await tokenHash(session.accessToken)}`;
+  const saved = JSON.parse(await f.stub.openSession(await f.stub.get(key)));
+  delete saved.account.method;
+  await f.stub.remove(key);
+  await f.stub.put(
+    key,
+    await f.stub.sealSession(JSON.stringify(saved)),
+    '',
+    saved.absoluteExpiresAt,
+  );
+  const response = await f.call('/v1/me', undefined, session.accessToken);
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), {
+    error: 'reown_reauthentication_required',
+  });
+});
+
+test('stored social sessions require a valid provider rather than inferring one', async context => {
+  const f = await setup(context);
+  const session = await f.login('social');
+  const key = `session:${await tokenHash(session.accessToken)}`;
+  const saved = JSON.parse(await f.stub.openSession(await f.stub.get(key)));
+  delete saved.account.provider;
+  await f.stub.remove(key);
+  await f.stub.put(
+    key,
+    await f.stub.sealSession(JSON.stringify(saved)),
+    '',
+    saved.absoluteExpiresAt,
+  );
+  const response = await f.call('/v1/me', undefined, session.accessToken);
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), {
+    error: 'reown_reauthentication_required',
+  });
+});
 
 test('remote identity verification fails closed for project, expiry, origin, missing profile and provider denial', async context => {
   const f = await setup(context);
@@ -109,14 +342,16 @@ test('remote identity verification fails closed for project, expiry, origin, mis
     const before = f.upstream.claims[field];
     f.upstream.claims[field] = value;
     assert.equal(
-      (await f.call('/auth/reown', {token: 'provider-token'})).status,
+      (await f.call('/auth/reown', {token: 'provider-token', method: 'wallet'}))
+        .status,
       401,
     );
     f.upstream.claims[field] = before;
   }
   f.upstream.reownStatus = 401;
   assert.equal(
-    (await f.call('/auth/reown', {token: 'provider-token'})).status,
+    (await f.call('/auth/reown', {token: 'provider-token', method: 'wallet'}))
+      .status,
     401,
   );
 });
@@ -129,7 +364,10 @@ test('provider request rejection is distinguished from an invalid login credenti
     [403, 502, 'reown_verification_rejected'],
   ]) {
     f.upstream.reownStatus = upstreamStatus;
-    const login = await f.call('/auth/reown', {token: 'provider-token'});
+    const login = await f.call('/auth/reown', {
+      token: 'provider-token',
+      method: 'wallet',
+    });
     assert.equal(login.status, status);
     assert.deepEqual(await login.json(), {error});
     const existing = await f.call('/v1/me', undefined, session.accessToken);

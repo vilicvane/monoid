@@ -1,5 +1,5 @@
 // Match the APP button presentation without importing its service container.
-import classNames from 'classnames';
+import classNames from 'classNames';
 import type {ButtonHTMLAttributes, ReactNode} from 'react';
 import {styled} from 'styled-components';
 

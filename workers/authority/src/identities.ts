@@ -7,6 +7,15 @@ const identity = (
   account: {id: string; login: string},
 ): Namespace => ({source, id: account.id, displayName: account.login});
 
+const personalIdentity = (session: Session): Namespace => ({
+  source: 'reown',
+  id: session.account.id,
+  displayName:
+    session.account.method === 'wallet'
+      ? session.account.login
+      : (session.account.email ?? 'Account'),
+});
+
 async function connectedGitHub(session: Session, fetcher: typeof fetch) {
   if (!session.github) throw new HttpError(403, 'github_connection_required');
   const account = await githubAccount(session.github.token, fetcher);
@@ -19,8 +28,9 @@ export async function identities(
   session: Session,
   fetcher: typeof fetch,
 ): Promise<Namespace[]> {
-  const result = [identity('reown', session.account)];
-  if (session.wallet) result.push(identity('wallet', session.wallet));
+  const result = [personalIdentity(session)];
+  if (session.account.method === 'wallet' && session.wallet)
+    result.push(identity('wallet', session.wallet));
   if (session.github) {
     result.push(
       identity('github-user', await connectedGitHub(session, fetcher)),
@@ -44,10 +54,14 @@ export async function authorizeOwner(
   const id = string(value.id, 256);
   switch (value.source) {
     case 'reown':
-      if (id === session.account.id) return identity('reown', session.account);
+      if (id === session.account.id) return personalIdentity(session);
       break;
     case 'wallet':
-      if (session.wallet && id === session.wallet.id)
+      if (
+        session.account.method === 'wallet' &&
+        session.wallet &&
+        id === session.wallet.id
+      )
         return identity('wallet', session.wallet);
       break;
     case 'github-user': {

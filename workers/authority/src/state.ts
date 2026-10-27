@@ -79,6 +79,10 @@ export class AuthorityState extends DurableObject<Env> {
     return this.store.take(key, proof, Date.now());
   }
 
+  async touchSession(key: string, absoluteExpiresAt: number): Promise<boolean> {
+    return this.store.touchSession(key, absoluteExpiresAt, Date.now());
+  }
+
   async remove(key: string): Promise<void> {
     this.store.remove(key);
   }

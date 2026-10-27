@@ -7,7 +7,7 @@ export interface ReownEnv {
 }
 
 export interface ReownIdentity {
-  account: Account;
+  account: Account & {email?: string};
   wallet?: Account;
   expiresAt: number;
 }
@@ -74,6 +74,9 @@ export async function reownIdentity(
     account: {
       id: `${env.REOWN_PROJECT_ID}:${claims.profileUuid.toLowerCase()}`,
       login: claims.address,
+      ...(typeof claims.email === 'string' && claims.email
+        ? {email: claims.email}
+        : {}),
     },
     wallet: walletIdentity(claims),
     expiresAt: claims.exp * 1000,

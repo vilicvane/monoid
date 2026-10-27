@@ -10,16 +10,25 @@ function canonicalConnection(value) {
 // not authorization: the Authority still verifies every credential remotely.
 export class LoginLifecycle {
   connection;
+  method;
+  provider;
   revision = 0;
 
   constructor(signedOut = false) {
     this.signedOut = signedOut;
   }
 
-  setConnection(connection) {
+  setConnection(connection, method, provider) {
     const canonical = canonicalConnection(connection);
-    if (canonical === this.connection) return false;
+    if (
+      canonical === this.connection &&
+      method === this.method &&
+      provider === this.provider
+    )
+      return false;
     this.connection = canonical;
+    this.method = method;
+    this.provider = provider;
     ++this.revision;
     return true;
   }

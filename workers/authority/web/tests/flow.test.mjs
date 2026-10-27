@@ -5,6 +5,7 @@ import {
   BrowserFlow,
   LoginError,
   restoreFlow,
+  signInMethod,
 } from '../src/flow.mjs';
 
 function storage() {
@@ -96,7 +97,10 @@ test('complete and cancel cannot concurrently issue two browser completions', as
       return pending;
     },
   );
-  const completing = flow.finish('complete', 'provider-token');
+  const completing = flow.finish('complete', {
+    token: 'provider-token',
+    method: 'social',
+  });
   assert.equal(await flow.finish('cancel'), null);
   resolve(
     Response.json({
@@ -107,7 +111,10 @@ test('complete and cancel cannot concurrently issue two browser completions', as
     await completing,
     'app.monoid://authority/callback?code=one&state=two',
   );
-  assert.equal(await flow.finish('complete', 'provider-token'), null);
+  assert.equal(
+    await flow.finish('complete', {token: 'provider-token', method: 'social'}),
+    null,
+  );
   assert.equal(calls.length, 1);
   assert.equal(calls[0].options.credentials, 'same-origin');
   assert.equal(calls[0].options.redirect, 'error');
@@ -115,6 +122,7 @@ test('complete and cancel cannot concurrently issue two browser completions', as
   assert.deepEqual(JSON.parse(calls[0].options.body), {
     flow: 'a'.repeat(43),
     token: 'provider-token',
+    method: 'social',
   });
 });
 
@@ -136,9 +144,12 @@ test('a failed request can be retried without clearing another tab flow', async 
           redirectUrl: 'app.monoid://authority/callback?code=one&state=two',
         });
   });
-  await assert.rejects(flow.finish('complete', 'token'), LoginError);
+  await assert.rejects(
+    flow.finish('complete', {token: 'token', method: 'email'}),
+    LoginError,
+  );
   assert.equal(flow.state, 'active');
-  await flow.finish('complete', 'token');
+  await flow.finish('complete', {token: 'token', method: 'email'});
   assert.equal(
     restoreFlow({search: '', pathname: '/api/authority/login'}, history, saved),
     newer,
@@ -168,4 +179,71 @@ test('wallet changes and cancellation invalidate in-flight profile results', () 
     selection.accepts(current, {caip2Network: 'eip155:1', address: '0xdef'}),
     false,
   );
+});
+
+test('AppKit embedded auth provider selects email/social; only connector accounts select wallet', () => {
+  assert.equal(signInMethod(undefined), undefined);
+  assert.equal(signInMethod({isConnected: false}), undefined);
+  assert.equal(signInMethod({isConnected: true}), 'wallet');
+  for (const provider of [
+    'email',
+    'google',
+    'github',
+    'apple',
+    'discord',
+    'farcaster',
+  ]) {
+    assert.equal(
+      signInMethod({
+        isConnected: true,
+        embeddedWalletInfo: {authProvider: provider},
+      }),
+      provider === 'email' ? 'email' : 'social',
+    );
+  }
+  // An incomplete embedded account must never turn into a wallet owner.
+  assert.equal(
+    signInMethod({isConnected: true, embeddedWalletInfo: {}}),
+    undefined,
+  );
+});
+
+test('method changes invalidate a pending verification even when the address is unchanged', () => {
+  const selection = new AccountSelection();
+  const account = {caip2Network: 'eip155:1', address: '0xabc'};
+  selection.setConnection('eip155:1:0xABC', 'email');
+  const first = selection.revision;
+  assert.equal(selection.setConnection('eip155:1:0xabc', 'email'), false);
+  assert.equal(selection.accepts(first, account), true);
+  assert.equal(selection.setConnection('eip155:1:0xabc', 'social'), true);
+  assert.equal(selection.accepts(first, account), false);
+  const second = selection.revision;
+  selection.setConnection('eip155:1:0xabc', 'wallet');
+  assert.equal(selection.accepts(second, account), false);
+});
+
+test('completion includes provider only for social; cancellation submits no credentials', async () => {
+  for (const method of ['wallet', 'email', 'social']) {
+    const requests = [];
+    const flow = new BrowserFlow('a'.repeat(43), storage(), async (_, init) => {
+      requests.push(JSON.parse(init.body));
+      return Response.json({redirectUrl: 'app.monoid://authority/callback'});
+    });
+    await flow.finish('complete', {
+      token: 'verified-token',
+      method,
+      provider: 'google',
+    });
+    assert.deepEqual(requests, [
+      {
+        flow: 'a'.repeat(43),
+        token: 'verified-token',
+        method,
+        ...(method === 'social' ? {provider: 'google'} : {}),
+      },
+    ]);
+    const cancel = new BrowserFlow('b'.repeat(43), storage(), flow.fetcher);
+    await cancel.finish('cancel', {token: 'ignored', method});
+    assert.deepEqual(requests[1], {flow: 'b'.repeat(43)});
+  }
 });

@@ -1,3 +1,4 @@
+import {signInMethod, signInProvider} from '../../web/src/flow.mjs';
 import {createAppKit} from '@reown/appkit';
 import {EthersAdapter} from '@reown/appkit-adapter-ethers';
 import {ReownAuthentication} from '@reown/appkit-controllers/features';
@@ -159,10 +160,18 @@ async function namespaces() {
 
 async function sessionReady(session: {
   expiresIn: number;
-  account: {login: string; id: string};
+  account: {
+    login: string;
+    id: string;
+    method: 'wallet' | 'email' | 'social';
+    email?: string;
+  };
 }) {
   element('connection').textContent = '已登录';
-  element('account').textContent = session.account.login;
+  element('account').textContent =
+    session.account.method === 'wallet'
+      ? session.account.login
+      : (session.account.email ?? '邮箱不可用');
   button('logout').disabled = false;
   button('github').disabled = false;
   clearTimeout(expiryTimer);
@@ -185,7 +194,13 @@ async function syncLogin(force = false, providerEvent = false) {
   }
   const connected = appkit.getAccount();
   const connection = connected?.isConnected ? connected.caipAddress : undefined;
-  if (lifecycle.setConnection(connection)) {
+  if (
+    lifecycle.setConnection(
+      connection,
+      signInMethod(connected),
+      signInProvider(connected),
+    )
+  ) {
     tokenInUse = null;
     clearUI();
     void client.logout().catch(() => {});
@@ -228,7 +243,15 @@ async function syncLogin(force = false, providerEvent = false) {
         setStatus('钱包已切换，请为当前钱包完成 AppKit 身份签名。');
       return;
     }
-    const session = await client.login(token);
+    const method = signInMethod(appkit.getAccount());
+    const socialProvider = signInProvider(appkit.getAccount());
+    if (
+      !method ||
+      method !== lifecycle.method ||
+      socialProvider !== lifecycle.provider
+    )
+      return;
+    const session = await client.login(token, method, socialProvider);
     if (session && revision === uiRevision && lifecycle.isCurrent(intent))
       await sessionReady(session);
   } catch (error) {
@@ -250,6 +273,8 @@ appkit.subscribeAccount(account => {
   if (
     !lifecycle.setConnection(
       account.isConnected ? account.caipAddress : undefined,
+      signInMethod(account),
+      signInProvider(account),
     )
   )
     return;

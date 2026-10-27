@@ -2,6 +2,8 @@ import {
   type AuthEnv,
   createReownSession,
   issueSession,
+  signInMethod,
+  signInProvider,
   stateStore,
   validateSession,
 } from './auth.js';
@@ -172,10 +174,24 @@ export async function completeBrowserLogin(
 ) {
   requireBrowserOrigin(request, env);
   const input = await body(request);
+  requireValue(
+    Object.keys(input).every(key =>
+      ['flow', 'token', 'method', 'provider'].includes(key),
+    ),
+    'invalid_login_request',
+  );
+  const method = signInMethod(input.method);
+  const provider = signInProvider(method, input.provider);
   const flow = opaque(input.flow);
   const {login, key, proof} = await browserLogin(request, flow, env);
   const token = string(input.token, 3072);
-  const session = await createReownSession(token, env, fetcher);
+  const session = await createReownSession(
+    token,
+    method,
+    env,
+    fetcher,
+    provider,
+  );
   // Provider failures leave the browser flow available for a deliberate retry.
   // Only one racing completion/cancellation can acquire the verified flow.
   requireValue(await stateStore(env).take(key, proof), 'invalid_login_request');
@@ -185,7 +201,7 @@ export async function completeBrowserLogin(
     `login-code:${await tokenHash(code)}`,
     await stateStore(env).sealSession(JSON.stringify(session)),
     await grantProof(login.challenge, login.redirectUri),
-    Math.min(session.expiresAt, Date.now() + CODE_TTL),
+    Math.min(session.absoluteExpiresAt, Date.now() + CODE_TTL),
   );
   const response = json({redirectUrl: appCallback(login, {code})});
   response.headers.set('Set-Cookie', cookie(flow, '', env, 0));
