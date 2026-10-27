@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import {afterEach, mock, test} from 'node:test';
 
-import {observable, runInAction, toJS} from 'mobx';
+import {observable, onReactionError, runInAction, toJS} from 'mobx';
+import {routra} from 'routra';
 
 import {
   setCardAlias,
@@ -20,6 +21,7 @@ import {
   setItemAlias,
 } from '../.bld/app/@lib/monoid/item-operations.js';
 import {MultiCardSeries} from '../.bld/app/@lib/monoid/multi-card-series.js';
+import {ROUTE_SCHEMA} from '../.bld/app/@routes.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
 import {
   WalletStorageService,
@@ -313,7 +315,7 @@ function sparseCardItems(index, wallets, known = [], preview) {
   ];
 }
 
-function mount({items = [], keys = []}) {
+function mount({items = [], keys = [], view, router}) {
   const storage = new WalletStorageService({async set() {}}, keys);
   const state = {
     slots: [],
@@ -338,14 +340,16 @@ function mount({items = [], keys = []}) {
     authCount: 0,
     clears: 0,
     storage,
-    view: observable({
-      card: {
-        id: 'aabbccdd',
-        publicKey: `04${'12'.repeat(64)}`,
-      },
-      $leaving: false,
-      $match: {$exact: {$active: true}},
-    }),
+    view:
+      view ??
+      observable({
+        card: {
+          id: 'aabbccdd',
+          publicKey: `04${'12'.repeat(64)}`,
+        },
+        $leaving: false,
+        $match: {$exact: {$active: true}},
+      }),
     slot(create) {
       return (this.slots[this.index++] ??= create());
     },
@@ -549,12 +553,12 @@ function mount({items = [], keys = []}) {
     return {...metadata(source.index, merged), derivations};
   };
   state.pinSession = {clear: () => state.clears++};
-  state.view.$match.$view = () => ({$entries: [state.view]});
+  if (!view) state.view.$match.$view = () => ({$entries: [state.view]});
   state.entrances = {
     cardStore: state.cardStore,
     walletStorageService: storage,
     monoidCredentialsStore: {createPINSession: () => state.pinSession},
-    router: {
+    router: router ?? {
       safe: {
         $exact: {},
         copyItems: options => ({$push: () => state.copies.push(options)}),
@@ -2459,5 +2463,30 @@ for (const [bundle, authority, visible] of [
       ]);
       assert.deepEqual(state.scans, []);
     }
+  });
+}
+
+for (const label of ['Sync cards', 'Create bundle', 'Join Authority bundle']) {
+  test(`${label} leaves the card route before the page unmounts without reaction errors`, async context => {
+    const router = routra(ROUTE_SCHEMA, {});
+    await router.safe.$reset().$completed;
+    await router.safe
+      .card({card: {id: 'aabbccdd', publicKey: `04${'12'.repeat(64)}`}})
+      .$push().$completed;
+    const source = router.safe.card.$view();
+    const [view] = source.$entries;
+    const errors = [];
+    context.after(onReactionError(error => errors.push(error)));
+    const state = mount({items: cardItems(INDEX, [wallet(0)]), view, router});
+    state.card.authority = 'https://authority.monoid.app/';
+
+    state.menuButton().props.onClick();
+    state.popupButton(label).props.onClick();
+    await new Promise(resolve => setImmediate(resolve));
+
+    // Routra removed the view while the page's reactions are still mounted.
+    assert.equal(router.safe.card.$active, false);
+    assert.deepEqual(source.$entries, []);
+    assert.deepEqual(errors, []);
   });
 }

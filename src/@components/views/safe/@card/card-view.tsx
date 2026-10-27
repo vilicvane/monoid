@@ -128,24 +128,27 @@ export const CardView = observer(
   ({view}: RouteComponentProps<Router['safe']['card']>): ReactNode => {
     const {cardStore, router} = useEntrances();
     const isViewActive = useViewActive(view);
-    const [card, setCard] = useState(
-      () => view.card && cardStore.get(view.card),
-    );
+    // Routra removes this view when it is left, before React unmounts the
+    // page, and the reaction below still runs then: read route state here.
+    const identity = view.card;
+    const [card, setCard] = useState(() => identity && cardStore.get(identity));
 
     useEffect(
       () =>
         reaction(
           () => ({
             active: isViewActive(),
-            cached: view.card && cardStore.get(view.card),
+            cached: identity && cardStore.get(identity),
           }),
           ({active, cached}) => {
             // Keep the working copy while this page applies acknowledged writes.
             // An invalidated snapshot must not survive leaving and returning.
             if (cached || !active) setCard(cached);
           },
+          // A same-route replacement changes the identity without remounting.
+          {fireImmediately: true},
         ),
-      [cardStore, view, isViewActive],
+      [cardStore, identity, isViewActive],
     );
 
     return (
