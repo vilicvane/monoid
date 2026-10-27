@@ -397,7 +397,7 @@ test('prepared and mixed cards use one next ring, pending labels, and acknowledg
     get: () => cached,
     set: card => assert.equal(card, cached),
   };
-  await state.click('Button', 'Join bundle');
+  await state.click('Button', 'Scan card to join');
   assert.deepEqual(state.errors, []);
   assert.equal(cached.bundle, '2a'.repeat(32));
   previews = nodes(state.render()).filter(node => node.type === 'CardPreview');
@@ -410,6 +410,7 @@ test('prepared and mixed cards use one next ring, pending labels, and acknowledg
     ],
   );
   assert.equal(text(steps(state)[1].props.title), 'Add cards1/3');
+  assert.ok(state.find('Button', 'Scan next card to join'));
   assert.equal(state.find('Button', 'Change bundle'), undefined);
 });
 
@@ -419,7 +420,10 @@ test('Done exits the grid and steps before showing only completion and its neutr
   await state.flush();
   await state.click('Button', 'Continue');
   state.flow.authority.cards[0].joined = true;
-  assert.equal(state.find('Button', 'Add another card').props.color, undefined);
+  assert.equal(
+    state.find('Button', 'Scan next card to join').props.color,
+    undefined,
+  );
   await state.click('Button', 'Done');
   assert.equal(state.logouts, 1);
   assert.equal(state.entrances.authorityService.signedIn, false);
@@ -476,7 +480,7 @@ test('a mid-flow session end returns to Choose bundle signed out and resumes the
   };
   await state.click('Button', 'Sign in');
   assert.equal(signIns, 1);
-  assert.ok(state.find('Button', 'Join bundle'));
+  assert.ok(state.find('Button', 'Scan next card to join'));
   assert.equal(state.flow.authority, session);
   assert.equal(session.nextCard.id, prepared(2).id);
 });
@@ -527,7 +531,7 @@ test('401 during issuance returns to Sign in and retains cards and the chosen bu
     state.entrances.authorityService.account = undefined;
     throw new AuthorityError('unauthorized');
   };
-  await state.click('Button', 'Join bundle');
+  await state.click('Button', 'Scan card to join');
   assert.equal(state.errors.at(-1).code, 'unauthorized');
   assert.ok(state.find('Button', 'Sign in'));
   assert.equal(state.flow.authority.cards.length, 1);
@@ -623,6 +627,7 @@ test('signed-in entry starts at Choose bundle, prefills the most recent bundle, 
   );
   assert.ok(state.find('CardGrid'));
   assert.equal(state.find('Button', 'Change bundle').props.color, 'neutral');
+  assert.ok(state.find('Button', 'Scan card to join'));
   await state.click('Button', 'Change bundle');
   assert.equal(state.find('InputWithAction').props.value, 'Recovery');
 });

@@ -474,11 +474,9 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
               >
                 {addition.pendingPIN || addition.pendingReset
                   ? addition.buttonLabel
-                  : session.nextCard
-                    ? 'Join bundle'
-                    : session.cards.length
-                      ? 'Add another card'
-                      : 'Add a card'}
+                  : session.joinedCount
+                    ? 'Scan next card to join'
+                    : 'Scan card to join'}
               </Button>
               {!session.joinedCount ? (
                 <Button
