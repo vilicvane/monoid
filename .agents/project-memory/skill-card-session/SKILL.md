@@ -5,7 +5,7 @@ description: Monoid NFC card sessions, Access/Safe PIN ownership, biometric vaul
 
 # Monoid card sessions
 
-Source: `../records.md`, especially records 29–32, 34, 38–41, 47–50 and 63, and `../29.md`, `../48.md` and `../50.md`. Treat records
+Source: `../records.md`, especially records 29–32, 34, 38–41, 47–50, 63 and 83, and `../29.md`, `../48.md` and `../50.md`. Treat records
 as authoritative and keep them up to date. Records 19–24 describe an older WIP;
 do not reintroduce their plain-storage design or assume those TODOs still exist.
 
@@ -46,6 +46,12 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   initially copies a new Secret PIN to Access PIN; authenticate Secret before
   writing a distinct Access PIN on that connection. Changed card identity
   invalidates pending input. Wrong-PIN retries respect firmware tries. See record 59.
+- Every plaintext PIN held in JS memory goes through `HeldPINValue`/`HeldPINs`:
+  dropped after 5 idle minutes per holder or when `isAppHidden()` (lock, app
+  switch), never on inactive-only states. Android WebView stays `visible` on
+  lock, so Android also uses `appStateChange` false (`onStop`); never use it on
+  iOS (`willResignActive`). Only clear/expiry/hide abort the owner; capture it
+  before awaiting a write. See record 83.
 - iOS Core NFC covers the WebView and has a system session limit. Errors close
   the sheet and return to the caller; no automatic iOS retry hides the error or
   replays an uncertain mutation. Cancellation and iOS timeout before any card
