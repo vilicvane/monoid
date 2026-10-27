@@ -5,7 +5,7 @@ description: Monoid app development basics, sibling firmware, Capacitor iOS/Andr
 
 # Monoid app development
 
-Source: `../records.md`, records 13, 14, 25–38, 42–46, 62, 64, 69 and 70. Treat these records as authoritative and keep them up to date.
+Source: `../records.md`, records 13, 14, 25–38, 42–46, 62, 64, 69, 70, 84 and 85. Treat these records as authoritative and keep them up to date.
 
 - The app (Ionic React + Capacitor, iOS and Android) drives the card applets of the sibling repo `monoid-javacard`, which owns the card protocol. The app mirrors its commands as x-value schemas in `src/@lib/monoid/monoid-applet.ts`, on top of the generic `CBORApplet`/`Applet` transport in `src/@lib`.
 - The project is old: point out whenever the user's choices conflict with the interactions its existing code implies.
@@ -17,6 +17,13 @@ Source: `../records.md`, records 13, 14, 25–38, 42–46, 62, 64, 69 and 70. Tr
 - Flow completion (record 74): multi-step flows pop their steps (and any card preview or grid) out, then show only `OperationComplete` with a neutral back button. A `Step` takes the color of the current step's default button.
 - Message blocks (`InfoMessage`/`WarningMessage`) are notices, never headings. Lists stay as they normally are: no wrapper boxes for the common case. Exceptions (e.g. skipped items) are appended after the normal list under a labeled divider (yellow warning icon, normal-color text, no count). A card popup header is the title plus a line of card ID and bundle tags (`ViewHeaderIdentifier`).
 - Warning prompts (records 77, 78): several notices go in `ConfirmNotices` (numbered), a single one stays a paragraph; notices are real risks or required actions, never procedure steps. Ask choices about an added card when it is added (record 75). A scan for a specific card names it (`scanCardPrompt`).
+- New flows and choices follow existing patterns first (records 84, 85). The user rejects invented UI. Copy the key derive steps:
+  - selectors (`SegmentedControl` capsules, all the same height) and inputs in the step body;
+  - the footer button confirms;
+  - a done step shows `summary`.
+
+  Setup cards' None / Cards / Authority capsules sit in each mode's first step. Pickers copy the Bitcoin recipient picker. A row with an icon uses the shared 36px `Symbol`. The Authority account display (`AuthorityAccountInfo`) is identical in the app and on the hosted sign-in page (`workers/authority/web`), which reuses app components through documented adapters.
+
 - Card operations use the shared layer (records 69, 70): `removeItems`/`setItemAlias`/`acceptMatchingItem` (item-operations), `CardItemNotFoundError`/`CardItemExistsError`, `probeApplet` (only `6A82` is missing), `isOperationCancelled`, `assertSameCard` (ID + public key; bundle only for Copy/Sync/backup/bundle flows) and `card-pins`, `readCardContents` with feature decoders, `MultiCardSeries`/`scanNextCards`, and `useCardOperation` for single-operation pages. Card cache invalidation is automatic through `CardStore.observeApplet`; never call `cardStore.forget` by hand after a write. Firmware has no backward compatibility: `EXISTS` on an existing index, `{removed}` from Remove, OTP accounts as one HMAC-mapped `0xF201` item.
 - Verify from the repo root with `npx tsc --build --pretty false` and `npx prettier --check <files>`.
 - Run ESLint from `src`, e.g. `Push-Location src; npx eslint --report-unused-disable-directives '<path>'; Pop-Location`. From the root it fails with "TSConfig does not include this file". Quote `@`-prefixed paths in PowerShell.
