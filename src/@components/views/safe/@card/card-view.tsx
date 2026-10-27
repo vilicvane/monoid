@@ -369,6 +369,7 @@ const CardContent = observer(
                 runInAction(() => {
                   card.alias = verified.alias;
                   card.allowPeerExtension = verified.allowPeerExtension;
+                  card.authority = verified.authority;
                   cardStore.set(card);
                 });
               },
@@ -1515,12 +1516,28 @@ const CardContent = observer(
                         router.safe
                           .setupCard({
                             card: {id: card.id, publicKey: card.publicKey},
-                            createBundle: true,
+                            bundle: 'card',
                           })
                           .$push();
                       }}
                     >
                       Create bundle
+                    </Button>
+                  )}
+                  {!canDelete && card.bundle === false && card.authority && (
+                    <Button
+                      color="neutral"
+                      onClick={() => {
+                        setMenu(undefined);
+                        router.safe
+                          .setupCard({
+                            card: {id: card.id, publicKey: card.publicKey},
+                            bundle: 'authority',
+                          })
+                          .$push();
+                      }}
+                    >
+                      Join Authority bundle
                     </Button>
                   )}
                   {!canDelete &&
@@ -1538,6 +1555,7 @@ const CardContent = observer(
                                 bundle: card.bundle,
                                 alias: card.alias,
                                 allowPeerExtension: card.allowPeerExtension,
+                                authority: card.authority,
                               },
                             })
                             .$push();

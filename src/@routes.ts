@@ -141,7 +141,7 @@ export const ROUTE_SCHEMA = {
       $state: (state: {
         cardInformation?: CardInformation;
         card?: Pick<ScannedCardData, 'id' | 'publicKey'>;
-        createBundle?: boolean;
+        bundle?: 'card' | 'authority';
         copyId?: string;
         bundleId?: string;
       }) => ({
@@ -153,7 +153,12 @@ export const ROUTE_SCHEMA = {
       $state: (state: {
         card: Pick<
           ScannedCardData,
-          'id' | 'publicKey' | 'bundle' | 'alias' | 'allowPeerExtension'
+          | 'id'
+          | 'publicKey'
+          | 'bundle'
+          | 'alias'
+          | 'allowPeerExtension'
+          | 'authority'
         >;
         extensionId?: string;
       }) => ({...state, extensionId: state.extensionId ?? createFlowId()}),

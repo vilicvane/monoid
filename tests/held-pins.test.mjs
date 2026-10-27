@@ -1,11 +1,27 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-import {HeldPINs} from '../.bld/app/@lib/held-pins.js';
+import {HeldPINValue, HeldPINs} from '../.bld/app/@lib/held-pins.js';
 
 import {pinClock} from './helpers/held-pins.mjs';
 
 const MINUTE = 60_000;
+
+test('inspection does not extend the lifetime and cleanup receives the dropped value once', t => {
+  const clock = pinClock(t);
+  const released = [];
+  const held = new HeldPINValue(value => {
+    if (value) released.push(value);
+  });
+  const value = {secret: 'test'};
+  held.set(value);
+  clock.tick(4 * MINUTE);
+  assert.equal(held.peek(), value);
+  clock.tick(MINUTE);
+  assert.equal(held.peek(), undefined);
+  held.clear();
+  assert.deepEqual(released, [value]);
+});
 
 test('reads and writes refresh the whole holder, then one timer wipes every PIN', t => {
   const clock = pinClock(t);

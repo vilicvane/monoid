@@ -72,6 +72,7 @@ export const ScanCardView = ({
                 bundle: hello.bundle && uint8ArrayToHex(hello.bundle),
                 alias: hello.alias,
                 allowPeerExtension: hello.allowPeerExtension,
+                authority: hello.authority,
                 items,
               };
             },

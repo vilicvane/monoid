@@ -32,6 +32,7 @@ function prepared(card) {
     publicKey: hex(card.publicKey),
     alias: card.alias,
     allowPeerExtension: card.allowPeerExtension,
+    authority: card.authority,
     bundle: card.bundle === false ? false : hex(card.bundle),
   };
 }
@@ -202,6 +203,7 @@ test('a prepared Card snapshot seeds collection without a synthetic Hello or PIN
       status: 'pending',
       alias: snapshot.alias,
       allowPeerExtension: snapshot.allowPeerExtension,
+      authority: snapshot.authority,
     },
   ]);
   assert.equal(session.phase, 'collecting');

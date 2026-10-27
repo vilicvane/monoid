@@ -8,7 +8,7 @@ import type {MonoidAppletHello} from './monoid-applet.js';
 export type CardIdentity = {id: MonoidIdHex; publicKey: PublicKeyHex};
 export type CardDisplayData = Pick<
   MonoidAppletHello,
-  'alias' | 'allowPeerExtension'
+  'alias' | 'allowPeerExtension' | 'authority'
 >;
 export type CardBackupIdentity = CardIdentity & {
   bundle: string | false;
@@ -48,6 +48,7 @@ export function readBackupCardIdentity(
   return {
     ...readCardIdentity(hello),
     alias: hello.alias,
+    authority: hello.authority,
     allowPeerExtension: hello.allowPeerExtension,
     bundle: bundle === false ? false : uint8ArrayToHex(bundle),
   };

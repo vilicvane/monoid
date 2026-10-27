@@ -10,7 +10,7 @@ export class HeldPINValue<T> {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private unwatch: (() => void) | undefined;
 
-  constructor(private readonly onClear?: () => void) {}
+  constructor(private readonly onClear?: (value: T | undefined) => void) {}
 
   get signal(): AbortSignal {
     return this.check() ? this.owner.signal : AbortSignal.abort();
@@ -20,6 +20,11 @@ export class HeldPINValue<T> {
     if (!this.check()) return;
     this.touch();
     return this.value;
+  }
+
+  /** Inspect availability without extending the idle lifetime. */
+  peek(): T | undefined {
+    return this.check() ? this.value : undefined;
   }
 
   set(value: T, owner?: AbortSignal): void {
@@ -39,10 +44,11 @@ export class HeldPINValue<T> {
 
   clear(): void {
     const owner = this.owner;
+    const value = this.value;
     this.owner = new AbortController();
     this.delete();
     owner.abort();
-    this.onClear?.();
+    this.onClear?.(value);
   }
 
   private check(): boolean {

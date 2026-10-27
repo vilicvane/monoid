@@ -1,5 +1,6 @@
 export * from './address-book-service.js';
 export * from './app-preferences-service.js';
+export * from './authority-service.js';
 export * from './bitcoin-wallet-service.js';
 export * from './card-bundle-store.js';
 export * from './card-store.js';

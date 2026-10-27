@@ -31,7 +31,6 @@ import {AppletIcon} from '../../@ui/feature-icons.js';
 import {InfoSection} from '../../@ui/info-section.js';
 import {
   IconList,
-  LIST_ICON_SIZE,
   ListItem,
   ListItemButton,
   ListItemContent,
@@ -40,6 +39,7 @@ import {
 } from '../../@ui/list.js';
 import {InfoMessage, WarningMessage} from '../../@ui/message-content.js';
 import {Step, Steps} from '../../@ui/step.js';
+import {Symbol} from '../../@ui/symbol.js';
 import {CardResourceIssues, CardSetupInformation} from '../safe/index.js';
 
 const Empty = styled.div`
@@ -277,19 +277,6 @@ const Applets = styled(IconList)`
 
 const AppletRow = styled(ListItem)`
   align-items: center;
-`;
-
-const Symbol = styled.span`
-  width: ${LIST_ICON_SIZE}px;
-  height: ${LIST_ICON_SIZE}px;
-  border-radius: ${LIST_ICON_SIZE / 4}px;
-  background: var(--ion-color-primary);
-  color: var(--ion-color-primary-contrast);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  font-size: 28px;
 `;
 
 const Status = styled(AppIcon)<{$status: 'unknown' | 'update' | 'installed'}>`

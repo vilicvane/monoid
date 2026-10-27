@@ -26,10 +26,10 @@ test('Bundle setup opens distinct flows from Card in HTTP WebViews and retains a
 
   const ids = [];
   for (let i = 0; i < 2; i++) {
-    await router.safe.setupCard({card, createBundle: true}).$push().$completed;
+    await router.safe.setupCard({card, bundle: 'card'}).$push().$completed;
     assert.equal(router.safe.setupCard.$exact.$active, true);
     assert.deepEqual({...router.$state.card}, card);
-    assert.equal(router.$state.createBundle, true);
+    assert.equal(router.$state.bundle, 'card');
     assert.equal(typeof router.$state.bundleId, 'string');
     assert.ok(router.$state.bundleId.length > 0);
     ids.push(router.$state.bundleId);
@@ -38,9 +38,8 @@ test('Bundle setup opens distinct flows from Card in HTTP WebViews and retains a
   }
   assert.notEqual(ids[0], ids[1]);
 
-  await router.safe
-    .setupCard({card, createBundle: true, bundleId: ids[0]})
-    .$push().$completed;
+  await router.safe.setupCard({card, bundle: 'card', bundleId: ids[0]}).$push()
+    .$completed;
   assert.equal(router.$state.bundleId, ids[0]);
 });
 

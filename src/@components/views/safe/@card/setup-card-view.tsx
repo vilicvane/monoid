@@ -37,9 +37,9 @@ import {
 } from '../../../@ui/info-section.js';
 import {WarningMessage} from '../../../@ui/message-content.js';
 import {OperationComplete} from '../../../@ui/operation-complete.js';
+import {SegmentedControl} from '../../../@ui/segmented-control.js';
 import {Step, Steps} from '../../../@ui/step.js';
 import {useToast} from '../../../@ui/toast.js';
-import {Toggle} from '../../../@ui/toggle.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 import {
   View,
@@ -50,6 +50,7 @@ import {
 } from '../../../@view/index.js';
 import type {ScannedCardData} from '../common.js';
 
+import {AuthorityBundleSetup} from './authority-bundle-setup.js';
 import {CardBundleSession} from './card-bundle-session.js';
 import {
   type CardResetIdentity,
@@ -86,9 +87,7 @@ export const SetupCardView = observer(
     } = useEntrances();
     const [fromCopy] = useState(() => view.copyId !== undefined);
     const [fromCard] = useState(() => !fromCopy && view.card !== undefined);
-    const [bundleOnly] = useState(
-      () => !fromCopy && view.createBundle === true,
-    );
+    const [fixedBundle] = useState(() => (!fromCopy ? view.bundle : undefined));
     const [sourceCard] = useState(() =>
       !fromCopy && view.card ? cardStore.get(view.card) : undefined,
     );
@@ -103,9 +102,9 @@ export const SetupCardView = observer(
         view.bundleId,
         () => new CardBundleSession(),
       );
-      if (bundleOnly)
+      if (fixedBundle)
         runInAction(() => {
-          state.bundleEnabled = true;
+          state.bundle = fixedBundle;
         });
       return state;
     });
@@ -114,7 +113,7 @@ export const SetupCardView = observer(
       monoidCredentialsStore.createPINSession(),
     );
     const [secretPINSession] = useState(() => new CardSecretPINSession());
-    const bundleEnabled = flow.bundleEnabled;
+    const bundleEnabled = flow.bundle === 'card';
     const [pinInput, showPINInput] = useInputModal();
     const [selectedCard, setSelectedCard] = useState<string>();
     const [interruptedCard, setInterruptedCard] = useState<string>();
@@ -147,6 +146,7 @@ export const SetupCardView = observer(
                 publicKey: uint8ArrayToHex(candidate.hello.publicKey),
                 alias: candidate.hello.alias,
                 allowPeerExtension: candidate.hello.allowPeerExtension,
+                authority: candidate.hello.authority,
                 bundle:
                   candidate.hello.bundle === false
                     ? (false as const)
@@ -190,7 +190,7 @@ export const SetupCardView = observer(
         reaction(
           isViewActive,
           active => {
-            if (!active) return;
+            if (!active || flow.bundle === 'authority') return;
             if (view.cardInformation && !flow.informationForwarded) {
               runInAction(() => {
                 flow.informationForwarded = true;
@@ -292,6 +292,7 @@ export const SetupCardView = observer(
                 ...identity,
                 alias: hello.alias,
                 allowPeerExtension: hello.allowPeerExtension,
+                authority: hello.authority,
                 bundle:
                   hello.bundle === false
                     ? false
@@ -737,161 +738,176 @@ export const SetupCardView = observer(
       </>
     );
 
+    const bundleMode = !fromCopy && !fixedBundle && (
+      <SegmentedControl
+        aria-label="Bundle"
+        value={flow.bundle ?? 'none'}
+        options={[
+          {value: 'none', label: 'None'},
+          {value: 'card', label: 'Cards'},
+          {value: 'authority', label: 'Authority'},
+        ]}
+        disabled={
+          collectionBusy ||
+          !!flow.authority?.busy ||
+          (flow.bundle === 'authority'
+            ? !!flow.authority?.joinedCount
+            : bundleSession.cards.length > 0 || configuring)
+        }
+        onChange={errorService.catch(async mode => {
+          if (mode === 'card' && sourceCard) {
+            await requestBundleCard({type: 'prepared', card: sourceCard});
+          }
+          runInAction(() => {
+            flow.bundle = mode === 'none' ? undefined : mode;
+            flow.sourceConsumed = mode === 'card';
+          });
+        })}
+      />
+    );
+
     return (
       <View>
         <ViewHeader>
           <ViewHeaderTitle>
             {fromCopy
               ? 'Setup card'
-              : bundleOnly
-                ? 'Create bundle'
-                : 'Setup cards'}
+              : fixedBundle === 'authority'
+                ? 'Authority bundle'
+                : fixedBundle === 'card'
+                  ? 'Create bundle'
+                  : 'Setup cards'}
           </ViewHeaderTitle>
         </ViewHeader>
-        <ViewContent
-          footer={
-            complete ? (
-              back && (
-                <Button color="neutral" onClick={() => back()}>
-                  {backLabel}
-                </Button>
-              )
-            ) : configuring ? (
-              generationFailed ? (
+        {flow.bundle === 'authority' ? (
+          <AuthorityBundleSetup view={view} flow={flow} sourceCard={sourceCard}>
+            {bundleMode}
+          </AuthorityBundleSetup>
+        ) : (
+          <ViewContent
+            footer={
+              complete ? (
                 back && (
                   <Button color="neutral" onClick={() => back()}>
                     {backLabel}
                   </Button>
                 )
-              ) : (
-                <Button
-                  disabled={!hasPendingCard || !!pendingBundleCard}
-                  loading={busy}
-                  onClick={errorService.catch(() => configureCard())}
-                >
-                  {bundleSession.configuredCount
-                    ? 'Scan next card'
-                    : 'Scan a card'}
-                </Button>
-              )
-            ) : (
-              <Buttons>
-                {bundleEnabled &&
-                  !collectionBusy &&
-                  bundleSession.cards.length >= 2 && (
-                    <Button
-                      color="primary"
-                      onClick={errorService.catch(() =>
-                        bundleSession.beginRoundTwo(),
-                      )}
-                    >
-                      Continue
+              ) : configuring ? (
+                generationFailed ? (
+                  back && (
+                    <Button color="neutral" onClick={() => back()}>
+                      {backLabel}
                     </Button>
-                  )}
-                {pendingPIN ? (
-                  <Button onClick={() => setShowPINSetup(true)}>
-                    {pendingPIN.pins.secret === false
-                      ? 'Set Secret PIN'
-                      : pendingPIN.pins.access === false
-                        ? 'Set Access PIN'
-                        : 'Continue'}
-                  </Button>
+                  )
                 ) : (
                   <Button
-                    color={
-                      bundleEnabled && bundleSession.cards.length >= 2
-                        ? 'neutral'
-                        : 'primary'
-                    }
-                    disabled={!!pendingBundleCard}
+                    disabled={!hasPendingCard || !!pendingBundleCard}
                     loading={busy}
-                    onClick={errorService.catch(() =>
-                      flow.pendingReset?.replacement
-                        ? resetAndAdd(flow.pendingReset)
-                        : scan(),
-                    )}
+                    onClick={errorService.catch(() => configureCard())}
                   >
-                    {flow.pendingReset?.replacement
-                      ? 'Check card'
-                      : bundleSession.cards.length
-                        ? 'Add another card'
-                        : 'Add a card'}
+                    {bundleSession.configuredCount
+                      ? 'Scan next card'
+                      : 'Scan a card'}
                   </Button>
-                )}
-              </Buttons>
-            )
-          }
-        >
-          {complete ? (
-            <OperationComplete />
-          ) : (
-            <>
-              {!fromCopy && !bundleOnly && (
-                <Toggle
-                  checked={bundleEnabled}
-                  disabled={
-                    collectionBusy ||
-                    bundleSession.cards.length > 0 ||
-                    configuring
-                  }
-                  onChange={errorService.catch(async enabled => {
-                    if (enabled && sourceCard) {
-                      await requestBundleCard({
-                        type: 'prepared',
-                        card: sourceCard,
-                      });
-                    }
-                    runInAction(() => {
-                      flow.bundleEnabled = enabled;
-                      flow.sourceConsumed = true;
-                    });
-                  })}
-                >
-                  Create bundle
-                </Toggle>
-              )}
-              <Steps>
-                {bundleEnabled ? (
-                  <>
-                    <Step
-                      title="Add cards"
-                      numero={1}
-                      activeNumero={configuring ? 2 : 1}
-                      processing={busy && !configuring}
-                    >
-                      {bundleCards}
-                    </Step>
-                    <Step
-                      title={
-                        <InfoSectionHeader>
-                          <span>Create bundle</span>
-                          {configuring && (
-                            <InfoSectionItemLabel>
-                              {bundleSession.configuredCount}/
-                              {bundleSession.cards.length}
-                            </InfoSectionItemLabel>
-                          )}
-                        </InfoSectionHeader>
+                )
+              ) : (
+                <Buttons>
+                  {bundleEnabled &&
+                    !collectionBusy &&
+                    bundleSession.cards.length >= 2 && (
+                      <Button
+                        color="primary"
+                        onClick={errorService.catch(() =>
+                          bundleSession.beginRoundTwo(),
+                        )}
+                      >
+                        Continue
+                      </Button>
+                    )}
+                  {pendingPIN ? (
+                    <Button onClick={() => setShowPINSetup(true)}>
+                      {pendingPIN.pins.secret === false
+                        ? 'Set Secret PIN'
+                        : pendingPIN.pins.access === false
+                          ? 'Set Access PIN'
+                          : 'Continue'}
+                    </Button>
+                  ) : (
+                    <Button
+                      color={
+                        bundleEnabled && bundleSession.cards.length >= 2
+                          ? 'neutral'
+                          : 'primary'
                       }
-                      numero={2}
-                      activeNumero={configuring ? 2 : 1}
-                      processing={busy && configuring}
+                      disabled={!!pendingBundleCard}
+                      loading={busy}
+                      onClick={errorService.catch(() =>
+                        flow.pendingReset?.replacement
+                          ? resetAndAdd(flow.pendingReset)
+                          : scan(),
+                      )}
                     >
-                      {bundleCards}
+                      {flow.pendingReset?.replacement
+                        ? 'Check card'
+                        : bundleSession.cards.length
+                          ? 'Add another card'
+                          : 'Add a card'}
+                    </Button>
+                  )}
+                </Buttons>
+              )
+            }
+          >
+            {complete ? (
+              <OperationComplete />
+            ) : (
+              <>
+                <Steps>
+                  {bundleEnabled ? (
+                    <>
+                      <Step
+                        title="Add cards"
+                        numero={1}
+                        activeNumero={configuring ? 2 : 1}
+                        processing={busy && !configuring}
+                      >
+                        {bundleMode}
+                        {bundleCards}
+                      </Step>
+                      <Step
+                        title={
+                          <InfoSectionHeader>
+                            <span>Create bundle</span>
+                            {configuring && (
+                              <InfoSectionItemLabel>
+                                {bundleSession.configuredCount}/
+                                {bundleSession.cards.length}
+                              </InfoSectionItemLabel>
+                            )}
+                          </InfoSectionHeader>
+                        }
+                        numero={2}
+                        activeNumero={configuring ? 2 : 1}
+                        processing={busy && configuring}
+                      >
+                        {bundleCards}
+                      </Step>
+                    </>
+                  ) : (
+                    <Step
+                      title="Set up card"
+                      numero={1}
+                      activeNumero={1}
+                      processing={busy}
+                    >
+                      {bundleMode}
                     </Step>
-                  </>
-                ) : (
-                  <Step
-                    title="Set up card"
-                    numero={1}
-                    activeNumero={1}
-                    processing={busy}
-                  />
-                )}
-              </Steps>
-            </>
-          )}
-        </ViewContent>
+                  )}
+                </Steps>
+              </>
+            )}
+          </ViewContent>
+        )}
         {selectedCard && !configuring && (
           <DetailsPopup
             aria-label="Card actions"

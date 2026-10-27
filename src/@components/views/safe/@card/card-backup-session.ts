@@ -137,6 +137,7 @@ function createBackup(
       bundle: source.bundle === false ? false : source.bundle.toLowerCase(),
       alias: source.alias,
       allowPeerExtension: source.allowPeerExtension,
+      authority: source.authority,
     },
     items: groupedItems,
     targets: [],

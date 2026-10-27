@@ -3,6 +3,7 @@ import {afterEach, mock, test} from 'node:test';
 
 import {observable} from 'mobx';
 
+import {AuthorityBundleSession} from '../.bld/app/@components/views/safe/@card/authority-bundle-session.js';
 import {CardSecretPINSession} from '../.bld/app/@components/views/safe/@card/card-secret-pin-session.js';
 import {
   MonoidCardError,
@@ -257,6 +258,7 @@ function mount(options = {}) {
     secretPINSession: new CardSecretPINSession(),
     isActive: () => state.active,
     validateAddition: options.validateAddition ?? (() => {}),
+    acceptsBundle: options.acceptsBundle,
     onAdded: async value => state.added.push(value),
     onNeedsInstall: information => state.installs.push(information),
   };
@@ -277,6 +279,22 @@ function mount(options = {}) {
 }
 
 afterEach(() => owners.splice(0).forEach(owner => owner.unmount()));
+
+test('a recognized Authority bundle is accepted without reset or PIN input', async () => {
+  const bundle = new Uint8Array(32).fill(42);
+  const state = mount({
+    acceptsBundle: hello => Buffer.from(hello.bundle).equals(bundle),
+  });
+  state.result.hello.bundle = bundle;
+  const operation = state.hook.addCard();
+  await state.tap();
+  state.scans[0].resolve();
+  await operation;
+  state.render();
+  assert.deepEqual(state.added, [state.result.hello]);
+  assert.deepEqual(state.inputs, []);
+  assert.equal(state.hook.pendingReset, undefined);
+});
 
 test('an initialized target is added after native cleanup without a PIN prompt', async () => {
   const state = mount();
@@ -356,6 +374,85 @@ test('a bundled target requires the existing two-stage reset confirmation after 
   state.render();
   assert.equal(state.hook.busy, false);
   assert.equal(find(state.hook.content, 'confirm-popup'), undefined);
+});
+
+for (const member of [true, false]) {
+  test(`first issuance ${member ? 'recognizes a member without reset' : 'confirms a foreign bundle before offering reset'}`, async () => {
+    const url = 'https://authority.monoid.app/';
+    const session = new AuthorityBundleSession(url);
+    session.choose({
+      owner: {source: 'reown', id: 'account'},
+      name: 'Family',
+      allowPeerExtension: true,
+    });
+    const issued = new Uint8Array(32).fill(42);
+    const pending = deferred();
+    let requests = 0;
+    const authority = {
+      issueBundle: async () => {
+        requests++;
+        await pending.promise;
+        return {bundle: issued};
+      },
+    };
+    const state = mount({
+      validateAddition: (card, signal, setState) =>
+        session.resolveBundle(card, authority, signal, setState),
+      acceptsBundle: card => session.acceptsBundle(card),
+    });
+    state.result.hello = {
+      ...hello({bundle: member ? issued : new Uint8Array(32).fill(7)}),
+      authority: url,
+      alias: 'Travel',
+    };
+    state.options.onAdded = async card => {
+      state.added.push(card);
+      await session.addCard(card);
+    };
+    state.render();
+    const operation = state.hook.addCard();
+    const tap = state.tap();
+    await Promise.resolve();
+    state.render();
+    assert.equal(find(state.hook.content, 'confirm-popup'), undefined);
+    assert.equal(state.added.length, 0);
+    pending.resolve();
+    await tap;
+    state.scans[0].resolve();
+    await operation;
+    state.render();
+    assert.equal(requests, 1);
+    assert.deepEqual(state.inputs, []);
+    const confirmation = find(state.hook.content, 'confirm-popup');
+    if (member) {
+      assert.equal(confirmation, undefined);
+      assert.equal(session.joinedCount, 1);
+    } else {
+      assert.ok(confirmation);
+      assert.equal(
+        find(confirmation, 'p').props.children.join(''),
+        'Card Travel already belongs to a bundle.',
+      );
+      assert.equal(session.cards.length, 0);
+    }
+  });
+}
+
+test('leaving during membership resolution cannot offer a reset or accept a late card', async () => {
+  const pending = deferred();
+  const state = mount({validateAddition: () => pending.promise});
+  state.result.hello = hello({bundle: new Uint8Array(32).fill(7)});
+  const operation = state.hook.addCard();
+  const tap = state.tap();
+  const rejected = assert.rejects(tap, {name: 'AbortError'});
+  state.deactivate();
+  pending.resolve();
+  await rejected;
+  state.scans[0].resolve();
+  await operation;
+  state.render();
+  assert.equal(find(state.hook.content, 'confirm-popup'), undefined);
+  assert.deepEqual(state.added, []);
 });
 
 test('a target missing PINs uses shared PIN setup and preserves confirmed setup after navigation', async () => {

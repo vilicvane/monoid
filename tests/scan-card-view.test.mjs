@@ -194,6 +194,7 @@ test('a completed scan stores every resource and routes to Card with only its id
     publicKey,
     bundle: new Uint8Array(32).fill(0x42),
     alias: 'Travel',
+    authority: 'https://authority.monoid.app/',
     allowPeerExtension: false,
   });
   state.resolveScan();
@@ -207,6 +208,7 @@ test('a completed scan stores every resource and routes to Card with only its id
       publicKey: Buffer.from(publicKey).toString('hex'),
       bundle: '42'.repeat(32),
       alias: 'Travel',
+      authority: 'https://authority.monoid.app/',
       allowPeerExtension: false,
       items: state.scannedItems,
     },

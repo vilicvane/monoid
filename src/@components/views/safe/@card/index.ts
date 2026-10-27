@@ -1,4 +1,6 @@
 export {CardResourceItem, CardResourceList} from './@resource-item.js';
+export * from './authority-bundle-setup.js';
+export * from './authority-bundle-session.js';
 export * from './card-backup-session.js';
 export * from './card-bundle-extension-session.js';
 export * from './card-bundle-session.js';

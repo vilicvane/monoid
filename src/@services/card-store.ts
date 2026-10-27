@@ -110,6 +110,7 @@ export class CardState implements ScannedCardData {
   readonly publicKey: PublicKeyHex;
   bundle: string | false;
   alias: string | false;
+  authority: string | false;
   allowPeerExtension: boolean;
   items: CardItem[];
   /** Reset invalidates the initialization assumed by the original Card scan. */
@@ -120,6 +121,7 @@ export class CardState implements ScannedCardData {
     this.publicKey = card.publicKey;
     this.bundle = card.bundle;
     this.alias = card.alias;
+    this.authority = card.authority;
     this.allowPeerExtension = card.allowPeerExtension;
     this.items = card.items.map(item => new CardItem(item));
     makeAutoObservable(this, {id: false, publicKey: false});
@@ -144,6 +146,7 @@ export class CardState implements ScannedCardData {
       publicKey: this.publicKey,
       bundle: this.bundle,
       alias: this.alias,
+      authority: this.authority,
       allowPeerExtension: this.allowPeerExtension,
       items: this.items.map(item => ({
         index: item.index,
@@ -199,6 +202,7 @@ export class CardStore {
       if (cached)
         runInAction(() => {
           cached.alias = hello.alias;
+          cached.authority = hello.authority;
           cached.allowPeerExtension = hello.allowPeerExtension;
           cached.bundle =
             hello.bundle === false ? false : uint8ArrayToHex(hello.bundle);
@@ -269,6 +273,7 @@ export class CardStore {
     if (existing) {
       existing.bundle = card.bundle;
       existing.alias = card.alias;
+      existing.authority = card.authority;
       existing.allowPeerExtension = card.allowPeerExtension;
       existing.items = card.items.map(item => new CardItem(item));
       existing.requiresPINSetup = false;

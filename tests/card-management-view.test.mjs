@@ -4,6 +4,7 @@ import {setImmediate} from 'node:timers/promises';
 
 import {observable, runInAction} from 'mobx';
 
+import {CardSecretPINSession} from '../.bld/app/@components/views/safe/@card/card-secret-pin-session.js';
 import {SyncCardsState} from '../.bld/app/@components/views/safe/@card/sync-cards-state.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {HeldPINs} from '../.bld/app/@lib/held-pins.js';
@@ -426,6 +427,7 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     $match: {$exact: {$active: true}},
     returnTo,
     copyId: returnTo === 'copy' ? 'copy' : undefined,
+    bundleId: returnTo === 'bundle' ? 'bundle-flow' : undefined,
     cardInformation: cardInformation ? state.information : undefined,
   });
   state.view.$match.$view = () => ({$entries: [state.view]});
@@ -581,7 +583,10 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
         session: {addTarget: async target => state.targets.push(target)},
       }),
     },
-    cardBundleStore: {acceptInstalledCard: async () => {}},
+    cardBundleStore: {
+      get: () => undefined,
+      acceptInstalledCard: async () => {},
+    },
     cardStore: {
       observeApplet: applet => applet,
       get: () => undefined,
@@ -596,6 +601,36 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
   return state;
 }
 afterEach(() => owners.splice(0).forEach(owner => owner.unmount()));
+
+test('Authority install returns the verified card and holds its newly set Secret PIN for joining', async () => {
+  const state = mount({returnTo: 'bundle'});
+  const secretPINs = new CardSecretPINSession();
+  state.entrances.cardBundleStore = {
+    get: id => {
+      assert.equal(id, 'bundle-flow');
+      return {authority: {secretPINs}};
+    },
+    acceptInstalledCard: async (id, card) => {
+      assert.equal(id, 'bundle-flow');
+      state.targets.push(card);
+    },
+  };
+  state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.targets, [state.initialized]);
+  const identity = monoid.readBackupCardIdentity(state.initialized);
+  await secretPINs.run(
+    [identity],
+    () => assert.fail('Secret PIN asked again'),
+    async credentials => {
+      assert.equal(credentials(identity).pin, PIN);
+    },
+  );
+  secretPINs.clear();
+});
 
 function finishProcessExit(state) {
   const process = state.process();

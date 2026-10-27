@@ -590,7 +590,7 @@ test('Create bundle passes the current card identity and starts in bundle mode w
   assert.deepEqual(state.setups, [
     {
       card: {id: state.card.id, publicKey: state.card.publicKey},
-      createBundle: true,
+      bundle: 'card',
     },
   ]);
   assert.equal(state.popup(), undefined);
@@ -2436,3 +2436,28 @@ test('Extend bundle follows the cached peer extension policy and alias follows t
   assert.equal(tags[1].props.children, 'Travel');
   assert.equal(tags[2].props.identifier.type, 'bundle');
 });
+
+for (const [bundle, authority, visible] of [
+  [false, 'https://authority.monoid.app/', true],
+  [false, false, false],
+  ['11'.repeat(32), 'https://authority.monoid.app/', false],
+]) {
+  test(`Authority entry requires an unbundled card with Authority: ${bundle}/${authority}`, () => {
+    const state = mount({items: cardItems(INDEX, [wallet(0)])});
+    state.card.bundle = bundle;
+    state.card.authority = authority;
+    state.menuButton().props.onClick();
+    const join = state.popupButton('Join Authority bundle');
+    assert.equal(!!join, visible);
+    if (join) {
+      join.props.onClick();
+      assert.deepEqual(state.setups, [
+        {
+          card: {id: state.card.id, publicKey: state.card.publicKey},
+          bundle: 'authority',
+        },
+      ]);
+      assert.deepEqual(state.scans, []);
+    }
+  });
+}

@@ -34,6 +34,7 @@ function prepared(card) {
     publicKey: hex(card.publicKey),
     alias: card.alias,
     allowPeerExtension: card.allowPeerExtension,
+    authority: card.authority,
     bundle: card.bundle === false ? false : hex(card.bundle),
   };
 }
@@ -129,6 +130,7 @@ test('entry requires a full identity in an existing Bundle', () => {
     publicKey: source.publicKey,
     alias: source.alias,
     allowPeerExtension: source.allowPeerExtension,
+    authority: source.authority,
   });
   assert.equal(session.bundle, source.bundle);
   assert.equal(session.phase, 'collecting');
@@ -240,6 +242,7 @@ test('only one initialized new card is added and it remains editable until the r
     publicKey: snapshot.publicKey,
     alias: snapshot.alias,
     allowPeerExtension: snapshot.allowPeerExtension,
+    authority: snapshot.authority,
   });
   await session.configureCard(sourceApplet, source, PIN, signal());
   await assert.rejects(session.removeTarget(), /already confirmed/);
@@ -311,12 +314,14 @@ test('the three taps authenticate separately and forward both opaque packets wit
       publicKey: hex(approver.publicKey),
       alias: approver.alias,
       allowPeerExtension: approver.allowPeerExtension,
+      authority: approver.authority,
     });
     assert.deepEqual(session.requester, {
       id: hex(source.id),
       publicKey: hex(source.publicKey),
       alias: source.alias,
       allowPeerExtension: source.allowPeerExtension,
+      authority: source.authority,
     });
     assert.equal(session.bundle, hex(bundle));
     assert.equal(session.busy, false);
@@ -344,12 +349,14 @@ test('any existing member may request and the entry card may approve', async () 
     publicKey: hex(requester.publicKey),
     alias: requester.alias,
     allowPeerExtension: requester.allowPeerExtension,
+    authority: requester.authority,
   });
   assert.deepEqual(session.source, {
     id: hex(source.id),
     publicKey: hex(source.publicKey),
     alias: source.alias,
     allowPeerExtension: source.allowPeerExtension,
+    authority: source.authority,
   });
   for (const card of [requester, {...requester, id: source.id}]) {
     await assert.rejects(
@@ -404,6 +411,7 @@ test('a lost extension response fixes the full requester identity before the com
       publicKey: hex(requester.publicKey),
       alias: requester.alias,
       allowPeerExtension: requester.allowPeerExtension,
+      authority: requester.authority,
     });
     throw new Error('NFC disconnected');
   };
@@ -654,6 +662,7 @@ test('empty extension data does not freeze target editing', async () => {
     publicKey: hex(source.publicKey),
     alias: source.alias,
     allowPeerExtension: source.allowPeerExtension,
+    authority: source.authority,
   });
   await session.removeTarget();
   assert.equal(session.phase, 'collecting');

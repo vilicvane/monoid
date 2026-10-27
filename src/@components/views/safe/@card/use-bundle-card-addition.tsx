@@ -38,13 +38,22 @@ export function useBundleCardAddition({
   onAdded,
   onNeedsInstall,
   secretPINSession,
+  acceptsBundle = () => false,
   label = 'Add a card',
 }: {
   isActive: () => boolean;
-  validateAddition: (hello: MonoidAppletHello) => void;
-  onAdded: (hello: MonoidAppletHello) => Promise<void>;
+  validateAddition: (
+    hello: MonoidAppletHello,
+    signal: AbortSignal,
+    setState?: (message: string) => void,
+  ) => void | Promise<void>;
+  onAdded: (
+    hello: MonoidAppletHello,
+    replaced?: CardResetIdentity,
+  ) => Promise<void>;
   onNeedsInstall: (information: CardInformation) => void;
   secretPINSession: CardSecretPINSession;
+  acceptsBundle?: (hello: MonoidAppletHello) => boolean;
   label?: string;
 }): {
   busy: boolean;
@@ -113,6 +122,7 @@ export function useBundleCardAddition({
               ...identity,
               alias: hello.alias,
               allowPeerExtension: hello.allowPeerExtension,
+              authority: hello.authority,
               bundle:
                 hello.bundle === false ? false : uint8ArrayToHex(hello.bundle),
               items: [],
@@ -125,25 +135,36 @@ export function useBundleCardAddition({
     });
   };
 
-  const completeSetup = async (hello: MonoidAppletHello): Promise<void> => {
+  const completeSetup = async (
+    hello: MonoidAppletHello,
+    replaced = pendingReset?.card,
+  ): Promise<void> => {
     cacheSetup(hello);
-    await onAdded(hello);
+    await onAdded(hello, replaced);
     if (mounted.current) {
       setPendingPIN(undefined);
       setPendingReset(undefined);
     }
   };
 
-  const validateScan = (hello: MonoidAppletHello): void => {
-    validateAddition(hello);
+  const validateScan = async (
+    hello: MonoidAppletHello,
+    signal: AbortSignal,
+    setState?: (message: string) => void,
+  ): Promise<void> => {
+    await validateAddition(hello, signal, setState);
+    signal.throwIfAborted();
     // Reset does not need the old PINs, even when they are blocked.
     if (hello.bundle !== false) return;
     assertCardPINsNotBlocked(hello);
   };
 
-  const acceptScan = async (hello: MonoidAppletHello): Promise<void> => {
-    validateScan(hello);
-    if (hello.bundle !== false) {
+  const acceptScan = async (
+    hello: MonoidAppletHello,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    await validateScan(hello, signal);
+    if (hello.bundle !== false && !acceptsBundle(hello)) {
       setPendingBundleCard({
         card: {
           id: uint8ArrayToHex(hello.id),
@@ -153,7 +174,7 @@ export function useBundleCardAddition({
         },
         generation: ++bundleConfirmation.current,
       });
-    } else if (!hasInitializedPINs(hello)) {
+    } else if (!acceptsBundle(hello) && !hasInitializedPINs(hello)) {
       cacheSetup(hello);
       setPendingPIN(hello);
       setShowPINSetup(true);
@@ -177,15 +198,19 @@ export function useBundleCardAddition({
     try {
       let result: Awaited<ReturnType<typeof readCardForSetup>> | undefined;
       await scanPrompt('Scan a card', async (sessionId, setState, signal) => {
+        const scanSignal = AbortSignal.any([signal, operation.signal]);
         result = await readCardForSetup(
           sessionId,
           monoidApplet,
           setState,
-          AbortSignal.any([signal, operation.signal]),
+          scanSignal,
         );
         if (result.type === 'ready') {
-          validateScan(result.hello);
-          if (hasInitializedPINs(result.hello) && result.hello.bundle === false)
+          await validateScan(result.hello, scanSignal, setState);
+          if (
+            acceptsBundle(result.hello) ||
+            (hasInitializedPINs(result.hello) && result.hello.bundle === false)
+          )
             completed = result.hello;
         }
       });
@@ -193,7 +218,7 @@ export function useBundleCardAddition({
       setPendingReset(undefined);
       setPendingPIN(undefined);
       if (result.type === 'setup') onNeedsInstall(result.cardInformation);
-      else if (!completed) await acceptScan(result.hello);
+      else if (!completed) await acceptScan(result.hello, operation.signal);
     } catch (error) {
       if (!isOperationCancelled(error, operation.signal)) throw error;
     } finally {
@@ -272,7 +297,7 @@ export function useBundleCardAddition({
             hello,
             hello.pins.secret === false && hello.pins.access === false,
           );
-          validateScan(hello);
+          await validateScan(hello, signal, setState);
           if (pin !== undefined) {
             signal.throwIfAborted();
             const rememberPIN = secretPINSession.onAuthenticated(
@@ -310,8 +335,7 @@ export function useBundleCardAddition({
         }
       }
       if (!isActive() || operation.signal.aborted || !initialized) return;
-      if (!completed) await acceptScan(initialized);
-      setPendingReset(undefined);
+      if (!completed) await acceptScan(initialized, operation.signal);
     } catch (error) {
       if (!isOperationCancelled(error, operation.signal)) throw error;
     } finally {
@@ -319,7 +343,7 @@ export function useBundleCardAddition({
       accessPIN = undefined;
       pinSession.clear();
       try {
-        if (completed) await completeSetup(completed);
+        if (completed) await completeSetup(completed, reset.card);
       } finally {
         if (cardOperation.current === operation)
           cardOperation.current = undefined;
@@ -343,8 +367,20 @@ export function useBundleCardAddition({
       !isActive()
     )
       return false;
-    await acceptScan(hello);
-    return true;
+    const operation = new AbortController();
+    cardOperation.current = operation;
+    setBusy(true);
+    try {
+      await acceptScan(hello, operation.signal);
+      return true;
+    } catch (error) {
+      if (!isOperationCancelled(error, operation.signal)) throw error;
+      return false;
+    } finally {
+      if (cardOperation.current === operation)
+        cardOperation.current = undefined;
+      if (mounted.current) setBusy(false);
+    }
   };
 
   return {

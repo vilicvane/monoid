@@ -32,6 +32,7 @@ import {
   hasAppletBundle,
   initializeMonoidCard,
   installMonoidApplets,
+  readBackupCardIdentity,
   readCardIdentity,
   readMonoidAppletInstallation,
   resolveMonoidAppletMaintenanceAid,
@@ -530,6 +531,14 @@ export const CardManagementView = observer(
               return next;
             setState('Setting up PINs...');
             const accessUnset = next.pins.access === false;
+            const authorityFlow =
+              context.returnTo === 'bundle' && context.bundleId
+                ? cardBundleStore.get(context.bundleId)?.authority
+                : undefined;
+            const rememberSetupPIN = authorityFlow?.secretPINs.onAuthenticated(
+              readBackupCardIdentity(next),
+              pin!,
+            );
             const initialized = await initializeMonoidCard(
               applet,
               next,
@@ -537,6 +546,7 @@ export const CardManagementView = observer(
               signal,
               requestedPINs?.access,
             ).catch(rejectSecretPIN);
+            rememberSetupPIN?.();
             if (procedureCard && pending && maintenance.get(pending.id))
               holdSecretPIN(procedureCard, pin!);
             if (accessUnset) {

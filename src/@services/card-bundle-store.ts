@@ -1,6 +1,7 @@
 import {makeAutoObservable, observable, runInAction} from 'mobx';
 
 import type {
+  AuthorityBundleSession,
   CardBundleExtensionSession,
   CardBundleSession,
   CardResetSession,
@@ -8,17 +9,19 @@ import type {
 import {type MonoidAppletHello, MonoidCardError} from '../@lib/monoid/index.js';
 import {uint8ArrayToHex} from '../@utils/index.js';
 
-/** Only non-secret flow state survives the Card maintenance detour. */
+/** Flow state survives Card Applets; Secret PINs use their expiring memory holder. */
 export class BundleSetupState {
   sourceConsumed = false;
   informationForwarded = false;
-  bundleEnabled = false;
+  bundle: 'card' | 'authority' | undefined;
   pendingReset: CardResetSession | undefined;
+  authority: AuthorityBundleSession | undefined;
 
   constructor(readonly session: CardBundleSession) {
     makeAutoObservable(this, {
       session: false,
       pendingReset: observable.ref,
+      authority: observable.ref,
     });
   }
 }
@@ -91,6 +94,15 @@ export class CardBundleStore {
     hello: MonoidAppletHello,
   ): Promise<void> {
     const flow = this.get(id);
+    if (flow?.bundle === 'authority') {
+      if (!flow.authority || flow.authority.complete) {
+        throw new MonoidCardError('Bundle setup is no longer accepting cards');
+      }
+      runInAction(() => {
+        flow.authority!.installedCard = hello;
+      });
+      return;
+    }
     if (!flow || flow.session.phase !== 'collecting') {
       throw new MonoidCardError('Bundle setup is no longer accepting cards');
     }

@@ -14,6 +14,7 @@ import {ROUTE_SCHEMA, type ViewSwitchingState} from './@routes.js';
 import {
   AddressBookService,
   AppPreferencesService,
+  AuthorityService,
   BitcoinWalletService,
   CardBundleStore,
   CardMaintenanceService,
@@ -140,6 +141,13 @@ export class Entrances {
   get cardMaintenanceService() {
     return this.storageService.then(storage =>
       CardMaintenanceService.create(storage),
+    );
+  }
+
+  @entrance
+  get authorityService() {
+    return this.storageService.then(storage =>
+      AuthorityService.create(storage),
     );
   }
 

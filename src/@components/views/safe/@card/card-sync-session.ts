@@ -83,6 +83,7 @@ function snapshot(card: CardSyncSnapshot): ScannedCardData {
     bundle: card.bundle,
     alias: card.alias ?? false,
     allowPeerExtension: card.allowPeerExtension ?? false,
+    authority: card.authority ?? false,
     items: card.items.map(
       ({data: _data, exported: _exported, ...item}) => item,
     ),

@@ -16,6 +16,7 @@ const identity = {
   publicKey: `04${'12'.repeat(64)}`,
   bundle: '34'.repeat(32),
   alias: '旅行卡',
+  authority: 'https://authority.monoid.app/',
   allowPeerExtension: true,
 };
 const hello = {
@@ -23,6 +24,7 @@ const hello = {
   publicKey: bytes(identity.publicKey),
   bundle: bytes(identity.bundle),
   alias: identity.alias,
+  authority: identity.authority,
   allowPeerExtension: identity.allowPeerExtension,
 };
 

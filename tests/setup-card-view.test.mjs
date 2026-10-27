@@ -113,6 +113,9 @@ mock.module('mobx', {
     },
   },
 });
+mock.module('styled-components', {
+  namedExports: {styled: {div: () => 'bundle-mode-row'}},
+});
 mock.module('react/jsx-runtime', {
   namedExports: {
     jsx: element,
@@ -189,9 +192,15 @@ mock.module('../.bld/app/@components/@monoid/card-preview.js', {
     CardPreviewButton: 'card-preview-button',
   },
 });
-mock.module('../.bld/app/@components/@ui/toggle.js', {
-  namedExports: {Toggle: 'toggle'},
+mock.module('../.bld/app/@components/@ui/segmented-control.js', {
+  namedExports: {SegmentedControl: 'segmented'},
 });
+mock.module(
+  '../.bld/app/@components/views/safe/@card/authority-bundle-setup.js',
+  {
+    namedExports: {AuthorityBundleSetup: 'authority-setup'},
+  },
+);
 mock.module('../.bld/app/@components/@ui/toast.js', {
   namedExports: {useToast: () => message => fixture.toasts.push(message)},
 });
@@ -431,8 +440,8 @@ function bundleCard(identity, overrides = {}) {
 }
 
 async function enableBundle(state) {
-  await find(state.render(), node => node.type === 'toggle').props.onChange(
-    true,
+  await find(state.render(), node => node.type === 'segmented').props.onChange(
+    'card',
   );
   state.render();
 }
@@ -470,7 +479,7 @@ async function replacementCard(alias = false) {
     {
       cardInformation: undefined,
       card: {id: source.id, publicKey: source.publicKey},
-      createBundle: true,
+      bundle: 'card',
     },
     [source],
   );
@@ -908,7 +917,7 @@ afterEach(() => {
 });
 
 test('missing applets leave Setup after reader cleanup and carry the stable Bundle flow into Card maintenance', async () => {
-  const state = mount(SetupCardView, {createBundle: true});
+  const state = mount(SetupCardView, {bundle: 'card'});
   const scanning = state.click('Add a card');
   await state.connect();
   assert.deepEqual(state.routes, []);
@@ -932,7 +941,7 @@ test('missing applets leave Setup after reader cleanup and carry the stable Bund
 test('Card maintenance return survives a Setup remount without rereading or duplicating the first card', async () => {
   const source = preparedCard(bundleCard(1));
   const store = new CardBundleStore();
-  const options = {bundleId: 'bundle-return', createBundle: true, card: source};
+  const options = {bundleId: 'bundle-return', bundle: 'card', card: source};
   const state = mount(SetupCardView, options, [source], store);
   await state.finished;
   state.unmount();
@@ -948,7 +957,7 @@ test('Card maintenance return survives a Setup remount without rereading or dupl
 });
 
 test('adding an initialized card does not cache unread resources as an empty card', async () => {
-  const state = mount(SetupCardView, {createBundle: true});
+  const state = mount(SetupCardView, {bundle: 'card'});
   const hello = bundleCard(2);
   await state.collect(hello);
   assert.ok(state.card('00000002'));
@@ -1225,7 +1234,7 @@ for (const destination of ['inactive', 'leaving', 'unmounted']) {
   });
 
   test(`a verified added card remains in the Bundle when Setup becomes ${destination} during scan exit`, async () => {
-    const state = mount(SetupCardView, {createBundle: true});
+    const state = mount(SetupCardView, {bundle: 'card'});
     const flow = state.entrances.cardBundleStore.get(state.view.bundleId);
     state.existingHello = bundleCard(2);
     const adding = state.click('Add a card');
@@ -1253,9 +1262,12 @@ test('normal Setup is plural with bundle creation off, while every Copy origin s
     textOf(find(state.tree, node => node.type === 'h1')),
     'Setup cards',
   );
-  const toggle = find(state.tree, node => node.type === 'toggle');
-  assert.equal(textOf(toggle), 'Create bundle');
-  assert.equal(toggle.props.checked, false);
+  const toggle = find(state.tree, node => node.type === 'segmented');
+  assert.deepEqual(
+    toggle.props.options.map(option => option.label),
+    ['None', 'Cards', 'Authority'],
+  );
+  assert.equal(toggle.props.value, 'none');
   assert.equal(toggle.props.disabled, false);
 
   for (const copyId of ['source-copy', 'missing-copy']) {
@@ -1265,7 +1277,7 @@ test('normal Setup is plural with bundle creation off, while every Copy origin s
       'Setup card',
     );
     assert.equal(
-      find(copy.tree, node => node.type === 'toggle'),
+      find(copy.tree, node => node.type === 'segmented'),
       undefined,
     );
   }
@@ -1282,8 +1294,8 @@ test('Card entry adds the captured prepared card when enabling a bundle without 
   );
   assert.equal(state.card(source.id), undefined);
   assert.equal(
-    find(state.tree, node => node.type === 'toggle').props.checked,
-    false,
+    find(state.tree, node => node.type === 'segmented').props.value,
+    'none',
   );
   assert.deepEqual(state.cardLookups, [identity]);
   state.view.card = {id: other.id, publicKey: other.publicKey};
@@ -1292,7 +1304,7 @@ test('Card entry adds the captured prepared card when enabling a bundle without 
   assert.equal(state.card(source.id).props.description, 'ready');
   assert.equal(state.card(other.id), undefined);
   assert.equal(
-    find(state.tree, node => node.type === 'toggle').props.disabled,
+    find(state.tree, node => node.type === 'segmented').props.disabled,
     true,
   );
   assert.equal(state.button('Continue'), undefined);
@@ -1323,11 +1335,11 @@ test('Card bundle entry starts enabled and adds the cached first card once acros
   const identity = {id: source.id, publicKey: source.publicKey};
   const state = mount(
     SetupCardView,
-    {cardInformation: undefined, card: identity, createBundle: true},
+    {cardInformation: undefined, card: identity, bundle: 'card'},
     [source, other],
   );
   assert.equal(
-    find(state.tree, node => node.type === 'toggle'),
+    find(state.tree, node => node.type === 'segmented'),
     undefined,
   );
   assert.equal(
@@ -1342,12 +1354,12 @@ test('Card bundle entry starts enabled and adds the cached first card once acros
   assert.deepEqual(state.errors, []);
 
   state.view.card = {id: other.id, publicKey: other.publicKey};
-  state.view.createBundle = false;
+  state.view.bundle = undefined;
   state.render();
   state.replayEffects();
   await state.finished;
   assert.equal(
-    find(state.render(), node => node.type === 'toggle'),
+    find(state.render(), node => node.type === 'segmented'),
     undefined,
   );
   assert.equal(
@@ -1388,7 +1400,7 @@ test('Card bundle entry waits for the entering route to become active before add
     {
       cardInformation: undefined,
       card: {id: source.id, publicKey: source.publicKey},
-      createBundle: true,
+      bundle: 'card',
       $match: {$exact: {$active: false, $transition: true}},
     },
     [source],
@@ -1431,7 +1443,7 @@ for (const destination of ['leaving', 'unmounted']) {
       {
         cardInformation: undefined,
         card: {id: source.id, publicKey: source.publicKey},
-        createBundle: true,
+        bundle: 'card',
         $match: {$exact: {$active: false, $transition: true}},
       },
       [source],
@@ -1463,11 +1475,11 @@ test('automatic bundle entry with no cached Card keeps bundle mode on and starts
   const state = mount(SetupCardView, {
     cardInformation: undefined,
     card: {id: source.id, publicKey: source.publicKey},
-    createBundle: true,
+    bundle: 'card',
   });
   await state.finished;
   assert.equal(
-    find(state.render(), node => node.type === 'toggle'),
+    find(state.render(), node => node.type === 'segmented'),
     undefined,
   );
   assert.equal(
@@ -1489,7 +1501,7 @@ test('Copy entry ignores bundle mode and source Card identity and retains its si
       cardInformation: undefined,
       card: {id: source.id, publicKey: source.publicKey},
       copyId: 'source-copy',
-      createBundle: true,
+      bundle: 'card',
     },
     [source],
   );
@@ -1501,7 +1513,7 @@ test('Copy entry ignores bundle mode and source Card identity and retains its si
     'Setup card',
   );
   assert.equal(
-    find(state.tree, node => node.type === 'toggle'),
+    find(state.tree, node => node.type === 'segmented'),
     undefined,
   );
   const destination = bundleCard(2);
@@ -1572,7 +1584,7 @@ test('bundle collection waits for scan cleanup and PIN setup before counting the
   );
   assert.equal(state.button('Continue'), undefined);
   assert.equal(
-    find(state.tree, node => node.type === 'toggle').props.disabled,
+    find(state.tree, node => node.type === 'segmented').props.disabled,
     true,
   );
   await state.collect(bundleCard(2));
@@ -1653,8 +1665,8 @@ test('collected members can be removed before round two, which locks membership'
     undefined,
   );
   assert.equal(
-    find(state.tree, node => node.type === 'toggle').props.disabled,
-    true,
+    find(state.tree, node => node.type === 'segmented'),
+    undefined,
   );
   assert.equal(
     find(state.tree, node => node.props?.['aria-label'] === 'Add card'),
@@ -1751,7 +1763,7 @@ for (const outcome of ['complete', 'uncertain']) {
       SetupCardView,
       {
         card: {id: source.id, publicKey: source.publicKey},
-        createBundle: true,
+        bundle: 'card',
       },
       [source],
     );
@@ -2233,5 +2245,81 @@ test('cancelling an in-flight join keeps the late ACK and prevents another opera
   assert.equal(
     state.bundleCalls.filter(call => call.type === 'join').length,
     1,
+  );
+});
+
+test('Authority mode is selectable without starting card setup, and fixed Authority has no switch', async () => {
+  const state = mount(SetupCardView, {cardInformation: undefined});
+  await find(state.render(), node => node.type === 'segmented').props.onChange(
+    'authority',
+  );
+  assert.ok(find(state.render(), node => node.type === 'authority-setup'));
+  assert.equal(
+    textOf(find(state.tree, node => node.type === 'h1')),
+    'Setup cards',
+  );
+  assert.deepEqual(state.scans, []);
+  const source = preparedCard(bundleCard(1));
+  const fixed = mount(
+    SetupCardView,
+    {cardInformation: undefined, card: source, bundle: 'authority'},
+    [source],
+  );
+  assert.equal(
+    textOf(find(fixed.tree, node => node.type === 'h1')),
+    'Authority bundle',
+  );
+  assert.equal(
+    find(fixed.tree, node => node.type === 'segmented'),
+    undefined,
+  );
+  assert.ok(find(fixed.tree, node => node.type === 'authority-setup'));
+  assert.deepEqual(fixed.scans, []);
+  assert.deepEqual(fixed.bundleCalls, []);
+});
+
+test('mode capsules belong to the first step and Cards locks them after collection', async () => {
+  const state = mount(SetupCardView, {cardInformation: undefined});
+  const firstStep = () =>
+    find(
+      state.render(),
+      node => node.type === 'step' && node.props.numero === 1,
+    );
+  assert.equal(textOf(firstStep().props.title), 'Set up card');
+  assert.ok(find(firstStep(), node => node.type === 'segmented'));
+  await enableBundle(state);
+  assert.equal(textOf(firstStep().props.title), 'Add cards');
+  assert.equal(
+    find(firstStep(), node => node.type === 'segmented').props.disabled,
+    false,
+  );
+  await state.collect(bundleCard(1));
+  assert.equal(
+    find(firstStep(), node => node.type === 'segmented').props.disabled,
+    true,
+  );
+});
+
+test('Authority pending cards allow mode changes, while joined cards lock the capsules', async () => {
+  const state = mount(SetupCardView, {cardInformation: undefined});
+  await find(state.render(), node => node.type === 'segmented').props.onChange(
+    'authority',
+  );
+  const authority = find(
+    state.render(),
+    node => node.type === 'authority-setup',
+  );
+  authority.props.flow.authority = {
+    cards: [preparedCard(bundleCard(1))],
+    joinedCount: 0,
+  };
+  assert.equal(
+    find(state.render(), node => node.type === 'segmented').props.disabled,
+    false,
+  );
+  authority.props.flow.authority.joinedCount = 1;
+  assert.equal(
+    find(state.render(), node => node.type === 'segmented').props.disabled,
+    true,
   );
 });

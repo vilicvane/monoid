@@ -52,6 +52,7 @@ function readIdentity(
     publicKey: PublicKeyHex.satisfies(card.publicKey.toLowerCase()),
     alias: card.alias,
     allowPeerExtension: card.allowPeerExtension,
+    authority: card.authority,
   };
 }
 
@@ -60,6 +61,7 @@ function readCardIdentity(hello: MonoidAppletHello): CardIdentity {
     id: uint8ArrayToHex(hello.id),
     alias: hello.alias,
     allowPeerExtension: hello.allowPeerExtension,
+    authority: hello.authority,
     publicKey: uint8ArrayToHex(hello.publicKey),
     bundle: hello.bundle === false ? false : uint8ArrayToHex(hello.bundle),
   });
