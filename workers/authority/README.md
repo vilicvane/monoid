@@ -134,12 +134,21 @@ Farcaster. Neither embedded method ever falls back to the wallet address.
 </InfoFieldset>
 ```
 
-Cancellation immediately returns to Monoid. If the browser stays open, show
+Cancellation attempts to return to Monoid after the Worker responds. If the browser stays open, show
 `<InfoMessage>Sign-in cancelled.</InfoMessage>` and one neutral `Back to Monoid`
 button, with no completion graphic. Only approval shows `OperationComplete`
 with `label="Signed in"`, followed by `Return to Monoid to continue.`. The
 optional label belongs only to this page's completion adapter; the APP's
 component is unchanged.
+
+Both Continue and Cancel first await the Worker's completion/cancellation
+request. Once it returns a redirect URL, the page starts Reown sign-out, saves
+the approved/cancelled fallback state, and calls `location.assign(url)`.
+External-scheme navigation to `app.monoid://…` in a real browser may require
+recent user activation, which can be lost during that network work. In either
+fallback state, **Back to Monoid** calls `location.assign(returned.url)` directly
+from its click handler, providing a fresh gesture. This behavior is unchanged;
+automatic handoff versus the gesture fallback still needs phone measurement.
 
 1. The client creates random state and a PKCE verifier, then POSTs
    `/auth/login/start` with
@@ -147,7 +156,8 @@ component is unchanged.
 codeChallengeMethod: "S256"}`. The redirect must exactly match the allowlist.
    The client must retain its state, verifier and expiry locally until completion
    or cancellation; the verifier never goes into the authorization URL.
-2. The client opens the returned authorization URL in the system browser.
+2. The client opens the returned authorization URL in the **system browser app**
+   (Chrome on Android, Safari on iOS), not an in-app or ephemeral auth session.
    The Worker consumes that request, binds a ten-minute flow to an HttpOnly
    browser cookie, and opens `/login`. This is the production page in `web/`,
    built with the APP's shared UI styles/components. AppKit runs on this page.
@@ -179,14 +189,37 @@ codeChallengeMethod: "S256"}`. The redirect must exactly match the allowlist.
    or expired session. Protected operations revalidate Reown remotely and fail
    closed on provider errors.
 
-The browser sign-in also ends on approval or cancellation. After obtaining the
-redirect URL, the page immediately clears its project-scoped SIWX auth/nonce
+Only the Monoid Authority session has the short lifetime described above. The
+system browser may retain Reown/provider sign-in or provider cookies, so a later
+sign-in may reuse the provider's login. The page still performs Reown cleanup
+on approval or cancellation. After obtaining the redirect URL, it immediately
+clears its project-scoped SIWX auth/nonce
 keys and stops accepting account updates, starts `siwx.setSessions([])` and
 `appkit.disconnect()` (after `appkit.ready()`), then returns to Monoid **without
 awaiting** SDK cleanup. Late SIWX session events erase credentials again. If the
 browser suspends before disconnect finishes, the next flow clears these keys
 again and uses `enableReconnect: false`, which disconnects cached connections
 instead of restoring them. Other projects' SIWX keys are untouched.
+
+Social sign-in uses AppKit 1.8.24's standard popup flow. It needs a real browser
+tab with `window.opener` so the popup can report its result to the sign-in page.
+In-app auth sessions do not preserve that opener relationship. Do not substitute
+AppKit's Telegram-only same-tab redirect or SDK internals for the popup flow.
+The hosted page keeps Google/GitHub/Apple in its local `features.socials` list;
+Reown's remote project settings can determine the final displayed choices.
+
+Phone observations (2026-10-27, measured over remote debugging on an Android phone), against the deployed page:
+in the Chrome app, Google's popup opened as a new tab, retained `window.opener`,
+returned its result and closed itself, and the hosted page showed **Signed in as**.
+In Chrome's Auth Tab, that popup had no opener and remained at
+`secure.walletconnect.org/loading`. This is the reason for using the system
+browser app; it is not a new Safari acceptance claim.
+
+In that Google sign-in, Reown's verified `/auth/v1/me` response supplied no
+`email` (`appKitAccount.email` was empty). The existing social account row
+therefore correctly displays **Google account**, with **Google** as its
+description. It must never fall back to the embedded wallet address. No code
+change is needed for this observation.
 
 These calls were checked in the installed AppKit **1.8.24** source:
 
@@ -203,7 +236,7 @@ These calls were checked in the installed AppKit **1.8.24** source:
   must not delay the callback. SIWX cleanup is explicit because disconnect alone
   does not always clear ReownAuthentication credentials.
 
-Native system-browser launch, warm/cold callback handling, pending-flow storage
+Native system-browser-app launch, warm/cold callback handling, pending-flow storage
 and platform callback registration belong to the APP. Allowlist entries alone
 do not register a handler or establish device acceptance.
 
