@@ -5,7 +5,7 @@ description: Monoid app development basics, sibling firmware, Capacitor iOS/Andr
 
 # Monoid app development
 
-Source: `../records.md`, records 13, 14, 25–38, 42–46, 62, 64, 69, 70, 84 and 85. Treat these records as authoritative and keep them up to date.
+Source: `../records.md`, records 13, 14, 25–38, 42–46, 62, 64, 69, 70 and 84–88. Treat these records as authoritative and keep them up to date.
 
 - The app (Ionic React + Capacitor, iOS and Android) drives the card applets of the sibling repo `monoid-javacard`, which owns the card protocol. The app mirrors its commands as x-value schemas in `src/@lib/monoid/monoid-applet.ts`, on top of the generic `CBORApplet`/`Applet` transport in `src/@lib`.
 - The project is old: point out whenever the user's choices conflict with the interactions its existing code implies.
@@ -30,6 +30,7 @@ Source: `../records.md`, records 13, 14, 25–38, 42–46, 62, 64, 69, 70, 84 an
 - `npm run lint` is clean on main (record 62); keep it error-free. Cross-directory imports go through `index.js` barrels per `@mufan/import`; when a barrel gains an export, update tests that mock that barrel path.
 - `vite.config.js`/`.d.ts` are stale tracked compiler output that Vite may load before `vite.config.ts`.
 - Branch `archive/security-key-cloud-backup` holds the unmerged Security Key phone-backup exploration (CloudKV plugin); do not reintroduce it on main without a new request.
+- Ionic Android live reload restores its `AndroidManifest.xml.orig` backup on exit: stop the session before editing the native manifest, or restore the manifest from git afterwards (record 86). It also reloads the WebView when Monoid returns from another app, wiping in-memory sign-in state; production builds do not (record 88).
 - Use Node 22.12+ and Capacitor 8.5.3. `npm run ios:sync` builds web assets and regenerates the iOS SPM dependencies; avoid hand-editing generated `CapApp-SPM`. `npm run ios` opens Xcode; Xcode 27 launches simulators through Device Hub.
 - After `npm run build`, run application tests with `node --experimental-test-module-mocks --test tests/*.test.mjs`. The native plugin packages have independent XCTest targets; simulator checks do not establish NFC or Secure Enclave behavior. Core iOS decisions and remaining physical-device checks are in `../29.md`.
 - The shared `MonoidUITests` scheme verifies first camera authorization on a real iPhone, resetting only Monoid's camera permission and preserving app data and other permissions. First authorization must wait for an actual app-activation notification after requesting access, because the reply can precede deactivation while activity snapshots still appear active.
