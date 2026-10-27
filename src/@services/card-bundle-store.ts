@@ -9,6 +9,11 @@ import type {
 import {type MonoidAppletHello, MonoidCardError} from '../@lib/monoid/index.js';
 import {uint8ArrayToHex} from '../@utils/index.js';
 
+type BundleSetupOptions = {
+  bundle?: 'card' | 'authority';
+  createAuthority?: () => AuthorityBundleSession;
+};
+
 /** Flow state survives Card Applets; Secret PINs use their expiring memory holder. */
 export class BundleSetupState {
   sourceConsumed = false;
@@ -17,7 +22,12 @@ export class BundleSetupState {
   pendingReset: CardResetSession | undefined;
   authority: AuthorityBundleSession | undefined;
 
-  constructor(readonly session: CardBundleSession) {
+  constructor(
+    readonly session: CardBundleSession,
+    {bundle, createAuthority}: BundleSetupOptions = {},
+  ) {
+    this.bundle = bundle;
+    this.authority = createAuthority?.();
     makeAutoObservable(this, {
       session: false,
       pendingReset: observable.ref,
@@ -80,10 +90,11 @@ export class CardBundleStore {
   getOrCreate(
     id: string,
     createSession: () => CardBundleSession,
+    options?: BundleSetupOptions,
   ): BundleSetupState {
     let flow = this.flows.get(id);
     if (!flow) {
-      flow = new BundleSetupState(createSession());
+      flow = new BundleSetupState(createSession(), options);
       this.flows.set(id, flow);
     }
     return flow;

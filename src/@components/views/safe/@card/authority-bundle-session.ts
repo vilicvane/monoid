@@ -3,7 +3,7 @@ import {makeAutoObservable, observable} from 'mobx';
 import {PublicKey} from '../../../../@atomics.js';
 import type {
   AuthorityGroup,
-  AuthorityOwner,
+  AuthorityNamespace,
 } from '../../../../@lib/authority-client.js';
 import {normalizeAuthorityUrl} from '../../../../@lib/authority-url.js';
 import {
@@ -24,7 +24,7 @@ import {CardSecretPINSession} from './card-secret-pin-session.js';
 import {authenticateCardSync} from './card-sync-session.js';
 
 type BundleChoice = Pick<AuthorityGroup, 'name' | 'allowPeerExtension'> & {
-  owner: AuthorityOwner;
+  owner: AuthorityNamespace;
 };
 export type AuthorityBundleCard = CardBackupIdentity & {joined: boolean};
 
@@ -42,10 +42,6 @@ export class AuthorityBundleSession {
     readonly authorityUrl: string,
     source?: CardBackupIdentity,
   ) {
-    makeAutoObservable(this, {
-      secretPINs: false,
-      installedCard: observable.ref,
-    });
     if (source) {
       const {id, publicKey, bundle, alias, authority, allowPeerExtension} =
         source;
@@ -59,6 +55,10 @@ export class AuthorityBundleSession {
         joined: false,
       });
     }
+    makeAutoObservable(this, {
+      secretPINs: false,
+      installedCard: observable.ref,
+    });
   }
 
   get joinedCount(): number {
@@ -147,7 +147,7 @@ export class AuthorityBundleSession {
   ): ReturnType<AuthorityService['issueBundle']> {
     const choice = this.choice!;
     return authority.issueBundle({
-      owner: choice.owner,
+      owner: {source: choice.owner.source, id: choice.owner.id},
       groupName: choice.name,
       allowPeerExtension: choice.allowPeerExtension,
       recipientPublicKey: hello.publicKey,

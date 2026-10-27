@@ -1,11 +1,35 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
+import {AuthorityBundleSession} from '../.bld/app/@components/views/safe/@card/authority-bundle-session.js';
 import {CardBundleExtensionSession} from '../.bld/app/@components/views/safe/@card/card-bundle-extension-session.js';
 import {CardBundleSession} from '../.bld/app/@components/views/safe/@card/card-bundle-session.js';
 import {CardBundleStore} from '../.bld/app/@services/card-bundle-store.js';
 
 const createSession = () => new CardBundleSession();
+
+test('new flows initialize their mode and Authority session together; existing flows ignore initial options', () => {
+  const store = new CardBundleStore();
+  const session = new AuthorityBundleSession('https://authority.monoid.app/');
+  const flow = store.getOrCreate('authority', createSession, {
+    bundle: 'authority',
+    createAuthority: () => session,
+  });
+  assert.equal(flow.bundle, 'authority');
+  assert.equal(flow.authority, session);
+  assert.equal(
+    store.getOrCreate('cards', createSession, {bundle: 'card'}).bundle,
+    'card',
+  );
+  const unexpected = () => assert.fail('A retained flow must not be recreated');
+  const reused = store.getOrCreate('authority', unexpected, {
+    bundle: 'card',
+    createAuthority: unexpected,
+  });
+  assert.equal(reused, flow);
+  assert.equal(reused.bundle, 'authority');
+  assert.equal(reused.authority, session);
+});
 
 function hello(id, overrides = {}) {
   return {

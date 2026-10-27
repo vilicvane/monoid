@@ -1,5 +1,5 @@
 import {App} from '@capacitor/app';
-import {Browser} from '@capacitor/browser';
+import {AppLauncher} from '@capacitor/app-launcher';
 import {base64urlnopad} from '@scure/base';
 import {observable, runInAction} from 'mobx';
 import * as x from 'x-value';
@@ -43,10 +43,6 @@ type Login = {
   reject: (error: AuthorityError) => void;
   controller: AbortController;
   claimed: boolean;
-  browserOpen: boolean;
-  browserFinished: boolean;
-  opening?: Promise<void>;
-  finishing?: Promise<void>;
 };
 export type AuthoritySignInState =
   | {status: 'idle' | 'pending' | 'complete'}
@@ -97,30 +93,21 @@ export class AuthorityService {
   }
 
   signIn(): Promise<AuthorityAccount> {
-    if (this.login) {
-      if (!this.login.browserFinished || this.login.claimed)
-        return this.login.promise;
-      this.login.claimed = true;
-      this.login.controller.abort();
-      clearTimeout(this.loginTimer);
-      this.login.reject(new AuthorityError('cancelled'));
-    }
+    if (this.login) this.finish(this.login, new AuthorityError('cancelled'));
     const login = this.begin({
       authorityUrl: this.authorityUrl,
       state: authorityRandomToken(),
       codeVerifier: authorityRandomToken(),
       expiresAt: Date.now() + AUTHORITY_LOGIN_TTL,
     });
-    void this.savePending().then(
-      () => this.open(login),
-      () => this.finish(login, new AuthorityError('service_error')),
-    );
+    runInAction(() => this.loginState.set({status: 'pending'}));
+    void this.open(login);
     return login.promise;
   }
 
   async cancelSignIn(): Promise<void> {
-    if (this.login)
-      await this.finish(this.login, new AuthorityError('cancelled'));
+    if (this.login) this.finish(this.login, new AuthorityError('cancelled'));
+    await this.writing;
   }
 
   async signOut(): Promise<void> {
@@ -183,22 +170,24 @@ export class AuthorityService {
     };
   }
 
-  async handleCallback(url: string): Promise<void> {
+  private async handleCallback(url: string): Promise<void> {
     const login = this.login;
-    if (!login || login.claimed || login.finishing)
-      throw new AuthorityError('invalid_callback');
+    if (!login || login.claimed) return;
     let code: string;
     try {
       code = authorityCallback(url, login.pending.state);
-      if (Date.now() >= login.pending.expiresAt)
-        throw new AuthorityError('expired');
     } catch (error) {
-      if (error instanceof AuthorityError && error.code !== 'invalid_callback')
-        await this.finish(login, error);
-      throw error;
+      if (error instanceof AuthorityError && error.code === 'cancelled')
+        this.finish(login, error);
+      return;
     }
-    // Claim before any await so warm/cold delivery cannot redeem the same code twice.
+    if (Date.now() >= login.pending.expiresAt) {
+      this.finish(login, new AuthorityError('expired'));
+      return;
+    }
+    // Launch URLs and appUrlOpen can deliver the same link before either awaits.
     login.claimed = true;
+    runInAction(() => this.loginState.set({status: 'pending'}));
     try {
       await this.savePending();
       login.controller.signal.throwIfAborted();
@@ -224,9 +213,9 @@ export class AuthorityService {
         accessToken: token.accessToken,
         account: token.account,
       };
-      await this.finish(login, undefined, session);
+      this.finish(login, undefined, session);
     } catch (error) {
-      await this.finish(login, this.error(error));
+      this.finish(login, this.error(error));
     }
   }
 
@@ -237,7 +226,7 @@ export class AuthorityService {
       resolve = accept;
       reject = fail;
     });
-    // Cold callbacks can settle before a view subscribes; keep the rejection available to await.
+    // A view may observe signInState instead of awaiting the promise.
     void promise.catch(() => {});
     const login: Login = {
       pending,
@@ -246,17 +235,11 @@ export class AuthorityService {
       reject,
       controller: new AbortController(),
       claimed: false,
-      browserOpen: false,
-      browserFinished: false,
     };
     this.login = login;
-    runInAction(() => this.loginState.set({status: 'pending'}));
-    this.loginTimer = setTimeout(
-      () => {
-        void this.finish(login, new AuthorityError('expired'));
-      },
-      Math.max(0, pending.expiresAt - Date.now()),
-    );
+    this.loginTimer = setTimeout(() => {
+      this.finish(login, new AuthorityError('expired'));
+    }, pending.expiresAt - Date.now());
     return login;
   }
 
@@ -291,11 +274,12 @@ export class AuthorityService {
       login.controller.signal.throwIfAborted();
       await this.savePending(login.pending);
       login.controller.signal.throwIfAborted();
-      login.browserOpen = true;
-      login.opening = Browser.open({url: url.href});
-      await login.opening;
+      const {completed} = await AppLauncher.openUrl({url: url.href});
+      if (!completed) throw new AuthorityError('service_error');
+      if (this.login === login && !login.claimed)
+        runInAction(() => this.loginState.set({status: 'idle'}));
     } catch (error) {
-      await this.finish(login, this.error(error));
+      if (!login.claimed) this.finish(login, this.error(error));
     }
   }
 
@@ -303,59 +287,49 @@ export class AuthorityService {
     login: Login,
     error?: AuthorityError,
     session?: Session,
-  ): Promise<void> {
-    if (login.finishing || this.login !== login) {
+  ): void {
+    if (this.login !== login) {
       if (session) this.logout(session);
-      return login.finishing ?? Promise.resolve();
+      return;
     }
+    this.login = undefined;
+    void this.savePending().catch(() => {});
     if (session) this.clearSession();
     const owner = this.session.signal;
-    login.claimed = true;
     login.controller.abort();
     clearTimeout(this.loginTimer);
-    login.finishing = (async () => {
-      try {
-        await this.savePending();
-      } catch {
-        error = new AuthorityError('service_error');
+    if (!error && session) {
+      this.session.set(session, owner);
+      if (this.session.peek() === session) {
+        runInAction(() => {
+          this.accountState.set(session.account);
+          this.loginState.set({status: 'complete'});
+        });
+        login.resolve(session.account);
+        return;
       }
-      // Closing a dismissed browser must not turn into another exchange.
-      try {
-        await login.opening?.catch(() => {});
-        await Browser.close();
-      } catch {
-        /* The session still settles. */
-      }
-      this.login = undefined;
-      if (!error && session) {
-        this.session.set(session, owner);
-        if (this.session.peek() === session) {
-          runInAction(() => {
-            this.accountState.set(session.account);
-            this.loginState.set({status: 'complete'});
-          });
-          login.resolve(session.account);
-          return;
-        }
-        error = new AuthorityError('cancelled');
-      }
-      if (session) this.logout(session);
-      const failure = error ?? new AuthorityError('service_error');
-      runInAction(() => this.loginState.set({status: 'error', error: failure}));
-      login.reject(failure);
-    })();
-    return login.finishing;
+      error = new AuthorityError('cancelled');
+    }
+    if (session) this.logout(session);
+    const failure = error ?? new AuthorityError('service_error');
+    runInAction(() =>
+      this.loginState.set(
+        failure.code === 'cancelled' || failure.code === 'expired'
+          ? {status: 'idle'}
+          : {status: 'error', error: failure},
+      ),
+    );
+    login.reject(failure);
   }
 
   private savePending(pending?: AuthorityPendingLogin): Promise<void> {
-    this.writing = this.writing
-      .catch(() => {})
-      .then(() =>
-        pending
-          ? this.storage.set('authorityLogin', pending)
-          : this.storage.remove('authorityLogin'),
-      );
-    return this.writing;
+    const writing = this.writing.then(() =>
+      pending
+        ? this.storage.set('authorityLogin', pending)
+        : this.storage.remove('authorityLogin'),
+    );
+    this.writing = writing.catch(() => {});
+    return writing;
   }
 
   private requireSession(): Session {
@@ -439,7 +413,7 @@ export class AuthorityService {
       normalizeAuthorityUrl(baseUrl),
     );
     const saved = await storage.get('authorityLogin');
-    if (saved) {
+    if (saved !== undefined) {
       if (
         AuthorityPendingLogin.is(saved) &&
         saved.authorityUrl === service.authorityUrl &&
@@ -448,24 +422,14 @@ export class AuthorityService {
         saved.expiresAt > Date.now() &&
         saved.expiresAt <= Date.now() + AUTHORITY_LOGIN_TTL
       )
-        service.begin(saved).browserOpen = true;
+        service.begin(saved);
       else await storage.remove('authorityLogin');
     }
     await App.addListener('appUrlOpen', ({url}) => {
-      void service.handleCallback(url).catch(() => {
-        /* Unrelated links cannot consume the pending flow. */
-      });
-    });
-    await Browser.addListener('browserFinished', () => {
-      const login = service.login;
-      if (login?.browserOpen && !login.claimed) {
-        login.browserFinished = true;
-        login.browserOpen = false;
-        runInAction(() => service.loginState.set({status: 'idle'}));
-      }
+      void service.handleCallback(url);
     });
     const launch = await App.getLaunchUrl();
-    if (launch) void service.handleCallback(launch.url).catch(() => {});
+    if (launch?.url) void service.handleCallback(launch.url);
     return service;
   }
 }

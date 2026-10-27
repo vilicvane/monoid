@@ -11,7 +11,12 @@ import {
 } from '../.bld/app/@lib/authority-client.js';
 
 mock.module('styled-components', {
-  namedExports: {styled: Object.assign(type => () => type, {p: () => 'p'})},
+  namedExports: {
+    styled: Object.assign(type => () => type, {
+      p: () => 'p',
+      span: () => 'span',
+    }),
+  },
 });
 mock.module('lucide-react', {
   namedExports: {
@@ -92,6 +97,7 @@ for (const [path, names] of [
   ['operation-complete', ['OperationComplete']],
   ['input', ['InputWithAction']],
   ['address', ['Address']],
+  ['ellipsis-in-middle', ['EllipsisInMiddle']],
   ['symbol', ['Symbol']],
   [
     'list',
@@ -218,7 +224,10 @@ function fixture(
   state.isActive = () => state.active.get();
   state.logouts = 0;
   state.flow = flow ?? {};
-  state.sourceCard = sourceCard;
+  state.flow.authority ??= new AuthorityBundleSession(
+    'https://authority.monoid.app/',
+    sourceCard,
+  );
   state.view = {bundleId: 'flow'};
   const account = observable.box(
     signedIn
@@ -282,9 +291,8 @@ function fixture(
       state.dirty = false;
       state.tree = AuthorityBundleSetup({
         children,
-        flow: state.flow,
+        session: state.flow.authority,
         view: state.view,
-        sourceCard: state.sourceCard,
       });
       state.effects.splice(0).forEach(effect => effect());
     } while (state.dirty);
@@ -605,11 +613,11 @@ test('signed-in entry starts at Choose bundle, prefills the most recent bundle, 
   assert.deepEqual(
     steps(state).map(step => [
       typeof step.props.title === 'string' ? step.props.title : 'Add cards',
-      step.props.summary,
+      step.props.summary && text(step.props.summary),
       step.props.activeNumero,
     ]),
     [
-      ['Choose bundle', 'Recovery', 2],
+      ['Choose bundle', 'Account / Recovery', 2],
       ['Add cards', undefined, 2],
     ],
   );
@@ -618,6 +626,38 @@ test('signed-in entry starts at Choose bundle, prefills the most recent bundle, 
   await state.click('Button', 'Change bundle');
   assert.equal(state.find('InputWithAction').props.value, 'Recovery');
 });
+
+for (const owner of [
+  {source: 'reown', id: 'personal', displayName: 'Personal'},
+  {
+    source: 'wallet',
+    id: 'wallet-namespace',
+    displayName: '0x58E61234567890abcdef1234567890abcdef06531',
+  },
+  {source: 'github-user', id: 'github-id', displayName: 'octocat'},
+]) {
+  test(`Choose bundle summary retains the ${owner.source} owner across remounts`, async t => {
+    const state = fixture(t, {namespaces: [owner]});
+    await state.flush();
+    const name = 'a'.repeat(128);
+    input(state, name);
+    await state.click('Button', 'Continue');
+    const expected = `${owner.source === 'reown' ? 'Account' : owner.displayName} / ${name}`;
+    assert.equal(text(steps(state)[0].props.summary), expected);
+    assert.deepEqual({...state.flow.authority.choice.owner}, owner);
+    const wallet = nodes(steps(state)[0].props.summary).find(
+      node => node.type === 'EllipsisInMiddle',
+    );
+    assert.equal(
+      wallet?.props.children,
+      owner.source === 'wallet' ? owner.displayName : undefined,
+    );
+    state.unmount();
+    const restored = fixture(t, {flow: state.flow, namespaces: [owner]});
+    await restored.flush();
+    assert.equal(text(steps(restored)[0].props.summary), expected);
+  });
+}
 
 test('owner selector uses source labels, excludes organizations and loads the newly selected owner', async t => {
   const state = fixture(t, {
@@ -789,7 +829,7 @@ test('typing an existing normalized name locks its policy; a new name has editab
     0,
   );
   await state.click('Button', 'Continue');
-  assert.equal(steps(state)[0].props.summary, '\u00e9');
+  assert.equal(text(steps(state)[0].props.summary), 'Account / \u00e9');
   await state.click('Button', 'Change bundle');
   input(state, 'New family');
   assert.equal(state.find('Toggle').props.checked, true);
@@ -809,7 +849,7 @@ test('a new decomposed name is normalized in the input and the completed summary
   input(state, 'Cafe\u0301');
   assert.equal(state.find('InputWithAction').props.value, 'Caf\u00e9');
   await state.click('Button', 'Continue');
-  assert.equal(steps(state)[0].props.summary, 'Caf\u00e9');
+  assert.equal(text(steps(state)[0].props.summary), 'Account / Caf\u00e9');
 });
 
 test('loading uses Step processing; a 401 clears selection and returns to Sign in without stale results', async t => {

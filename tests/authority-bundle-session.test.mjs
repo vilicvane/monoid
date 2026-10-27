@@ -12,7 +12,7 @@ const url = 'https://authority.monoid.app/';
 const bundle = new Uint8Array(32).fill(42);
 const hex = value => Buffer.from(value).toString('hex');
 const choice = {
-  owner: {source: 'reown', id: 'account'},
+  owner: {source: 'reown', id: 'account', displayName: 'Personal'},
   name: 'Family',
   allowPeerExtension: true,
 };
@@ -81,7 +81,7 @@ test('Secret authentication precedes issuance and Join; verified hash marks the 
   assert.deepEqual(state.calls.find(([name]) => name === 'issue')[1], {
     groupName: choice.name,
     recipientPublicKey: state.current.publicKey,
-    owner: choice.owner,
+    owner: {source: 'reown', id: 'account'},
     allowPeerExtension: true,
   });
   assert.equal(state.session.bundle, hex(bundle));
@@ -212,12 +212,11 @@ test('401 and cancellation before Join preserve cards without attempting a mutat
 
 test('install detour retains selection and cards and reuses the just-set Secret PIN', async () => {
   const store = new CardBundleStore();
-  const flow = store.getOrCreate('flow', () => new CardBundleSession());
-  flow.bundle = 'authority';
-  flow.authority = new AuthorityBundleSession(
-    url,
-    readBackupCardIdentity(hello()),
-  );
+  const flow = store.getOrCreate('flow', () => new CardBundleSession(), {
+    bundle: 'authority',
+    createAuthority: () =>
+      new AuthorityBundleSession(url, readBackupCardIdentity(hello())),
+  });
   flow.authority.choose(choice);
   const installed = hello(2);
   const remember = flow.authority.secretPINs.onAuthenticated(

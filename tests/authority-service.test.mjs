@@ -8,38 +8,53 @@ import {autorun} from 'mobx';
 import {pinClock} from './helpers/held-pins.mjs';
 
 let state;
-mock.module('@capacitor/app', {
+mock.module('@ionic/storage', {
   namedExports: {
-    App: {
-      addListener: async (name, callback) => {
-        state.listeners.set(name, callback);
-        return {remove: async () => {}};
-      },
-      getLaunchUrl: async () => state.launch && {url: state.launch},
+    Storage: class {
+      async create() {}
+      async get(key) {
+        return structuredClone(state.storage.get(key));
+      }
+      async set(key, value) {
+        await state.beforeSet?.(key, value);
+        state.storage.set(key, structuredClone(value));
+      }
+      async remove(key) {
+        state.storage.delete(key);
+      }
     },
   },
 });
-mock.module('@capacitor/browser', {
+mock.module('@capacitor/app', {
   namedExports: {
-    Browser: {
-      addListener: async (name, callback) => {
-        state.listeners.set(name, callback);
-        return {remove: async () => {}};
+    App: {
+      async addListener(name, listener) {
+        state.listeners.set(name, listener);
+        return {remove: async () => state.listeners.delete(name)};
       },
-      open: async options => {
+      async getLaunchUrl() {
+        if (state.deliverLaunchTwice)
+          state.listeners.get('appUrlOpen')({url: state.launchUrl});
+        return state.launchUrl ? {url: state.launchUrl} : undefined;
+      },
+    },
+  },
+});
+mock.module('@capacitor/app-launcher', {
+  namedExports: {
+    AppLauncher: {
+      openUrl: async options => {
         state.opened.push(options);
-        await state.onOpen?.();
-      },
-      close: async () => {
-        state.closed++;
-        state.listeners.get('browserFinished')?.();
-        await state.onClose?.();
+        return (await state.onOpen?.(options)) ?? {completed: true};
       },
     },
   },
 });
 const {AuthorityService} = await import(
   '../.bld/app/@services/authority-service.js'
+);
+const {StorageService} = await import(
+  '../.bld/app/@services/storage-service.js'
 );
 const {
   AUTHORITY_CALLBACK_URI,
@@ -90,28 +105,39 @@ const BEARER = 'opaque-test-bearer';
 const encoded = (length, value = 4) =>
   base64urlnopad.encode(new Uint8Array(length).fill(value));
 const callback = (
-  saved,
+  pending,
   values = {code: CODE},
   base = AUTHORITY_CALLBACK_URI,
-) => `${base}?${new URLSearchParams({...values, state: saved.state})}`;
+) => `${base}?${new URLSearchParams({...values, state: pending.state})}`;
 const failure = code => error =>
   error instanceof AuthorityError && error.code === code;
 const flush = async () => {
   for (let i = 0; i < 5; i++) await setImmediate();
 };
 
-async function fixture(t, {saved, launch} = {}) {
+async function fixture(
+  t,
+  {saved, launchUrl, deliverLaunchTwice, respond} = {},
+) {
   const clock = pinClock(t);
   clock.elapse(999_000);
   const current = (state = {
     clock,
-    saved: structuredClone(saved),
-    launch,
-    listeners: new Map(),
+    storage: new Map(saved === undefined ? [] : [['authorityLogin', saved]]),
     opened: [],
-    closed: 0,
-    writes: [],
+    listeners: new Map(),
+    launchUrl,
+    deliverLaunchTwice,
+    respond,
     requests: [],
+    get pending() {
+      return this.requests.findLast(
+        request => request.path === '/auth/login/start',
+      )?.body;
+    },
+    complete(url = callback(this.pending)) {
+      this.listeners.get('appUrlOpen')({url});
+    },
     elapse(ms) {
       clock.elapse(ms);
     },
@@ -147,23 +173,9 @@ async function fixture(t, {saved, launch} = {}) {
       return Response.json({namespaces: [{...OWNER, displayName: 'Personal'}]});
     throw new Error('Unexpected test request');
   });
-  current.storage = {
-    get: async key => {
-      assert.equal(key, 'authorityLogin');
-      return structuredClone(current.saved);
-    },
-    set: async (key, value) => {
-      assert.equal(key, 'authorityLogin');
-      await current.beforeSet?.();
-      current.saved = structuredClone(value);
-      current.writes.push(structuredClone(value));
-    },
-    remove: async key => {
-      assert.equal(key, 'authorityLogin');
-      current.saved = undefined;
-    },
-  };
-  current.service = await AuthorityService.create(current.storage);
+  current.service = await AuthorityService.create(
+    await StorageService.create(),
+  );
   return current;
 }
 
@@ -171,7 +183,7 @@ async function signedIn(t) {
   const current = await fixture(t);
   const signIn = current.service.signIn();
   await flush();
-  await current.service.handleCallback(callback(current.saved));
+  current.complete();
   await signIn;
   return current;
 }
@@ -190,8 +202,11 @@ test('policy conflicts name bundles in the UI', () => {
   );
 });
 
-test('sign-in persists only PKCE flow data, opens the hosted URL, and publishes an in-memory session', async t => {
+test('sign-in persists PKCE before opening the system browser and becomes idle until its callback', async t => {
   const current = await fixture(t);
+  assert.equal(current.service.signInState.status, 'idle');
+  assert.equal(current.service.pendingSignIn, undefined);
+  assert.equal(current.service.signedIn, false);
   t.mock.method(crypto, 'randomUUID', () =>
     assert.fail('HTTP WebView has no randomUUID'),
   );
@@ -199,32 +214,38 @@ test('sign-in persists only PKCE flow data, opens the hosted URL, and publishes 
   t.after(autorun(() => observed.push(current.service.signedIn)));
   const result = current.service.signIn();
   assert.equal(current.service.pendingSignIn, result);
-  assert.equal(current.service.signIn(), result);
+  assert.equal(current.service.signInState.status, 'pending');
   await flush();
-  const saved = structuredClone(current.saved);
-  assert.match(saved.state, /^[A-Za-z0-9_-]{43}$/);
-  assert.match(saved.codeVerifier, /^[A-Za-z0-9_-]{43}$/);
-  assert.notEqual(saved.state, saved.codeVerifier);
-  assert.deepEqual(current.requests[0].body, {
+  const pending = current.pending;
+  assert.match(pending.state, /^[A-Za-z0-9_-]{43}$/);
+  assert.deepEqual(pending, {
     redirectUri: AUTHORITY_CALLBACK_URI,
-    state: saved.state,
-    codeChallenge: authorityPKCEChallenge(saved.codeVerifier),
+    state: pending.state,
+    codeChallenge: pending.codeChallenge,
     codeChallengeMethod: 'S256',
   });
-  assert.equal(saved.expiresAt, Date.now() + 600_000);
   assert.deepEqual(current.opened, [{url: `${BASE}auth/login?request=opaque`}]);
-  assert(!current.opened[0].url.includes(saved.codeVerifier));
-  current.listeners.get('appUrlOpen')({url: callback(saved)});
+  assert.equal(current.service.signInState.status, 'idle');
+  const saved = current.storage.get('authorityLogin');
+  assert.deepEqual(saved, {
+    authorityUrl: BASE,
+    state: pending.state,
+    codeVerifier: saved.codeVerifier,
+    expiresAt: Date.now() + 600_000,
+  });
+  current.complete();
+  assert.equal(current.service.signInState.status, 'pending');
   assert.deepEqual(await result, ACCOUNT);
   assert.deepEqual(current.service.account, ACCOUNT);
   assert.deepEqual(observed, [false, true]);
   assert.equal(current.service.signInState.status, 'complete');
-  assert.equal(current.saved, undefined);
-  assert.equal(current.closed, 1);
-  assert.equal(current.requests[1].body.codeVerifier, saved.codeVerifier);
+  const verifier = current.requests[1].body.codeVerifier;
+  assert.match(verifier, /^[A-Za-z0-9_-]{43}$/);
+  assert.notEqual(pending.state, verifier);
+  assert.equal(pending.codeChallenge, authorityPKCEChallenge(verifier));
+  assert(!current.opened[0].url.includes(verifier));
   assert.equal(current.requests[1].body.redirectUri, AUTHORITY_CALLBACK_URI);
-  assert(!JSON.stringify(current.writes).includes(BEARER));
-  assert(!JSON.stringify(current.writes).includes(ACCOUNT.id));
+  assert.equal(current.storage.size, 0);
   assert.deepEqual(await current.service.namespaces(), [
     {...OWNER, displayName: 'Personal'},
   ]);
@@ -234,42 +255,45 @@ test('sign-in persists only PKCE flow data, opens the hosted URL, and publishes 
   );
 });
 
-test('wrong state, scheme, path, fragment and duplicate query parameters leave the real login pending', async t => {
-  const current = await fixture(t);
-  const result = current.service.signIn();
-  await flush();
-  const saved = current.saved;
-  for (const url of [
-    callback({...saved, state: 'wrong'}),
-    callback(saved, {code: CODE}, 'other://authority/callback'),
-    callback(saved, {code: CODE}, 'app.monoid://authority/elsewhere'),
-    callback(saved, {code: CODE}, 'app.monoid://other/callback'),
-    `${callback(saved)}#fragment`,
-    `${callback(saved)}&code=duplicate`,
-    callback(saved, {error: 'access_denied', code: CODE}),
-  ]) {
-    await assert.rejects(
-      current.service.handleCallback(url),
-      failure('invalid_callback'),
-    );
+for (const [label, url] of [
+  ['state', pending => callback({...pending, state: 'wrong'})],
+  [
+    'scheme',
+    pending => callback(pending, {code: CODE}, 'other://authority/callback'),
+  ],
+  [
+    'path',
+    pending =>
+      callback(pending, {code: CODE}, 'app.monoid://authority/elsewhere'),
+  ],
+  [
+    'host',
+    pending => callback(pending, {code: CODE}, 'app.monoid://other/callback'),
+  ],
+  ['fragment', pending => `${callback(pending)}#fragment`],
+  ['duplicate code', pending => `${callback(pending)}&code=duplicate`],
+  [
+    'ambiguous result',
+    pending => callback(pending, {error: 'access_denied', code: CODE}),
+  ],
+]) {
+  test(`unrelated callback with invalid ${label} leaves the real login idle and usable`, async t => {
+    const current = await fixture(t);
+    const result = current.service.signIn();
+    await flush();
+    current.complete(url(current.pending));
+    await flush();
     assert.equal(current.service.pendingSignIn, result);
-    assert.deepEqual(current.saved, saved);
-  }
-  assert.equal(current.requests.length, 1);
-  await current.service.handleCallback(callback(saved));
-  await result;
-  await assert.rejects(
-    current.service.handleCallback(callback(saved)),
-    failure('invalid_callback'),
-  );
-  assert.equal(
-    current.requests.filter(item => item.path === '/auth/login/token').length,
-    1,
-  );
-});
+    assert.equal(current.service.signInState.status, 'idle');
+    assert.equal(current.service.signedIn, false);
+    assert.equal(current.requests.length, 1);
+    current.complete();
+    assert.deepEqual(await result, ACCOUNT);
+  });
+}
 
 for (const cancel of ['hosted page', 'explicit', 'expired']) {
-  test(`${cancel} settles sign-in and clears the persisted verifier`, async t => {
+  test(`${cancel} clears the pending login and returns the button to idle`, async t => {
     const current = await fixture(t);
     const result = current.service.signIn();
     await flush();
@@ -278,35 +302,30 @@ for (const cancel of ['hosted page', 'explicit', 'expired']) {
       failure(cancel === 'expired' ? 'expired' : 'cancelled'),
     );
     if (cancel === 'hosted page')
-      await assert.rejects(
-        current.service.handleCallback(
-          callback(current.saved, {error: 'access_denied'}),
-        ),
-        failure('cancelled'),
-      );
+      current.complete(callback(current.pending, {error: 'access_denied'}));
     if (cancel === 'explicit') await current.service.cancelSignIn();
     if (cancel === 'expired') {
       current.elapse(600_000);
-      await assert.rejects(
-        current.service.handleCallback(callback(current.saved)),
-        failure('expired'),
-      );
+      current.complete();
     }
     await rejected;
-    assert.equal(current.saved, undefined);
+    await flush();
+    assert.equal(current.service.signInState.status, 'idle');
+    assert.equal(current.storage.has('authorityLogin'), false);
+    assert.equal(current.service.pendingSignIn, undefined);
     assert.equal(current.service.signedIn, false);
     assert.equal(current.requests.length, 1);
   });
 }
 
-test('pending flow expiry proactively clears storage', async t => {
+test('pending flow expiry proactively releases the attempt', async t => {
   const current = await fixture(t);
   const result = current.service.signIn();
   await flush();
   const rejected = assert.rejects(result, failure('expired'));
   await current.tick(600_000);
   await rejected;
-  assert.equal(current.saved, undefined);
+  assert.equal(current.service.pendingSignIn, undefined);
 });
 
 test('a server-expired one-use code settles as expired without a retry', async t => {
@@ -316,9 +335,9 @@ test('a server-expired one-use code settles as expired without a retry', async t
   current.respond = () =>
     Response.json({error: 'invalid_grant'}, {status: 400});
   const rejected = assert.rejects(result, failure('expired'));
-  await current.service.handleCallback(callback(current.saved));
+  current.complete();
   await rejected;
-  assert.equal(current.saved, undefined);
+  assert.equal(current.service.pendingSignIn, undefined);
   assert.equal(
     current.requests.filter(item => item.path === '/auth/login/token').length,
     1,
@@ -334,96 +353,183 @@ test('an authorization URL outside this Authority is never opened', async t => {
     });
   await assert.rejects(current.service.signIn(), failure('service_error'));
   assert.equal(current.opened.length, 0);
-  assert.equal(current.saved, undefined);
+  assert.equal(current.service.pendingSignIn, undefined);
 });
 
-test('cancellation while Browser opens waits for it and closes it before settling', async t => {
+test('explicit cancellation settles immediately and a late callback cannot consume the next login', async t => {
   const current = await fixture(t);
-  const opening = Promise.withResolvers();
-  current.onOpen = () => opening.promise;
   const result = current.service.signIn();
   await flush();
+  const url = callback(current.pending);
   const rejected = assert.rejects(result, failure('cancelled'));
-  const cancelled = current.service.cancelSignIn();
-  await flush();
-  assert.equal(current.closed, 0);
-  opening.resolve();
-  await cancelled;
+  await current.service.cancelSignIn();
   await rejected;
-  assert.equal(current.closed, 1);
-  assert.equal(current.saved, undefined);
-});
-
-test('cold launch redeems the persisted pending flow without opening another browser', async t => {
-  const saved = {
-    authorityUrl: BASE,
-    state: encoded(32, 1),
-    codeVerifier: encoded(32, 2),
-    expiresAt: 1_500_000,
-  };
-  const current = await fixture(t, {saved, launch: callback(saved)});
+  const replacement = current.service.signIn();
   await flush();
-  assert.deepEqual(current.service.account, ACCOUNT);
-  assert.equal(current.saved, undefined);
-  assert.equal(current.opened.length, 0);
-  assert.equal(current.requests.length, 1);
-  assert.equal(current.requests[0].body.codeVerifier, saved.codeVerifier);
-});
-
-test('an expired saved flow is removed and its cold callback cannot sign in', async t => {
-  const saved = {
-    authorityUrl: BASE,
-    state: encoded(32, 1),
-    codeVerifier: encoded(32, 2),
-    expiresAt: 999_999,
-  };
-  const current = await fixture(t, {saved, launch: callback(saved)});
+  current.complete(url);
   await flush();
-  assert.equal(current.saved, undefined);
+  assert.equal(current.service.pendingSignIn, replacement);
   assert.equal(current.service.signedIn, false);
+  assert.equal(current.requests.length, 2);
+  current.complete();
+  assert.deepEqual(await replacement, ACCOUNT);
+});
+
+for (const expiresAt of [999_999, 1_500_000]) {
+  test(`startup restores only an unexpired login (${expiresAt}) and stays idle`, async t => {
+    const saved = {
+      authorityUrl: BASE,
+      state: encoded(32, 1),
+      codeVerifier: encoded(32, 2),
+      expiresAt,
+    };
+    const current = await fixture(t, {saved});
+    assert.equal(current.service.signInState.status, 'idle');
+    assert.equal(!!current.service.pendingSignIn, expiresAt > Date.now());
+    assert.equal(current.service.signedIn, false);
+    assert.equal(current.opened.length, 0);
+    assert.equal(current.requests.length, 0);
+    assert.equal(current.storage.has('authorityLogin'), expiresAt > Date.now());
+    if (expiresAt > Date.now()) {
+      const restored = current.service.pendingSignIn;
+      current.complete(callback(saved));
+      assert.equal(current.service.signInState.status, 'pending');
+      assert.deepEqual(await restored, ACCOUNT);
+      assert.equal(current.opened.length, 0);
+      assert.equal(current.requests[0].body.codeVerifier, saved.codeVerifier);
+      return;
+    }
+    const login = current.service.signIn();
+    await flush();
+    assert.notEqual(current.pending.state, saved.state);
+    assert.equal(current.opened.length, 1);
+    current.complete();
+    assert.deepEqual(await login, ACCOUNT);
+  });
+}
+
+test('cancellation during login start cannot open the browser later', async t => {
+  const current = await fixture(t);
+  const start = Promise.withResolvers();
+  current.respond = () => start.promise;
+  const login = current.service.signIn();
+  const rejected = assert.rejects(login, failure('cancelled'));
+  await current.service.cancelSignIn();
+  start.resolve(
+    Response.json({
+      authorizationUrl: `${BASE}auth/login?request=opaque`,
+      expiresIn: 600,
+    }),
+  );
+  await rejected;
+  await flush();
+  assert.equal(current.service.pendingSignIn, undefined);
+  assert.equal(current.opened.length, 0);
+});
+
+for (const deliverLaunchTwice of [false, true]) {
+  test(`cold-start callback${deliverLaunchTwice ? ' delivered by both native paths' : ''} redeems once`, async t => {
+    const saved = {
+      authorityUrl: BASE,
+      state: encoded(32, 1),
+      codeVerifier: encoded(32, 2),
+      expiresAt: 1_500_000,
+    };
+    const token = Promise.withResolvers();
+    const current = await fixture(t, {
+      saved,
+      launchUrl: callback(saved),
+      deliverLaunchTwice,
+      respond: ({path}) =>
+        path === '/auth/login/token' ? token.promise : undefined,
+    });
+    const result = current.service.pendingSignIn;
+    assert.equal(current.service.signInState.status, 'pending');
+    await flush();
+    assert.equal(current.storage.has('authorityLogin'), false);
+    current.complete(callback(saved));
+    assert.equal(current.requests.length, 1);
+    assert.equal(current.requests[0].path, '/auth/login/token');
+    assert.equal(current.requests[0].body.codeVerifier, saved.codeVerifier);
+    token.resolve(
+      Response.json({
+        accessToken: BEARER,
+        tokenType: 'Bearer',
+        expiresIn: 300,
+        account: ACCOUNT,
+      }),
+    );
+    assert.deepEqual(await result, ACCOUNT);
+    current.complete(callback(saved));
+    await flush();
+    assert.equal(current.requests.length, 1);
+    assert.equal(current.opened.length, 0);
+  });
+}
+
+test('cold start without a pending login ignores an unhandled launch URL', async t => {
+  const current = await fixture(t, {
+    launchUrl: callback({state: encoded(32, 1)}),
+  });
+  assert.equal(current.service.signInState.status, 'idle');
+  assert.equal(current.service.pendingSignIn, undefined);
   assert.equal(current.requests.length, 0);
 });
 
-test('duplicate callback during redemption is rejected; browserFinished cannot cancel a claimed code', async t => {
+test('replacement while saving serializes storage and never opens the replaced login', async t => {
   const current = await fixture(t);
+  const saving = Promise.withResolvers();
+  current.beforeSet = () => saving.promise;
+  const original = current.service.signIn();
+  const rejected = assert.rejects(original, failure('cancelled'));
+  await flush();
+  assert.equal(current.opened.length, 0);
+  const replacement = current.service.signIn();
+  await rejected;
+  saving.resolve();
+  await flush();
+  assert.equal(current.opened.length, 1);
+  assert.equal(
+    current.storage.get('authorityLogin').state,
+    current.pending.state,
+  );
+  current.complete();
+  assert.deepEqual(await replacement, ACCOUNT);
+});
+
+test('callback claimed before openUrl resolves keeps exchange loading and is not overwritten by idle', async t => {
+  const current = await fixture(t);
+  const opening = Promise.withResolvers();
   const token = Promise.withResolvers();
-  current.respond = request =>
-    request.path === '/auth/login/token' ? token.promise : undefined;
+  current.onOpen = () => opening.promise;
+  current.respond = ({path}) =>
+    path === '/auth/login/token' ? token.promise : undefined;
   const result = current.service.signIn();
   await flush();
-  const url = callback(current.saved);
-  const completing = current.service.handleCallback(url);
+  current.complete();
   await flush();
-  await assert.rejects(
-    current.service.handleCallback(url),
-    failure('invalid_callback'),
-  );
-  current.listeners.get('browserFinished')();
+  opening.resolve({completed: true});
+  await flush();
+  assert.equal(current.service.signInState.status, 'pending');
   token.resolve(
     Response.json({
       accessToken: BEARER,
       tokenType: 'Bearer',
-      expiresIn: 900,
+      expiresIn: 300,
       account: ACCOUNT,
     }),
   );
-  await completing;
   assert.deepEqual(await result, ACCOUNT);
 });
 
-test('cancellation during persistence cannot leave a late pending record or open the browser', async t => {
+test('pending storage failure never launches a browser', async t => {
   const current = await fixture(t);
-  const write = Promise.withResolvers();
-  current.beforeSet = () => write.promise;
-  const result = current.service.signIn();
-  await flush();
-  const rejected = assert.rejects(result, failure('cancelled'));
-  const cancelled = current.service.cancelSignIn();
-  write.resolve();
-  await cancelled;
-  await rejected;
-  assert.equal(current.saved, undefined);
+  current.beforeSet = () => {
+    throw new Error('storage unavailable');
+  };
+  await assert.rejects(current.service.signIn(), failure('service_error'));
   assert.equal(current.opened.length, 0);
+  assert.equal(current.service.pendingSignIn, undefined);
 });
 
 test('late token response after cancellation never restores a session', async t => {
@@ -433,7 +539,7 @@ test('late token response after cancellation never restores a session', async t 
     request.path === '/auth/login/token' ? token.promise : undefined;
   const result = current.service.signIn();
   await flush();
-  const completing = current.service.handleCallback(callback(current.saved));
+  current.complete();
   await flush();
   const rejected = assert.rejects(result, failure('cancelled'));
   await current.service.cancelSignIn();
@@ -446,7 +552,7 @@ test('late token response after cancellation never restores a session', async t 
       account: ACCOUNT,
     }),
   );
-  await completing;
+  await flush();
   assert.equal(current.service.signedIn, false);
   assert.equal(
     current.requests.filter(request => request.path === '/auth/logout').length,
@@ -553,7 +659,7 @@ for (const expiresIn of [-1, 0, 1, 300, 900, 901]) {
       ? login
       : assert.rejects(login, failure('service_error'));
     await flush();
-    await current.service.handleCallback(callback(current.saved));
+    current.complete();
     await result;
     assert.equal(current.service.signedIn, valid);
     if (valid) {
@@ -609,32 +715,11 @@ test('a late 401 from an ended session cannot sign out its replacement', async t
   await current.service.signOut();
   const login = current.service.signIn();
   await flush();
-  await current.service.handleCallback(callback(current.saved));
+  current.complete();
   await login;
   pending.resolve(Response.json({error: 'unauthorized'}, {status: 401}));
   await rejected;
   assert.equal(current.service.signedIn, true);
-  assert.equal(
-    current.requests.filter(request => request.path === '/auth/logout').length,
-    1,
-  );
-});
-
-test('sign-out during callback cleanup cannot publish a late bearer', async t => {
-  const current = await fixture(t);
-  const closing = Promise.withResolvers();
-  current.onClose = () => closing.promise;
-  const login = current.service.signIn();
-  const rejected = assert.rejects(login, failure('cancelled'));
-  await flush();
-  const callbackDone = current.service.handleCallback(callback(current.saved));
-  await flush();
-  const ended = current.service.signOut();
-  closing.resolve();
-  await ended;
-  await callbackDone;
-  await rejected;
-  assert.equal(current.service.signedIn, false);
   assert.equal(
     current.requests.filter(request => request.path === '/auth/logout').length,
     1,
@@ -739,38 +824,54 @@ test('public metadata decodes its key and network failures stay sanitized', asyn
   );
 });
 
-test('browser finish before the callback releases UI busy state but still completes login', async t => {
-  const current = await fixture(t);
-  const result = current.service.signIn();
-  await flush();
-  const saved = current.saved;
-  current.listeners.get('browserFinished')();
-  assert.equal(current.service.signInState.status, 'idle');
-  assert.deepEqual(current.saved, saved);
-  assert.equal(current.service.pendingSignIn, result);
-  await current.service.handleCallback(callback(saved));
-  assert.deepEqual(await result, ACCOUNT);
-  assert.equal(current.service.signedIn, true);
-});
-
-test('sign-in after browser finish replaces the old pending callback', async t => {
+test('every sign-in replaces the pending login and its old callback is unrelated', async t => {
   const current = await fixture(t);
   const original = current.service.signIn();
   await flush();
-  const saved = current.saved;
-  current.listeners.get('browserFinished')();
+  const previous = current.pending;
   const rejected = assert.rejects(original, failure('cancelled'));
   const replacement = current.service.signIn();
-  assert.notEqual(replacement, original);
-  assert.equal(current.service.signIn(), replacement);
   await rejected;
+  assert.notEqual(replacement, original);
   await flush();
-  assert.notEqual(current.saved.state, saved.state);
+  assert.notEqual(current.pending.state, previous.state);
   assert.equal(current.opened.length, 2);
-  await assert.rejects(
-    current.service.handleCallback(callback(saved)),
-    failure('invalid_callback'),
+  current.complete(callback(previous));
+  await flush();
+  assert.equal(current.service.signInState.status, 'idle');
+  assert.equal(current.service.pendingSignIn, replacement);
+  assert.equal(
+    current.storage.get('authorityLogin').state,
+    current.pending.state,
   );
-  await current.service.handleCallback(callback(current.saved));
+  assert.equal(current.requests.length, 2);
+  current.complete();
   assert.deepEqual(await replacement, ACCOUNT);
+});
+
+test('a failed system-browser launch clears the attempt without native error details', async t => {
+  const current = await fixture(t);
+  current.onOpen = () => {
+    throw new Error('native detail');
+  };
+  const login = current.service.signIn();
+  await assert.rejects(login, failure('service_error'));
+  assert.equal(current.service.pendingSignIn, undefined);
+  assert.equal(
+    current.service.signInState.error.message,
+    'Authority request failed.',
+  );
+  assert.equal(current.service.signedIn, false);
+});
+
+test('openUrl returning completed false ends loading and removes the saved attempt', async t => {
+  const current = await fixture(t);
+  current.onOpen = () => ({completed: false});
+  const login = current.service.signIn();
+  await assert.rejects(login, failure('service_error'));
+  await flush();
+  assert.equal(current.service.pendingSignIn, undefined);
+  assert.equal(current.storage.has('authorityLogin'), false);
+  assert.equal(current.service.signInState.status, 'error');
+  assert.equal(current.requests.length, 1);
 });

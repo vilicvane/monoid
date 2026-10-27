@@ -22,7 +22,6 @@ import {
 } from '../../../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
-import type {BundleSetupState} from '../../../../@services/index.js';
 import {
   CardGrid,
   CardPlaceholder,
@@ -39,6 +38,7 @@ import {
   DetailsPopupDivider,
   DetailsPopupTitle,
 } from '../../../@ui/details-popup.js';
+import {EllipsisInMiddle} from '../../../@ui/ellipsis-in-middle.js';
 import {
   InfoSection,
   InfoSectionHeader,
@@ -60,10 +60,9 @@ import {OperationSteps, Step} from '../../../@ui/step.js';
 import {Toggle} from '../../../@ui/toggle.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 import {ViewContent, useViewActive} from '../../../@view/index.js';
-import type {ScannedCardData} from '../common.js';
 
-import {
-  type AuthorityBundleCard,
+import type {
+  AuthorityBundleCard,
   AuthorityBundleSession,
 } from './authority-bundle-session.js';
 import type {CardResetIdentity} from './card-reset-session.js';
@@ -95,16 +94,27 @@ const Bundles = styled(InfoSection)`
   }
 `;
 
+const BundlePath = styled.span`
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+`;
+
+const BundleOwnerAddress = styled(EllipsisInMiddle)`
+  display: inline-flex;
+  width: 13ch;
+  vertical-align: bottom;
+`;
+
 export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
   children,
   view,
-  flow,
-  sourceCard,
+  session,
 }: {
   children?: ReactNode;
   view: RouteComponentProps<Router['safe']['setupCard']>['view'];
-  flow: BundleSetupState;
-  sourceCard?: ScannedCardData;
+  session: AuthorityBundleSession;
 }): ReactNode {
   const {
     authorityService: authority,
@@ -114,15 +124,6 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
     monoidApplet,
   } = useEntrances();
   const isViewActive = useViewActive(view);
-  const [session] = useState(() => {
-    runInAction(() => {
-      flow.authority ??= new AuthorityBundleSession(
-        authority.authorityUrl,
-        sourceCard,
-      );
-    });
-    return flow.authority!;
-  });
   const secretPINSession = session.secretPINs;
   const chosen = session.choice;
   const [working, setWorking] = useState(false);
@@ -451,7 +452,7 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
               onClick={() => {
                 if (validName === undefined) return;
                 session.choose({
-                  owner: {source: owner!.source, id: owner!.id},
+                  owner: owner!,
                   name: validName,
                   allowPeerExtension: policy,
                 });
@@ -523,7 +524,23 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
               numero={1}
               activeNumero={step}
               processing={!!account && loading}
-              summary={chosen?.name}
+              summary={
+                chosen && (
+                  <BundlePath>
+                    {chosen.owner.source === 'reown' ? (
+                      'Account'
+                    ) : chosen.owner.source === 'wallet' ? (
+                      <BundleOwnerAddress title={chosen.owner.displayName}>
+                        {chosen.owner.displayName}
+                      </BundleOwnerAddress>
+                    ) : (
+                      chosen.owner.displayName
+                    )}
+                    {' / '}
+                    {chosen.name}
+                  </BundlePath>
+                )
+              }
             >
               {children}
               {account ? (

@@ -4,29 +4,41 @@
 `VITE_AUTHORITY_URL`, falling back to `https://authority.monoid.app/`. Setup cards
 uses the client to choose a bundle and issue enrollment packets for each card.
 
-| API                                                                       | Result                                                                                                 |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `metadata()`                                                              | Public key as bytes, Bundle algorithm and time protocol                                                |
-| `signIn()`                                                                | Promise of `{id, login, method, email?, provider?}`; calls share the login while the browser is active |
-| `pendingSignIn`                                                           | The pending promise, including a restored cold-start flow                                              |
-| `signInState`                                                             | Observable `idle`, `pending`, `complete`, or `error` with an `AuthorityError`                          |
-| `account`, `signedIn`                                                     | Observable in-memory session state                                                                     |
-| `cancelSignIn()`                                                          | Clears the pending flow, closes Browser and rejects sign-in as cancelled                               |
-| `signOut()`                                                               | Clears locally immediately and attempts logout without awaiting the network; failures are silent       |
-| `namespaces()`                                                            | Authorized `{source, id, displayName}` entries                                                         |
-| `groups(owner)`                                                           | All `{name, allowPeerExtension, createdAt}` pages for `{source, id}`                                   |
-| `issueBundle({owner, groupName, allowPeerExtension, recipientPublicKey})` | `{publicKey, data, bundle, owner, groupName, allowPeerExtension}` with byte fields decoded             |
-| `handleCallback(url)`                                                     | Shared handler for warm `appUrlOpen` and cold `getLaunchUrl` delivery                                  |
+| API                                                                       | Result                                                                                                                |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `metadata()`                                                              | Public key as bytes, Bundle algorithm and time protocol                                                               |
+| `signIn()`                                                                | Promise of `{id, login, method, email?, provider?}`; each call starts a fresh login and replaces the previous attempt |
+| `pendingSignIn`                                                           | The current pending login's promise, including a restored attempt                                                     |
+| `signInState`                                                             | Observable `idle`, `pending`, `complete`, or `error` with an `AuthorityError`                                         |
+| `account`, `signedIn`                                                     | Observable in-memory session state                                                                                    |
+| `cancelSignIn()`                                                          | Removes the pending login and rejects it as cancelled; late callbacks are ignored                                     |
+| `signOut()`                                                               | Clears locally immediately and attempts logout without awaiting the network; failures are silent                      |
+| `namespaces()`                                                            | Authorized `{source, id, displayName}` entries                                                                        |
+| `groups(owner)`                                                           | All `{name, allowPeerExtension, createdAt}` pages for `{source, id}`                                                  |
+| `issueBundle({owner, groupName, allowPeerExtension, recipientPublicKey})` | `{publicKey, data, bundle, owner, groupName, allowPeerExtension}` with byte fields decoded                            |
+
+Sign-in opens the hosted page in the system browser app through
+`@capacitor/app-launcher`. Android uses a plain `ACTION_VIEW` intent; iOS uses
+`UIApplication.open`, both handing the HTTPS URL to the default browser
+(Chrome/Safari when configured as default). Browser Reown/provider sessions may
+remain signed in; Monoid's bearer lifetime below is independent.
 
 State and the PKCE verifier use `crypto.getRandomValues`. S256 uses the existing
 SHA-256 implementation, so HTTP development WebViews do not need `randomUUID`
-or `crypto.subtle`. Only `{authorityUrl, state, codeVerifier, expiresAt}` is saved
-under `authorityLogin`. The flow lasts ten minutes. A callback must exactly match
-`app.monoid://authority/callback` and the stored state. Unrelated or malformed
-callbacks leave the real flow intact. A valid callback is claimed synchronously
-and its persisted verifier removed before redemption; duplicate delivery and
-late responses cannot install another session. Hosted `access_denied`, explicit cancellation
-and expiry settle the pending promise and remove the record.
+or `crypto.subtle`. Before opening the page, the app persists only the Authority
+URL, state, verifier and ten-minute expiry under `authorityLogin`. Both platforms
+accept the exact `app.monoid://authority/callback` link through `appUrlOpen` or
+`getLaunchUrl`. A cold start restores the pending login only to accept its
+matching callback. A synchronous claim prevents double redemption; the saved
+attempt is removed before code exchange.
+
+The Sign in button loads only while starting, saving and opening the browser,
+then returns to idle without waiting visibly. Restored attempts also start idle.
+Every new tap replaces the pending login; old or unrelated callbacks are ignored.
+A matching callback loads during code exchange and completes sign-in. Hosted
+`error=access_denied` with the matching state cancels quietly. Cancellation and
+expiry clear the saved attempt and return to idle. Closing the browser is not
+observable by Monoid; the user can return and start a fresh attempt at any time.
 
 Bearer and account remain in memory. The session uses the same
 `HeldPINValue` lifetime as PINs: five idle minutes or app hiding, whichever comes
@@ -48,7 +60,6 @@ signals cannot log out the same session twice. A late response cannot restore an
 ended session or sign out a newer one. A mid-flow end returns to Choose bundle
 signed out while retaining the chosen bundle and cards. An installation detour
 also signs out; its returned card stays in the flow until sign-in resumes.
-Pending-login PKCE persistence and its ten-minute lifetime are unchanged.
 
 Errors expose only stable codes: `unauthorized`,
 `bundle_policy_conflict`, `rate_limited`, `network_error`, `service_error`,
@@ -61,14 +72,12 @@ refreshes this cached value. It identifies the card's installed trust; metadata
 does not change that trust, and no additional scan is made merely to display it.
 
 Android registers VIEW/DEFAULT/BROWSABLE for the callback on its existing
-singleTask MainActivity; iOS registers `app.monoid` in `CFBundleURLTypes`. Existing
-AppDelegate/SceneDelegate forwarding handles both warm and cold URLs.
-`@capacitor/browser` is pinned to 8.0.5. Capacitor sync generates the Android
-plugin dependencies and iOS `CapApp-SPM` Browser dependency. Rebuild and reinstall
-both native apps to use the plugin and callback registration. The normal iOS
-workflow is `npm run ios:sync`; for this package, web build and `cap sync` were
-run separately to retain the existing bundled CAPs. Native binaries and a real
-hosted sign-in still require device validation.
+singleTask MainActivity; iOS retains `app.monoid` in `CFBundleURLTypes`.
+Capacitor sync generates the App Launcher dependencies for Android and iOS SPM.
+Rebuild and reinstall both native apps after changing plugins. The normal iOS
+workflow is `npm run ios:sync`; web build and `cap sync` can be run separately
+to retain the existing bundled CAPs. Native binaries and a real hosted sign-in
+still require device validation.
 
 Setup cards offers None, Cards and Authority bundle modes at the top of the first
 step's body; fixed card entry points omit these capsules. Cards locks the mode
@@ -113,7 +122,3 @@ If an email sign-in has no email, its name is **Signed in.**, matching the hoste
 page; a social sign-in without provider metadata uses **Social account**.
 The signed-out notice still names the issuing Authority. There is no account
 switch action; leaving the flow ends the session.
-
-Closing the hosted browser releases the Sign in button without cancelling the
-pending callback. The callback remains valid until expiry; starting Sign in again
-replaces it. This handles Android delivering browserFinished before appUrlOpen.

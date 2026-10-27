@@ -50,6 +50,7 @@ import {
 } from '../../../@view/index.js';
 import type {ScannedCardData} from '../common.js';
 
+import {AuthorityBundleSession} from './authority-bundle-session.js';
 import {AuthorityBundleSetup} from './authority-bundle-setup.js';
 import {CardBundleSession} from './card-bundle-session.js';
 import {
@@ -81,6 +82,7 @@ export const SetupCardView = observer(
       errorService,
       copyItemsStore,
       cardBundleStore,
+      authorityService,
       monoidApplet,
       cardStore,
       monoidCredentialsStore,
@@ -97,17 +99,23 @@ export const SetupCardView = observer(
     const isViewActive = useViewActive(view);
     const scanPrompt = useIsoDepScanPrompt();
     const toast = useToast();
-    const [flow] = useState(() => {
-      const state = cardBundleStore.getOrCreate(
+    const [flow] = useState(() =>
+      cardBundleStore.getOrCreate(
         view.bundleId,
         () => new CardBundleSession(),
-      );
-      if (fixedBundle)
-        runInAction(() => {
-          state.bundle = fixedBundle;
-        });
-      return state;
-    });
+        {
+          bundle: fixedBundle,
+          createAuthority:
+            fixedBundle === 'authority'
+              ? () =>
+                  new AuthorityBundleSession(
+                    authorityService.authorityUrl,
+                    sourceCard,
+                  )
+              : undefined,
+        },
+      ),
+    );
     const bundleSession = flow.session;
     const [pinSession] = useState(() =>
       monoidCredentialsStore.createPINSession(),
@@ -759,6 +767,11 @@ export const SetupCardView = observer(
             await requestBundleCard({type: 'prepared', card: sourceCard});
           }
           runInAction(() => {
+            if (mode === 'authority')
+              flow.authority ??= new AuthorityBundleSession(
+                authorityService.authorityUrl,
+                sourceCard,
+              );
             flow.bundle = mode === 'none' ? undefined : mode;
             flow.sourceConsumed = mode === 'card';
           });
@@ -780,7 +793,7 @@ export const SetupCardView = observer(
           </ViewHeaderTitle>
         </ViewHeader>
         {flow.bundle === 'authority' ? (
-          <AuthorityBundleSetup view={view} flow={flow} sourceCard={sourceCard}>
+          <AuthorityBundleSetup view={view} session={flow.authority!}>
             {bundleMode}
           </AuthorityBundleSetup>
         ) : (

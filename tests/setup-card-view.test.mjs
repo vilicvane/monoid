@@ -3,6 +3,7 @@ import {afterEach, mock, test} from 'node:test';
 
 import * as actualMobx from 'mobx';
 
+import {AuthorityBundleSession} from '../.bld/app/@components/views/safe/@card/authority-bundle-session.js';
 import {
   MonoidCardError,
   MonoidWrongCardError,
@@ -452,6 +453,7 @@ function preparedCard(hello) {
     publicKey: hex(hello.publicKey),
     bundle: hello.bundle === false ? false : hex(hello.bundle),
     alias: hello.alias,
+    authority: hello.authority,
     allowPeerExtension: hello.allowPeerExtension,
     items: [],
   };
@@ -557,6 +559,7 @@ function mount(
         rendering = state;
         state.index = 0;
         state.tree = Component({view: state.view});
+        if (!('firstTree' in state)) state.firstTree = state.tree;
         rendering = undefined;
         state.effects.forEach(effect => effect());
       } while (state.dirty);
@@ -768,6 +771,7 @@ function mount(
   };
   state.entrances = {
     cardBundleStore: bundleStore,
+    authorityService: {authorityUrl: 'https://authority.monoid.app/'},
     monoidCredentialsStore: {
       createPINSession: () => state.pinSession,
     },
@@ -2309,17 +2313,96 @@ test('Authority pending cards allow mode changes, while joined cards lock the ca
     state.render(),
     node => node.type === 'authority-setup',
   );
-  authority.props.flow.authority = {
-    cards: [preparedCard(bundleCard(1))],
-    joinedCount: 0,
-  };
+  actualMobx.runInAction(() => {
+    authority.props.session.cards.push({
+      ...preparedCard(bundleCard(1)),
+      joined: false,
+    });
+  });
   assert.equal(
     find(state.render(), node => node.type === 'segmented').props.disabled,
     false,
   );
-  authority.props.flow.authority.joinedCount = 1;
+  actualMobx.runInAction(() => {
+    authority.props.session.cards[0].joined = true;
+  });
   assert.equal(
     find(state.render(), node => node.type === 'segmented').props.disabled,
     true,
   );
 });
+
+test('Authority initialization never updates observed state during render and retains sessions through mode changes and install detours', async t => {
+  const renderWrites = [];
+  const stop = actualMobx.spy(event => {
+    if (rendering && event.type === 'update') renderWrites.push(event.type);
+  });
+  t.after(stop);
+  const source = preparedCard(
+    bundleCard(1, {
+      authority: 'https://authority.monoid.app/',
+    }),
+  );
+  const store = new CardBundleStore();
+  const state = mount(SetupCardView, {card: source}, [source], store);
+  const select = mode =>
+    find(state.render(), node => node.type === 'segmented').props.onChange(
+      mode,
+    );
+  await select('authority');
+  const session = find(state.render(), node => node.type === 'authority-setup')
+    .props.session;
+  assert.ok(session instanceof AuthorityBundleSession);
+  assert.equal(session.cards[0].publicKey, source.publicKey);
+  await select('none');
+  await select('authority');
+  assert.equal(
+    find(state.render(), node => node.type === 'authority-setup').props.session,
+    session,
+  );
+  state.unmount();
+  await store.acceptInstalledCard(state.view.bundleId, bundleCard(2));
+  const resumed = mount(SetupCardView, state.view, [source], store);
+  assert.equal(
+    find(resumed.tree, node => node.type === 'authority-setup').props.session,
+    session,
+  );
+  assert.equal(session.installedCard.id[3], 2);
+  const fixed = mount(SetupCardView, {card: source, bundle: 'authority'}, [
+    source,
+  ]);
+  const fixedSession = find(fixed.tree, node => node.type === 'authority-setup')
+    .props.session;
+  assert.equal(fixedSession.cards[0].publicKey, source.publicKey);
+  fixed.replayEffects();
+  assert.equal(
+    find(fixed.tree, node => node.type === 'authority-setup').props.session,
+    fixedSession,
+  );
+  assert.equal(fixedSession.cards.length, 1);
+  assert.deepEqual(renderWrites, []);
+});
+
+for (const [bundle, title, firstStep] of [
+  [undefined, 'Setup cards', 'Set up card'],
+  ['card', 'Create bundle', 'Add cards'],
+  ['authority', 'Authority bundle', undefined],
+]) {
+  test(`${title} includes its header and steps before any effects run`, () => {
+    const state = mount(SetupCardView, {bundle});
+    assert.equal(
+      textOf(find(state.firstTree, node => node.type === 'h1')),
+      title,
+    );
+    if (firstStep) {
+      const step = find(state.firstTree, node => node.type === 'step');
+      assert.equal(textOf(step.props.title), firstStep);
+    } else {
+      const content = find(
+        state.firstTree,
+        node => node.type === 'authority-setup',
+      );
+      assert.ok(content.props.session instanceof AuthorityBundleSession);
+    }
+  });
+}
