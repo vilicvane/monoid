@@ -18,7 +18,7 @@
     "lint": "node scripts/lint.mjs",
     "lint-prettier": "prettier --check .",
     "test": "npm run lint-prettier && npm run build && npm run lint",
-    "android": "ionic cap run android --livereload --external",
+    "android": "npm run prepare:applets && ionic cap run android --livereload --external",
     "ionic:build": "npm run build:web",
     "ios": "npm run ios:sync && cap open ios",
     "ios:sync": "npm run build:web && cap sync ios",

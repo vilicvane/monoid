@@ -10,7 +10,7 @@ export const appletBundle: readonly BundledApplet[] | undefined = [
       '../../@assets/applets/monoididentity.bin',
       import.meta.url,
     ),
-    sha256: 'ad23180def6079fdc6c1a3a15d8e47848fe4ddeffb399d3ce11adacfba78af16',
+    sha256: '05d5faa4a3ea28b2a202058ae83a66d4af213ef0c89f00257811c844addfb27a',
   },
   {
     stage: 'library',
@@ -24,7 +24,7 @@ export const appletBundle: readonly BundledApplet[] | undefined = [
     appletAid: 'f06d6f6e6f69640201',
     dependencies: ['identity', 'library'],
     codeURL: new URL('../../@assets/applets/monoid.bin', import.meta.url),
-    sha256: '006bd127c671dcc1cc8755a1990c8e3821e390d02c60e509572c1a859f94ac7e',
+    sha256: '3602b380d6d087abe04043e41a5b3d67fb4cf49535189fa56338363638167898',
   },
   {
     stage: 'security-key',
