@@ -97,6 +97,9 @@ reader with `app-paused` / `APP_INACTIVE`. Transient inactivity caused by native
 UI does not itself terminate the reader.
 Reloading the WebView revokes the old reader and drops its pending replies;
 new-document calls still wait for native cleanup before opening another reader.
+The existing hook observes the public `WKWebView.isLoading` property through
+Capacitor's `bridge.webView`. Document checks discard old bridge calls, events
+and APDU replies; Core NFC's invalidation callback releases the old reader.
 
 `stopScan` waits for Core NFC's invalidation callback, which is the transport
 cleanup barrier. Core NFC exposes no separate sheet-animation completion
@@ -188,6 +191,17 @@ rejects with `BUSY`.
 Both methods wait for native connection closure and previous work to exit.
 Disabling NFC, pausing or destroying the host activity stops the scan. Returning
 to the foreground or enabling NFC does not automatically restart it.
+
+The plugin registers a Capacitor `WebViewListener` with the bridge's public
+`addWebViewListener` API in `load()`. Each main-frame `onPageStarted` ends the old
+scan and connection on the main thread with `page-reloaded` / `APP_INACTIVE`.
+This includes the initial page load, which does nothing to NFC when no scan is
+active. Destruction removes the listener and prevents further page handling.
+The existing controller closes transport work before disabling reader mode;
+starting a fresh scan during that cleanup can still reject with `BUSY`.
+Old scan IDs remain retired, and calls queued by the old document, its events
+and pending native results cannot be delivered to the new document. A sent APDU
+keeps its `unknown` outcome internally; no command or scan is replayed.
 
 When the activity is still in the foreground, `stopScan` completes all transport
 cleanup before returning tag discovery to Android. On Android 7 / API 24 and
@@ -307,8 +321,9 @@ session.
 | `scanEnded`     | `{scanId, reason, code?}`                                                                         |
 
 Session end reasons are `closed`, `connect-timeout`, `transceive-timeout`, `scan-timeout`,
-`tag-lost`, `io-error`, `scan-stopped`, `nfc-disabled`, `app-paused` and `destroyed`.
-Scan end reasons are `stopped`, `nfc-disabled`, `app-paused`, `destroyed` and
+`tag-lost`, `io-error`, `scan-stopped`, `nfc-disabled`, `app-paused`, `page-reloaded`
+and `destroyed`.
+Scan end reasons are `stopped`, `nfc-disabled`, `app-paused`, `page-reloaded`, `destroyed` and
 `io-error`, plus `cancelled` and `timeout` on iOS. Failures include an `IsoDepNfcErrorCode`; normal `closed`,
 `scan-stopped` and `stopped` events omit it. A failed connection also emits
 `sessionEnded`, even though it never emitted `sessionOpened`. An end event marks

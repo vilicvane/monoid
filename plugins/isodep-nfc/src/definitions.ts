@@ -83,6 +83,7 @@ export type SessionEndedReason =
   | 'scan-timeout'
   | 'nfc-disabled'
   | 'app-paused'
+  | 'page-reloaded'
   | 'destroyed';
 
 export type SessionEndedEvent = {
@@ -99,6 +100,7 @@ export type ScanEndedReason =
   | 'timeout'
   | 'nfc-disabled'
   | 'app-paused'
+  | 'page-reloaded'
   | 'destroyed'
   | 'io-error';
 

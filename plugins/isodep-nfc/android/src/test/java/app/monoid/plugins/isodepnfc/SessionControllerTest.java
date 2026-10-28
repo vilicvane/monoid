@@ -48,6 +48,129 @@ public class SessionControllerTest {
     }
 
     @Test
+    public void initialPageStartWithoutAScanDoesNotTouchTheReader() {
+        Fixture fixture = new Fixture();
+        fixture.page.pageStarted();
+        fixture.bridge.runAll();
+        fixture.finishCleanup();
+        assertEquals(0, fixture.reader.startCalls);
+        assertEquals(0, fixture.reader.stopCalls);
+        assertTrue(fixture.events.opened.isEmpty());
+        assertTrue(fixture.events.ended.isEmpty());
+        assertTrue(fixture.events.scans.isEmpty());
+        assertTrue(fixture.scheduler.actions.isEmpty());
+        assertSuccess(fixture.start("first-page"));
+    }
+
+    @Test
+    public void pageStartEndsTheOldScanAndSessionBeforeAllowingANewScan() {
+        Fixture fixture = new Fixture();
+        FakeTransport transport = new FakeTransport();
+        String oldSession = fixture.startAndConnect(transport);
+        SessionController.TagCallback oldDiscovery = fixture.reader.onTag;
+        fixture.page.pageStarted();
+        fixture.page.pageStarted();
+        fixture.bridge.runAll();
+
+        assertEvent(fixture.events.ended.get(0), "scan", oldSession, "page-reloaded", "APP_INACTIVE");
+        assertEvent(fixture.events.scans.get(0), "scan", null, "page-reloaded", "APP_INACTIVE");
+        assertEquals(1, fixture.events.ended.size());
+        assertEquals(1, fixture.events.scans.size());
+        assertFailure(fixture.start("next"), "BUSY", null);
+        assertFailure(fixture.start("scan"), "SCAN_CLOSED", null);
+        assertFailure(fixture.exchange(oldSession, null), "SESSION_CLOSED", "not-sent");
+        fixture.finishCleanup();
+        assertEquals(1, transport.closeCalls);
+        assertEquals(1, fixture.reader.stopCalls);
+
+        assertSuccess(fixture.start("next"));
+        FakeTransport staleTag = new FakeTransport();
+        oldDiscovery.accept(staleTag);
+        fixture.control.runAll();
+        fixture.connect(new FakeTransport());
+        String nextSession = fixture.events.lastSessionId();
+        assertNotEquals(oldSession, nextSession);
+        assertEquals(0, staleTag.connectCalls);
+        assertSuccess(fixture.stop("scan"));
+        assertSuccess(fixture.close(oldSession));
+        assertFailure(fixture.exchange(oldSession, null), "SESSION_CLOSED", "not-sent");
+        RecordingResult<byte[]> nextExchange = fixture.exchange(nextSession, null);
+        fixture.finishExchange();
+        assertSuccess(nextExchange);
+        assertArrayEquals(RESPONSE, nextExchange.value);
+        assertEquals(1, fixture.reader.stopCalls);
+        assertEquals(2, fixture.events.opened.size());
+    }
+
+    @Test
+    public void pageStartRetainsUnknownOutcomeAndDiscardsALateExchangeReply() {
+        Fixture fixture = new Fixture();
+        FakeTransport transport = new FakeTransport();
+        String sessionId = fixture.startAndConnect(transport);
+        RecordingResult<byte[]> exchange = fixture.exchange(sessionId, null);
+        fixture.io.runAll(); // Sent, but its native completion is still queued.
+        fixture.page.pageStarted();
+        assertFailure(exchange, "APP_INACTIVE", "unknown");
+        fixture.control.runAll();
+        fixture.finishCleanup();
+        assertEquals(1, exchange.settlements);
+        assertEquals(1, transport.transceiveCalls);
+        assertSuccess(fixture.start("next"));
+        fixture.connect(new FakeTransport());
+        assertEquals(2, fixture.events.opened.size());
+    }
+
+    @Test
+    public void pageStartDropsOldBridgeCallsAndResultsBeforeAcceptingNewDocumentWork() {
+        Fixture fixture = new Fixture();
+        String sessionId = fixture.startAndConnect(new FakeTransport());
+        Object oldDocument = fixture.page.currentDocument();
+        RecordingResult<byte[]> oldReply = new RecordingResult<>();
+        fixture.controller.transceive(sessionId, COMMAND, null, fixture.page.bind(oldReply));
+        fixture.page.dispatch(() -> fail("An old call queued on main must be dropped"));
+        fixture.page.pageStarted();
+        assertFalse(fixture.page.isCurrent(oldDocument));
+        // This represents an old call still on Capacitor's queue at page start.
+        fixture.page.dispatch(() -> fail("An old call queued on the bridge must be dropped"));
+        fixture.control.runAll();
+        fixture.finishExchange();
+        fixture.finishCleanup();
+        assertEquals(0, oldReply.settlements);
+
+        fixture.bridge.runAll();
+        RecordingResult<Void> nextStart = new RecordingResult<>();
+        fixture.page.dispatch(() -> fixture.controller.startScan("next", 1000, fixture.page.bind(nextStart)));
+        fixture.control.runAll();
+        assertSuccess(nextStart);
+        assertTrue(fixture.page.isCurrent(fixture.page.currentDocument()));
+
+        Fixture closing = new Fixture();
+        String closingSession = closing.startAndConnect(new FakeTransport());
+        RecordingResult<Void> oldClose = new RecordingResult<>();
+        closing.controller.close(closingSession, closing.page.bind(oldClose));
+        closing.page.pageStarted();
+        closing.finishCleanup();
+        assertEquals(0, oldClose.settlements);
+    }
+
+    @Test
+    public void pageStartAfterDestroyCannotReopenTheScopeOrAffectCleanup() {
+        Fixture fixture = new Fixture();
+        fixture.startAndConnect(new FakeTransport());
+        Object document = fixture.page.currentDocument();
+        fixture.page.destroy();
+        fixture.page.pageStarted();
+        fixture.bridge.runAll();
+        fixture.page.dispatch(() -> fail("Destroyed plugins cannot accept calls"));
+        fixture.finishCleanup();
+        assertFalse(fixture.page.isCurrent(document));
+        assertTrue(fixture.bridge.tasks.isEmpty());
+        assertEquals(1, fixture.reader.stopCalls);
+        assertEquals("destroyed", fixture.events.scans.get(0).reason);
+        assertEquals(1, fixture.events.scans.size());
+    }
+
+    @Test
     public void successiveDiscoveriesWithTheSameUidGetNewSessionsWithoutRestartingTheReader() {
         Fixture fixture = new Fixture();
         FakeTransport first = new FakeTransport();
@@ -145,7 +268,7 @@ public class SessionControllerTest {
     public void endingTheScanCancelsRemovalAndOldCallbacksCannotReleaseANewSession() {
         for (String[] termination : new String[][] {
             {"stopped", "CANCELLED"}, {"app-paused", "APP_INACTIVE"},
-            {"destroyed", "APP_INACTIVE"}, {"nfc-disabled", "NFC_DISABLED"}
+            {"destroyed", "APP_INACTIVE"}, {"page-reloaded", "APP_INACTIVE"}, {"nfc-disabled", "NFC_DISABLED"}
         }) {
             Fixture fixture = new Fixture();
             String sessionId = fixture.startAndConnect(new FakeTransport());
@@ -554,7 +677,7 @@ public class SessionControllerTest {
     @Test
     public void lifecycleTerminationEndsIdleScansAndPendingExchangesExactlyOnce() {
         for (String[] termination : new String[][] {
-            { "background", "APP_INACTIVE" }, { "nfc-disabled", "NFC_DISABLED" }
+            { "background", "APP_INACTIVE" }, { "page-reloaded", "APP_INACTIVE" }, { "nfc-disabled", "NFC_DISABLED" }
         }) {
             Fixture idle = new Fixture();
             assertSuccess(idle.start("idle"));
@@ -1115,11 +1238,13 @@ public class SessionControllerTest {
         static final int DEFAULT_TIMEOUT = 1000;
         final FakeReader reader = new FakeReader();
         final QueueExecutor control = new QueueExecutor();
+        final QueueExecutor bridge = new QueueExecutor();
         final QueueExecutor io = new QueueExecutor();
         final QueueExecutor closer = new QueueExecutor();
         final FakeScheduler scheduler = new FakeScheduler();
         final Events events = new Events();
         final SessionController controller = new SessionController(reader, control, io, closer, scheduler, events);
+        final PageSessionScope page = new PageSessionScope(controller, control, bridge);
 
         RecordingResult<Void> start(String scanId) {
             RecordingResult<Void> result = new RecordingResult<>();
