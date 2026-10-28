@@ -5,7 +5,7 @@ description: Monoid NFC card sessions, Access/Safe PIN ownership, biometric vaul
 
 # Monoid card sessions
 
-Source: `../records.md`, especially records 29–32, 34, 38–41, 47–50, 63 and 83, and `../29.md`, `../48.md` and `../50.md`. Treat records
+Source: `../records.md`, especially records 29–32, 34, 38–41, 47–50, 63, 83 and 90, and `../29.md`, `../48.md` and `../50.md`. Treat records
 as authoritative and keep them up to date. Records 19–24 describe an older WIP;
 do not reintroduce their plain-storage design or assume those TODOs still exist.
 
@@ -46,6 +46,12 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   initially copies a new Secret PIN to Access PIN; authenticate Secret before
   writing a distinct Access PIN on that connection. Changed card identity
   invalidates pending input. Wrong-PIN retries respect firmware tries. See record 59.
+  A wrong PIN never ends a procedure: authenticate through `authenticateCardPIN`
+  and re-ask in place (`retryCardPIN` / `CardSecretPINSession.run`) with
+  "Incorrect PIN, tries remaining: N", keeping entered input; only before card
+  writes, never resubmitting the failed PIN. Reset keeps the Card ID and alias
+  and rotates keys (firmware 95f449f); same ID with a new key means reset or
+  reinstalled, not a wrong card. See record 90.
 - Every plaintext PIN held in JS memory goes through `HeldPINValue`/`HeldPINs`:
   dropped after 5 idle minutes per holder or when `isAppHidden()` (lock, app
   switch), never on inactive-only states. Android WebView stays `visible` on
