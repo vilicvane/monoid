@@ -10,20 +10,20 @@
       "a0000000620102",
       "a0000000620201"
     ],
-    "sourceModifiedAt": "2026-10-26T12:03:42.317Z",
-    "capSha256": "308c99cfb62c81d074e5a576f8b334b658ef9348ae522ae3e60a189050b52330",
-    "loadSha256": "26f2da0f4b5af622a0105c1ddf164617ec3d3f154d14afe676950a23e4cc8143",
-    "loadBytes": 12960
+    "sourceModifiedAt": "2026-10-28T10:36:36.975Z",
+    "capSha256": "f3c93931ef86146ae7f55f0e8773d8e7a2cc21667155681a93c115498da27d9e",
+    "loadSha256": "ad23180def6079fdc6c1a3a15d8e47848fe4ddeffb399d3ce11adacfba78af16",
+    "loadBytes": 13236
   },
   {
     "name": "monoidlib",
     "stage": "library",
     "packageAid": "f06d6f6e6f696404",
     "imports": ["a0000000620001", "a0000000620101"],
-    "sourceModifiedAt": "2026-10-26T12:03:43.178Z",
-    "capSha256": "773b130531ec26f9411b524f20b432d66088539321c0b6575faf93af7112185a",
-    "loadSha256": "ed40732571179c60011ed3aa0dff05ce16576bce209ead851b1bbd7d6aa5eab2",
-    "loadBytes": 8641
+    "sourceModifiedAt": "2026-10-28T10:36:38.071Z",
+    "capSha256": "1e65cd5ff11249f65c1f4a2d44f40f45ff0562f1d0f9563869329ede95224d67",
+    "loadSha256": "654daf610646753785dfd8c132c7ffa66a4ec739222f8f0d393135896e3ec555",
+    "loadBytes": 8677
   },
   {
     "name": "monoid",
@@ -39,10 +39,10 @@
       "f06d6f6e6f696400",
       "a0000000620201"
     ],
-    "sourceModifiedAt": "2026-10-26T12:03:44.562Z",
-    "capSha256": "edf10fb1306ae1006cf106cd16a3dabeed1086bf41c923703a1bdc5a02d71682",
-    "loadSha256": "98966e59c8fdfe6d5b175d3dda287e47670e5b0b6dae7259b0a19ca207e98c3f",
-    "loadBytes": 40085
+    "sourceModifiedAt": "2026-10-28T10:36:39.659Z",
+    "capSha256": "a663ef55b1b6e70be6753db70879e033effe1673d299fedf0b0cfec108dc5437",
+    "loadSha256": "006bd127c671dcc1cc8755a1990c8e3821e390d02c60e509572c1a859f94ac7e",
+    "loadBytes": 40422
   },
   {
     "name": "monoidsecuritykey",
@@ -61,8 +61,8 @@
       "a0000000620201",
       "a0000000620209"
     ],
-    "sourceModifiedAt": "2026-10-26T12:03:45.623Z",
-    "capSha256": "7a7c1766e911e4c53017985417b2cfa7360aa17268ba659f840aaac4dfd81d52",
+    "sourceModifiedAt": "2026-10-28T10:36:40.965Z",
+    "capSha256": "942a0e6e400767c2cf8dde87458ef0b8732031914f3d888aa3df9043301fd491",
     "loadSha256": "478c35dd68292a94f3e3f1deac06e1d5e582871dad9956fa5f344851ec07544a",
     "loadBytes": 16098
   },
@@ -81,9 +81,9 @@
       "a0000000620102",
       "f06d6f6e6f696400"
     ],
-    "sourceModifiedAt": "2026-10-26T12:03:46.391Z",
-    "capSha256": "acd5e8289520cb68a9617dc33637a6e1fe8972ff5e82964e5da1c2c69d4a32db",
-    "loadSha256": "ce61d8d9814bbcbcc27e422107888670a6ee165e0420b84dc9efdfdd74e1b3b0",
+    "sourceModifiedAt": "2026-10-28T10:36:41.882Z",
+    "capSha256": "ac785b64e988b70ba5f99ca29b59e5b55f0158353117d1877242ade009e2922b",
+    "loadSha256": "0c19a6184033ae3282ec7a799d247b9a38acdc93a35e457721ae4ec3e7133137",
     "loadBytes": 2949
   }
 ]
