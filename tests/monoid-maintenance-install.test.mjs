@@ -105,6 +105,7 @@ mock.module('../.bld/app/@lib/global-platform/install.js', {
             fixture.events.push(`delete instance ${hex(aid)}`);
             if (fixture.failDelete) throw fixture.failDelete;
             fixture.instances.delete(hex(aid));
+            fixture.onInstanceRemoved?.(hex(aid));
           },
           async removePackage(aid) {
             if (!fixture.packages.has(hex(aid))) return;
@@ -432,6 +433,178 @@ test('Fresh removes dependents before Identity and installs Identity before Mono
     ],
   );
 });
+
+test('Start over after Fresh verify removes and reinstalls every selected applet from the current bundle', async () => {
+  const {CardMaintenanceService} = await import(
+    '../.bld/app/@services/card-maintenance-service.js'
+  );
+  let saved;
+  const storage = {
+    get: async () => structuredClone(saved),
+    set: async (_key, value) => {
+      saved = structuredClone(value);
+    },
+  };
+  const service = await CardMaintenanceService.create(storage);
+  const original = {...fixture.hello, alias: 'Travel'};
+  const operation = await service.prepareFresh(
+    information,
+    original,
+    undefined,
+    ['security-key'],
+  );
+  fixture.hello = {
+    ...fixture.hello,
+    alias: false,
+    publicKey: bytes(`04${'33'.repeat(64)}`),
+    pins: {secret: false, access: false},
+  };
+  await service.replace('first-session', operation.id);
+  assert.equal(service.get(operation.id).checkpoint, 'verify');
+
+  const refreshed = bytes('040506');
+  const monoid = bundle.find(applet => applet.stage === 'monoid');
+  monoid.codeURL = new URL(
+    `data:application/octet-stream;base64,${Buffer.from(refreshed).toString('base64')}`,
+  );
+  monoid.sha256 = createHash('sha256').update(refreshed).digest('hex');
+  await service.restart(operation.id);
+  assert.equal(service.get(operation.id).checkpoint, undefined);
+  fixture.events.length = 0;
+  fixture.installedPackages.length = 0;
+  await service.replace('second-session', operation.id);
+  assert.deepEqual(
+    fixture.events.filter(value => /delete|install /.test(value)),
+    [
+      `delete instance ${securityKeyInstance}`,
+      `delete package ${securityKeyPackage}`,
+      `delete instance ${monoidAid}`,
+      `delete package ${monoidPackage}`,
+      `delete package ${libraryPackage}`,
+      `delete instance ${identityAid}`,
+      `delete package ${identityPackage}`,
+      'install identity',
+      'install library',
+      'install monoid',
+      'install security-key',
+    ],
+  );
+  assert.equal(service.get(operation.id).card.id, hex(original.id));
+  assert.equal(service.get(operation.id).card.alias, original.alias);
+  assert.deepEqual(
+    fixture.installedPackages.find(applet => applet.stage === 'monoid').code,
+    refreshed,
+  );
+});
+
+for (const mode of ['update', 'reinstall']) {
+  test(`service Start over from ${mode} restore deletes from the beginning, loads the current images and restores its original archive`, async () => {
+    const {CardMaintenanceService} = await import(
+      '../.bld/app/@services/card-maintenance-service.js'
+    );
+    const {CardItemNotFoundError} = await import(
+      '../.bld/app/@lib/cbor-applet.js'
+    );
+    let saved;
+    const storage = {
+      get: async () => structuredClone(saved),
+      set: async (_key, value) => {
+        saved = structuredClone(value);
+      },
+    };
+    const item = {index: bytes('02400000000000000001'), secret: true};
+    const envelope = Uint8Array.of(1, ...new Uint8Array(143).fill(7));
+    let stored = true;
+    let exports = 0;
+    const card = {
+      aid: bytes(monoidAid),
+      hello: async () => structuredClone(fixture.hello),
+      listAppletGrants: async () => ({grants: []}),
+      list: async () => ({items: stored ? [item] : []}),
+      exportItem: async () => {
+        exports++;
+        return {data: envelope};
+      },
+      view: async () => {
+        if (!stored) throw new CardItemNotFoundError({code: 'NOT_FOUND'});
+        return item;
+      },
+      importItem: async request => {
+        assert.deepEqual(request.index, item.index);
+        assert.deepEqual(request.data, envelope);
+        assert.equal(hex(request.senderPublicKey), publicKey);
+        fixture.events.push('restore item');
+        stored = true;
+      },
+    };
+    fixture.onInstanceRemoved = aid => {
+      if (aid === monoidAid) stored = false;
+    };
+    const service = await CardMaintenanceService.create(storage);
+    const operation = await service.prepare(card, {
+      mode,
+      cardInformation: information,
+      appletAid: monoidAid,
+    });
+    await service.replace('first-session', operation.id);
+    assert.equal(service.get(operation.id).phase, 'restore');
+    const archiveBytes = Buffer.from(
+      JSON.stringify(saved.operations[0].archive),
+    );
+    const currentCode = bytes('040506');
+    const monoid = bundle.find(applet => applet.stage === 'monoid');
+    monoid.codeURL = new URL(
+      `data:application/octet-stream;base64,${Buffer.from(currentCode).toString('base64')}`,
+    );
+    monoid.sha256 = createHash('sha256').update(currentCode).digest('hex');
+    await service.restart(operation.id);
+    assert.deepEqual(
+      Buffer.from(JSON.stringify(saved.operations[0].archive)),
+      archiveBytes,
+    );
+    assert.equal(service.get(operation.id).checkpoint, undefined);
+    fixture.events.length = 0;
+    fixture.installedPackages.length = 0;
+    await service.replace('second-session', operation.id, progress => {
+      if (progress.stage === 'deleting') {
+        assert.equal(service.get(operation.id).phase, 'replacing');
+        assert.deepEqual(
+          Buffer.from(JSON.stringify(saved.operations[0].archive)),
+          archiveBytes,
+        );
+      }
+    });
+    assert.deepEqual(
+      fixture.events.filter(value => /^(delete|install) /.test(value)),
+      [
+        `delete instance ${monoidAid}`,
+        `delete package ${monoidPackage}`,
+        `delete package ${libraryPackage}`,
+        'install library',
+        'install monoid',
+      ],
+    );
+    assert.deepEqual(
+      fixture.installedPackages.find(applet => applet.stage === 'monoid').code,
+      currentCode,
+    );
+    assert.ok(fixture.instances.has(identityAid));
+    assert.equal(service.get(operation.id).phase, 'restore');
+    assert.deepEqual(
+      Buffer.from(JSON.stringify(saved.operations[0].archive)),
+      archiveBytes,
+    );
+    assert.equal((await service.restore(card, operation.id)).complete, true);
+    assert.equal(fixture.events.at(-1), 'restore item');
+    assert.equal(stored, true);
+    assert.equal(
+      exports,
+      1,
+      'restart reuses the original recovery instead of exporting the incomplete card',
+    );
+    assert.equal(service.get(operation.id), undefined);
+  });
+}
 
 test('Fresh installs the paired Authority URL and key; ordinary replacement preserves Identity', async () => {
   const authorityPublicKey = bytes(
@@ -1016,6 +1189,120 @@ test('missing original Identity aborts ordinary continuation without creating an
     fixture.events.every(
       value => !value.startsWith('delete') && !value.startsWith('install '),
     ),
+  );
+});
+
+test('a restarted replacement begins at the first removal and reinstalls every selected applet while retaining Identity', async () => {
+  fixture.packages.add(securityKeyPackage);
+  fixture.instances.add(securityKeyInstance);
+  await replaceMonoidApplets(
+    'session',
+    options({
+      restarted: true,
+      selectedOptionalStages: ['security-key'],
+    }),
+  );
+  assert.deepEqual(
+    fixture.events.filter(value => /^(saved|delete|install) /.test(value)),
+    [
+      'saved remove-security-key-instance',
+      `delete instance ${securityKeyInstance}`,
+      'saved remove-security-key-package',
+      `delete package ${securityKeyPackage}`,
+      'saved remove-monoid-instance',
+      `delete instance ${monoidAid}`,
+      'saved remove-monoid-package',
+      `delete package ${monoidPackage}`,
+      'saved remove-library-package',
+      `delete package ${libraryPackage}`,
+      'saved install',
+      'install library',
+      'install monoid',
+      'install security-key',
+      'saved verify',
+    ],
+  );
+  assert.ok(fixture.instances.has(identityAid));
+});
+
+test('a restarted plan can begin again with Monoid absent and still verifies the original Identity afterwards', async () => {
+  fixture.instances.delete(monoidAid);
+  const hello = await replaceMonoidApplets(
+    'session',
+    options({restarted: true}),
+  );
+  assert.equal(hex(hello.publicKey), publicKey);
+  assert.ok(fixture.events.includes('saved remove-monoid-instance'));
+  assert.ok(fixture.events.includes(`delete package ${monoidPackage}`));
+  assert.ok(fixture.events.includes('install monoid'));
+  assert.ok(fixture.instances.has(identityAid));
+});
+
+test('an untouched replacement still refuses a missing Monoid before saving a checkpoint', async () => {
+  fixture.instances.delete(monoidAid);
+  await assert.rejects(replaceMonoidApplets('session', options()));
+  assert.ok(
+    fixture.events.every(value => !/^(saved|delete|install) /.test(value)),
+  );
+});
+
+for (const changed of [
+  'physical card',
+  'id',
+  'publicKey',
+  'bundle',
+  'missing Identity',
+]) {
+  test(`restarted replacement still rejects ${changed} before deletion`, async () => {
+    if (changed === 'physical card') {
+      fixture.information = {
+        ...information,
+        cplc: {...information.cplc, icSerialNumber: 'deadbeef'},
+      };
+    } else if (changed === 'missing Identity') {
+      fixture.instances.delete(identityAid);
+      fixture.instances.delete(monoidAid);
+    } else {
+      fixture.hello[changed] =
+        changed === 'id'
+          ? bytes('55667788')
+          : changed === 'publicKey'
+            ? bytes(`04${'22'.repeat(64)}`)
+            : new Uint8Array(32).fill(9);
+    }
+    await assert.rejects(
+      replaceMonoidApplets('session', options({restarted: true})),
+    );
+    assert.ok(
+      fixture.events.every(value => !/^(saved|delete|install) /.test(value)),
+    );
+  });
+}
+
+test('a restarted plan with missing Monoid refuses a different retained Identity after installation', async () => {
+  fixture.instances.delete(monoidAid);
+  fixture.hello.publicKey = bytes(`04${'22'.repeat(64)}`);
+  await assert.rejects(
+    replaceMonoidApplets('session', options({restarted: true})),
+    /reset or reinstalled/,
+  );
+  assert.ok(fixture.events.includes('install monoid'));
+  assert.ok(fixture.instances.has(identityAid));
+});
+
+test('restart does not permit an ordinary update to replace Identity', async () => {
+  await assert.rejects(
+    replaceMonoidApplets(
+      'session',
+      options({
+        restarted: true,
+        replaceStages: ['identity', 'library', 'monoid'],
+      }),
+    ),
+    /Identity requires Fresh install/,
+  );
+  assert.ok(
+    fixture.events.every(value => !/^(saved|delete|install) /.test(value)),
   );
 });
 

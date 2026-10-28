@@ -580,20 +580,22 @@ export const OTPView = observer(
           >
             <DetailsPopupTitle>One-time Password</DetailsPopupTitle>
             <DetailsPopupDivider />
-            <Button
-              onClick={() => {
-                setURI(undefined);
-                setPopup('add');
-              }}
-            >
-              Enter manually
-            </Button>
-            <Button
-              color="neutral"
-              onClick={() => execute({type: 'authorize'}, card)}
-            >
-              Enable OTP on card
-            </Button>
+            <Buttons data-popup-animation-group>
+              <Button
+                onClick={() => {
+                  setURI(undefined);
+                  setPopup('add');
+                }}
+              >
+                Enter manually
+              </Button>
+              <Button
+                color="neutral"
+                onClick={() => execute({type: 'authorize'}, card)}
+              >
+                Enable OTP on card
+              </Button>
+            </Buttons>
           </DetailsPopup>
         )}
         {popup === 'add' && (

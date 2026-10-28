@@ -51,7 +51,7 @@ export type CardMaintenancePhase =
   | 'ready'
   | 'replacing'
   | 'restore'
-  /** Read only for validating and discarding obsolete persisted tasks. */
+  /** Legacy PIN-setup tasks remain available for an explicit Start over. */
   | 'setup';
 
 export type CardMaintenanceItem = {
@@ -79,6 +79,8 @@ export type CardMaintenanceOperation = {
   createdAt: number;
   mode: CardMaintenanceMode;
   phase: CardMaintenancePhase;
+  /** A prior attempt may have written to the card even with no current checkpoint. */
+  restarted?: boolean;
   card: {
     id?: MonoidIdHex;
     alias?: string | false;
@@ -236,7 +238,7 @@ export class CardMaintenanceService {
     });
   }
 
-  /** Only preparations preceding the first destructive checkpoint may restart. */
+  /** Only preparations that have never started may be discarded. */
   async discardPrepared(operationId: string): Promise<void> {
     return this.exclusive(async () => {
       const operation = this.get(operationId);
@@ -269,6 +271,55 @@ export class CardMaintenanceService {
     });
   }
 
+  /** Discard an untouched plan, or restart while keeping its card binding and recovery. */
+  async restart(
+    operationId: string,
+  ): Promise<CardMaintenanceOperation | undefined> {
+    return this.exclusive(async () => {
+      const operation = this.require(operationId);
+      if (operation.batchId)
+        throw new MonoidCardError('Finish the maintenance batch first');
+      if (isPreparedOnly(operation)) {
+        await this.remove(operationId);
+        return;
+      }
+      if (operation.mode !== 'fresh') {
+        if (operation.archive !== undefined)
+          assertArchive(operation.archive, operation.card);
+        assertGrants(operation);
+        if (replacesMonoid(operation) && !operation.archive)
+          throw new MonoidCardError('The card recovery archive is missing');
+      }
+
+      // Fresh has no recovery; other modes retain the exact archive, grants and
+      // original Identity. Never rebind recovery to the incomplete card's Hello.
+      await this.save({
+        ...(operation.mode !== 'fresh' ? operation : {}),
+        id: operation.id,
+        createdAt: operation.createdAt,
+        mode: operation.mode,
+        phase: 'ready',
+        restarted: true,
+        checkpoint: undefined,
+        rejectedItems: undefined,
+        card: {
+          ...operation.card,
+          appletAid:
+            operation.mode === 'fresh'
+              ? getBundledMonoidAppletAid()
+              : operation.card.appletAid,
+        },
+        bundleHashes: getMonoidAppletBundleHashes(),
+        selectedOptionalStages: operation.selectedOptionalStages,
+        replaceStages: operation.replaceStages,
+        authority: operation.authority,
+      });
+      // A retained Identity keeps its Secret PIN; fresh installation needs new PINs.
+      if (operation.mode === 'fresh') this.dropSecretPIN(operation.card);
+      return this.require(operationId);
+    });
+  }
+
   matchOperation({
     hello,
     cardInformation,
@@ -288,7 +339,8 @@ export class CardMaintenanceService {
         operation =>
           fingerprint === operation.card.fingerprint &&
           (operation.mode === 'fresh' ||
-            (!publicKey && operation.phase === 'replacing')),
+            (!publicKey &&
+              (operation.phase === 'replacing' || operation.restarted))),
       )
     );
   }
@@ -589,7 +641,7 @@ export class CardMaintenanceService {
     });
   }
 
-  /** Explicitly resumed calls use the saved next step, never restart deletion. */
+  /** Resume the saved next step unless Start over cleared replacement progress. */
   async replace(
     sessionId: string,
     id: string,
@@ -656,6 +708,7 @@ export class CardMaintenanceService {
           selectedOptionalStages: operation.selectedOptionalStages,
           replaceStages: operation.replaceStages,
           checkpoint: operation.checkpoint,
+          restarted: operation.restarted,
           expectedPublicKey: operation.card.publicKey,
           expectedCardId: operation.card.id,
           expectedCardAlias: operation.card.alias,
@@ -674,7 +727,13 @@ export class CardMaintenanceService {
           },
           signal,
         });
-        if (operation.mode !== 'fresh') {
+        if (operation.mode === 'fresh' && !operation.card.id) {
+          operation = {
+            ...operation,
+            card: {...operation.card, id: uint8ArrayToHex(hello.id)},
+          };
+          await this.save(operation);
+        } else if (operation.mode !== 'fresh') {
           operation = {
             ...operation,
             phase: 'restore',
@@ -693,14 +752,8 @@ export class CardMaintenanceService {
           ),
           appletAid: operation.card.appletAid,
         });
-        // PIN setup is inferred from Hello, but a fresh install's saved alias
-        // must survive until restored. Empty recovery tasks need no continuation.
-        if (
-          (operation.mode === 'fresh' && !operation.card.alias) ||
-          (!operation.batchId && isEmptyRestore(operation))
-        ) {
-          await this.remove(id);
-        }
+        // Keep even empty recovery until PIN setup and restore verification finish.
+        // Fresh stays restartable until PIN and alias verification instead.
         return hello;
       } catch (error) {
         // Until a checkpoint has been saved, no destructive command can run.
@@ -712,7 +765,7 @@ export class CardMaintenanceService {
     });
   }
 
-  /** Fresh installation retains a known alias until PIN setup restores it. */
+  /** Complete fresh installation only after PIN setup and the alias are verified. */
   async finishFreshAlias(
     id: string,
     hello: MonoidAppletHello,
@@ -724,9 +777,11 @@ export class CardMaintenanceService {
       if (
         operation.mode !== 'fresh' ||
         operation.checkpoint !== 'verify' ||
+        hello.pins.secret === false ||
+        hello.pins.access === false ||
         (operation.card.id &&
           operation.card.id !== uint8ArrayToHex(hello.id)) ||
-        hello.alias !== operation.card.alias
+        hello.alias !== (operation.card.alias || false)
       )
         throw new MonoidCardError('Could not verify the card alias');
       await this.remove(id);
@@ -1017,35 +1072,31 @@ export class CardMaintenanceService {
           ['ready', 'replacing', 'restore', 'setup'].includes(
             operation.phase,
           ) &&
-          (!isPreparedOnly(operation) || !!operation.archive?.source) &&
-          !(
-            operation.mode === 'fresh' &&
-            operation.phase === 'setup' &&
-            !operation.archive &&
-            !operation.grants?.length
-          ),
+          (!isPreparedOnly(operation) || !!operation.archive?.source),
       );
     for (const operation of operations) {
       if (operation.archive !== undefined)
         assertArchive(operation.archive, operation.card);
       assertGrants(operation);
       if (
-        operation.phase === 'restore' &&
+        ['restore', 'setup'].includes(operation.phase) &&
+        operation.mode !== 'fresh' &&
         replacesMonoid(operation) &&
         operation.archive === undefined
       ) {
         throw new Error('The card recovery archive is missing');
       }
-      if (operation.phase === 'setup') {
+      if (
+        operation.phase === 'setup' &&
+        operation.mode === 'fresh' &&
+        (operation.archive || operation.grants?.length)
+      ) {
         throw new Error('The saved card maintenance data is invalid');
       }
     }
-    const retained = operations.filter(
-      operation => operation.batchId || !isEmptyRestore(operation),
-    );
     for (const batch of state?.batches ?? []) {
       for (const target of batch.targets.filter(target => !target.complete)) {
-        const operation = retained.find(
+        const operation = operations.find(
           operation => operation.id === target.operationId,
         );
         if (!operation || operation.batchId !== batch.id || !operation.archive)
@@ -1058,9 +1109,9 @@ export class CardMaintenanceService {
     );
     if (
       state &&
-      JSON.stringify(retained) !== JSON.stringify(state.operations)
+      JSON.stringify(operations) !== JSON.stringify(state.operations)
     ) {
-      await service.write(current => ({...current, operations: retained}));
+      await service.write(current => ({...current, operations}));
     }
     return service;
   }
@@ -1182,15 +1233,10 @@ export function cardFingerprint(information: CardInformation): string {
 }
 
 function isPreparedOnly(operation: CardMaintenanceOperation): boolean {
-  return operation.phase === 'ready' && operation.checkpoint === undefined;
-}
-
-/** Only call after validating the archive and grant payloads. */
-function isEmptyRestore(operation: CardMaintenanceOperation): boolean {
   return (
-    operation.phase === 'restore' &&
-    !operation.archive?.items.length &&
-    !operation.grants?.length
+    operation.phase === 'ready' &&
+    operation.checkpoint === undefined &&
+    !operation.restarted
   );
 }
 

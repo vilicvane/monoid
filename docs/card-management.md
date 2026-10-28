@@ -83,7 +83,52 @@ The alias survives Reset and Monoid replacement. Fresh installation also retains
 the previous alias from Hello or maintenance records before deleting Identity.
 After PIN setup it authenticates Secret, sets the exact saved alias, and verifies
 Hello before removing the maintenance record. A failed alias write retains that
-record; an explicit retry checks Hello before writing again.
+record; an explicit retry checks Hello before writing again. Started Fresh operations,
+including those without an alias, remain saved until both PINs and the alias
+are verified. A generated Card ID on a previously blank card is saved too.
+
+**Start over** is available for every single-card Fresh install, Update and
+Reinstall operation. A ready plan with no checkpoint that has never been
+restarted is untouched: Start over calls `discardPrepared` and shows "Discard
+this preparation. Changes already written to cards will remain." An untouched
+Fresh plan is also discarded if its first run fails before persisting any
+checkpoint, or when loading saved preparations after an app restart.
+
+Any checkpoint, a phase after ready (including legacy setup), or a previous
+restart means the operation has started. Start over resets that same operation
+to ready with no checkpoint and marks it as restarted. This marker survives app
+restart and preflight failures, so the plan cannot become discardable again.
+The next run begins at the first removal step and reinstalls every selected
+replacement applet using the current bundled images. Its primary action is
+**Fresh install**, **Continue update**, or **Continue installation**.
+
+Fresh retains its Card ID, alias, optional selections and Identity Authority
+settings, clears attempt-specific recovery/grant state and held procedure PINs,
+then installs and sets new PINs before restoring the saved alias. Update and
+Reinstall retain their recovery archive byte-for-byte, including peer recovery
+source, grants, checksums and previous grant token hashes; only replacement
+progress and an earlier item-omission offer are cleared. They pass through
+replacing and restore again, using that same recovery. Since Identity and its
+Secret PIN are retained, a held procedure Secret PIN and saved Access PIN can
+still be reused. Optional-only operations keep their selected stages and grant
+recovery; they do not erase Monoid or require an item archive.
+Empty recovery tasks also stay saved through PIN setup and restore verification,
+so a failure between installation and setup cannot lose Start over.
+
+Update/Reinstall never rebind recovery to an incomplete installation's Hello.
+They retain the original full public key, Card ID, Bundle, caller AID and physical
+fingerprint. A restarted plan with Monoid absent can be found by its fingerprint
+even while ready, and can start removal without Hello. A readable Hello must
+still match before removal; the original Identity instance must exist, and the
+installed Hello and restore each verify the original identity again. A changed
+Identity never matches by fingerprint when Hello is available. This checkout
+forbids Identity in an Update/Reinstall replacement plan ("Identity requires
+Fresh install"); restart preserves that boundary rather than attempting to
+import an archive encrypted for a different public key.
+
+Start over is hidden for batches and the restart service refuses every batch,
+including untouched ones. `discardPrepared` retains its existing ability to
+discard a whole untouched batch; it cannot discard one after any target starts.
 
 Initial inspection uses the public GP registry. If the card requires authentication
 (`6982`) but Monoid still answers Hello, Update and Reinstall open the GP secure
@@ -138,8 +183,9 @@ Interrupted work survives navigation and application restart. Physical productio
 information locates an interrupted installation while Monoid is absent; it does
 not authorize importing an archive into another Identity.
 On load, the retention filter discards operations whose phases are no longer
-current and rewrites storage. Recovery archive, grant and batch validation remain
-strict.
+current and rewrites storage. Started legacy setup tasks remain available for
+Start over; malformed Fresh setup tasks carrying recovery still fail validation.
+Recovery archive, grant and batch validation remain strict.
 
 Bundle members cannot recover their own exported envelopes. Update and Reinstall
 open maintenance Sync, with the starting card always selected. Each added bundle
@@ -198,8 +244,8 @@ service permits only the first unfinished target to proceed, including after
 navigation or restart. An interrupted card must finish restoration before the
 next can be emptied. All archives are written and read back together. Completed
 cards retain their batch status, while their recovery material is removed only
-after verification. Start over discards a whole batch only before any target
-has started replacement. Fresh install cannot bypass an unfinished batch.
+after verification. Batch restart remains unavailable. Fresh install cannot
+bypass an unfinished batch.
 
 Optional OTP and Security Key installation stays per card through **Install
 applets**. Optional-only updates and reinstalls also stay per card. Monoid and
@@ -209,8 +255,9 @@ installed Security Key's FIDO PIN again through a FIDO client.
 
 Fresh install does not delete an existing recovery archive. An archive belonging
 to the former Identity cannot be restored into the new Identity. Unknown APDU
-outcomes stop the current operation. A subsequent explicit retry reads the
-registry and resumes its saved checkpoint instead of restarting deletion.
+outcomes stop the current operation. **Resume** reads the registry and continues
+the saved checkpoint. **Start over** explicitly resets replacement progress as
+described above.
 
 The resource cache is invalidated when replacement begins. The phone's imported
 keys and addresses are not removed by this cache invalidation.

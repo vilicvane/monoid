@@ -576,6 +576,7 @@ export async function replaceMonoidApplets(
   {
     fresh,
     checkpoint,
+    restarted = false,
     expectedPublicKey,
     expectedCardId,
     expectedCardAlias,
@@ -592,6 +593,8 @@ export async function replaceMonoidApplets(
   }: {
     fresh: boolean;
     checkpoint?: AppletReplacementCheckpoint;
+    /** The saved plan has already entered replacement on this physical card. */
+    restarted?: boolean;
     expectedPublicKey?: PublicKeyHex;
     expectedCardId?: MonoidIdHex;
     expectedCardAlias?: string | false;
@@ -691,7 +694,8 @@ export async function replaceMonoidApplets(
 
   // A retained Monoid must authenticate the exact Identity before deletion.
   // If an acknowledged/uncertain previous DELETE removed it, only the saved
-  // continuation can proceed without Hello; restoration checks Identity again.
+  // continuation or explicit restart can proceed without Hello; both the
+  // installed Hello and restoration still check the original Identity.
   if (!fresh && position === 0) {
     const applet = createMonoidApplet(monoid.appletAid!).attachSession(
       sessionId,
@@ -710,7 +714,7 @@ export async function replaceMonoidApplets(
         },
         'The card Bundle changed during maintenance',
       );
-    } else if (!checkpoint) {
+    } else if (!checkpoint && !restarted) {
       throw new AppletNotFoundError(new Uint8Array(), applet.aid);
     }
   }

@@ -501,9 +501,9 @@ test('optional applet replacement preserves items even on a Bundle card and rest
 });
 
 for (const kind of ['empty card', 'optional without grants']) {
-  test(`${kind} replacement finishes without retaining an empty automatic recovery task`, async () => {
+  test(`${kind} stays restartable through setup and removes its empty recovery only after restore verification`, async () => {
     const storage = storageFixture();
-    const service = await CardMaintenanceService.create(storage);
+    let service = await CardMaintenanceService.create(storage);
     const card = cardFixture();
     if (kind === 'empty card') card.items = [];
     const operation = await service.prepare(card, {
@@ -516,6 +516,17 @@ for (const kind of ['empty card', 'optional without grants']) {
       }),
     });
     await service.replace('session', operation.id);
+    assert.equal(service.get(operation.id).phase, 'restore');
+    service = await CardMaintenanceService.create(storage);
+    assert.equal(service.get(operation.id).phase, 'restore');
+    const archive = JSON.stringify(service.get(operation.id).archive);
+    await service.restart(operation.id);
+    service = await CardMaintenanceService.create(storage);
+    assert.equal(service.get(operation.id).restarted, true);
+    await service.replace('session', operation.id);
+    assert.equal(service.get(operation.id).phase, 'restore');
+    assert.equal(JSON.stringify(service.get(operation.id).archive), archive);
+    assert.equal((await service.restore(card, operation.id)).complete, true);
     assert.equal(service.get(operation.id), undefined);
     assert.equal(service.matchOperation({hello: card.state}), undefined);
     assert.deepEqual((await storage.get()).operations, []);
@@ -530,7 +541,7 @@ for (const kind of ['empty card', 'optional without grants']) {
   });
 }
 
-test('restart removes verified empty automatic recovery but retains uncertain checkpoints', async () => {
+test('loading retains empty recovery still awaiting setup and restore verification, along with uncertain checkpoints', async () => {
   const storage = storageFixture();
   const service = await CardMaintenanceService.create(storage);
   const card = cardFixture();
@@ -556,12 +567,9 @@ test('restart removes verified empty automatic recovery but retains uncertain ch
   const restarted = await CardMaintenanceService.create(storage);
   assert.deepEqual(
     restarted.operations.map(operation => operation.id),
-    ['uncertain'],
+    ['empty', 'uncertain'],
   );
-  assert.deepEqual(await storage.get(), {
-    ...before,
-    operations: before.operations.slice(1),
-  });
+  assert.deepEqual(await storage.get(), before);
 });
 
 for (const phase of ['manual-restore', 'obsolete-phase']) {
@@ -933,7 +941,7 @@ test('storage acknowledgement and read-back verification are required before del
 });
 
 for (const mode of ['update', 'reinstall', 'fresh']) {
-  test(`${mode} preflight failure discards only the unstarted preparation`, async () => {
+  test(`${mode} preflight failure discards only the untouched preparation`, async () => {
     const storage = storageFixture();
     const service = await CardMaintenanceService.create(storage);
     const operation =
@@ -988,7 +996,7 @@ test('package validation failure discards an unstarted archive before entering r
 });
 
 for (const stage of ['before replace', 'during preflight']) {
-  test(`cancellation ${stage} clears the preparation before any checkpoint`, async () => {
+  test(`cancellation ${stage} discards an untouched fresh plan without authorizing a checkpoint`, async () => {
     const storage = storageFixture();
     const service = await CardMaintenanceService.create(storage);
     const operation = await service.prepareFresh(information, hello);
@@ -1037,7 +1045,7 @@ test('cancellation after checkpoint persistence retains the archive and uncertai
   assert.deepEqual(restarted.get(operation.id).archive, operation.archive);
 });
 
-test('a failed checkpoint save cannot authorize deletion and leaves no unstarted operation', async () => {
+test('a failed checkpoint save cannot authorize deletion and discards the untouched fresh preparation', async () => {
   const storage = storageFixture();
   const service = await CardMaintenanceService.create(storage);
   const operation = await service.prepareFresh(information, hello);
@@ -1114,7 +1122,7 @@ test('a concurrent rejected replace does not clear the operation owned by the ac
   assert.equal(service.get(operation.id).checkpoint, 'remove-monoid-instance');
 });
 
-test('restart discards unstarted and completed Fresh setup records while preserving recovery data and installations', async () => {
+test('loading discards untouched records and retains started setup, recovery data and installations', async () => {
   const storage = storageFixture();
   const service = await CardMaintenanceService.create(storage);
   const operation = await service.prepare(cardFixture(), {
@@ -1160,12 +1168,12 @@ test('restart discards unstarted and completed Fresh setup records while preserv
   const restarted = await CardMaintenanceService.create(storage);
   assert.deepEqual(
     restarted.operations.map(item => item.id),
-    ['checkpoint', 'replacing', 'restore'],
+    ['checkpoint', 'replacing', 'restore', 'setup'],
   );
   assert.deepEqual(await storage.get(), {
     ...before,
     operations: before.operations
-      .filter(item => !['unstarted', 'setup'].includes(item.id))
+      .filter(item => item.id !== 'unstarted')
       .map(({restored: _restored, ...item}) => item),
   });
   assert.deepEqual(restarted.get('restore').archive, operation.archive);
@@ -1429,7 +1437,7 @@ for (const fromRecord of [false, true]) {
   });
 }
 
-test('fresh reinstall works without Hello and clears only its own completed operation', async () => {
+test('fresh reinstall without Hello retains its generated Card ID through setup and clears only its own completed operation', async () => {
   const storage = storageFixture();
   const service = await CardMaintenanceService.create(storage);
   const first = await service.prepareFresh(information);
@@ -1439,6 +1447,7 @@ test('fresh reinstall works without Hello and clears only its own completed oper
   });
   replacement = async (_session, options) => {
     assert.equal(options.fresh, true);
+    await options.onCheckpoint('verify');
     return structuredClone(hello);
   };
   assert.equal(
@@ -1447,6 +1456,15 @@ test('fresh reinstall works without Hello and clears only its own completed oper
     first.id,
   );
   await service.replace('session', first.id);
+  assert.equal(service.get(first.id).card.id, hex(hello.id));
+  await assert.rejects(
+    service.finishFreshAlias(first.id, {
+      ...hello,
+      pins: {access: false, secret: 5},
+    }),
+    /verify/,
+  );
+  await service.finishFreshAlias(first.id, hello);
   assert.equal(service.get(first.id), undefined);
   assert.equal(service.operations.length, 1);
   assert.equal(service.operations[0].id, second.id);
@@ -1511,10 +1529,10 @@ for (const failure of ['installation record', 'operation removal']) {
       }
       return set.call(this, key, value);
     };
-    await assert.rejects(
-      service.replace('session', operation.id),
-      /Storage interrupted/,
-    );
+    await assert.rejects(async () => {
+      const next = await service.replace('session', operation.id);
+      await service.finishFreshAlias(operation.id, next);
+    }, /Storage interrupted/);
     assert.equal(service.get(operation.id).phase, 'replacing');
     assert.equal(service.get(operation.id).checkpoint, 'verify');
     assert.equal((await storage.get()).operations[0].checkpoint, 'verify');
@@ -1523,7 +1541,8 @@ for (const failure of ['installation record', 'operation removal']) {
       assert.equal(options.checkpoint, 'verify');
       return structuredClone(hello);
     };
-    await service.replace('retry-session', operation.id);
+    const next = await service.replace('retry-session', operation.id);
+    await service.finishFreshAlias(operation.id, next);
     assert.equal(service.get(operation.id), undefined);
     assert.equal(service.isUpdateAvailable(hello), false);
     assert.equal(service.isIdentityUpdateAvailable(hello), false);
@@ -1550,7 +1569,7 @@ test('a new ordinary operation cannot overwrite an existing archive while Fresh 
   assert.equal(service.get(original.id).archive.items.length, 3);
 });
 
-test('Fresh returns its new Identity without retaining PIN setup or removing another recovery archive', async () => {
+test('Fresh retains its new Identity setup until completion without removing another recovery archive', async () => {
   const storage = storageFixture();
   const service = await CardMaintenanceService.create(storage);
   const original = await service.prepare(cardFixture(), {
@@ -1564,8 +1583,13 @@ test('Fresh returns its new Identity without retaining PIN setup or removing ano
     ...structuredClone(hello),
     publicKey: bytes(`04${'33'.repeat(64)}`),
   };
-  replacement = async () => newHello;
+  replacement = async (_session, options) => {
+    await options.onCheckpoint('verify');
+    return newHello;
+  };
   assert.deepEqual(await service.replace('session', fresh.id), newHello);
+  assert.equal(service.get(fresh.id).checkpoint, 'verify');
+  await service.finishFreshAlias(fresh.id, newHello);
   assert.equal(service.get(fresh.id), undefined);
   assert.equal(
     service.matchOperation({hello: newHello, cardInformation: information}),
@@ -2241,6 +2265,417 @@ test('discarding a missing preparation is idempotent and does not write storage'
     appletAid: hex(aid),
   });
   assert.notEqual(next.id, operation.id);
+});
+
+for (const mode of ['fresh', 'update', 'reinstall']) {
+  test(`Start over discards an untouched ${mode} plan durably`, async () => {
+    const storage = storageFixture();
+    const service = await CardMaintenanceService.create(storage);
+    const prepare = () =>
+      mode === 'fresh'
+        ? service.prepareFresh(information, hello)
+        : service.prepare(cardFixture(), {
+            mode,
+            cardInformation: information,
+            appletAid: hex(aid),
+          });
+    const operation = await prepare();
+    await service.discardPrepared(operation.id);
+    assert.equal(service.get(operation.id), undefined);
+    assert.deepEqual((await storage.get()).operations, []);
+    const next = await prepare();
+    assert.equal(await service.restart(next.id), undefined);
+    assert.deepEqual((await storage.get()).operations, []);
+    assert.deepEqual(
+      (await CardMaintenanceService.create(storage)).operations,
+      [],
+    );
+  });
+}
+
+for (const mode of ['update', 'reinstall']) {
+  for (const peer of [false, true]) {
+    for (const [phase, checkpoint] of [
+      ['ready', 'remove-monoid-instance'],
+      ['replacing', undefined],
+      ['replacing', 'install'],
+      ['restore', 'verify'],
+      ['setup', undefined],
+    ]) {
+      test(`Start over restarts ${mode} ${phase}/${checkpoint} with ${peer ? 'peer' : 'own'} recovery byte-identical and restores it after replacement`, async () => {
+        const storage = storageFixture();
+        let service = await CardMaintenanceService.create(storage);
+        const card = cardFixture();
+        if (peer) card.state.bundle = new Uint8Array(32).fill(9);
+        card.grants = [
+          {
+            aid: bytes('a0000006472f0001'),
+            types: [[-3839, true]],
+            tokenHash: new Uint8Array(32),
+          },
+        ];
+        const prepared = await service.prepare(card, {
+          mode,
+          cardInformation: information,
+          appletAid: hex(aid),
+          selectedOptionalStages: ['security-key'],
+        });
+        if (peer)
+          await service.saveBundleRecovery(prepared, bundleRecovery(card));
+        storage.mutate(state => {
+          Object.assign(state.operations[0], {
+            phase,
+            checkpoint,
+            rejectedItems: [{index: '01', reason: 'Previous rejection'}],
+          });
+        });
+        service = await CardMaintenanceService.create(storage);
+        const original = (await storage.get()).operations.find(
+          operation => operation.id === prepared.id,
+        );
+        const recoveryBytes = operation =>
+          Buffer.from(
+            JSON.stringify({
+              archive: operation.archive,
+              grants: operation.grants,
+              grantsChecksum: operation.grantsChecksum,
+              previousGrantTokens: operation.previousGrantTokens,
+              previousGrantTokensChecksum:
+                operation.previousGrantTokensChecksum,
+            }),
+          );
+        const archive = recoveryBytes(original);
+        service.holdSecretPIN(original.card, 'Secret-42');
+        bundleHashes[2] = 'current-monoid-image';
+        const reset = await service.restart(prepared.id);
+        assert.equal(reset.id, original.id);
+        assert.equal(reset.createdAt, original.createdAt);
+        assert.equal(reset.mode, mode);
+        assert.equal(reset.phase, 'ready');
+        assert.equal(reset.restarted, true);
+        assert.equal(reset.checkpoint, undefined);
+        assert.equal(reset.rejectedItems, undefined);
+        assert.deepEqual(reset.card, original.card);
+        assert.deepEqual(reset.selectedOptionalStages, ['security-key']);
+        assert.deepEqual(reset.bundleHashes, bundleHashes);
+        assert.deepEqual(recoveryBytes(reset), archive);
+        assert.equal(service.secretPIN(original.card), 'Secret-42');
+        await assert.rejects(
+          service.discardPrepared(reset.id),
+          /already started/,
+        );
+
+        service = await CardMaintenanceService.create(storage);
+        assert.deepEqual(recoveryBytes(service.get(reset.id)), archive);
+        assert.equal(
+          service.matchOperation({cardInformation: information}).id,
+          reset.id,
+        );
+        const changedIdentity = {
+          ...card.state,
+          publicKey: bytes(`04${'99'.repeat(64)}`),
+        };
+        assert.equal(
+          service.matchOperation({
+            hello: changedIdentity,
+            cardInformation: information,
+          }),
+          undefined,
+          'a restarted retained Identity cannot be rebound by its chip fingerprint',
+        );
+        replacement = async () => {
+          throw new Error('Preflight failed');
+        };
+        await assert.rejects(
+          service.replace('session', reset.id),
+          /Preflight failed/,
+        );
+        await assert.rejects(
+          service.discardPrepared(reset.id),
+          /already started/,
+        );
+        service = await CardMaintenanceService.create(storage);
+        await service.restart(reset.id);
+        assert.deepEqual(recoveryBytes(service.get(reset.id)), archive);
+        replacement = async (_session, options) => {
+          assert.equal(options.fresh, false);
+          assert.equal(options.restarted, true);
+          assert.equal(options.checkpoint, undefined);
+          assert.equal(options.expectedPublicKey, original.card.publicKey);
+          assert.equal(options.expectedCardId, original.card.id);
+          assert.equal(options.expectedBundle, original.card.bundle);
+          assert.equal(options.expectedAppletAid, original.card.appletAid);
+          await options.onCheckpoint('remove-security-key-instance');
+          assert.equal(service.get(reset.id).phase, 'replacing');
+          assert.deepEqual(recoveryBytes(service.get(reset.id)), archive);
+          await options.onCheckpoint('install');
+          await options.onCheckpoint('verify');
+          return structuredClone(card.state);
+        };
+        await service.replace('session', reset.id);
+        assert.equal(service.get(reset.id).phase, 'restore');
+        assert.deepEqual(recoveryBytes(service.get(reset.id)), archive);
+        // Recovery still refuses another Identity after installation.
+        card.state = changedIdentity;
+        await assert.rejects(
+          service.restore(card, reset.id),
+          /reset or reinstalled/,
+        );
+        assert.equal(card.imports.length, 0);
+        card.state = {...card.state, publicKey: bytes(original.card.publicKey)};
+        card.grants = [];
+        assert.equal((await service.restore(card, reset.id)).complete, true);
+        assert.equal(card.imports.length, original.archive.items.length);
+        assert.equal(card.grants.length, original.grants.length);
+        assert.equal(service.get(reset.id), undefined);
+      });
+    }
+  }
+}
+
+for (const mode of ['fresh', 'update', 'reinstall']) {
+  test(`a restarted ${mode} plan survives preflight failure and reload without becoming discardable`, async () => {
+    const storage = storageFixture();
+    let service = await CardMaintenanceService.create(storage);
+    const operation =
+      mode === 'fresh'
+        ? await service.prepareFresh(information, hello)
+        : await service.prepare(cardFixture(), {
+            mode,
+            cardInformation: information,
+            appletAid: hex(aid),
+          });
+    await service.replace('session', operation.id);
+    await service.restart(operation.id);
+    replacement = async () => {
+      throw new Error('Before card writes');
+    };
+    await assert.rejects(
+      service.replace('session', operation.id),
+      /Before card writes/,
+    );
+    service = await CardMaintenanceService.create(storage);
+    assert.equal(service.get(operation.id).restarted, true);
+    await assert.rejects(
+      service.discardPrepared(operation.id),
+      /already started/,
+    );
+  });
+}
+
+for (const mode of ['update', 'reinstall']) {
+  test(`restarting an optional-only ${mode} preserves its grant token comparison without erasing Monoid`, async () => {
+    const storage = storageFixture();
+    let service = await CardMaintenanceService.create(storage);
+    const card = cardFixture();
+    card.grants = [
+      {
+        aid: bytes('a0000006472f0001'),
+        types: [[-3839, true]],
+        tokenHash: new Uint8Array(32),
+      },
+    ];
+    const operation = await service.prepare(card, {
+      mode,
+      cardInformation: information,
+      appletAid: hex(aid),
+      selectedOptionalStages: ['security-key'],
+      replaceStages: ['security-key'],
+    });
+    await service.replace('first-session', operation.id);
+    const before = (await storage.get()).operations[0];
+    assert.equal(before.archive, undefined);
+    await service.restart(operation.id);
+    service = await CardMaintenanceService.create(storage);
+    const reset = service.get(operation.id);
+    assert.equal(reset.archive, undefined);
+    assert.deepEqual(reset.grants, before.grants);
+    assert.equal(reset.grantsChecksum, before.grantsChecksum);
+    assert.deepEqual(reset.previousGrantTokens, before.previousGrantTokens);
+    assert.equal(
+      reset.previousGrantTokensChecksum,
+      before.previousGrantTokensChecksum,
+    );
+    replacement = async (_session, options) => {
+      assert.equal(options.checkpoint, undefined);
+      assert.deepEqual(options.replaceStages, ['security-key']);
+      assert.deepEqual(options.selectedOptionalStages, ['security-key']);
+      await options.onCheckpoint('remove-security-key-instance');
+      await options.onCheckpoint('verify');
+      return structuredClone(card.state);
+    };
+    await service.replace('second-session', operation.id);
+    assert.equal(service.get(operation.id).phase, 'restore');
+    assert.equal((await service.restore(card, operation.id)).complete, true);
+    assert.equal(card.imports.length, 0);
+    assert.notEqual(hex(card.grants[0].tokenHash), hex(new Uint8Array(32)));
+  });
+}
+
+for (const checkpoint of [
+  undefined,
+  'remove-monoid-package',
+  'install',
+  'verify',
+]) {
+  test(`Start over resets fresh ${checkpoint ?? 'preparation'} durably while retaining its identity and installation options`, async () => {
+    const storage = storageFixture();
+    let service = await CardMaintenanceService.create(storage);
+    const originalHello = {...hello, alias: ' 旅行卡 😀 '};
+    const authority = {
+      authorityUrl: 'https://authority.example',
+      authorityPublicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(7)),
+    };
+    const prepared = await service.prepareFresh(
+      information,
+      originalHello,
+      undefined,
+      ['otp', 'security-key'],
+      authority,
+    );
+    storage.mutate(state => {
+      const operation = state.operations[0];
+      operation.phase = checkpoint ? 'replacing' : 'ready';
+      operation.checkpoint = checkpoint;
+      operation.restarted = checkpoint ? undefined : true;
+      operation.rejectedItems = [{index: '01', reason: 'Old attempt'}];
+      operation.previousGrantTokens = {[hex(aid)]: 'old-token-hash'};
+      operation.previousGrantTokensChecksum = `0x${createHash('sha256')
+        .update(JSON.stringify(operation.previousGrantTokens))
+        .digest('hex')}`;
+    });
+    service = await CardMaintenanceService.create(storage);
+    service.holdSecretPIN(prepared.card, 'Secret-42');
+    const unrelated = {publicKey: 'unrelated-card'};
+    service.holdSecretPIN(unrelated, 'Other-42');
+    bundleHashes[0] = 'new-identity-image';
+    const reset = await service.restart(prepared.id);
+    assert.deepEqual(reset, {
+      ...prepared,
+      restarted: true,
+      bundleHashes: [...bundleHashes],
+    });
+    assert.equal(service.secretPIN(prepared.card), undefined);
+    assert.equal(service.secretPIN(unrelated), 'Other-42');
+    assert.deepEqual((await storage.get()).operations, [reset]);
+
+    service = await CardMaintenanceService.create(storage);
+    const incompleteHello = {
+      ...hello,
+      publicKey: bytes(`04${'33'.repeat(64)}`),
+      alias: false,
+    };
+    assert.equal(
+      service.matchOperation({
+        hello: incompleteHello,
+        cardInformation: information,
+      }).id,
+      prepared.id,
+    );
+    assert.equal(service.matchOperation({hello: incompleteHello}), undefined);
+    replacement = async (_session, options) => {
+      assert.equal(options.fresh, true);
+      assert.equal(options.checkpoint, undefined);
+      assert.equal(options.expectedCardId, hex(originalHello.id));
+      assert.equal(options.expectedCardAlias, originalHello.alias);
+      assert.deepEqual(options.selectedOptionalStages, ['otp', 'security-key']);
+      assert.equal(options.authorityUrl, authority.authorityUrl);
+      assert.deepEqual(
+        options.authorityPublicKey,
+        authority.authorityPublicKey,
+      );
+      await options.onCheckpoint('remove-monoid-instance');
+      return incompleteHello;
+    };
+    await service.replace('session', prepared.id);
+    assert.equal(service.get(prepared.id).checkpoint, 'remove-monoid-instance');
+    assert.equal(service.get(prepared.id).card.alias, originalHello.alias);
+  });
+}
+
+for (const mode of ['update', 'reinstall', 'fresh']) {
+  test(`Start over refuses a ${mode} batch without changing the operation or its held PIN`, async () => {
+    const storage = storageFixture();
+    let service = await CardMaintenanceService.create(storage);
+    const operation =
+      mode === 'fresh'
+        ? await service.prepareFresh(information, hello)
+        : await service.prepare(cardFixture(), {
+            mode,
+            cardInformation: information,
+            appletAid: hex(aid),
+          });
+    storage.mutate(state => {
+      state.operations[0].phase = 'replacing';
+      state.operations[0].checkpoint = 'verify';
+      state.operations[0].batchId = 'batch';
+    });
+    service = await CardMaintenanceService.create(storage);
+    service.holdSecretPIN(operation.card, 'Secret-42');
+    const before = await storage.get();
+    await assert.rejects(service.restart(operation.id), /maintenance batch/);
+    assert.deepEqual(await storage.get(), before);
+    assert.deepEqual(service.get(operation.id), before.operations[0]);
+    assert.equal(service.secretPIN(operation.card), 'Secret-42');
+  });
+}
+
+for (const failure of ['write', 'readback']) {
+  test(`fresh Start over requires storage ${failure} before publishing or dropping its PIN`, async () => {
+    const storage = storageFixture();
+    const service = await CardMaintenanceService.create(storage);
+    const operation = await service.prepareFresh(information, {
+      ...hello,
+      alias: 'Daily',
+    });
+    await service.replace('session', operation.id);
+    const saved = (await storage.get()).operations[0];
+    service.holdSecretPIN(operation.card, 'Secret-42');
+    if (failure === 'write') storage.failWrite = true;
+    else storage.corruptRead = true;
+    await assert.rejects(service.restart(operation.id), /Disk full|verify/);
+    assert.deepEqual(service.get(operation.id), saved);
+    assert.equal(service.secretPIN(operation.card), 'Secret-42');
+  });
+}
+
+test('fresh Start over holds the maintenance mutex through its verified write', async () => {
+  const storage = storageFixture();
+  const service = await CardMaintenanceService.create(storage);
+  const operation = await service.prepareFresh(information, {
+    ...hello,
+    alias: 'Daily',
+  });
+  await service.replace('session', operation.id);
+  let entered;
+  let release;
+  const saving = new Promise(resolve => {
+    entered = resolve;
+  });
+  const blocked = new Promise(resolve => {
+    release = resolve;
+  });
+  storage.afterSet = async value => {
+    if (value.operations[0]?.phase === 'ready') {
+      entered();
+      await blocked;
+    }
+  };
+  const resetting = service.restart(operation.id);
+  await saving;
+  try {
+    await assert.rejects(service.restart(operation.id), /already running/);
+    await assert.rejects(
+      service.replace('session', operation.id),
+      /already running/,
+    );
+    assert.equal(service.get(operation.id).checkpoint, 'verify');
+  } finally {
+    release();
+  }
+  await resetting;
+  assert.equal(service.get(operation.id).phase, 'ready');
+  assert.equal(service.get(operation.id).checkpoint, undefined);
 });
 
 for (const [phase, checkpoint] of [

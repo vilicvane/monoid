@@ -501,23 +501,25 @@ export const SecurityKeyView = observer(
           >
             <DetailsPopupTitle>Security Key</DetailsPopupTitle>
             <DetailsPopupDivider />
-            {snapshot?.installed && (
+            <Buttons data-popup-animation-group>
+              {snapshot?.installed && (
+                <Button
+                  disabled={!!configuration}
+                  onClick={() => setPopup('configure')}
+                >
+                  {configureLabel}
+                </Button>
+              )}
               <Button
-                disabled={!!configuration}
-                onClick={() => setPopup('configure')}
+                color="neutral"
+                onClick={() => {
+                  setPopup(undefined);
+                  applets();
+                }}
               >
-                {configureLabel}
+                Card Applets
               </Button>
-            )}
-            <Button
-              color="neutral"
-              onClick={() => {
-                setPopup(undefined);
-                applets();
-              }}
-            >
-              Card Applets
-            </Button>
+            </Buttons>
           </DetailsPopup>
         )}
         {popup === 'configure' && snapshot && (

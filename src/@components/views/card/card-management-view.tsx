@@ -287,10 +287,12 @@ export const CardManagementView = observer(
       (busy || processComplete ? operationSnapshot : undefined);
     const needsReplacement =
       pending && ['ready', 'replacing'].includes(pending.phase);
-    const canRestart =
+    const preparedOnly =
       pending?.phase === 'ready' && pending.checkpoint === undefined;
+    const untouched = preparedOnly && !pending?.restarted;
+    const canRestart = !!pending && !pending.batchId;
     const resumeLabel = needsReplacement
-      ? canRestart
+      ? preparedOnly
         ? pending.mode === 'fresh'
           ? 'Fresh install'
           : pending.mode === 'update'
@@ -777,10 +779,10 @@ export const CardManagementView = observer(
               retryable = false;
               next = await setCardAlias(applet, next, alias, signal);
             }
-            if (saved?.mode === 'fresh' && maintenance.get(saved.id))
-              await maintenance.finishFreshAlias(saved.id, next, signal);
             setInstallationAlias(undefined);
           }
+          if (saved?.mode === 'fresh' && maintenance.get(saved.id))
+            await maintenance.finishFreshAlias(saved.id, next, signal);
           if (saved && maintenance.get(saved.id)?.phase === 'restore') {
             let installedAppletAids: string[] | undefined;
             if (saved.grants?.length) {
@@ -979,7 +981,14 @@ export const CardManagementView = observer(
       setBusy(true);
       setPopup(undefined);
       try {
-        await maintenance.discardPrepared(pending.id);
+        if (untouched) {
+          await maintenance.discardPrepared(pending.id);
+        } else {
+          await maintenance.restart(pending.id);
+          if (pending.mode === 'fresh') pinSession.clear();
+          setConfirm(undefined);
+          resetCompletion();
+        }
       } catch (error) {
         errorService.catch(Promise.reject(error));
       } finally {
@@ -1347,42 +1356,44 @@ export const CardManagementView = observer(
           >
             <DetailsPopupTitle>Card applets</DetailsPopupTitle>
             <DetailsPopupDivider />
-            {canRestart && (
+            <Buttons data-popup-animation-group>
+              {canRestart && (
+                <Button
+                  color="neutral"
+                  disabled={busy}
+                  onClick={() => setPopup('restart')}
+                >
+                  Start over
+                </Button>
+              )}
+              {optionalApplets.some(
+                applet => !installation?.optional?.[applet.stage]?.installed,
+              ) && (
+                <Button
+                  color="primary"
+                  disabled={!canStartMaintenance || !hasAppletBundle}
+                  onClick={() => requestInstall()}
+                >
+                  Install applets
+                </Button>
+              )}
+              {!updateAvailable && (
+                <Button
+                  color="neutral"
+                  disabled={!canMaintain || !hello}
+                  onClick={() => requestMaintenance('reinstall')}
+                >
+                  Reinstall Monoid Applet
+                </Button>
+              )}
               <Button
-                color="neutral"
-                disabled={busy}
-                onClick={() => setPopup('restart')}
+                color="danger"
+                disabled={!canFreshInstall}
+                onClick={() => requestInstall(true)}
               >
-                Start over
+                Fresh install
               </Button>
-            )}
-            {optionalApplets.some(
-              applet => !installation?.optional?.[applet.stage]?.installed,
-            ) && (
-              <Button
-                color="primary"
-                disabled={!canStartMaintenance || !hasAppletBundle}
-                onClick={() => requestInstall()}
-              >
-                Install applets
-              </Button>
-            )}
-            {!updateAvailable && (
-              <Button
-                color="neutral"
-                disabled={!canMaintain || !hello}
-                onClick={() => requestMaintenance('reinstall')}
-              >
-                Reinstall Monoid Applet
-              </Button>
-            )}
-            <Button
-              color="danger"
-              disabled={!canFreshInstall}
-              onClick={() => requestInstall(true)}
-            >
-              Fresh install
-            </Button>
+            </Buttons>
           </DetailsPopup>
         )}
         {popup === 'restart' && (
@@ -1392,8 +1403,27 @@ export const CardManagementView = observer(
             onCancel={() => setPopup(undefined)}
             onConfirm={() => void startOver()}
           >
-            Discard this preparation. Changes already written to cards will
-            remain.
+            {untouched ? (
+              <>
+                Discard this preparation. Changes already written to cards will
+                remain.
+              </>
+            ) : pending?.mode === 'fresh' ? (
+              <>
+                The applets will be installed again from scratch. The card keeps
+                its Card ID and alias.
+              </>
+            ) : pending?.archive ? (
+              <>
+                The applets will be installed again from scratch, then the
+                card's items are restored from the saved recovery.
+              </>
+            ) : (
+              <>
+                The selected applets will be installed again from scratch, then
+                their access is restored.
+              </>
+            )}
           </ConfirmPopup>
         )}
         {(popup === 'install' || popup === 'fresh') && (
@@ -1433,56 +1463,58 @@ export const CardManagementView = observer(
               {APPLET_NAMES[popup as AppletStage]}
             </DetailsPopupTitle>
             <DetailsPopupDivider />
-            {popup === 'security-key' && hello && (
+            <Buttons data-popup-animation-group>
+              {popup === 'security-key' && hello && (
+                <Button
+                  onClick={() => {
+                    setPopup(undefined);
+                    router
+                      .securityKey({
+                        card: {
+                          id: uint8ArrayToHex(hello.id),
+                          publicKey: uint8ArrayToHex(hello.publicKey),
+                        },
+                      })
+                      .$push();
+                  }}
+                >
+                  Open Security Key
+                </Button>
+              )}
+              {popup === 'otp' && hello && (
+                <Button
+                  onClick={() => {
+                    setPopup(undefined);
+                    router
+                      .otp({
+                        card: {
+                          id: uint8ArrayToHex(hello.id),
+                          publicKey: uint8ArrayToHex(hello.publicKey),
+                        },
+                      })
+                      .$push();
+                  }}
+                >
+                  Open OTP
+                </Button>
+              )}
               <Button
-                onClick={() => {
-                  setPopup(undefined);
-                  router
-                    .securityKey({
-                      card: {
-                        id: uint8ArrayToHex(hello.id),
-                        publicKey: uint8ArrayToHex(hello.publicKey),
-                      },
-                    })
-                    .$push();
-                }}
+                color="neutral"
+                disabled={!canMaintain || !hello}
+                onClick={() =>
+                  requestMaintenance(
+                    optionalUpdates.includes(popup as AppletStage)
+                      ? 'update'
+                      : 'reinstall',
+                    [popup as AppletStage],
+                  )
+                }
               >
-                Open Security Key
+                {optionalUpdates.includes(popup as AppletStage)
+                  ? 'Update applet'
+                  : 'Reinstall applet'}
               </Button>
-            )}
-            {popup === 'otp' && hello && (
-              <Button
-                onClick={() => {
-                  setPopup(undefined);
-                  router
-                    .otp({
-                      card: {
-                        id: uint8ArrayToHex(hello.id),
-                        publicKey: uint8ArrayToHex(hello.publicKey),
-                      },
-                    })
-                    .$push();
-                }}
-              >
-                Open OTP
-              </Button>
-            )}
-            <Button
-              color="neutral"
-              disabled={!canMaintain || !hello}
-              onClick={() =>
-                requestMaintenance(
-                  optionalUpdates.includes(popup as AppletStage)
-                    ? 'update'
-                    : 'reinstall',
-                  [popup as AppletStage],
-                )
-              }
-            >
-              {optionalUpdates.includes(popup as AppletStage)
-                ? 'Update applet'
-                : 'Reinstall applet'}
-            </Button>
+            </Buttons>
           </DetailsPopup>
         )}
         {confirm && (
