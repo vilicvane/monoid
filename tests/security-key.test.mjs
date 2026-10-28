@@ -418,7 +418,9 @@ test('configuration verifies full identity before reading or writing items', asy
     );
     await assert.rejects(
       configuration.apply(applet, wrong, signal()),
-      /Wrong card/,
+      hex(wrong.id) === hex(hello.id)
+        ? /was reset or reinstalled/
+        : /Wrong card/,
     );
     assert.deepEqual(commands, []);
   }

@@ -197,7 +197,8 @@ mock.module(
             return true;
           },
           confirmReset: card => state.confirmReset(card),
-          resume: async () => {},
+          resume: async () => state.calls.push('add'),
+          ...state.additionState,
         };
       },
     },
@@ -424,6 +425,7 @@ test('prepared and mixed cards use one next ring, pending labels, and acknowledg
   let previews = nodes(state.render()).filter(
     node => node.type === 'CardPreview',
   );
+  assert.ok(previews.every(node => !node.props.aliasToggle));
   assert.deepEqual(
     previews.map(node => [node.props.$scan, node.props.description]),
     [
@@ -476,16 +478,44 @@ test('prepared and mixed cards use one next ring, pending labels, and acknowledg
   assert.equal(state.find('Button', 'Change bundle'), undefined);
 });
 
+test('the footer distinguishes adding from joining and preserves pending PIN/reset actions', async t => {
+  const state = fixture(t);
+  await state.flush();
+  await state.click('Button', 'Continue');
+  await state.click('Button', 'Add a card');
+  assert.equal(state.calls.at(-1), 'add');
+  assert.equal(state.find('Button', 'Scan card to join'), undefined);
+
+  const session = state.flow.authority;
+  session.addPrepared(prepared());
+  assert.ok(state.find('Button', 'Scan card to join'));
+  for (const [pending, label] of [
+    ['pendingPIN', 'Set Secret PIN'],
+    ['pendingReset', 'Check card'],
+  ]) {
+    state.additionState = {[pending]: {}, buttonLabel: label};
+    await state.click('Button', label);
+    assert.equal(state.calls.at(-1), 'add');
+    assert.equal(state.find('Button', 'Scan card to join'), undefined);
+    assert.equal(state.pinPrompts, 0);
+    assert.equal(state.scans, 0);
+  }
+  state.additionState = undefined;
+  session.cards[0].joined = true;
+  await state.click('Button', 'Add another card');
+  assert.equal(state.calls.at(-1), 'add');
+  assert.equal(state.find('Button', 'Scan next card to join'), undefined);
+  session.addPrepared(prepared(2));
+  assert.ok(state.find('Button', 'Scan next card to join'));
+});
+
 test('Done exits the grid and steps before showing only completion and its neutral back button', async t => {
   const state = fixture(t, {sourceCard: prepared()});
   state.view.card = prepared();
   await state.flush();
   await state.click('Button', 'Continue');
   state.flow.authority.cards[0].joined = true;
-  assert.equal(
-    state.find('Button', 'Scan next card to join').props.color,
-    undefined,
-  );
+  assert.equal(state.find('Button', 'Add another card').props.color, undefined);
   await state.click('Button', 'Done');
   assert.equal(state.logouts, 1);
   assert.equal(state.entrances.authorityService.signedIn, false);
@@ -689,7 +719,7 @@ test('signed-in entry starts at Choose bundle, prefills the most recent bundle, 
   );
   assert.ok(state.find('CardGrid'));
   assert.equal(state.find('Button', 'Change bundle').props.color, 'neutral');
-  assert.ok(state.find('Button', 'Scan card to join'));
+  assert.ok(state.find('Button', 'Add a card'));
   await state.click('Button', 'Change bundle');
   assert.equal(state.find('InputWithAction').props.value, 'Recovery');
 });

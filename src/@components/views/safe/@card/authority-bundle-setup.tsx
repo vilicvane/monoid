@@ -502,9 +502,13 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
               >
                 {addition.pendingPIN || addition.pendingReset
                   ? addition.buttonLabel
-                  : session.joinedCount
-                    ? 'Scan next card to join'
-                    : 'Scan card to join'}
+                  : session.nextCard
+                    ? session.joinedCount
+                      ? 'Scan next card to join'
+                      : 'Scan card to join'
+                    : session.cards.length
+                      ? 'Add another card'
+                      : 'Add a card'}
               </Button>
               {!session.joinedCount ? (
                 <Button
@@ -645,7 +649,6 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
                     <CardPreview
                       id={card.id}
                       alias={card.alias}
-                      aliasToggle
                       description={
                         card.joined
                           ? 'joined'

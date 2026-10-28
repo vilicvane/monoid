@@ -433,7 +433,7 @@ export const SetupCardView = observer(
       let accessPINId: MonoidIdHex | undefined;
       try {
         if (!reset.attempted) {
-          // One vault authorization covers removing the old ID and saving the new ID.
+          // One vault authorization covers removing and replacing this card's PIN.
           await pinSession.authenticate(operation.signal);
           operation.signal.throwIfAborted();
           if (!isActive()) return;
@@ -979,8 +979,7 @@ export const SetupCardView = observer(
             </p>
             <ol>
               <li>
-                Adding this card will erase its stored items and both PINs, and
-                change its Card ID.
+                Adding this card will erase its stored items and both PINs.
               </li>
               <li>
                 This card will no longer be able to receive data from other

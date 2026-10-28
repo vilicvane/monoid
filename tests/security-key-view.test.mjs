@@ -438,7 +438,10 @@ test('configuration validates the full identity before shared Access PIN authent
     await state.tap(wrong);
     assert.deepEqual(wrong.authentications, []);
     assert.deepEqual(wrong.writes, []);
-    assert.match(state.errors[0].message, /Wrong card/);
+    assert.match(
+      state.errors[0].message,
+      change === 'publicKey' ? /was reset or reinstalled/ : /Wrong card/,
+    );
   }
 });
 

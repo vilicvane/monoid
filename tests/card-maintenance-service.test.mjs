@@ -888,6 +888,32 @@ test('a failed export or oversized Import prevents committing a maintenance oper
   }
 });
 
+test('a same-ID reset cannot inherit an old maintenance operation through its chip fingerprint', async () => {
+  const storage = storageFixture();
+  const service = await CardMaintenanceService.create(storage);
+  const card = cardFixture();
+  const operation = await service.prepare(card, {
+    mode: 'reinstall',
+    cardInformation: information,
+    appletAid: hex(aid),
+  });
+  assert.equal(service.matchOperation({hello: card.state}).id, operation.id);
+  const reset = {
+    ...card.state,
+    publicKey: bytes(`04${'99'.repeat(64)}`),
+    bundle: false,
+    pins: {access: false, secret: false},
+  };
+  assert.equal(
+    service.matchOperation({hello: reset, cardInformation: information}),
+    undefined,
+  );
+  assert.equal(
+    service.get(operation.id).card.publicKey,
+    hex(card.state.publicKey),
+  );
+});
+
 test('storage acknowledgement and read-back verification are required before deletion', async () => {
   for (const failure of ['write', 'read']) {
     const storage = storageFixture();
@@ -1222,9 +1248,11 @@ test('restore verifies the full Identity, caller AID and unchanged Bundle before
     else card.state.bundle = new Uint8Array(32);
     await assert.rejects(
       service.restore(card, operation.id),
-      mismatch === 'id' || mismatch === 'publicKey'
-        ? /Wrong card, scan Daily wallet \(01020304\)/
-        : /Wrong card|Bundle changed/,
+      mismatch === 'publicKey'
+        ? /Card Daily wallet \(01020304\) was reset or reinstalled/
+        : mismatch === 'id'
+          ? /Wrong card, scan Daily wallet \(01020304\)/
+          : /Wrong card|Bundle changed/,
     );
     assert.equal(card.imports.length, 0);
     assert.ok(service.get(operation.id).archive);

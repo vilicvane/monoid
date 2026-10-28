@@ -778,6 +778,11 @@ test('card identity and bundle are still checked before authentication or writes
   await assert.rejects(write(session, target), /Wrong card/);
   assert.deepEqual(target.calls, []);
   target.hello.id = originalId;
+  const originalKey = target.hello.publicKey;
+  target.hello.publicKey = mockCard(3, 1).hello.publicKey;
+  await assert.rejects(write(session, target), /Scan a card in this sync/);
+  assert.deepEqual(target.calls, []);
+  target.hello.publicKey = originalKey;
   target.hello.bundle = new Uint8Array(32).fill(2);
   await assert.rejects(write(session, target), /Card changed/);
   assert.deepEqual(target.calls, []);

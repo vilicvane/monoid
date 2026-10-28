@@ -63,9 +63,12 @@ for (const [field, value] of [
         error => {
           assert.ok(error instanceof MonoidWrongCardError);
           assert.equal(error.card.id, identity.id);
+          assert.equal(error.keyChanged, field === 'publicKey');
           assert.equal(
             error.message,
-            `Wrong card, scan ${identity.alias} (${identity.id})`,
+            field === 'publicKey'
+              ? `Card ${identity.alias} (${identity.id}) was reset or reinstalled, start over`
+              : `Wrong card, scan ${identity.alias} (${identity.id})`,
           );
           return true;
         },
@@ -73,6 +76,19 @@ for (const [field, value] of [
     }
   });
 }
+
+test('cached cards without aliases distinguish a changed key from a different ID', () => {
+  const expected = {...identity, alias: false};
+  const changed = {...expected, publicKey: `04${'56'.repeat(64)}`};
+  assert.throws(() => assertSameCard(changed, expected), {
+    message: `Card ${identity.id} was reset or reinstalled, start over`,
+    keyChanged: true,
+  });
+  assert.throws(() => assertSameCard({...changed, id: '89abcdef'}, expected), {
+    message: `Wrong card, scan ${identity.id}`,
+    keyChanged: false,
+  });
+});
 
 for (const bundle of [false, bytes('78'.repeat(32))]) {
   test(`only bundle-dependent operations reject ${bundle === false ? 'removed' : 'changed'} membership`, () => {

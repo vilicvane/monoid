@@ -749,7 +749,7 @@ test('snapshot identity is checked with the full public key before the first sou
   const wrong = hello(3, {id: source.hello.id});
   await assert.rejects(
     session.exportItems(source, wrong, PIN, signal(), progress),
-    /Wrong card/i,
+    /was reset or reinstalled/,
   );
   assert.deepEqual(source.calls, []);
 });
@@ -915,11 +915,11 @@ test('same display ID with another public key is rejected before any authenticat
   const wrongSource = hello(3, {id: source.hello.id});
   assert.throws(
     () => assertBackupCard(wrongSource, session.backup.source),
-    /Wrong card/,
+    /was reset or reinstalled/,
   );
   await assert.rejects(
     session.exportItems(source, wrongSource, PIN, signal(), progress),
-    /Wrong card/,
+    /was reset or reinstalled/,
   );
   assert.equal(source.calls.length, 2);
 
@@ -1119,7 +1119,7 @@ test('initialization rejects a different full public key before authentication o
       signal(),
       PIN,
     ),
-    /Wrong card/i,
+    /was reset or reinstalled/,
   );
   assert.deepEqual(state.calls, []);
 });
@@ -1243,7 +1243,9 @@ for (const invalidResult of [
         undefined,
         PIN,
       ),
-      /incomplete|blocked|Wrong card/i,
+      invalidResult === 'identity-changed'
+        ? /was reset or reinstalled/
+        : /incomplete|blocked|Wrong card/i,
     );
     assert.deepEqual(
       state.calls.map(([method]) => method),

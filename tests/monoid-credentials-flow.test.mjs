@@ -783,6 +783,32 @@ test('prompt: wrong-card and PIN retry instructions retain the alias and unhighl
   ]);
 });
 
+test('prompt: a same-ID key change displays the reset message and keeps wrong-card retry handling', async () => {
+  const state = mount({
+    auth: false,
+    onBusiness: (_applet, _setContent, hello) => {
+      assertSameCardWithBundle(hello, {
+        ...readBackupCardIdentity(hello),
+        alias: 'Daily wallet',
+        publicKey: `04${'11'.repeat(64)}`,
+      });
+    },
+  });
+  const scan = await state.tap({cleanup: false});
+  const failure = state.presentedErrors[0];
+  assert.ok(failure instanceof MonoidWrongCardError);
+  assert.equal(failure.keyChanged, true);
+  assert.equal(scan.waitingForRemoval, true);
+  assert.equal(
+    promptText(state.presenter.current.content),
+    `Card Daily wallet (${CARD_ID}) was reset or reinstalled, start over`,
+  );
+  scan.onCleanup();
+  await state.flush();
+  await state.finishExit();
+  assert.deepEqual(state.retryErrors, [failure]);
+});
+
 test('prompt: ordinary errors retain their identity after inline display and retry', async () => {
   const failure = new Error('Unexpected APDU response');
   const state = mount({

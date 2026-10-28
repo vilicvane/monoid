@@ -14,7 +14,7 @@ export type CardResetIdentity = Pick<ScannedCardData, 'id' | 'publicKey'> &
     bundle: string;
   };
 
-/** One explicit reset approval, bound to the old and observed replacement IDs. */
+/** One explicit reset approval, bound to the old and observed replacement keys. */
 export class CardResetSession {
   attempted = false;
   confirmed = false;
@@ -31,8 +31,8 @@ export class CardResetSession {
   ): Promise<MonoidAppletHello> {
     signal.throwIfAborted();
     if (this.attempted) {
-      // Reset rotates identity. Without an observed replacement, a later tap
-      // cannot establish that it is the same physical card.
+      // Reset keeps the ID but rotates the keys. Without an observed replacement,
+      // the unauthenticated ID cannot establish that a later tap is the same card.
       if (!this.replacement) {
         throw new MonoidCardError(
           'Card reset not confirmed, add the card again',
@@ -66,12 +66,12 @@ export class CardResetSession {
       reset.bundle !== false ||
       reset.pins.secret !== false ||
       reset.pins.access !== false ||
-      uint8ArrayToHex(reset.id) === this.card.id ||
+      uint8ArrayToHex(reset.id) !== this.card.id ||
       uint8ArrayToHex(reset.publicKey) === this.card.publicKey
     ) {
       throw new MonoidCardError('Card reset state not confirmed');
     }
-    // Keep an acknowledged new identity even when cancellation follows Hello.
+    // Keep the observed replacement key even when cancellation follows Hello.
     this.replacement = reset;
     signal.throwIfAborted();
     return reset;

@@ -298,7 +298,9 @@ test('a recognized Authority bundle is accepted without reset or PIN input', asy
 
 test('an initialized target is added after native cleanup without a PIN prompt', async () => {
   const state = mount();
+  assert.equal(state.hook.buttonLabel, 'Add a card');
   const operation = state.hook.addCard();
+  assert.equal(state.scans[0].label, 'Scan a card to add');
   await state.tap();
   assert.deepEqual(state.added, []);
   assert.deepEqual(state.inputs, []);
@@ -497,15 +499,16 @@ test('resetting an extension target remembers its new Secret PIN only for the re
   const original = hello({bundle: new Uint8Array(32).fill(2)});
   let current = original;
   state.pin = 'New-42';
-  state.pinSession.removePIN = async () => {};
-  state.pinSession.setPIN = async () => {};
+  const savedPINs = new Map([['01020304', 'Old-42']]);
+  state.pinSession.removePIN = async id => savedPINs.delete(id);
+  state.pinSession.setPIN = async (id, pin) => savedPINs.set(id, pin);
   state.entrances.cardStore.set = card => card;
   state.entrances.monoidApplet.openSession = async () => ({
     hello: async () => current,
     reset: async () => {
+      assert.equal(savedPINs.has('01020304'), false);
       current = {
         ...hello({pins: {access: false, secret: false}}),
-        id: Uint8Array.from([5, 6, 7, 8]),
         publicKey: Uint8Array.from([4, ...new Array(64).fill(34)]),
       };
     },
@@ -529,6 +532,8 @@ test('resetting an extension target remembers its new Secret PIN only for the re
   state.scans.at(-1).resolve();
   await adding;
   assert.deepEqual(state.added, [current]);
+  assert.deepEqual(current.id, original.id);
+  assert.deepEqual([...savedPINs], [['01020304', 'New-42']]);
   const identity = card => ({
     id: Buffer.from(card.id).toString('hex'),
     publicKey: Buffer.from(card.publicKey).toString('hex'),

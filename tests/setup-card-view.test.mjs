@@ -894,7 +894,8 @@ function mount(
       await state.resetPending?.promise;
       if (state.resetFailure) throw state.resetFailure;
       state.bundleHello = state.resetHello ?? {
-        ...bundleCard(9),
+        ...state.bundleHello,
+        publicKey: bundleCard(9).publicKey,
         bundle: false,
         pins: {access: false, secret: false},
       };
@@ -968,7 +969,7 @@ test('adding an initialized card does not cache unread resources as an empty car
   assert.equal(state.cachedCards.has(hex(hello.publicKey)), false);
 });
 
-test('an existing Bundle is reset and initialized during Add with one tap before its new identity is counted', async () => {
+test('an existing Bundle is reset with the same ID and added once under its new key', async () => {
   const state = await replacementCard();
   const confirmation = state.confirmation();
   assert.deepEqual(confirmation.props.confirmText, [
@@ -989,7 +990,7 @@ test('an existing Bundle is reset and initialized during Add with one tap before
     ['reset', 'set-pin', 'authenticate'],
   );
   assert.deepEqual(state.bundleCalls[1].request, {secret: true, pin: 'New-42'});
-  assert.equal(state.card('00000009'), undefined);
+  assert.equal(state.card('00000001'), undefined);
   assert.equal(
     state.credentialCalls.some(call => call.type === 'save'),
     false,
@@ -999,8 +1000,12 @@ test('an existing Bundle is reset and initialized during Add with one tap before
   assert.equal(state.replacementSource.allowPeerExtension, false);
   state.bundleScans.at(-1).resolve();
   await adding;
-  assert.equal(state.card('00000009').props.description, 'ready');
-  assert.equal(state.card('00000001'), undefined);
+  assert.equal(state.card('00000001').props.description, 'ready');
+  const flow = state.entrances.cardBundleStore.get(state.view.bundleId);
+  assert.deepEqual(
+    flow.session.cards.map(card => [card.id, card.publicKey]),
+    [['00000001', hex(bundleCard(9).publicKey)]],
+  );
   assert.equal(
     state.credentialCalls.filter(call => call.type === 'authenticate').length,
     1,
@@ -1011,7 +1016,7 @@ test('an existing Bundle is reset and initialized during Add with one tap before
   );
   assert.equal(
     state.credentialCalls.find(call => call.type === 'save').id,
-    '00000009',
+    '00000001',
   );
   assert.equal(
     state.cachedCards.get(hex(bundleCard(9).publicKey)).requiresPINSetup,
@@ -1140,14 +1145,14 @@ for (const leaveBeforeConfigure of [false, true]) {
       state.render();
     }
     const inputCount = state.bundleInputs.length;
-    state.cardButton('00000009').props.onClick();
+    state.cardButton('00000001').props.onClick();
     if (leaveBeforeConfigure) {
       assert.equal(state.bundleInputs.length, inputCount + 1);
       await state.answerBundlePIN('New-42');
     } else {
       assert.equal(state.bundleInputs.length, inputCount);
     }
-    await state.tapBundle(bundleCard(9));
+    await state.tapBundle(bundleCard(9, {id: state.replacementHello.id}));
     await state.finishBundle();
     assert.deepEqual(
       state.bundleCalls.find(
@@ -1155,7 +1160,7 @@ for (const leaveBeforeConfigure of [false, true]) {
       ).request,
       {secret: true, pin: 'New-42'},
     );
-    assert.equal(state.card('00000009').props.description, 'complete');
+    assert.equal(state.card('00000001').props.description, 'complete');
     assert.deepEqual(state.errors, []);
   });
 }
@@ -1189,11 +1194,11 @@ test('a lost initialization response resumes by reading the known new identity w
   await adding;
   assert.ok(state.button('Check card'));
   const checking = state.click('Check card');
-  const initialized = bundleCard(9);
+  const initialized = bundleCard(9, {id: state.replacementHello.id});
   await state.tapBundle(initialized);
   state.bundleScans.at(-1).resolve();
   await checking;
-  assert.equal(state.card('00000009').props.description, 'ready');
+  assert.equal(state.card('00000001').props.description, 'ready');
   assert.equal(
     state.bundleCalls.filter(call => call.type === 'reset').length,
     1,
@@ -1227,7 +1232,7 @@ for (const destination of ['inactive', 'leaving', 'unmounted']) {
     await adding;
     assert.deepEqual(
       flow.session.cards.map(card => card.id),
-      ['00000009'],
+      ['00000001'],
     );
     assert.equal(flow.pendingReset, undefined);
     assert.equal(

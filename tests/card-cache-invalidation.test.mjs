@@ -159,13 +159,19 @@ test('missing deletes remain skips, and cancellation before a write leaves the c
   assert.equal(state.store.get(identity), undefined);
 });
 
-test('a fresh Hello after reset changes the identity invalidated by subsequent writes', async () => {
+test('reset evicts the old key and caches only its same-ID successor before subsequent writes', async () => {
   const state = fixture();
   const applet = await state.open('first');
   await applet.reset({});
   assert.equal(state.store.get(identity), undefined);
   state.cards.set('first', hello(otherIdentity));
   await applet.hello({});
+  const successor = state.store.set({...snapshot(otherIdentity), items: []});
+  assert.equal(successor.id, state.current.id);
+  assert.notEqual(successor.publicKey, state.current.publicKey);
+  assert.equal(state.store.get(identity), undefined);
+  assert.equal(state.store.get(otherIdentity), successor);
+  assert.deepEqual(successor.items, []);
   await applet.remove({index});
   assert.equal(state.store.get(otherIdentity), undefined);
 });

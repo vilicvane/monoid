@@ -799,7 +799,8 @@ export function useMonoidScanPrompt({
             result.presented = true;
           } else {
             setStateContent(
-              result.error instanceof MonoidWrongCardError ? (
+              result.error instanceof MonoidWrongCardError &&
+                !result.error.keyChanged ? (
                 <>Wrong card, scan {cardPromptName(result.error.card)}</>
               ) : result.error instanceof Error ? (
                 result.error.message

@@ -203,23 +203,27 @@ export function useBundleCardAddition({
     let completed: MonoidAppletHello | undefined;
     try {
       let result: Awaited<ReturnType<typeof readCardForSetup>> | undefined;
-      await scanPrompt('Scan a card', async (sessionId, setState, signal) => {
-        const scanSignal = AbortSignal.any([signal, operation.signal]);
-        result = await readCardForSetup(
-          sessionId,
-          monoidApplet,
-          setState,
-          scanSignal,
-        );
-        if (result.type === 'ready') {
-          await validateScan(result.hello, scanSignal, setState);
-          if (
-            acceptsBundle(result.hello) ||
-            (hasInitializedPINs(result.hello) && result.hello.bundle === false)
-          )
-            completed = result.hello;
-        }
-      });
+      await scanPrompt(
+        'Scan a card to add',
+        async (sessionId, setState, signal) => {
+          const scanSignal = AbortSignal.any([signal, operation.signal]);
+          result = await readCardForSetup(
+            sessionId,
+            monoidApplet,
+            setState,
+            scanSignal,
+          );
+          if (result.type === 'ready') {
+            await validateScan(result.hello, scanSignal, setState);
+            if (
+              acceptsBundle(result.hello) ||
+              (hasInitializedPINs(result.hello) &&
+                result.hello.bundle === false)
+            )
+              completed = result.hello;
+          }
+        },
+      );
       if (!isActive() || operation.signal.aborted || !result) return;
       setPendingReset(undefined);
       setPendingPIN(undefined);
@@ -294,6 +298,7 @@ export function useBundleCardAddition({
                 if (cached) {
                   cached.items = [];
                   cached.bundle = false;
+                  cached.allowPeerExtension = false;
                   cached.requiresPINSetup = true;
                 }
               }),
@@ -450,8 +455,7 @@ export function useBundleCardAddition({
             </p>
             <ol>
               <li>
-                Adding this card will erase its stored items and both PINs, and
-                change its Card ID.
+                Adding this card will erase its stored items and both PINs.
               </li>
               <li>
                 This card will no longer be able to receive data from other

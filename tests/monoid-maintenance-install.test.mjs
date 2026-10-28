@@ -273,7 +273,7 @@ for (const checkpoint of [undefined, 'verify']) {
         'session',
         options({checkpoint, expectedCardAlias: 'Daily wallet'}),
       ),
-      /Wrong card, scan Daily wallet \(01020304\)/,
+      /Card Daily wallet \(01020304\) was reset or reinstalled/,
     );
     assert.ok(
       fixture.events.every(value => !/saved|delete|install /.test(value)),

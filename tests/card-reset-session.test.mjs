@@ -20,7 +20,6 @@ function fixture() {
   };
   const resetHello = {
     ...hello,
-    id: Uint8Array.of(8, 7, 6, 5),
     publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(9)),
     bundle: false,
     authority: false,
@@ -71,7 +70,7 @@ function fixture() {
   return state;
 }
 
-test('full reset runs only after identity validation and pre-reset cleanup, then confirms the fresh Hello', async () => {
+test('reset keeps the ID, rotates the key and confirms cleared state after pre-reset cleanup', async () => {
   const state = fixture();
   assert.deepEqual(await state.run(), state.resetHello);
   assert.deepEqual(state.calls, [
@@ -241,6 +240,7 @@ for (const changed of ['id', 'publicKey']) {
   test(`post-reset Hello validates the full ${changed}`, async () => {
     const state = fixture();
     const value = state.hello[changed].slice();
+    if (changed === 'id') value[value.length - 1] ^= 1;
     state.resetHello = {...state.resetHello, [changed]: value};
     await assert.rejects(state.run(), /Card reset state not confirmed/);
     assert.equal(state.session.confirmed, true);

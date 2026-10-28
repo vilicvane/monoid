@@ -61,7 +61,7 @@ export function assertSameCard(
   const card = readCardIdentity(hello);
 
   if (card.id !== identity.id || card.publicKey !== identity.publicKey) {
-    throw new MonoidWrongCardError(identity);
+    throw new MonoidWrongCardError(identity, card.id === identity.id);
   }
 }
 

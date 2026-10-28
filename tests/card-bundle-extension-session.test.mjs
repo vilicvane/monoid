@@ -250,6 +250,30 @@ test('only one initialized new card is added and it remains editable until the r
   await assert.rejects(session.addPreparedCard(snapshot), /already confirmed/);
 });
 
+test('a reset target keeps its ID but only its new key enters extension membership', async () => {
+  const {session, source, approver, sourceApplet, approverApplet} =
+    await ready('collecting');
+  const original = hello(3, {bundle: new Uint8Array(32).fill(7)});
+  session.validateAddition(original);
+  assert.equal(session.target, undefined);
+  const successor = hello(4, {id: original.id, bundle: false});
+  await session.addPreparedCard(prepared(successor));
+  assert.equal(session.target.id, hex(original.id));
+  assert.equal(session.target.publicKey, hex(successor.publicKey));
+  await assert.rejects(
+    session.addPreparedCard(prepared(original)),
+    /already belongs/,
+  );
+  await session.configureCard(sourceApplet, source, PIN, signal());
+  assert.deepEqual(sourceApplet.calls[1], [
+    'extendBundle',
+    {publicKey: successor.publicKey},
+  ]);
+  await session.configureCard(approverApplet, approver, PIN, signal());
+  await session.configureCard(applet(successor), successor, PIN, signal());
+  assert.equal(session.phase, 'complete');
+});
+
 test('prepared maintenance returns obey the same identity and membership rules', async () => {
   const {session, source, target} = await ready('collecting');
   await assert.rejects(
@@ -428,11 +452,15 @@ test('a lost extension response fixes the full requester identity before the com
     hello(9, {id: requester.id}),
     {...requester, id: source.id},
   ]) {
-    assert.throws(() => session.validateCard(card), /Wrong card/);
+    const expected =
+      hex(card.id) === hex(requester.id)
+        ? /was reset or reinstalled/
+        : /Wrong card/;
+    assert.throws(() => session.validateCard(card), expected);
     const wrongApplet = applet(card);
     await assert.rejects(
       session.configureCard(wrongApplet, card, PIN, signal()),
-      /Wrong card/,
+      expected,
     );
     assert.deepEqual(wrongApplet.calls, []);
   }

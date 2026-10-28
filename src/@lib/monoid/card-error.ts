@@ -6,8 +6,15 @@ import {type NamedCard, cardName, cardNameWithId} from './card-name.js';
 export class MonoidCardError extends Error {}
 
 export class MonoidWrongCardError extends MonoidCardError {
-  constructor(readonly card: NamedCard) {
-    super(`Wrong card, scan ${cardNameWithId(card)}`);
+  constructor(
+    readonly card: NamedCard,
+    readonly keyChanged = false,
+  ) {
+    super(
+      keyChanged
+        ? `Card ${cardNameWithId(card)} was reset or reinstalled, start over`
+        : `Wrong card, scan ${cardNameWithId(card)}`,
+    );
   }
 }
 

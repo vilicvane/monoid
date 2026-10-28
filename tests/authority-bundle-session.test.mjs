@@ -119,14 +119,30 @@ test('a member is recognized by first issuance without authenticating or replayi
   assert.equal(state.session.bundle, hex(bundle));
 });
 
-test('a reset replacement updates the pending card instead of leaving the old identity in the grid', async () => {
+test('a same-ID reset replaces the pending card by its old key without duplicating membership', async () => {
   const state = fixture();
   const original = readBackupCardIdentity(state.current);
-  const replacement = hello(2);
+  const replacement = hello(2, {id: state.current.id});
   await state.session.addCard(replacement, original);
   assert.equal(state.session.cards.length, 1);
+  assert.equal(state.session.nextCard.id, original.id);
   assert.equal(state.session.nextCard.publicKey, hex(replacement.publicKey));
   assert.equal(state.session.joinedCount, 0);
+  await state.session.join(
+    state.applet,
+    replacement,
+    state.session.nextCard,
+    state.authority,
+    'Secret-42',
+    () => {},
+    new AbortController().signal,
+    () => {},
+  );
+  assert.equal(state.session.joinedCount, 1);
+  assert.deepEqual(
+    state.calls.find(([name]) => name === 'issue')[1].recipientPublicKey,
+    replacement.publicKey,
+  );
 });
 
 test('uncertain Join is never replayed; a later Hello recognizes the issued hash', async () => {
