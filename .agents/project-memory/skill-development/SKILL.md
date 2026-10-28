@@ -5,7 +5,7 @@ description: Monoid app development basics, sibling firmware, Capacitor iOS/Andr
 
 # Monoid app development
 
-Source: `../records.md`, records 13, 14, 25–38, 42–46, 62, 64, 69, 70 and 84–88. Treat these records as authoritative and keep them up to date.
+Source: `../records.md`, records 13, 14, 25–38, 42–46, 62, 64, 69, 70 and 84–89. Treat these records as authoritative and keep them up to date.
 
 - The app (Ionic React + Capacitor, iOS and Android) drives the card applets of the sibling repo `monoid-javacard`, which owns the card protocol. The app mirrors its commands as x-value schemas in `src/@lib/monoid/monoid-applet.ts`, on top of the generic `CBORApplet`/`Applet` transport in `src/@lib`.
 - The project is old: point out whenever the user's choices conflict with the interactions its existing code implies.
@@ -22,7 +22,7 @@ Source: `../records.md`, records 13, 14, 25–38, 42–46, 62, 64, 69, 70 and 84
   - the footer button confirms;
   - a done step shows `summary`.
 
-  Setup cards' None / Cards / Authority capsules sit in each mode's first step. Pickers copy the Bitcoin recipient picker. A row with an icon uses the shared 36px `Symbol`. The Authority account display (`AuthorityAccountInfo`) is identical in the app and on the hosted sign-in page (`workers/authority/web`), which reuses app components through documented adapters.
+  Setup cards' None / Cards / Authority capsules sit in each mode's first step. Authority owners are provider-native IDs and the bundle name is optional (record 89); "authority" is lowercase mid-sentence. Pickers copy the Bitcoin recipient picker. A row with an icon uses the shared 36px `Symbol`. The Authority account display (`AuthorityAccountInfo`) is identical in the app and on the hosted sign-in page (`workers/authority/web`), which reuses app components through documented adapters.
 
 - Card operations use the shared layer (records 69, 70): `removeItems`/`setItemAlias`/`acceptMatchingItem` (item-operations), `CardItemNotFoundError`/`CardItemExistsError`, `probeApplet` (only `6A82` is missing), `isOperationCancelled`, `assertSameCard` (ID + public key; bundle only for Copy/Sync/backup/bundle flows) and `card-pins`, `readCardContents` with feature decoders, `MultiCardSeries`/`scanNextCards`, and `useCardOperation` for single-operation pages. Card cache invalidation is automatic through `CardStore.observeApplet`; never call `cardStore.forget` by hand after a write. Firmware has no backward compatibility: `EXISTS` on an existing index, `{removed}` from Remove, OTP accounts as one HMAC-mapped `0xF201` item.
 - Verify from the repo root with `npx tsc --build --pretty false` and `npx prettier --check <files>`.
