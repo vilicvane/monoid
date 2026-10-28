@@ -107,6 +107,16 @@ const BundleOwnerAddress = styled(EllipsisInMiddle)`
   vertical-align: bottom;
 `;
 
+function bundleOwnerName(owner: AuthorityNamespace): ReactNode {
+  return owner.source === 'wallet' ? (
+    <BundleOwnerAddress title={owner.displayName}>
+      {owner.displayName}
+    </BundleOwnerAddress>
+  ) : (
+    owner.displayName
+  );
+}
+
 export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
   children,
   view,
@@ -142,7 +152,13 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
       hello: MonoidAppletHello,
       signal: AbortSignal,
       setState?: (message: string) => void,
-    ) => session.resolveBundle(hello, authority, signal, setState),
+    ) =>
+      session.resolveBundle(
+        readBackupCardIdentity(hello),
+        authority,
+        signal,
+        setState,
+      ),
     [session, authority],
   );
   const acceptsBundle = useCallback(
@@ -338,6 +354,13 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
     setWorking(true);
     let needsReset: MonoidAppletHello | undefined;
     try {
+      if (card.bundle !== false) {
+        await session.resolveBundle(card, authority, controller.signal);
+        if (!isActive()) return;
+        session.addPrepared(card);
+        if (!card.joined) addition.confirmReset({...card, bundle: card.bundle});
+        return;
+      }
       await secretPINSession.run(
         [card],
         async (expected, pinSignal) => {
@@ -375,7 +398,12 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
               const hello = MonoidAppletHello.satisfies(await applet.hello({}));
               signal.throwIfAborted();
               assertSameCard(hello, card);
-              await session.resolveBundle(hello, authority, signal, setState);
+              await session.resolveBundle(
+                readBackupCardIdentity(hello),
+                authority,
+                signal,
+                setState,
+              );
               if (hello.bundle !== false && !session.acceptsBundle(hello)) {
                 needsReset = hello;
                 return;
@@ -525,17 +553,8 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
               summary={
                 chosen && (
                   <BundlePath>
-                    {chosen.owner.source === 'reown' ? (
-                      'Account'
-                    ) : chosen.owner.source === 'wallet' ? (
-                      <BundleOwnerAddress title={chosen.owner.displayName}>
-                        {chosen.owner.displayName}
-                      </BundleOwnerAddress>
-                    ) : (
-                      chosen.owner.displayName
-                    )}
-                    {' / '}
-                    {chosen.name}
+                    {bundleOwnerName(chosen.owner)}
+                    {chosen.name && ` / ${chosen.name}`}
                   </BundlePath>
                 )
               }
@@ -553,8 +572,8 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
                   options={namespaces.map((namespace, index) => ({
                     value: String(index),
                     label:
-                      namespace.source === 'reown'
-                        ? 'Account'
+                      namespace.source === 'google'
+                        ? 'Google'
                         : namespace.source === 'wallet'
                           ? 'Wallet'
                           : 'GitHub',
@@ -566,7 +585,7 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
                 <>
                   <InputWithAction
                     aria-label="Bundle name"
-                    placeholder="Bundle name"
+                    placeholder="Bundle name (optional)"
                     aria-invalid={!!name && validName === undefined}
                     value={name}
                     disabled={loading || !groups}
@@ -675,11 +694,13 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
                   }}
                 >
                   <ListItemContent>
-                    <ListItemName>{group.name}</ListItemName>
+                    <ListItemName>
+                      {group.name || bundleOwnerName(owner!)}
+                    </ListItemName>
                     <ListItemDescription>
                       {group.allowPeerExtension
                         ? 'Members can add cards'
-                        : 'Only the Authority adds cards'}
+                        : 'Only the authority adds cards'}
                     </ListItemDescription>
                   </ListItemContent>
                   <RippleEffect />

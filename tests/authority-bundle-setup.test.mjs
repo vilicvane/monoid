@@ -21,7 +21,6 @@ mock.module('styled-components', {
 mock.module('lucide-react', {
   namedExports: {
     List: 'list-icon',
-    Mail: 'mail-icon',
     UserRound: 'user-icon',
     Wallet: 'wallet-icon',
   },
@@ -160,18 +159,35 @@ mock.module('../.bld/app/@components/@monoid/pin-input-placeholder.js', {
 });
 mock.module('../.bld/app/@components/@monoid/use-isodep-scan-prompt.js', {
   namedExports: {
-    useIsoDepScanPrompt: () => async (_prompt, callback) =>
-      callback('test', () => {}, new AbortController().signal),
+    useIsoDepScanPrompt: () => {
+      const state = current;
+      return async (_prompt, callback) => {
+        state.scans++;
+        return callback('test', () => {}, new AbortController().signal);
+      };
+    },
   },
 });
 mock.module('../.bld/app/@components/@ui/use-input-modal.js', {
-  namedExports: {useInputModal: () => [undefined, async () => 'Secret-42']},
+  namedExports: {
+    useInputModal: () => {
+      const state = current;
+      return [
+        undefined,
+        async () => {
+          state.pinPrompts++;
+          return 'Secret-42';
+        },
+      ];
+    },
+  },
 });
 mock.module(
   '../.bld/app/@components/views/safe/@card/use-bundle-card-addition.js',
   {
     namedExports: {
       useBundleCardAddition: options => {
+        const state = current;
         current.addition = options;
         return {
           busy: false,
@@ -180,6 +196,7 @@ mock.module(
             await options.onAdded(hello);
             return true;
           },
+          confirmReset: card => state.confirmReset(card),
           resume: async () => {},
         };
       },
@@ -190,7 +207,7 @@ const {AuthorityBundleSetup} = await import(
   '../.bld/app/@components/views/safe/@card/authority-bundle-setup.js'
 );
 const owners = [
-  {source: 'reown', id: 'personal', displayName: 'Personal'},
+  {source: 'google', id: 'google-sub', displayName: 'test@example.com'},
   {source: 'wallet', id: 'wallet', displayName: 'Wallet'},
   {source: 'github-organization', id: 'team', displayName: 'Team'},
 ];
@@ -219,7 +236,15 @@ function fixture(
     flow,
   } = {},
 ) {
-  const state = {slots: [], effects: [], errors: [], calls: [], dirty: true};
+  const state = {
+    slots: [],
+    effects: [],
+    errors: [],
+    calls: [],
+    dirty: true,
+    scans: 0,
+    pinPrompts: 0,
+  };
   state.active = observable.box(true);
   state.isActive = () => state.active.get();
   state.logouts = 0;
@@ -232,10 +257,9 @@ function fixture(
   const account = observable.box(
     signedIn
       ? {
-          id: 'account',
-          login: 'embedded-address',
-          method: 'email',
-          email: 'test@example.com',
+          source: 'google',
+          id: 'google-sub',
+          displayName: 'test@example.com',
         }
       : undefined,
     {deep: false},
@@ -325,11 +349,12 @@ function fixture(
 }
 
 test('Authority bundle names use UTF-8 bytes, NFC and exact surrounding whitespace', () => {
+  assert.equal(validateAuthorityBundleName(''), '');
   assert.equal(validateAuthorityBundleName('e\u0301'), 'é');
   for (const name of ['a', 'é', '😀'.repeat(32), 'a'.repeat(128)])
     assert.doesNotThrow(() => validateAuthorityBundleName(name));
   for (const name of [
-    '',
+    ' ',
     ' x',
     'x ',
     'a\n',
@@ -349,6 +374,43 @@ function prepared(id = 1) {
     alias: `Long alias for card ${id}`,
     allowPeerExtension: false,
   };
+}
+
+for (const member of [false, true]) {
+  test(`a bundled prepared card ${member ? 'is recognized' : 'opens reset confirmation'} without PIN or scan after issuance`, async t => {
+    const hash = new Uint8Array(32).fill(42);
+    const bundle = member ? hash : new Uint8Array(32).fill(7);
+    const sourceCard = {
+      ...prepared(),
+      bundle: Buffer.from(bundle).toString('hex'),
+    };
+    const state = fixture(t, {sourceCard});
+    await state.flush();
+    await state.click('Button', 'Continue');
+    const events = [];
+    state.entrances.authorityService.issueBundle = async input => {
+      assert.equal(
+        Buffer.from(input.recipientPublicKey).toString('hex'),
+        sourceCard.publicKey,
+      );
+      events.push('issue');
+      return {bundle: hash};
+    };
+    state.confirmReset = card => {
+      assert.deepEqual(card, {...sourceCard, joined: false});
+      events.push('reset confirmation');
+    };
+    await state.click('Button', 'Scan card to join');
+    assert.deepEqual(state.errors, []);
+    assert.deepEqual(
+      events,
+      member ? ['issue'] : ['issue', 'reset confirmation'],
+    );
+    assert.equal(state.pinPrompts, 0);
+    assert.equal(state.scans, 0);
+    assert.equal(state.flow.authority.joinedCount, member ? 1 : 0);
+    assert.equal(state.flow.authority.cards.length, 1);
+  });
 }
 
 test('prepared and mixed cards use one next ring, pending labels, and acknowledged joins update the cache', async t => {
@@ -610,7 +672,7 @@ test('signed-in entry starts at Choose bundle, prefills the most recent bundle, 
   assert.equal(state.find('Toggle').props.disabled, true);
   assert.equal(
     text(state.find('InfoFieldset')),
-    'Signed in astest@example.comEmail',
+    'Signed in astest@example.comGoogle',
   );
   assert.equal(state.find('Button', 'Continue').props.disabled, false);
   await state.click('Button', 'Continue');
@@ -621,7 +683,7 @@ test('signed-in entry starts at Choose bundle, prefills the most recent bundle, 
       step.props.activeNumero,
     ]),
     [
-      ['Choose bundle', 'Account / Recovery', 2],
+      ['Choose bundle', 'test@example.com / Recovery', 2],
       ['Add cards', undefined, 2],
     ],
   );
@@ -633,7 +695,7 @@ test('signed-in entry starts at Choose bundle, prefills the most recent bundle, 
 });
 
 for (const owner of [
-  {source: 'reown', id: 'personal', displayName: 'Personal'},
+  {source: 'google', id: 'google-sub', displayName: 'test@example.com'},
   {
     source: 'wallet',
     id: 'wallet-namespace',
@@ -647,7 +709,7 @@ for (const owner of [
     const name = 'a'.repeat(128);
     input(state, name);
     await state.click('Button', 'Continue');
-    const expected = `${owner.source === 'reown' ? 'Account' : owner.displayName} / ${name}`;
+    const expected = `${owner.displayName} / ${name}`;
     assert.equal(text(steps(state)[0].props.summary), expected);
     assert.deepEqual({...state.flow.authority.choice.owner}, owner);
     const wallet = nodes(steps(state)[0].props.summary).find(
@@ -675,7 +737,7 @@ test('owner selector uses source labels, excludes organizations and loads the ne
   const selector = state.find('SegmentedControl');
   assert.deepEqual(
     selector.props.options.map(option => option.label),
-    ['Account', 'Wallet', 'GitHub'],
+    ['Google', 'Wallet', 'GitHub'],
   );
   state.entrances.authorityService.groups = async owner => {
     state.calls.push(owner);
@@ -712,74 +774,50 @@ test('Choose bundle orders mode, account, owner and bundle controls', async t =>
   );
 });
 
-for (const method of ['email', 'social', 'wallet']) {
-  for (const email of [undefined, 'person@example.com']) {
-    test(`${method} sign-in ${email ? 'with' : 'without'} email uses its actual sign-in identity`, async t => {
-      const state = fixture(t, {namespaces: [owners[0]]});
-      state.entrances.authorityService.account = {
-        id: 'account',
-        login: '0x1234567890abcdef1234567890abcdef12345678',
-        method,
-        email,
-        provider: method === 'social' ? 'github' : undefined,
-      };
-      await state.flush();
-      const fieldset = state.find('InfoFieldset');
-      assert.equal(text(state.find('InfoLegend')), 'Signed in as');
-      assert.ok(state.find('Symbol'));
-      assert.equal(fieldset.props.onClick, undefined);
-      assert.equal(state.find('ListItem').props.onClick, undefined);
-      assert.equal(state.find('ListItemButton'), undefined);
-      if (method === 'wallet') {
-        assert.equal(
-          state.find('Address').props.children,
-          state.entrances.authorityService.account.login,
-        );
-        assert.equal(
-          state.find('Address').props.title,
-          state.entrances.authorityService.account.login,
-        );
-        assert.doesNotMatch(text(fieldset), /person@example/);
-      } else {
-        assert.equal(
-          text(state.find('ListItemName')),
-          email ?? (method === 'social' ? 'GitHub account' : 'Signed in.'),
-        );
-        assert.equal(state.find('Address'), undefined);
-        assert.doesNotMatch(text(fieldset), /0x123456/);
-      }
+for (const account of [
+  {source: 'google', id: 'google-sub', displayName: 'person@example.com'},
+  {source: 'google', id: 'google-sub', displayName: 'Person Name'},
+  {source: 'google', id: 'google-sub', displayName: 'Google account'},
+  {source: 'github-user', id: '12345', displayName: 'vilic'},
+  {
+    source: 'wallet',
+    id: 'eip155:0x58e61234567890abcdef1234567890abcdef06531',
+    displayName: '0x58E61234567890abcdef1234567890abcdef06531',
+  },
+]) {
+  test(`${account.source} account row displays ${account.displayName}`, async t => {
+    const state = fixture(t, {namespaces: [account]});
+    state.entrances.authorityService.account = account;
+    await state.flush();
+    const fieldset = state.find('InfoFieldset');
+    assert.equal(text(state.find('InfoLegend')), 'Signed in as');
+    assert.ok(state.find('Symbol'));
+    assert.equal(fieldset.props.onClick, undefined);
+    assert.equal(state.find('ListItem').props.onClick, undefined);
+    assert.equal(state.find('ListItemButton'), undefined);
+    assert.equal(text(state.find('ListItemName')), account.displayName);
+    if (account.source === 'wallet') {
+      assert.equal(state.find('Address').props.children, account.displayName);
+      assert.equal(state.find('Address').props.title, account.displayName);
       assert.equal(
-        text(state.find('ListItemDescription')),
-        method === 'wallet'
-          ? 'Wallet'
-          : method === 'email'
-            ? 'Email'
-            : 'GitHub',
+        state.find('Address').props['aria-label'],
+        account.displayName,
       );
-      assert.equal(
-        state.find('AppIcon').props.icon,
-        method === 'wallet'
-          ? 'wallet-icon'
-          : method === 'email'
-            ? 'mail-icon'
-            : 'user-icon',
-      );
-    });
-  }
+    } else {
+      assert.equal(state.find('Address'), undefined);
+    }
+    assert.equal(
+      text(state.find('ListItemDescription')),
+      {google: 'Google', 'github-user': 'GitHub', wallet: 'Wallet'}[
+        account.source
+      ],
+    );
+    assert.equal(
+      state.find('AppIcon').props.icon,
+      account.source === 'wallet' ? 'wallet-icon' : 'user-icon',
+    );
+  });
 }
-
-test('social sign-in without provider metadata never falls back to the embedded address', async t => {
-  const state = fixture(t);
-  state.entrances.authorityService.account = {
-    id: 'account',
-    login: 'embedded-address',
-    method: 'social',
-  };
-  await state.flush();
-  assert.equal(text(state.find('ListItemName')), 'Social account');
-  assert.equal(text(state.find('ListItemDescription')), 'Social');
-  assert.doesNotMatch(text(state.find('InfoFieldset')), /embedded-address/);
-});
 
 test('one eligible namespace has no owner selector; no bundles has no picker action', async t => {
   const state = fixture(t, {namespaces: [owners[0], owners[2]], groups: []});
@@ -787,7 +825,11 @@ test('one eligible namespace has no owner selector; no bundles has no picker act
   assert.equal(state.find('SegmentedControl'), undefined);
   assert.equal(state.find('InputWithAction').props.action, undefined);
   assert.equal(state.find('InputWithAction').props.autoFocus, undefined);
-  assert.equal(state.find('Button', 'Continue').props.disabled, true);
+  assert.equal(state.find('Button', 'Continue').props.disabled, false);
+  assert.equal(
+    state.find('InputWithAction').props.placeholder,
+    'Bundle name (optional)',
+  );
   assert.equal(state.find('Toggle').props.checked, true);
   assert.equal(state.find('Toggle').props.disabled, false);
   assert.match(
@@ -797,9 +839,78 @@ test('one eligible namespace has no owner selector; no bundles has no picker act
       .join(' '),
     /A new bundle's policy can't be changed/,
   );
+  await state.click('Button', 'Continue');
+  assert.equal(state.flow.authority.choice.name, '');
+  assert.equal(text(steps(state)[0].props.summary), owners[0].displayName);
+  await state.click('Button', 'Change bundle');
   input(state, 'Family');
   assert.equal(state.find('Button', 'Continue').props.disabled, false);
 });
+
+test('the most recent unnamed bundle prefills empty and locks its own policy', async t => {
+  const state = fixture(t, {
+    groups: [...bundles, {name: '', allowPeerExtension: false, createdAt: 3}],
+  });
+  await state.flush();
+  assert.equal(state.find('InputWithAction').props.value, '');
+  assert.equal(state.find('Button', 'Continue').props.disabled, false);
+  assert.equal(state.find('Toggle').props.disabled, true);
+  assert.equal(state.find('Toggle').props.checked, false);
+  assert.equal(state.find('InfoMessage'), undefined);
+  await state.click('Button', 'Continue');
+  assert.equal(state.flow.authority.choice.name, '');
+  assert.equal(state.flow.authority.choice.allowPeerExtension, false);
+  assert.equal(text(steps(state)[0].props.summary), owners[0].displayName);
+  await state.click('Button', 'Change bundle');
+  input(state, 'Daily wallet');
+  assert.equal(state.find('Toggle').props.checked, true);
+  assert.equal(state.find('Toggle').props.disabled, true);
+  input(state, '');
+  assert.equal(state.find('Toggle').props.checked, false);
+  assert.equal(state.find('Toggle').props.disabled, true);
+});
+
+for (const owner of [
+  owners[0],
+  {
+    source: 'wallet',
+    id: 'eip155:0x52908400098527886e0f7030069857d2e4169ee7',
+    displayName: '0x52908400098527886E0F7030069857D2E4169EE7',
+  },
+]) {
+  test(`unnamed ${owner.source} picker row uses the owner and clears the input`, async t => {
+    const state = fixture(t, {
+      namespaces: [owner],
+      groups: [{name: '', allowPeerExtension: false, createdAt: 0}, ...bundles],
+    });
+    await state.flush();
+    assert.equal(state.find('InputWithAction').props.value, 'Recovery');
+    state.find('InputWithAction').props.action.onClick();
+    const row = state.find(
+      'ListItemButton',
+      `${owner.displayName}Only the authority adds cards`,
+    );
+    assert.ok(row);
+    if (owner.source === 'wallet')
+      assert.ok(nodes(row).find(node => node.type === 'EllipsisInMiddle'));
+    await state.click(
+      'ListItemButton',
+      `${owner.displayName}Only the authority adds cards`,
+    );
+    assert.equal(state.find('InputWithAction').props.value, '');
+    assert.equal(state.find('Toggle').props.disabled, true);
+    assert.equal(state.find('Button', 'Continue').props.disabled, false);
+    await state.click('Button', 'Continue');
+    assert.equal(text(steps(state)[0].props.summary), owner.displayName);
+    assert.equal(state.flow.authority.choice.name, '');
+    if (owner.source === 'wallet')
+      assert.ok(
+        nodes(steps(state)[0].props.summary).find(
+          node => node.type === 'EllipsisInMiddle',
+        ),
+      );
+  });
+}
 
 test('picker has a divider and plain rows; a row fills the input without advancing, and Cancel preserves it', async t => {
   const state = fixture(t);
@@ -834,7 +945,10 @@ test('typing an existing normalized name locks its policy; a new name has editab
     0,
   );
   await state.click('Button', 'Continue');
-  assert.equal(text(steps(state)[0].props.summary), 'Account / \u00e9');
+  assert.equal(
+    text(steps(state)[0].props.summary),
+    'test@example.com / \u00e9',
+  );
   await state.click('Button', 'Change bundle');
   input(state, 'New family');
   assert.equal(state.find('Toggle').props.checked, true);
@@ -854,7 +968,10 @@ test('a new decomposed name is normalized in the input and the completed summary
   input(state, 'Cafe\u0301');
   assert.equal(state.find('InputWithAction').props.value, 'Caf\u00e9');
   await state.click('Button', 'Continue');
-  assert.equal(text(steps(state)[0].props.summary), 'Account / Caf\u00e9');
+  assert.equal(
+    text(steps(state)[0].props.summary),
+    'test@example.com / Caf\u00e9',
+  );
 });
 
 test('loading uses Step processing; a 401 clears selection and returns to Sign in without stale results', async t => {

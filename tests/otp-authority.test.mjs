@@ -132,7 +132,7 @@ test('invalid URLs are rejected before fetching or starting card work', async t 
   ]) {
     await assert.rejects(
       resolveOTPAuthorityInstallationOptions(url, signal()),
-      /Authority URL/,
+      /[Aa]uthority URL/,
     );
   }
   assert.equal(fetch.mock.callCount(), 0);
@@ -151,7 +151,7 @@ test('invalid metadata or public keys stop initialization', async t => {
     );
     await assert.rejects(
       resolveOTPAuthorityInstallationOptions('https://example.com', signal()),
-      /Invalid Authority public key/,
+      /Invalid authority public key/,
     );
     fetch.mock.restore();
   }
@@ -165,7 +165,7 @@ test('service failures do not silently initialize a card without Authority', asy
   );
   await assert.rejects(
     resolveOTPAuthorityInstallationOptions('https://example.com', signal()),
-    /Could not connect to Authority/,
+    /Could not connect to the authority/,
   );
 });
 

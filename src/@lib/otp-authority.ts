@@ -68,7 +68,7 @@ export async function resolveOTPAuthorityInstallationOptions(
     authorityUrl === normalizeAuthorityUrl(configuredUrl)
   ) {
     if (!/^04[0-9a-f]{128}$/i.test(configuredKey))
-      throw new Error('Invalid Authority public key');
+      throw new Error('Invalid authority public key');
     authorityPublicKey = hexToUint8Array(configuredKey);
   } else {
     let metadata: {publicKey?: unknown};
@@ -83,13 +83,13 @@ export async function resolveOTPAuthorityInstallationOptions(
       metadata = await response.json();
     } catch {
       signal.throwIfAborted();
-      throw new Error('Could not connect to Authority');
+      throw new Error('Could not connect to the authority');
     }
     try {
       if (typeof metadata?.publicKey !== 'string') throw new Error();
       authorityPublicKey = base64urlnopad.decode(metadata.publicKey);
     } catch {
-      throw new Error('Invalid Authority public key');
+      throw new Error('Invalid authority public key');
     }
   }
   signal.throwIfAborted();
@@ -98,7 +98,7 @@ export async function resolveOTPAuthorityInstallationOptions(
       throw new Error();
     p256.Point.fromHex(authorityPublicKey).assertValidity();
   } catch {
-    throw new Error('Invalid Authority public key');
+    throw new Error('Invalid authority public key');
   }
   return {authorityUrl, authorityPublicKey};
 }

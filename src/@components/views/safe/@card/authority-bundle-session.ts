@@ -18,7 +18,7 @@ import {
   rethrowAuthorityJoinError,
 } from '../../../../@lib/monoid/index.js';
 import type {AuthorityService} from '../../../../@services/index.js';
-import {uint8ArrayToHex} from '../../../../@utils/index.js';
+import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 
 import {CardSecretPINSession} from './card-secret-pin-session.js';
 import {authenticateCardSync} from './card-sync-session.js';
@@ -80,7 +80,7 @@ export class AuthorityBundleSession {
   ): void {
     if (!card.authority) {
       throw new MonoidCardError(
-        `Card ${cardName(card)} doesn't trust an Authority. Reinstall its applets with one.`,
+        `Card ${cardName(card)} doesn't trust an authority. Reinstall its applets with one.`,
       );
     }
     if (
@@ -88,7 +88,7 @@ export class AuthorityBundleSession {
       normalizeAuthorityUrl(this.authorityUrl)
     ) {
       throw new MonoidCardError(
-        `Card ${cardName(card)} trusts a different Authority.`,
+        `Card ${cardName(card)} trusts a different authority.`,
       );
     }
   }
@@ -102,10 +102,6 @@ export class AuthorityBundleSession {
   addPrepared(card: CardBackupIdentity, replaced?: CardIdentity): void {
     this.validateAddition(card);
     const joined = card.bundle !== false && card.bundle === this.bundle;
-    if (card.bundle !== false && !joined)
-      throw new MonoidCardError(
-        'Reset this card before joining another bundle',
-      );
     const existing = this.cards.find(
       current => current.publicKey === (replaced?.publicKey ?? card.publicKey),
     );
@@ -127,22 +123,22 @@ export class AuthorityBundleSession {
 
   /** Resolve membership before any reset offer; issuance does not touch the card. */
   async resolveBundle(
-    hello: MonoidAppletHello,
+    card: CardBackupIdentity,
     authority: Pick<AuthorityService, 'issueBundle'>,
     signal: AbortSignal,
     setState?: (message: string) => void,
   ): Promise<void> {
-    this.validateAddition(readBackupCardIdentity(hello));
+    this.validateAddition(card);
     signal.throwIfAborted();
-    if (hello.bundle === false || this.bundle) return;
+    if (card.bundle === false || this.bundle) return;
     setState?.('Requesting bundle, hold tight...');
-    const issued = await this.issue(hello, authority);
+    const issued = await this.issue(hexToUint8Array(card.publicKey), authority);
     signal.throwIfAborted();
     this.rememberBundle(uint8ArrayToHex(issued.bundle));
   }
 
   private issue(
-    hello: MonoidAppletHello,
+    recipientPublicKey: Uint8Array,
     authority: Pick<AuthorityService, 'issueBundle'>,
   ): ReturnType<AuthorityService['issueBundle']> {
     const choice = this.choice!;
@@ -150,7 +146,7 @@ export class AuthorityBundleSession {
       owner: {source: choice.owner.source, id: choice.owner.id},
       groupName: choice.name,
       allowPeerExtension: choice.allowPeerExtension,
-      recipientPublicKey: hello.publicKey,
+      recipientPublicKey,
     });
   }
 
@@ -201,12 +197,17 @@ export class AuthorityBundleSession {
   ): Promise<void> {
     signal.throwIfAborted();
     assertSameCard(hello, card);
-    await this.resolveBundle(hello, authority, signal, setState);
+    await this.resolveBundle(
+      readBackupCardIdentity(hello),
+      authority,
+      signal,
+      setState,
+    );
     if (this.recognizeJoined(hello, card)) return;
     setState('Authenticating, hold tight...');
     await authenticateCardSync(applet, hello, pin, signal, onAuthenticated);
     setState('Requesting bundle, hold tight...');
-    const issued = await this.issue(hello, authority);
+    const issued = await this.issue(hello.publicKey, authority);
     signal.throwIfAborted();
     this.rememberBundle(uint8ArrayToHex(issued.bundle));
     setState('Joining bundle, hold tight...');

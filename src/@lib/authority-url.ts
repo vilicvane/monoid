@@ -4,7 +4,7 @@ export function normalizeAuthorityUrl(value: string): string {
   try {
     url = new URL(value.trim());
   } catch {
-    throw new Error('Invalid Authority URL');
+    throw new Error('Invalid authority URL');
   }
   if (
     !['http:', 'https:'].includes(url.protocol) ||
@@ -13,7 +13,7 @@ export function normalizeAuthorityUrl(value: string): string {
     url.search ||
     url.hash
   )
-    throw new Error('Invalid Authority URL');
+    throw new Error('Invalid authority URL');
   url.pathname = `${url.pathname.replace(/\/+$/, '')}/`;
   return url.href;
 }

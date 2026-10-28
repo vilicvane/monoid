@@ -90,7 +90,7 @@ export function AppletSelectionPopup({
         setError(
           error instanceof Error
             ? error.message
-            : 'Could not connect to Authority',
+            : 'Could not connect to the authority',
         );
     } finally {
       if (!task.signal.aborted) setConnecting(false);

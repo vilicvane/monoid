@@ -368,7 +368,7 @@ test('Authority installation parameters are validated before card access and att
         authorityPublicKey: invalid,
         authorityUrl,
       }),
-      /Invalid Authority public key/,
+      /Invalid authority public key/,
     );
   }
   for (const options of [
@@ -388,7 +388,7 @@ test('Authority installation parameters are validated before card access and att
   ]) {
     await assert.rejects(
       installMonoidApplets('connection', () => {}, undefined, [], options),
-      /Authority/,
+      /[Aa]uthority/,
     );
   }
   assert.deepEqual(fixture.events, []);

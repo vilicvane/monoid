@@ -1527,7 +1527,7 @@ const CardContent = observer(
                       Create bundle
                     </Button>
                   )}
-                  {!canDelete && card.bundle === false && card.authority && (
+                  {!canDelete && card.authority && (
                     <Button
                       color="neutral"
                       onClick={() => {
@@ -1540,7 +1540,7 @@ const CardContent = observer(
                           .$push();
                       }}
                     >
-                      Join Authority bundle
+                      Join authority bundle
                     </Button>
                   )}
                   {!canDelete &&

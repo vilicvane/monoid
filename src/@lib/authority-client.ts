@@ -8,11 +8,11 @@ export const AUTHORITY_LOGIN_TTL = 10 * 60 * 1000;
 const messages = {
   cancelled: 'Authority sign-in cancelled',
   expired: 'Authority sign-in expired',
-  invalid_callback: 'Invalid Authority sign-in callback',
+  invalid_callback: 'Invalid authority sign-in callback',
   unauthorized: 'Authority session expired. Sign in again.',
   bundle_policy_conflict: 'A bundle with this name has a different policy.',
-  rate_limited: 'Too many Authority requests. Try again later.',
-  network_error: 'Could not connect to Authority.',
+  rate_limited: 'Too many authority requests. Try again later.',
+  network_error: 'Could not connect to the authority.',
   service_error: 'Authority request failed.',
 } as const;
 
@@ -23,20 +23,18 @@ export class AuthorityError extends Error {
 }
 
 export const AuthorityAccount = x.object({
-  id: x.string,
-  login: x.string,
-  method: x.union([
+  source: x.union([
+    x.literal('google'),
+    x.literal('github-user'),
     x.literal('wallet'),
-    x.literal('email'),
-    x.literal('social'),
   ]),
-  email: x.string.optional(),
-  provider: x.string.optional(),
+  id: x.string,
+  displayName: x.string,
 });
 export type AuthorityAccount = x.TypeOf<typeof AuthorityAccount>;
 export const AuthorityOwner = x.object({
   source: x.union([
-    x.literal('reown'),
+    x.literal('google'),
     x.literal('wallet'),
     x.literal('github-user'),
     x.literal('github-organization'),
@@ -59,14 +57,13 @@ export type AuthorityGroup = x.TypeOf<typeof AuthorityGroup>;
 export function validateAuthorityBundleName(value: string): string {
   const name = value.normalize('NFC');
   if (
-    !name ||
     value.length > 128 ||
     name.trim() !== name ||
     /[\p{Cc}\p{Cf}]/u.test(name) ||
     new TextEncoder().encode(name).length > 128
   )
     throw new Error(
-      'Use a bundle name of 1–128 UTF-8 bytes, without surrounding spaces or control characters.',
+      'Use a bundle name of up to 128 UTF-8 bytes, without surrounding spaces or control characters.',
     );
   return name;
 }

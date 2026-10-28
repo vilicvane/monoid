@@ -12,7 +12,7 @@ const url = 'https://authority.monoid.app/';
 const bundle = new Uint8Array(32).fill(42);
 const hex = value => Buffer.from(value).toString('hex');
 const choice = {
-  owner: {source: 'reown', id: 'account', displayName: 'Personal'},
+  owner: {source: 'google', id: 'account', displayName: 'Personal'},
   name: 'Family',
   allowPeerExtension: true,
 };
@@ -81,7 +81,7 @@ test('Secret authentication precedes issuance and Join; verified hash marks the 
   assert.deepEqual(state.calls.find(([name]) => name === 'issue')[1], {
     groupName: choice.name,
     recipientPublicKey: state.current.publicKey,
-    owner: {source: 'reown', id: 'account'},
+    owner: {source: 'google', id: 'account'},
     allowPeerExtension: true,
   });
   assert.equal(state.session.bundle, hex(bundle));
@@ -95,6 +95,15 @@ test('a different returned hash does not mark a card joined', async () => {
   await assert.rejects(state.join(), /Card returned a different bundle/);
   assert.equal(state.session.joinedCount, 0);
   assert.equal(state.session.bundle, hex(bundle));
+});
+
+test('an unnamed bundle issues the empty name without substituting its owner label', async () => {
+  const state = fixture();
+  state.session.choose({...choice, name: ''});
+  await state.join();
+  assert.equal(state.calls.find(([name]) => name === 'issue')[1].groupName, '');
+  assert.equal(state.session.choice.name, '');
+  assert.equal(state.session.joinedCount, 1);
 });
 
 test('a member is recognized by first issuance without authenticating or replaying Join', async () => {
@@ -144,7 +153,7 @@ test('Authority eligibility names the card and normalizes URLs', () => {
   assert.throws(
     () =>
       session.addPrepared(readBackupCardIdentity(hello(1, {authority: false}))),
-    /Card Daily wallet doesn't trust an Authority\. Reinstall its applets with one\./,
+    /Card Daily wallet doesn't trust an authority\. Reinstall its applets with one\./,
   );
   assert.throws(
     () =>
@@ -153,7 +162,7 @@ test('Authority eligibility names the card and normalizes URLs', () => {
           hello(1, {authority: 'https://another.example/'}),
         ),
       ),
-    /Card Daily wallet trusts a different Authority\./,
+    /Card Daily wallet trusts a different authority\./,
   );
   session.addPrepared(
     readBackupCardIdentity(
@@ -172,7 +181,7 @@ test('only Join 6985 maps to an Authority key mismatch', async () => {
   await assert.rejects(
     state.join(),
     error =>
-      error.message === 'Card Daily wallet trusts a different Authority key.' &&
+      error.message === 'Card Daily wallet trusts a different authority key.' &&
       error.cause === rejected,
   );
   const other = new AppletISOError('Join', 0x6982, new Uint8Array());

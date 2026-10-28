@@ -60,46 +60,41 @@ const {
   AUTHORITY_CALLBACK_URI,
   AuthorityAccount,
   AuthorityError,
+  AuthorityOwner,
   authorityPKCEChallenge,
 } = await import('../.bld/app/@lib/authority-client.js');
 
-test('account requires the hosted sign-in method and retains optional verified email and provider', () => {
-  for (const method of ['wallet', 'email', 'social']) {
-    for (const email of [undefined, 'person@example.com']) {
-      const account = {
-        id: 'account',
-        login: 'address',
-        method,
-        ...(email && {email}),
-        ...(method === 'social' && {provider: 'github'}),
-      };
-      assert.deepEqual(AuthorityAccount.satisfies(account), account);
-      if (method === 'social') {
-        delete account.provider;
-        assert.deepEqual(AuthorityAccount.satisfies(account), account);
-      }
-    }
+test('accounts use provider-native IDs and organizations are owners only', () => {
+  for (const source of ['google', 'github-user', 'wallet']) {
+    const account = {source, id: 'provider-id', displayName: 'Visible name'};
+    assert.deepEqual(AuthorityAccount.satisfies(account), account);
+    assert.deepEqual(AuthorityOwner.sanitize(account), {
+      source,
+      id: account.id,
+    });
+    assert.equal(AuthorityAccount.is({source, id: account.id}), false);
   }
-  assert.throws(() =>
-    AuthorityAccount.satisfies({id: 'account', login: 'address'}),
+  const organization = {source: 'github-organization', id: '12345'};
+  assert.deepEqual(AuthorityOwner.satisfies(organization), organization);
+  assert.equal(
+    AuthorityAccount.is({...organization, displayName: 'Team'}),
+    false,
   );
-  assert.throws(() =>
-    AuthorityAccount.satisfies({
-      id: 'account',
-      login: 'address',
-      method: 'unknown',
-    }),
-  );
+  for (const source of ['reown', 'email', 'social']) {
+    assert.equal(
+      AuthorityAccount.is({source, id: 'old', displayName: 'Old'}),
+      false,
+    );
+    assert.equal(AuthorityOwner.is({source, id: 'old'}), false);
+  }
 });
 const BASE = 'https://authority.monoid.app/';
 const ACCOUNT = {
-  id: 'account-id',
-  login: 'account-name',
-  method: 'social',
-  email: 'person@example.com',
-  provider: 'github',
+  source: 'google',
+  id: 'google-sub',
+  displayName: 'person@example.com',
 };
-const OWNER = {source: 'reown', id: 'project:profile'};
+const OWNER = {source: ACCOUNT.source, id: ACCOUNT.id};
 const CODE = base64urlnopad.encode(new Uint8Array(32).fill(3));
 const BEARER = 'opaque-test-bearer';
 const encoded = (length, value = 4) =>
@@ -736,10 +731,10 @@ test('sign-out clears locally even when logout fails', async t => {
   assert.equal(current.requests.at(-1).options.method, 'POST');
 });
 
-test('groups follows each cursor and bundle issuance encodes and decodes bytes', async t => {
+test('groups follows the empty-name cursor and unnamed issuance encodes and decodes bytes', async t => {
   const current = await signedIn(t);
   const groups = [
-    {name: 'A', allowPeerExtension: false, createdAt: 10},
+    {name: '', allowPeerExtension: false, createdAt: 10},
     {name: 'B', allowPeerExtension: true, createdAt: 20},
   ];
   current.respond = ({path, body}) => {
@@ -747,16 +742,17 @@ test('groups follows each cursor and bundle issuance encodes and decodes bytes',
     if (path === '/v1/groups/list')
       return Response.json({
         owner: OWNER,
-        groups: [groups[body.after ? 1 : 0]],
-        next: body.after ? null : 'A',
+        groups: [groups[body.after === undefined ? 0 : 1]],
+        next: body.after === undefined ? '' : null,
       });
     assert.equal(body.recipientPublicKey, encoded(65));
+    assert.equal(body.groupName, '');
     return Response.json({
       publicKey: encoded(65),
       data: encoded(182),
       bundle: encoded(32),
       owner: OWNER,
-      groupName: 'A',
+      groupName: '',
       allowPeerExtension: false,
     });
   };
@@ -766,11 +762,11 @@ test('groups follows each cursor and bundle issuance encodes and decodes bytes',
   );
   assert.deepEqual(
     calls.map(request => request.body),
-    [{owner: OWNER}, {owner: OWNER, after: 'A'}],
+    [{owner: OWNER}, {owner: OWNER, after: ''}],
   );
   const result = await current.service.issueBundle({
     owner: OWNER,
-    groupName: 'A',
+    groupName: '',
     allowPeerExtension: false,
     recipientPublicKey: new Uint8Array(65).fill(4),
   });
@@ -779,7 +775,7 @@ test('groups follows each cursor and bundle issuance encodes and decodes bytes',
     data: new Uint8Array(182).fill(4),
     bundle: new Uint8Array(32).fill(4),
     owner: OWNER,
-    groupName: 'A',
+    groupName: '',
     allowPeerExtension: false,
   });
 });
@@ -820,7 +816,8 @@ test('public metadata decodes its key and network failures stay sanitized', asyn
   await assert.rejects(
     current.service.metadata(),
     error =>
-      failure('network_error')(error) && !String(error).includes('sensitive'),
+      failure('network_error')(error) &&
+      error.message === 'Could not connect to the authority.',
   );
 });
 

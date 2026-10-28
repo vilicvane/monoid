@@ -376,12 +376,17 @@ test('a bundled target requires the existing two-stage reset confirmation after 
   assert.equal(find(state.hook.content, 'confirm-popup'), undefined);
 });
 
-for (const member of [true, false]) {
-  test(`first issuance ${member ? 'recognizes a member without reset' : 'confirms a foreign bundle before offering reset'}`, async () => {
+for (const [entry, member] of [
+  ['scanned', true],
+  ['scanned', false],
+  ['prepared', true],
+  ['prepared', false],
+]) {
+  test(`first issuance for a ${entry} card ${member ? 'recognizes a member without reset' : 'confirms a foreign bundle before offering reset'}`, async () => {
     const url = 'https://authority.monoid.app/';
     const session = new AuthorityBundleSession(url);
     session.choose({
-      owner: {source: 'reown', id: 'account'},
+      owner: {source: 'google', id: 'account'},
       name: 'Family',
       allowPeerExtension: true,
     });
@@ -397,7 +402,12 @@ for (const member of [true, false]) {
     };
     const state = mount({
       validateAddition: (card, signal, setState) =>
-        session.resolveBundle(card, authority, signal, setState),
+        session.resolveBundle(
+          readBackupCardIdentity(card),
+          authority,
+          signal,
+          setState,
+        ),
       acceptsBundle: card => session.acceptsBundle(card),
     });
     state.result.hello = {
@@ -405,20 +415,25 @@ for (const member of [true, false]) {
       authority: url,
       alias: 'Travel',
     };
+    if (entry === 'prepared')
+      session.addPrepared(readBackupCardIdentity(state.result.hello));
     state.options.onAdded = async card => {
       state.added.push(card);
       await session.addCard(card);
     };
     state.render();
-    const operation = state.hook.addCard();
-    const tap = state.tap();
+    const operation =
+      entry === 'prepared'
+        ? state.hook.acceptCard(state.result.hello)
+        : state.hook.addCard();
+    const tap = entry === 'scanned' ? state.tap() : undefined;
     await Promise.resolve();
     state.render();
     assert.equal(find(state.hook.content, 'confirm-popup'), undefined);
     assert.equal(state.added.length, 0);
     pending.resolve();
     await tap;
-    state.scans[0].resolve();
+    if (entry === 'scanned') state.scans[0].resolve();
     await operation;
     state.render();
     assert.equal(requests, 1);
@@ -433,7 +448,7 @@ for (const member of [true, false]) {
         find(confirmation, 'p').props.children.join(''),
         'Card Travel already belongs to a bundle.',
       );
-      assert.equal(session.cards.length, 0);
+      assert.equal(session.cards.length, entry === 'prepared' ? 1 : 0);
     }
   });
 }
@@ -620,6 +635,39 @@ for (const destination of ['inactive', 'unmounted']) {
     assert.deepEqual(state.errors, []);
   });
 }
+
+test('a cached bundled card opens reset confirmation before any PIN and verifies its identity on the reset scan', async () => {
+  const state = mount();
+  const original = hello({bundle: new Uint8Array(32).fill(2)});
+  const card = readBackupCardIdentity(original);
+  state.hook.confirmReset(card);
+  state.render();
+  const confirmation = find(state.hook.content, 'confirm-popup');
+  assert.equal(confirmation.props.title, 'Reset card and join bundle?');
+  assert.deepEqual(state.inputs, []);
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.credentialCalls, []);
+
+  state.pin = 'New-42';
+  state.pinSession.removePIN = async () =>
+    assert.fail('No removal before identity verification');
+  state.entrances.monoidApplet.openSession = async () => ({
+    hello: async () => ({...original, id: Uint8Array.of(9, 9, 9, 9)}),
+    reset: async () => assert.fail('Do not reset a different card'),
+  });
+  const resetting = confirmation.props.onConfirm();
+  for (let index = 0; index < 10; index++) await Promise.resolve();
+  await assert.rejects(state.tap(), error => {
+    assert.ok(error instanceof MonoidWrongCardError);
+    state.scans.at(-1).reject(error);
+    return true;
+  });
+  await resetting;
+  state.render();
+  assert.equal(state.errors.length, 1);
+  assert.equal(state.hook.pendingReset.attempted, false);
+  assert.deepEqual(state.added, []);
+});
 
 test('an installed target retaining its original bundle opens reset confirmation without mutation or another scan', async () => {
   const state = mount();

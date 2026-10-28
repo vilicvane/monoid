@@ -1,8 +1,4 @@
-import {
-  Mail as mail,
-  UserRound as userRound,
-  Wallet as wallet,
-} from 'lucide-react';
+import {UserRound, Wallet} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
@@ -12,7 +8,6 @@ import {Address} from './address.js';
 import {AppIcon} from './app-icon.js';
 import {InfoFieldset, InfoLegend} from './info-section.js';
 import {
-  IconList,
   ListItem,
   ListItemContent,
   ListItemDescription,
@@ -20,29 +15,26 @@ import {
 } from './list.js';
 import {Symbol} from './symbol.js';
 
-const PROVIDER_NAMES: Record<string, string> = {
+const SOURCE_NAMES = {
   google: 'Google',
-  github: 'GitHub',
-  apple: 'Apple',
-  facebook: 'Facebook',
-  x: 'X',
-  discord: 'Discord',
-  farcaster: 'Farcaster',
+  'github-user': 'GitHub',
+  wallet: 'Wallet',
 };
 
-const Account = styled(IconList)`
-  --list-item-padding-inline: 0px;
-  --list-item-padding-block: 0px;
-  flex: none;
-  margin: 0;
-`;
-
+// Card Applets' row geometry, inside an InfoFieldset instead of an IconList.
 const AccountRow = styled(ListItem)`
+  --list-item-gap: 12px;
+  --list-item-content-gap: 2px;
+  --list-item-name-line-height: 20px;
+  --list-item-padding-block: 0px;
+  --list-item-padding-inline: 0px;
   align-items: center;
-`;
 
-const AccountName = styled(ListItemName)`
-  overflow-wrap: anywhere;
+  ${ListItemName} {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    text-wrap: pretty;
+  }
 
   ${Address} {
     width: 100%;
@@ -52,51 +44,34 @@ const AccountName = styled(ListItemName)`
 export function AuthorityAccountInfo({
   account,
 }: {
-  account: Pick<AuthorityAccount, 'method' | 'login' | 'email' | 'provider'>;
+  account: AuthorityAccount;
 }): ReactNode {
-  const description =
-    account.method === 'wallet'
-      ? 'Wallet'
-      : account.method === 'email'
-        ? 'Email'
-        : (PROVIDER_NAMES[account.provider ?? ''] ??
-          account.provider ??
-          'Social');
+  const description = SOURCE_NAMES[account.source];
+  const icon = account.source === 'wallet' ? Wallet : UserRound;
 
   return (
     <InfoFieldset>
       <InfoLegend>Signed in as</InfoLegend>
-      <Account>
-        <AccountRow>
-          <Symbol>
-            <AppIcon
-              icon={
-                account.method === 'wallet'
-                  ? wallet
-                  : account.method === 'email'
-                    ? mail
-                    : userRound
-              }
-              aria-hidden="true"
-            />
-          </Symbol>
-          <ListItemContent>
-            <AccountName>
-              {account.method === 'wallet' ? (
-                <Address title={account.login} aria-label={account.login}>
-                  {account.login}
-                </Address>
-              ) : (
-                account.email ||
-                (account.method === 'social'
-                  ? `${description} account`
-                  : 'Signed in.')
-              )}
-            </AccountName>
-            <ListItemDescription>{description}</ListItemDescription>
-          </ListItemContent>
-        </AccountRow>
-      </Account>
+      <AccountRow>
+        <Symbol>
+          <AppIcon icon={icon} aria-hidden="true" />
+        </Symbol>
+        <ListItemContent>
+          <ListItemName>
+            {account.source === 'wallet' ? (
+              <Address
+                title={account.displayName}
+                aria-label={account.displayName}
+              >
+                {account.displayName}
+              </Address>
+            ) : (
+              account.displayName
+            )}
+          </ListItemName>
+          <ListItemDescription>{description}</ListItemDescription>
+        </ListItemContent>
+      </AccountRow>
     </InfoFieldset>
   );
 }

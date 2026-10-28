@@ -99,17 +99,17 @@ function identityApplicationData({
       'Authority URL and public key are required together',
     );
   if (authorityPublicKey.length !== 65 || authorityPublicKey[0] !== 4)
-    throw new MonoidCardError('Invalid Authority public key');
+    throw new MonoidCardError('Invalid authority public key');
   try {
     p256.Point.fromHex(authorityPublicKey).assertValidity();
   } catch {
-    throw new MonoidCardError('Invalid Authority public key');
+    throw new MonoidCardError('Invalid authority public key');
   }
   let url: URL;
   try {
     url = new URL(authorityUrl);
   } catch {
-    throw new MonoidCardError('Invalid Authority URL');
+    throw new MonoidCardError('Invalid authority URL');
   }
   if (
     !['http:', 'https:'].includes(url.protocol) ||
@@ -118,7 +118,7 @@ function identityApplicationData({
     url.search ||
     url.hash
   )
-    throw new MonoidCardError('Invalid Authority URL');
+    throw new MonoidCardError('Invalid authority URL');
   const encodedUrl = new TextEncoder().encode(authorityUrl);
   // 247-byte secure INSTALL data minus 35 bytes of GP/AID fields and 66 bytes
   // of flags + key leaves 146 bytes for the URL, or 142 with a retained Card ID.

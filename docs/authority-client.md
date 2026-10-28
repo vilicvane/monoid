@@ -4,23 +4,41 @@
 `VITE_AUTHORITY_URL`, falling back to `https://authority.monoid.app/`. Setup cards
 uses the client to choose a bundle and issue enrollment packets for each card.
 
-| API                                                                       | Result                                                                                                                |
-| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `metadata()`                                                              | Public key as bytes, Bundle algorithm and time protocol                                                               |
-| `signIn()`                                                                | Promise of `{id, login, method, email?, provider?}`; each call starts a fresh login and replaces the previous attempt |
-| `pendingSignIn`                                                           | The current pending login's promise, including a restored attempt                                                     |
-| `signInState`                                                             | Observable `idle`, `pending`, `complete`, or `error` with an `AuthorityError`                                         |
-| `account`, `signedIn`                                                     | Observable in-memory session state                                                                                    |
-| `cancelSignIn()`                                                          | Removes the pending login and rejects it as cancelled; late callbacks are ignored                                     |
-| `signOut()`                                                               | Clears locally immediately and attempts logout without awaiting the network; failures are silent                      |
-| `namespaces()`                                                            | Authorized `{source, id, displayName}` entries                                                                        |
-| `groups(owner)`                                                           | All `{name, allowPeerExtension, createdAt}` pages for `{source, id}`                                                  |
-| `issueBundle({owner, groupName, allowPeerExtension, recipientPublicKey})` | `{publicKey, data, bundle, owner, groupName, allowPeerExtension}` with byte fields decoded                            |
+| API                                                                       | Result                                                                                                   |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `metadata()`                                                              | Public key as bytes, Bundle algorithm and time protocol                                                  |
+| `signIn()`                                                                | Promise of `{source, id, displayName}`; each call starts a fresh login and replaces the previous attempt |
+| `pendingSignIn`                                                           | The current pending login's promise, including a restored attempt                                        |
+| `signInState`                                                             | Observable `idle`, `pending`, `complete`, or `error` with an `AuthorityError`                            |
+| `account`, `signedIn`                                                     | Observable in-memory session state                                                                       |
+| `cancelSignIn()`                                                          | Removes the pending login and rejects it as cancelled; late callbacks are ignored                        |
+| `signOut()`                                                               | Clears locally immediately and attempts logout without awaiting the network; failures are silent         |
+| `namespaces()`                                                            | Authorized `{source, id, displayName}` entries                                                           |
+| `groups(owner)`                                                           | All `{name, allowPeerExtension, createdAt}` pages for `{source, id}`                                     |
+| `issueBundle({owner, groupName, allowPeerExtension, recipientPublicKey})` | `{publicKey, data, bundle, owner, groupName, allowPeerExtension}` with byte fields decoded               |
+
+Accounts from token exchange and `/v1/me` are exactly
+`{source, id, displayName}`. Identity and bundle ownership use the provider's own
+stable `(source, id)`, never display text or a Reown profile. Reown is only a
+replaceable wallet-connection UI; email sign-in is not supported.
+
+| Source                | Stable owner ID                            | Account display name                                     |
+| --------------------- | ------------------------------------------ | -------------------------------------------------------- |
+| `google`              | Google `sub`                               | Verified email, otherwise name, otherwise Google account |
+| `github-user`         | GitHub numeric user ID as a string         | GitHub login                                             |
+| `wallet`              | `eip155:<lowercase address>`               | EIP-55 address                                           |
+| `github-organization` | GitHub numeric organization ID as a string | Namespace only; organization login                       |
+
+An account's source is Google, GitHub user or Wallet. Owners also support GitHub
+organizations. `/v1/namespaces` returns the account's own namespace and, for a
+GitHub sign-in, organizations where the user is an Owner. Setup currently filters
+organizations out of its owner controls. Namespace display labels affect only
+presentation, not ownership or bundle roots.
 
 Sign-in opens the hosted page in the system browser app through
 `@capacitor/app-launcher`. Android uses a plain `ACTION_VIEW` intent; iOS uses
 `UIApplication.open`, both handing the HTTPS URL to the default browser
-(Chrome/Safari when configured as default). Browser Reown/provider sessions may
+(Chrome/Safari when configured as default). Browser provider sessions may
 remain signed in; Monoid's bearer lifetime below is independent.
 
 State and the PKCE verifier use `crypto.getRandomValues`. S256 uses the existing
@@ -84,13 +102,21 @@ step's body; fixed card entry points omit these capsules. Cards locks the mode
 after adding a card; Authority locks it after the first join. Authority uses two
 steps: Choose bundle and Add cards. Sign-in lives inside Choose bundle, whose
 footer is Sign in when signed out and Continue when signed in. The completed
-step shows the bundle name as its summary. Choose bundle uses an owner selector when there
-are multiple eligible namespaces (Account, Wallet, GitHub; organizations are
-excluded for now). Its name input starts with the owner's most recent bundle,
+step shows the owner text alone for an unnamed bundle, or owner / name for a
+named bundle. The owner text is the namespace display name or a middle-truncated
+wallet address, with end ellipsis for long paths. Choose bundle uses an owner selector when there are multiple
+eligible namespaces, labeled Google, GitHub or Wallet. Its name input starts with the owner's most recent bundle,
 and a trailing action opens a picker that fills the input without advancing.
-Existing names lock their policy; new names allow choosing the policy and show
-the permanence notice. Names are normalized to NFC in the input and must contain
-1–128 UTF-8 bytes, without surrounding whitespace or control/format characters.
+The name is optional: an empty input selects the owner's unnamed bundle,
+distinct from every named bundle and with its own fixed policy. The placeholder
+is **Bundle name (optional)**. Issuance sends and returns `groupName: ""`; listings
+represent it with `name: ""`. Its picker row displays the owner text and clears
+the input when selected. If it is the most recent bundle, the prefilled input is
+empty. Existing bundles, including the unnamed one, lock their policy; new
+bundles allow choosing the policy and show the permanence notice. Policy
+conflicts still return 409. Non-empty names are normalized to NFC in the input
+and must contain 1–128 UTF-8 bytes, without surrounding whitespace or
+control/format characters.
 Continue selects the bundle or draft; no bundle is created until its first
 issuance. Add cards uses the shared Setup grid: one pending card is ringed,
 later cards say "join later", and joined cards are dimmed. Change bundle is
@@ -112,13 +138,9 @@ selected bundle's hash, it requests issuance for that card's key first. This
 does not write to the card. A matching hash recognizes an existing member without
 Join or reset; only a different hash can offer the shared reset confirmation.
 
-The read-only `AuthorityAccountInfo` fieldset is labeled **Signed in as** and uses
-the shared 36px `Symbol` and list content, like Card Applets. Email uses the Mail
-icon, the email and **Email**; social uses UserRound, the email (or **GitHub
-account**, for example) and the provider's display name. Wallet uses Wallet and
-the shared `Address` for `login`, with **Wallet** beneath. Long email addresses
-wrap within the row. Email/social never display the embedded wallet address.
-If an email sign-in has no email, its name is **Signed in.**, matching the hosted
-page; a social sign-in without provider metadata uses **Social account**.
-The signed-out notice still names the issuing Authority. There is no account
-switch action; leaving the flow ends the session.
+The read-only `AuthorityAccountInfo` fieldset is labeled **Signed in as** and
+matches the hosted account row's shared markup and spacing. Google and GitHub use
+UserRound, `displayName` and their source name; Wallet uses Wallet and the shared
+`Address` with middle ellipsis. The shared `Symbol` remains 36px. Long names wrap
+inside the row. The signed-out notice still names the issuing Authority. There
+is no account switch action in the app; leaving the flow ends its session.

@@ -59,6 +59,7 @@ export function useBundleCardAddition({
   busy: boolean;
   addCard: () => Promise<void>;
   acceptCard: (hello: MonoidAppletHello) => Promise<boolean>;
+  confirmReset: (card: CardResetIdentity) => void;
   resume: () => Promise<void>;
   pendingPIN: MonoidAppletHello | undefined;
   pendingReset: CardResetSession | undefined;
@@ -159,20 +160,25 @@ export function useBundleCardAddition({
     assertCardPINsNotBlocked(hello);
   };
 
+  const confirmReset = (card: CardResetIdentity): void => {
+    if (!isActive()) return;
+    setPendingBundleCard({
+      card,
+      generation: ++bundleConfirmation.current,
+    });
+  };
+
   const acceptScan = async (
     hello: MonoidAppletHello,
     signal: AbortSignal,
   ): Promise<void> => {
     await validateScan(hello, signal);
     if (hello.bundle !== false && !acceptsBundle(hello)) {
-      setPendingBundleCard({
-        card: {
-          id: uint8ArrayToHex(hello.id),
-          publicKey: uint8ArrayToHex(hello.publicKey),
-          alias: hello.alias,
-          bundle: uint8ArrayToHex(hello.bundle),
-        },
-        generation: ++bundleConfirmation.current,
+      confirmReset({
+        id: uint8ArrayToHex(hello.id),
+        publicKey: uint8ArrayToHex(hello.publicKey),
+        alias: hello.alias,
+        bundle: uint8ArrayToHex(hello.bundle),
       });
     } else if (!acceptsBundle(hello) && !hasInitializedPINs(hello)) {
       cacheSetup(hello);
@@ -387,6 +393,7 @@ export function useBundleCardAddition({
     busy: busy || showPINSetup || !!pendingBundleCard,
     addCard,
     acceptCard,
+    confirmReset,
     resume,
     pendingPIN,
     pendingReset,

@@ -18,7 +18,7 @@ export function rethrowAuthorityJoinError(
 ): never {
   if (error instanceof AppletISOError && error.sw === 0x6985) {
     throw new MonoidCardError(
-      `Card ${cardName(card)} trusts a different Authority key.`,
+      `Card ${cardName(card)} trusts a different authority key.`,
       {cause: error},
     );
   }

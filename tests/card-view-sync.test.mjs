@@ -2444,14 +2444,15 @@ test('Extend bundle follows the cached peer extension policy and alias follows t
 for (const [bundle, authority, visible] of [
   [false, 'https://authority.monoid.app/', true],
   [false, false, false],
-  ['11'.repeat(32), 'https://authority.monoid.app/', false],
+  ['11'.repeat(32), 'https://authority.monoid.app/', true],
+  ['11'.repeat(32), false, false],
 ]) {
-  test(`Authority entry requires an unbundled card with Authority: ${bundle}/${authority}`, () => {
+  test(`Authority entry requires a trusted Authority regardless of bundle: ${bundle}/${authority}`, () => {
     const state = mount({items: cardItems(INDEX, [wallet(0)])});
     state.card.bundle = bundle;
     state.card.authority = authority;
     state.menuButton().props.onClick();
-    const join = state.popupButton('Join Authority bundle');
+    const join = state.popupButton('Join authority bundle');
     assert.equal(!!join, visible);
     if (join) {
       join.props.onClick();
@@ -2466,7 +2467,7 @@ for (const [bundle, authority, visible] of [
   });
 }
 
-for (const label of ['Sync cards', 'Create bundle', 'Join Authority bundle']) {
+for (const label of ['Sync cards', 'Create bundle', 'Join authority bundle']) {
   test(`${label} leaves the card route before the page unmounts without reaction errors`, async context => {
     const router = routra(ROUTE_SCHEMA, {});
     await router.safe.$reset().$completed;
