@@ -3,6 +3,13 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(({mode}) => ({
   base: mode === 'development' ? '/api/authority/' : '/',
+  build: {
+    rollupOptions: {
+      input: ['index.html', 'home.html', 'privacy.html', 'terms.html'].map(
+        path => fileURLToPath(new URL(path, import.meta.url)),
+      ),
+    },
+  },
   resolve: {
     dedupe: [
       'react',

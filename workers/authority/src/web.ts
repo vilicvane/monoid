@@ -20,6 +20,23 @@ const LOGIN_CSP = [
   "object-src 'none'",
 ].join('; ');
 
+const PUBLIC_PAGES: Record<string, string> = {
+  '': '/home.html',
+  '/': '/home.html',
+  '/privacy': '/privacy.html',
+  '/terms': '/terms.html',
+};
+
+const PUBLIC_CSP = [
+  "default-src 'none'",
+  "style-src 'self'",
+  "font-src 'self' data:",
+  "img-src 'self' data:",
+  "frame-ancestors 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join('; ');
+
 export function createWebHandler(fetcher: typeof fetch = fetch) {
   const api = createHandler(fetcher);
   return async (request: Request, env: WebEnv): Promise<Response> => {
@@ -28,32 +45,37 @@ export function createWebHandler(fetcher: typeof fetch = fetch) {
     const prefix = base.pathname.replace(/\/$/, '');
     const path = url.pathname.slice(prefix.length);
     const atBase = url.pathname === prefix || url.pathname === `${prefix}/`;
+    const publicPage = Object.hasOwn(PUBLIC_PAGES, path)
+      ? PUBLIC_PAGES[path]
+      : undefined;
     if (
       url.origin !== base.origin ||
       !['GET', 'HEAD'].includes(request.method) ||
       (!atBase &&
         (!url.pathname.startsWith(`${prefix}/`) ||
-          (path !== '/login' && !path.startsWith('/assets/'))))
+          (!publicPage && path !== '/login' && !path.startsWith('/assets/'))))
     )
       return api(request, env);
 
-    let response: Response;
-    if (atBase) {
-      response = new Response(null, {
-        status: 302,
-        headers: {Location: `${prefix}/login`},
-      });
-    } else {
-      const assetUrl = new URL(url);
-      assetUrl.pathname = path === '/login' ? '/index.html' : path;
-      assetUrl.search = '';
-      const asset = await env.ASSETS.fetch(new Request(assetUrl, request));
-      response = new Response(asset.body, asset);
-    }
-    response.headers.set('Referrer-Policy', atBase ? 'no-referrer' : 'origin');
+    const assetUrl = new URL(url);
+    assetUrl.pathname =
+      publicPage ?? (path === '/login' ? '/index.html' : path);
+    assetUrl.search = '';
+    const asset = await env.ASSETS.fetch(new Request(assetUrl, request));
+    const response = new Response(
+      request.method === 'HEAD' ? null : asset.body,
+      asset,
+    );
+    response.headers.set(
+      'Referrer-Policy',
+      publicPage ? 'no-referrer' : 'origin',
+    );
     response.headers.set('X-Content-Type-Options', 'nosniff');
-    response.headers.set('Content-Security-Policy', LOGIN_CSP);
-    if (atBase || path === '/login')
+    response.headers.set(
+      'Content-Security-Policy',
+      publicPage ? PUBLIC_CSP : LOGIN_CSP,
+    );
+    if (publicPage || path === '/login')
       response.headers.set('Cache-Control', 'no-store');
     return response;
   };

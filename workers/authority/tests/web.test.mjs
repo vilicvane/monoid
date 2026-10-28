@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
+import {readFile} from 'node:fs/promises';
 import {createWebHandler} from '../.bld/web.js';
 import {cryptoState} from './helpers.mjs';
 
@@ -25,22 +26,27 @@ test('custom domain serves root API and login assets without the development pre
       new Request(env.AUTHORITY_URL + '/?flow=discarded', {method}),
       env,
     );
-    assert.equal(root.status, 302);
-    assert.equal(root.headers.get('Location'), '/login');
+    assert.equal(root.status, 200);
+    assert.equal(root.headers.get('Location'), null);
     assert.equal(root.headers.get('Cache-Control'), 'no-store');
     assert.equal(root.headers.get('Referrer-Policy'), 'no-referrer');
-    assert.equal(await root.text(), '');
+    assert.equal(await root.text(), method === 'HEAD' ? '' : 'asset');
   }
   assert.equal((await call('/login')).status, 200);
   assert.equal((await call('/assets/login.js')).status, 200);
-  assert.deepEqual(requests, ['/index.html', '/assets/login.js']);
+  assert.deepEqual(requests, [
+    '/home.html',
+    '/home.html',
+    '/index.html',
+    '/assets/login.js',
+  ]);
 
   const metadata = await call('/v1/metadata');
   assert.equal(metadata.status, 200);
   assert.equal((await metadata.json()).time.protocol, 'monoid-authority-time');
   for (const path of ['/api/authority/login', '/api/authority/v1/metadata'])
     assert.equal((await call(path)).status, 404);
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 4);
 });
 
 test('hosted login assets never receive the browser flow query and use scoped security headers', async () => {
@@ -62,10 +68,11 @@ test('hosted login assets never receive the browser flow query and use scoped se
   const handler = createWebHandler();
   for (const suffix of ['', '/']) {
     const root = await handler(new Request(env.AUTHORITY_URL + suffix), env);
-    assert.equal(root.status, 302);
-    assert.equal(root.headers.get('Location'), '/api/authority/login');
+    assert.equal(root.status, 200);
+    assert.equal(root.headers.get('Location'), null);
     assert.equal(root.headers.get('Cache-Control'), 'no-store');
   }
+  requests.length = 0;
   const page = await handler(
     new Request(`${env.AUTHORITY_URL}/login?flow=private-flow`),
     env,
@@ -90,6 +97,53 @@ test('hosted login assets never receive the browser flow query and use scoped se
   assert.equal(new URL(requests[1].url).pathname, '/assets/login.js');
   assert.equal(new URL(requests[1].url).search, '');
   assert.equal(asset.headers.get('Cache-Control'), 'public,max-age=3600');
+});
+
+test('public home and policies are HTML without authentication, scripts or redirects', async () => {
+  for (const prefix of ['', '/api/authority']) {
+    const env = {
+      AUTHORITY_URL: 'https://authority.monoid.app' + prefix,
+      ASSETS: {
+        fetch: async request => {
+          const url = new URL(request.url);
+          assert.equal(url.search, '');
+          return new Response(
+            await readFile(
+              new URL('../web' + url.pathname, import.meta.url),
+              'utf8',
+            ),
+            {
+              headers: {'Content-Type': 'text/html; charset=utf-8'},
+            },
+          );
+        },
+      },
+    };
+    const handler = createWebHandler();
+    for (const path of ['/', '/privacy', '/terms']) {
+      const response = await handler(
+        new Request(env.AUTHORITY_URL + path + '?flow=private-flow-query'),
+        env,
+      );
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get('Content-Type'), /text\/html/);
+      assert.equal(response.headers.get('Location'), null);
+      assert.equal(response.headers.get('Referrer-Policy'), 'no-referrer');
+      assert.match(
+        response.headers.get('Content-Security-Policy'),
+        /default-src 'none'/,
+      );
+      assert.doesNotMatch(
+        response.headers.get('Content-Security-Policy'),
+        /unsafe-inline|https:/,
+      );
+      const html = await response.text();
+      assert.match(html, /href="%BASE_URL%privacy"/);
+      assert.match(html, /href="%BASE_URL%terms"/);
+      assert.doesNotMatch(html, /<script|<button|<form|private-flow-query/);
+      assert.match(html, /Monoid Authority/);
+    }
+  }
 });
 
 test('asset routing cannot swallow API requests or requests to an untrusted host', async () => {

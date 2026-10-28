@@ -3,11 +3,6 @@ import {createRoot} from 'react-dom/client';
 import {useEffect, useRef, useState, type ReactNode} from 'react';
 import {styled} from 'styled-components';
 import {Certificate} from 'lucide-react';
-import '@ionic/react/css/core.css';
-import '@ionic/react/css/normalize.css';
-import '@ionic/react/css/structure.css';
-import '@ionic/react/css/typography.css';
-import '../../../../src/@styles/variables.css';
 import {Button, Buttons} from './button.js';
 import monoidLogo from '../../../../src/@assets/monoid.svg';
 import googleLogo from './assets/google-g.svg';
@@ -415,6 +410,11 @@ function LoginPage(): ReactNode {
           </>
         ) : null}
       </Actions>
+      <nav className="legal-links" aria-label="Policies">
+        <a href={`${import.meta.env.BASE_URL}privacy`}>Privacy</a>
+        <span aria-hidden="true"> · </span>
+        <a href={`${import.meta.env.BASE_URL}terms`}>Terms</a>
+      </nav>
     </Page>
   );
 }

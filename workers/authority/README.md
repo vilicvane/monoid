@@ -9,6 +9,80 @@ The app opens the hosted `/login` page in the system browser app, using PKCE and
 `app.monoid://authority/callback`. The app calls Authority groups **bundles**;
 wire names `groupName`, `groups` and `/v1/groups/list` remain unchanged.
 
+## Public pages and Google branding
+
+The Worker serves public, static HTML at `/` (home), `/privacy` and `/terms`.
+The home page explains the optional service and links to the policies without
+sign-in; it no longer redirects to `/login`. These pages need no JavaScript,
+cookies, provider SDK or external assets. They use the login page's shared
+`web/src/style.css`, Ionic typography and app colour tokens. The public pages
+add Ionic's system dark palette; `/login` retains its existing light appearance
+and flow, with small Privacy / Terms links in every state. Policy links respect
+the development base path and do not carry flow parameters. Operator: Monoid;
+privacy/deletion contact: `support@monoid.app`; effective date: 28 October 2026.
+
+After deploying these pages, use these Google Auth Platform **Branding** fields:
+
+| Field                        | Value                                  |
+| ---------------------------- | -------------------------------------- |
+| Application home page        | `https://authority.monoid.app/`        |
+| Application privacy policy   | `https://authority.monoid.app/privacy` |
+| Application terms of service | `https://authority.monoid.app/terms`   |
+| Authorized domain            | `monoid.app`                           |
+
+Google requires ownership verification of the authorized domain. Publishing
+the pages does not itself publish or verify the OAuth consent screen; that is
+a separate console action. See [Google's brand-verification requirements](https://developers.google.com/identity/protocols/oauth2/production-readiness/brand-verification).
+The existing OAuth callback URI and scopes below are unchanged.
+
+### Policy facts checked against the implementation
+
+- `storage.ts` writes `namespace_names` only for an explicit label change.
+  Google `sub` and the default display name live in encrypted authentication
+  records; signing in alone creates no persistent profile. Owner IDs persist
+  with created bundles or explicit labels. A verified email is the default
+  display name, not a separate saved email field.
+- GitHub tokens are encrypted in a flow, handoff grant and bearer session, not
+  just the final session row. They are usable only within that flow/session's
+  limits; expired copies can remain until cleanup. Membership lists are not
+  persisted. Organization and wallet records are visible to other authorized
+  controllers, and account/bundle information is returned to the user's app.
+- Wallet challenges contain an address when already known and an unsigned SIWE
+  message (or message fields for WalletConnect). Submitted signatures are not
+  persisted. RPC verification sends the address, message hash, signature and
+  verification data as required; EOA verification is local.
+- `api.ts` / `crypto.ts` do not store recipient card public keys, time-proof
+  challenges, card private keys, OTP secrets or individual bundle roots. A
+  persistent service master derives roots from owner, name and policy.
+- Requests/flows last 10 minutes from start; OAuth attempts share the flow
+  deadline; wallet challenges last at most 5 minutes within that flow; the SIWE
+  proof expires after 15 minutes; app handoff codes last at most 60 seconds.
+  Bearer authentication has the existing 5-minute idle / 15-minute absolute cap,
+  reduced by provider/proof expiry. Consumption/logout removes applicable rows
+  immediately; other expired rows are inaccessible and cleaned by hourly alarms,
+  not necessarily erased at the instant of expiry. Provider browser sessions
+  are separate and may persist.
+- AES-GCM protects identities, GitHub tokens and OAuth attempt secrets. Lookup
+  tokens/proofs are hashed, but owner IDs, labels, policies, routing metadata and
+  wallet challenge contents are not all individually encrypted or hashed.
+  [Cloudflare encrypts Durable Object storage at rest](https://developers.cloudflare.com/durable-objects/reference/data-security/).
+- IP rate-limit keys apply to API requests; account keys additionally limit
+  bundle issuance. Neither is written to the Worker's database. This does not
+  assert that Cloudflare keeps no network/security information.
+- Stored observability remains disabled. Redacted diagnostics are emitted for
+  live tail, not saved by Worker code. Live platform metadata can contain URLs;
+  no blanket claim is made about all provider/platform logging.
+- Deletion is an operator-assisted request via email, not a public deletion API.
+  It removes live labels/bundle records, not existing card contents or the
+  ability to derive the same root with the unchanged master. Support email is
+  separate from database/session retention. The policy makes no immediate
+  erasure promise for hosting-platform recovery copies.
+
+The Google policy includes the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy)
+and Limited Use commitment. Policy updates change the effective date; a new use
+of Google data also requires notice and any required consent. No governing-law
+clause is included in the terms.
+
 ## Identity and bundles
 
 Both `POST /auth/login/token` and `GET /v1/me` return exactly:

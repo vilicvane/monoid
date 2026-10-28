@@ -1,3 +1,9 @@
+@import '@ionic/react/css/core.css';
+@import '@ionic/react/css/normalize.css';
+@import '@ionic/react/css/structure.css';
+@import '@ionic/react/css/typography.css';
+@import '../../../../src/@styles/variables.css';
+
 html,
 body,
 #root {
@@ -7,4 +13,25 @@ body,
 body {
   overflow: auto;
   background: var(--ion-color-primary-contrast);
+}
+
+.legal-links {
+  flex: none;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.legal-links a {
+  display: inline-block;
+  padding: 4px 0;
+  color: inherit;
+  text-underline-offset: 3px;
+}
+
+@media (min-width: 600px) {
+  .legal-links {
+    margin-top: 16px;
+  }
 }

@@ -19,7 +19,7 @@ async function removePersistence(root) {
   assert.ok(basename(root).startsWith('monoid-authority-runtime-'));
   await rm(root, {recursive: true, force: true});
 }
-function options(root, fixture, script) {
+function options(root, fixture, script, assets = false) {
   const {AUTHORITY_STATE, REQUEST_LIMIT, ...bindings} = environment(null);
   return {
     ...convertV4MiniflareOptions({
@@ -37,6 +37,17 @@ function options(root, fixture, script) {
         },
       },
       bindings,
+      ...(assets
+        ? {
+            assets: {
+              directory: 'web/dist',
+              binding: 'ASSETS',
+              run_worker_first: true,
+              routerConfig: {has_user_worker: true},
+              assetConfig: {html_handling: 'none', not_found_handling: 'none'},
+            },
+          }
+        : {}),
       handleStructuredLogs: log => fixture.upstream.logs.push(log),
       outboundService: async request =>
         fixture.fetcher(request.url, {
@@ -50,11 +61,11 @@ function options(root, fixture, script) {
     resourcePersistencePath: root,
   };
 }
-async function setup(t) {
+async function setup(t, assets = false) {
   const root = await mkdtemp(join(tmpdir(), 'monoid-authority-runtime-')),
     fixture = providerFixture();
   fixture.upstream.logs = [];
-  let mf = new Miniflare(options(root, fixture));
+  let mf = new Miniflare(options(root, fixture, undefined, assets));
   t.after(async () => {
     await mf.dispose();
     await removePersistence(root);
@@ -80,10 +91,52 @@ async function setup(t) {
       ),
     restart: async () => {
       await mf.dispose();
-      mf = new Miniflare(options(root, fixture));
+      mf = new Miniflare(options(root, fixture, undefined, assets));
     },
   };
 }
+
+test('workerd serves built public HTML and preserves the separate login entry', async t => {
+  const f = await setup(t, true);
+  for (const [path, title] of [
+    ['/', 'Monoid Authority'],
+    ['/privacy', 'Privacy policy · Monoid Authority'],
+    ['/terms', 'Terms of service · Monoid Authority'],
+  ]) {
+    const response = await f.call(path + '?flow=not-retained');
+    assert.equal(
+      response.status,
+      200,
+      JSON.stringify({
+        body: await response.clone().text(),
+        logs: f.upstream.logs,
+      }),
+    );
+    assert.equal(response.headers.get('Location'), null);
+    assert.match(response.headers.get('Content-Type'), /text\/html/);
+    assert.equal(response.headers.get('Referrer-Policy'), 'no-referrer');
+    const html = await response.text();
+    assert.ok(html.includes(`<title>${title}</title>`));
+    assert.match(html, /href="\/privacy"/);
+    assert.match(html, /href="\/terms"/);
+    assert.doesNotMatch(html, /<script|<button|%BASE_URL%|not-retained/);
+    const css = html.match(/href="(\/assets\/[^\"]+\.css)"/)[1];
+    const style = await f.call(css);
+    assert.equal(style.status, 200);
+    assert.match(style.headers.get('Content-Type'), /text\/css/);
+  }
+  const login = await f.call('/login?flow=not-retained');
+  assert.equal(login.status, 200);
+  assert.equal(login.headers.get('Referrer-Policy'), 'origin');
+  assert.equal(login.headers.get('Cache-Control'), 'no-store');
+  const html = await login.text();
+  assert.match(html, /<title>Sign in · Monoid<\/title>/);
+  assert.match(html, /<div id="root"><\/div>/);
+  assert.match(html, /<script type="module"/);
+  assert.doesNotMatch(html, /not-retained|<h1>/);
+  assert.equal((await f.call('/privacy', {})).status, 404);
+  assert.equal((await f.call('/unknown')).status, 404);
+});
 
 for (const provider of ['google', 'github'])
   test(`workerd ${provider} OAuth, encrypted identity, PKCE and persistent owner/session`, async t => {
