@@ -83,15 +83,31 @@ export class AuthorityState extends DurableObject<Env> {
     return this.store.touchSession(key, absoluteExpiresAt, Date.now());
   }
 
+  async takeMatch(
+    key: string,
+    proof: string,
+    expected: string,
+  ): Promise<string | null> {
+    return this.store.takeMatch(key, proof, expected, Date.now());
+  }
+
   async remove(key: string): Promise<void> {
     this.store.remove(key);
+  }
+
+  async replace(
+    key: string,
+    expected: string,
+    value: string,
+  ): Promise<boolean> {
+    return this.store.replace(key, expected, value, Date.now());
   }
 
   async group(owner: Owner, name: string, policy?: boolean) {
     return this.store.group(owner, name, policy);
   }
 
-  async groups(owner: Owner, after: string) {
+  async groups(owner: Owner, after: string | null = null) {
     return this.store.groups(owner, after);
   }
 

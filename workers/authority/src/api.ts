@@ -1,10 +1,4 @@
-import {
-  authenticate,
-  type AuthEnv,
-  logout,
-  reownLogin,
-  stateStore,
-} from './auth.js';
+import {authenticate, type AuthEnv, logout, stateStore} from './auth.js';
 import {
   authorizeBrowserLogin,
   browserLoginContext,
@@ -12,17 +6,13 @@ import {
   completeBrowserLogin,
   exchangeBrowserLogin,
   startBrowserLogin,
+  resetBrowserLogin,
 } from './browser-login.js';
-import {
-  approve,
-  authorize,
-  exchange,
-  githubCallback,
-  startLogin,
-} from './github-oauth.js';
+import {startOAuth, oauthCallback} from './oauth.js';
+import {walletNonce, verifyWallet} from './wallet.js';
 import {body, bytes, HttpError, json, requireValue} from './http.js';
 import {organizations} from './github.js';
-import {groupName} from './names.js';
+import {groupName, requiredName} from './names.js';
 import {authorizeOwner, identities} from './identities.js';
 
 export interface Env extends AuthEnv {
@@ -85,9 +75,6 @@ export function createHandler(fetcher: typeof fetch = fetch) {
           case 'GET /v1/metadata':
             response = json(await stateStore(env).metadata());
             break;
-          case 'POST /auth/reown':
-            response = await reownLogin(request, env, fetcher);
-            break;
           case 'POST /auth/login/start':
             response = await startBrowserLogin(request, env);
             break;
@@ -98,46 +85,57 @@ export function createHandler(fetcher: typeof fetch = fetch) {
             response = await browserLoginContext(request, env);
             break;
           case 'POST /auth/login/complete':
-            response = await completeBrowserLogin(request, env, fetcher);
+            response = await completeBrowserLogin(request, env);
             break;
           case 'POST /auth/login/cancel':
             response = await cancelBrowserLogin(request, env);
             break;
           case 'POST /auth/login/token':
-            response = await exchangeBrowserLogin(request, env, fetcher);
+            response = await exchangeBrowserLogin(request, env);
             break;
-          case 'POST /auth/github/start':
-            response = await startLogin(request, env, fetcher);
+          case 'POST /auth/login/google':
+          case 'POST /auth/login/github':
+            response = await startOAuth(
+              request,
+              env,
+              path.endsWith('google') ? 'google' : 'github',
+            );
             break;
-          case 'GET /auth/github':
-            response = await authorize(request, env);
-            break;
+          case 'GET /auth/google/callback':
           case 'GET /auth/github/callback':
-            response = await githubCallback(request, env, fetcher);
+            response = await oauthCallback(
+              request,
+              env,
+              fetcher,
+              path.includes('/google/') ? 'google' : 'github',
+            );
             break;
-          case 'POST /auth/approve':
-            response = await approve(request, env);
+          case 'POST /auth/login/reset':
+            response = await resetBrowserLogin(request, env);
             break;
-          case 'POST /auth/token':
-            response = await exchange(request, env, fetcher);
+          case 'POST /auth/login/wallet/nonce':
+            response = await walletNonce(request, env);
+            break;
+          case 'POST /auth/login/wallet/verify':
+            response = await verifyWallet(request, env, fetcher);
             break;
           case 'POST /auth/logout':
             response = await logout(request, env);
             break;
           case 'GET /v1/me': {
-            const session = await authenticate(request, env, fetcher);
+            const session = await authenticate(request, env);
             response = json({account: session.account});
             break;
           }
           case 'GET /v1/organizations': {
-            const session = await authenticate(request, env, fetcher);
+            const session = await authenticate(request, env);
             response = json({
               organizations: await organizations(session, fetcher),
             });
             break;
           }
           case 'GET /v1/namespaces': {
-            const session = await authenticate(request, env, fetcher);
+            const session = await authenticate(request, env);
             response = json({
               namespaces: await stateStore(env).namespaces(
                 await identities(session, fetcher),
@@ -146,24 +144,24 @@ export function createHandler(fetcher: typeof fetch = fetch) {
             break;
           }
           case 'POST /v1/namespaces/name': {
-            const session = await authenticate(request, env, fetcher);
+            const session = await authenticate(request, env);
             const input = await body(request);
             const owner = await resolveOwner(input.owner, session);
             response = json({
               namespace: await stateStore(env).namespace(
                 {source: owner.source, id: owner.id},
                 owner.displayName,
-                groupName(input.displayName),
+                requiredName(input.displayName),
               ),
             });
             break;
           }
           case 'POST /v1/groups/list': {
-            const session = await authenticate(request, env, fetcher);
+            const session = await authenticate(request, env);
             const input = await body(request);
             const owner = await resolveOwner(input.owner, session);
             const after =
-              input.after === undefined ? '' : groupName(input.after);
+              input.after === undefined ? null : groupName(input.after);
             const groups = await stateStore(env).groups(owner, after);
             response = json({
               owner,
@@ -179,11 +177,11 @@ export function createHandler(fetcher: typeof fetch = fetch) {
             break;
           }
           case 'POST /v1/bundle': {
-            const session = await authenticate(request, env, fetcher);
+            const session = await authenticate(request, env);
             if (
               !(
                 await env.REQUEST_LIMIT.limit({
-                  key: `bundle:${session.account.id}`,
+                  key: `bundle:${session.account.source}:${session.account.id}`,
                 })
               ).success
             )

@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "dev:init": "node scripts/init-dev.mjs",
-    "demo": "npm --prefix demo run dev",
     "dev": "npm run build:web:dev && wrangler dev --ip 0.0.0.0 --local-upstream localhost:8787 --upstream-protocol http",
     "dev:web": "npm --prefix web run build -- --mode development --watch",
     "build:web": "npm --prefix web run build",
@@ -17,7 +16,9 @@
     "deploy": "npm run build:web && wrangler deploy"
   },
   "dependencies": {
-    "@hpke/core": "1.9.0"
+    "@hpke/core": "1.9.0",
+    "jose": "6.2.13",
+    "viem": "2.57.12"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261016.1",

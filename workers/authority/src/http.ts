@@ -37,7 +37,10 @@ export function bytes(value: unknown, length: number): Uint8Array {
   }
 }
 
-export async function body(request: Request): Promise<Record<string, unknown>> {
+export async function body(
+  request: Request,
+  maxLength = 4096,
+): Promise<Record<string, unknown>> {
   requireValue(
     request.headers.get('Content-Type')?.split(';')[0] === 'application/json',
   );
@@ -52,7 +55,7 @@ export async function body(request: Request): Promise<Record<string, unknown>> {
     if (done) break;
 
     length += value.length;
-    if (length > 4096) {
+    if (length > maxLength) {
       await reader.cancel();
       throw new HttpError(413, 'request_too_large');
     }
@@ -84,20 +87,4 @@ export function redirect(url: string, cookie?: string): Response {
   const headers = new Headers({Location: url});
   if (cookie) headers.set('Set-Cookie', cookie);
   return new Response(null, {status: 303, headers});
-}
-
-export function html(value: string): Response {
-  return new Response(value, {
-    headers: {'Content-Type': 'text/html; charset=utf-8'},
-  });
-}
-
-export function escapeHTML(value: string): string {
-  return value.replace(
-    /[&<>"']/g,
-    char =>
-      ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[
-        char
-      ]!,
-  );
 }

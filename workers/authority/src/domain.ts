@@ -1,28 +1,14 @@
-export interface Account {
+export interface Owner {
+  source: 'google' | 'github-user' | 'github-organization' | 'wallet';
   id: string;
-  login: string;
 }
 
-export type SignInMethod = 'wallet' | 'email' | 'social';
+export interface Namespace extends Owner {
+  displayName: string;
+}
 
-// AppKit 1.8.24: @reown/appkit-common SocialProvider.
-export const SOCIAL_PROVIDERS = [
-  'google',
-  'github',
-  'apple',
-  'facebook',
-  'x',
-  'discord',
-  'farcaster',
-] as const;
-export type SocialProvider = (typeof SOCIAL_PROVIDERS)[number];
-export const isSocialProvider = (value: unknown): value is SocialProvider =>
-  (SOCIAL_PROVIDERS as readonly unknown[]).includes(value);
-
-export interface SignedInAccount extends Account {
-  method: SignInMethod;
-  email?: string;
-  provider?: SocialProvider;
+export interface Account extends Namespace {
+  source: 'google' | 'github-user' | 'wallet';
 }
 
 export interface Group {
@@ -31,19 +17,8 @@ export interface Group {
   createdAt: number;
 }
 
-export interface Owner {
-  source: 'reown' | 'wallet' | 'github-user' | 'github-organization';
-  id: string;
-}
-
-export interface Namespace extends Owner {
-  displayName: string;
-}
-
 export interface Session {
-  account: SignedInAccount;
-  wallet?: Account;
-  reownToken: string;
+  account: Account;
   absoluteExpiresAt: number;
-  github?: {account: Account; token: string};
+  githubToken?: string;
 }

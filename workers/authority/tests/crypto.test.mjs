@@ -67,7 +67,7 @@ test('Java Card wire packet independently decrypts; group roots stable and isola
   recipient.generateKeys();
   const other = createECDH('prime256v1');
   other.generateKeys();
-  const owner = {source: 'reown', id: 'project:profile'};
+  const owner = {source: 'google', id: 'google-sub-123'};
   const first = await authority.issueBundle(
     owner,
     'family',
@@ -141,4 +141,52 @@ test('time proof binds domain, challenge and big-endian timestamp with P1363 sig
   assert.equal(await verify(data), false);
   data[40] ^= 1;
   assert.equal(await verify(cat('Monoid Authority Time', data)), false);
+});
+
+test('the unnamed bundle derives from the canonical empty name without changing the root format', async () => {
+  const material = await AuthorityCrypto.generateMaterial();
+  const authority = await AuthorityCrypto.create(material);
+  const recipient = createECDH('prime256v1');
+  recipient.generateKeys();
+  const owner = {source: 'google', id: 'google-sub-123'};
+  const bundle = await authority.issueBundle(
+    owner,
+    '',
+    false,
+    recipient.getPublicKey(),
+  );
+  const root = decrypt(bundle, recipient, b64(bundle.publicKey));
+  assert.deepEqual(
+    root,
+    mac(
+      material.master,
+      JSON.stringify([
+        'Monoid Authority Bundle Root',
+        1,
+        owner.source,
+        owner.id,
+        '',
+        false,
+      ]),
+    ),
+  );
+  assert.equal(bundle.groupName, '');
+  const repeated = await authority.issueBundle(
+    owner,
+    '',
+    false,
+    recipient.getPublicKey(),
+  );
+  assert.equal(repeated.bundle, bundle.bundle);
+  for (const [o, name, policy] of [
+    [owner, 'treasury', false],
+    [owner, '', true],
+    [{...owner, id: 'other'}, '', false],
+  ]) {
+    assert.notEqual(
+      (await authority.issueBundle(o, name, policy, recipient.getPublicKey()))
+        .bundle,
+      bundle.bundle,
+    );
+  }
 });

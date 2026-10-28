@@ -5,3 +5,5 @@
 .env
 .env.*
 secrets*.json
+# Generated output left by the retired diagnostic client.
+/demo/dist/

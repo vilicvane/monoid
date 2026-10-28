@@ -1,6 +1,10 @@
 import {requireValue, string} from './http.js';
 
 export function groupName(value: unknown): string {
+  return value === undefined || value === '' ? '' : requiredName(value);
+}
+
+export function requiredName(value: unknown): string {
   const name = string(value, 128).normalize('NFC');
   requireValue(
     name.trim() === name &&

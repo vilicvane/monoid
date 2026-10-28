@@ -10,6 +10,7 @@ export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   color?: 'primary' | 'danger' | 'warning' | 'neutral';
   loading?: boolean;
   footerReveal?: 'always' | 'end';
+  icon?: ReactNode;
 };
 
 export const Buttons = styled.div`
@@ -75,6 +76,23 @@ const LoadingContent = styled.span<{$loading: boolean}>`
   }
 `;
 
+const IconSlot = styled.span`
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  > svg,
+  > img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+`;
+
 const Spinner = styled(LoadingSpinner)`
   position: absolute;
   right: calc(100% + 8px);
@@ -97,9 +115,16 @@ export const Button = ({
   disabled,
   loading,
   footerReveal,
+  icon,
   children,
   ...props
 }: ButtonProps): ReactNode => {
+  const content = (
+    <>
+      {icon && <IconSlot aria-hidden="true">{icon}</IconSlot>}
+      {children}
+    </>
+  );
   return (
     <Container
       className={classNames(className, 'ion-activatable')}
@@ -110,11 +135,11 @@ export const Button = ({
       {...props}
     >
       {loading === undefined ? (
-        children
+        content
       ) : (
         <LoadingContent $loading={loading}>
           <Spinner paused={!loading} style={{opacity: loading ? 1 : 0}} />
-          {children}
+          {content}
         </LoadingContent>
       )}
       {!disabled && !loading && <RippleEffect />}

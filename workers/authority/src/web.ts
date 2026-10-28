@@ -4,8 +4,8 @@ export interface WebEnv extends Env {
   ASSETS: Fetcher;
 }
 
-// AppKit's auth iframe requires an origin Referer. Keep that policy scoped to
-// the login UI; API and redirect responses retain no-referrer.
+// Wallet UI resources receive only the origin, never flow/OAuth parameters.
+// API and redirect responses retain no-referrer.
 const LOGIN_CSP = [
   "default-src 'none'",
   "script-src 'self'",

@@ -2,7 +2,7 @@ import {setupIonicReact} from '@ionic/react';
 import {createRoot} from 'react-dom/client';
 import {useEffect, useRef, useState, type ReactNode} from 'react';
 import {styled} from 'styled-components';
-import {Lock} from 'lucide-react';
+import {Certificate} from 'lucide-react';
 import '@ionic/react/css/core.css';
 import '@ionic/react/css/normalize.css';
 import '@ionic/react/css/structure.css';
@@ -10,12 +10,10 @@ import '@ionic/react/css/typography.css';
 import '../../../../src/@styles/variables.css';
 import {Button, Buttons} from './button.js';
 import monoidLogo from '../../../../src/@assets/monoid.svg';
+import googleLogo from './assets/google-g.svg';
+import githubLogo from './assets/github-invertocat.svg?raw';
 import {AppIcon} from '../../../../src/@components/@ui/app-icon.js';
-import {
-  IconTag,
-  IconTagName,
-} from '../../../../src/@components/@ui/icon-tag.js';
-import {WhiteTag} from '../../../../src/@components/@ui/tag.js';
+import {Tag, leadingIconTagCSS} from '../../../../src/@components/@ui/tag.js';
 import {InfoSectionItemLabel} from '../../../../src/@components/@ui/info-section.js';
 import {StandaloneLoadingSpinner} from '../../../../src/@components/@ui/loading-spinner.js';
 import {
@@ -26,7 +24,8 @@ import {OperationComplete} from './operation-complete.js';
 import {ViewHeaderTitle} from '../../../../src/@components/@view/view-header.js';
 import {AccountCard} from './account.js';
 import {BrowserFlow, LoginError, restoreFlow} from './flow.mjs';
-import type {Identity, ReownLogin} from './reown.js';
+import type {Account} from '../../src/domain.js';
+import type {WalletLogin} from './wallet.js';
 import './style.css';
 
 setupIonicReact();
@@ -63,13 +62,33 @@ const Title = styled(ViewHeaderTitle)`
   line-height: 32px;
 `;
 
-const AuthorityTag = styled(IconTag)`
+const AuthorityTag = styled(Tag).attrs({as: 'span'})`
+  ${leadingIconTagCSS}
+
+  background-color: var(
+    --color-address-tag-background,
+    var(--ion-color-dark-contrast)
+  );
+  border-color: var(--color-address-tag-border, var(--ion-color-light-shade));
+  color: var(--color-address-tag-text, var(--ion-color-dark));
+
   align-self: center;
+  min-width: 0;
+  max-width: 100%;
 `;
 
-const LockTag = styled(WhiteTag).attrs({as: 'span'})`
-  padding: 0;
-  font-size: 14px;
+const CertificateIcon = styled(AppIcon)`
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: block;
+`;
+
+const AuthorityHost = styled.span`
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 `;
 
 const Secondary = styled(InfoSectionItemLabel).attrs({as: 'p'})`
@@ -144,7 +163,7 @@ function errorText(error: unknown): string {
       ].includes(error.message)
     )
       return 'This sign-in has expired. Open Monoid and try again.';
-    if (error.message === 'reown_reauthentication_required')
+    if (error.message === 'unauthorized')
       return 'Your sign-in has expired. Please sign in again.';
     if (error.message === 'rate_limited')
       return 'Please wait a minute and try again.';
@@ -161,15 +180,21 @@ try {
 const browserFlow = flow ? new BrowserFlow(flow, sessionStorage) : null;
 
 function LoginPage(): ReactNode {
-  const login = useRef<ReownLogin | null>(null);
+  const wallet = useRef<WalletLogin | null>(null);
   const alive = useRef(true);
   const finishing = useRef(false);
+  const projectId = useRef('');
   const expiryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [identity, setIdentity] = useState<Identity | null>(null);
+  const [account, setAccount] = useState<Account | null>(null);
+  const [providers, setProviders] = useState({
+    google: false,
+    github: false,
+    wallet: false,
+  });
   const [message, setMessage] = useState(
     browserFlow
       ? 'Preparing sign-in…'
@@ -180,7 +205,6 @@ function LoginPage(): ReactNode {
     url: string;
     cancelled: boolean;
   } | null>(null);
-
   const showError = (error: unknown) => {
     setError(true);
     setMessage(errorText(error));
@@ -190,39 +214,24 @@ function LoginPage(): ReactNode {
     if (!browserFlow) return;
     void browserFlow
       .context()
-      .then(async context => {
+      .then(context => {
         if (!alive.current) return;
         if (
-          !context.projectId ||
           !Number.isFinite(context.expiresAt) ||
           context.expiresAt <= Date.now()
         )
           throw new LoginError('login_expired');
-        const {createLogin} = await import('./reown.js');
-        if (!alive.current) return;
-        login.current = createLogin(
-          context.projectId,
-          value => {
-            if (!alive.current || finishing.current) return;
-            setIdentity(value);
-            setError(false);
-            setMessage(
-              value
-                ? 'Continue with this account.'
-                : 'Choose an account to sign in.',
-            );
-          },
-          () => {
-            if (alive.current && !finishing.current) showError(new Error());
-          },
-        );
+        projectId.current = context.projectId;
+        setProviders(context.providers);
+        setAccount(context.account);
         setReady(true);
         setMessage('Choose an account to sign in.');
+        if (context.error) showError(new LoginError(context.error));
         expiryTimer.current = setTimeout(() => {
           if (finishing.current) return;
-          login.current?.stop();
+          wallet.current?.stop();
           setReady(false);
-          setIdentity(null);
+          setAccount(null);
           showError(new LoginError('login_expired'));
         }, context.expiresAt - Date.now());
       })
@@ -232,7 +241,7 @@ function LoginPage(): ReactNode {
     return () => {
       alive.current = false;
       clearTimeout(expiryTimer.current);
-      login.current?.stop();
+      wallet.current?.stop();
     };
   }, []);
 
@@ -243,20 +252,10 @@ function LoginPage(): ReactNode {
     setError(false);
     setMessage(cancelled ? 'Returning to Monoid…' : 'Signing in…');
     try {
-      const credential = cancelled ? null : await login.current?.credential();
-      if (!cancelled && !credential) {
-        setIdentity(null);
-        setMessage('Please confirm your account and sign in again.');
-        return;
-      }
-      const url = await browserFlow.finish(
-        cancelled ? 'cancel' : 'complete',
-        credential,
-      );
+      const url = await browserFlow.finish(cancelled ? 'cancel' : 'complete');
       if (!url) return;
       clearTimeout(expiryTimer.current);
-      // Erase local credentials now; async SDK sign-out must not delay return.
-      void login.current?.signOut();
+      void wallet.current?.signOut().catch(() => {});
       setReady(false);
       setReturned({url, cancelled});
       location.assign(url);
@@ -268,13 +267,52 @@ function LoginPage(): ReactNode {
     }
   };
 
-  const openLogin = async (changeAccount = false) => {
-    if (!login.current) return;
+  const choose = async (provider: 'google' | 'github' | 'wallet') => {
+    if (!browserFlow) return;
     setBusy(true);
     setError(false);
     try {
-      if (changeAccount) await login.current.changeAccount();
-      else await login.current.open();
+      if (provider === 'wallet') {
+        if (!wallet.current) {
+          const {createWalletLogin} = await import('./wallet.js');
+          wallet.current = createWalletLogin(
+            projectId.current,
+            browserFlow,
+            value => {
+              if (!alive.current || finishing.current) return;
+              setAccount(value);
+              setError(false);
+              setMessage('Choose an account to sign in.');
+            },
+            () => {
+              if (alive.current && !finishing.current) showError(new Error());
+            },
+          );
+        }
+        await wallet.current.open();
+      } else {
+        await wallet.current?.changeAccount();
+        const result = await browserFlow.request(provider, {
+          flow: browserFlow.flow,
+        });
+        location.assign(result.authorizationUrl);
+      }
+    } catch (error) {
+      showError(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const changeAccount = async () => {
+    if (!browserFlow) return;
+    setBusy(true);
+    setError(false);
+    try {
+      await wallet.current?.changeAccount();
+      await browserFlow.request('reset', {flow: browserFlow.flow});
+      setAccount(null);
+      setMessage('Choose an account to sign in.');
     } catch (error) {
       showError(error);
     } finally {
@@ -289,13 +327,11 @@ function LoginPage(): ReactNode {
           <Logo src={monoidLogo} alt="Monoid" />
           <Title>Sign in to Monoid</Title>
           <AuthorityTag>
-            <LockTag>
-              <AppIcon icon={Lock} aria-hidden="true" />
-            </LockTag>
-            <IconTagName>{location.host}</IconTagName>
+            <CertificateIcon icon={Certificate} aria-hidden="true" />
+            <AuthorityHost>{location.host}</AuthorityHost>
           </AuthorityTag>
           <Secondary>
-            Monoid uses this account to issue Authority bundles for your cards.
+            Monoid uses this account to issue authority bundles for your cards.
           </Secondary>
         </IdentityBlock>
       )}
@@ -311,19 +347,17 @@ function LoginPage(): ReactNode {
           )
         ) : error ? (
           <WarningMessage role="alert">{message}</WarningMessage>
-        ) : identity ? (
+        ) : account ? (
           <AccountCard
-            account={identity}
+            account={account}
             busy={busy}
-            onChange={() => void openLogin(true)}
+            onChange={() => void changeAccount()}
           />
         ) : browserFlow && !ready ? (
           <Preparing role="status" aria-label="Preparing sign-in">
             <StandaloneLoadingSpinner />
           </Preparing>
-        ) : !browserFlow ||
-          busy ||
-          message !== 'Choose an account to sign in.' ? (
+        ) : !browserFlow || message !== 'Choose an account to sign in.' ? (
           <InfoMessage aria-live="polite">{message}</InfoMessage>
         ) : null}
       </Content>
@@ -334,14 +368,42 @@ function LoginPage(): ReactNode {
           </Button>
         ) : ready ? (
           <>
-            {identity ? (
+            {account ? (
               <Button loading={busy} onClick={() => void finish(false)}>
                 Continue
               </Button>
             ) : (
-              <Button loading={busy} onClick={() => void openLogin()}>
-                Sign in
-              </Button>
+              <>
+                <Button
+                  color="neutral"
+                  icon={<img src={googleLogo} alt="" />}
+                  disabled={busy || !providers.google}
+                  onClick={() => void choose('google')}
+                >
+                  Continue with Google
+                </Button>
+                <Button
+                  color="neutral"
+                  icon={
+                    <AppIcon
+                      icon={githubLogo}
+                      aria-hidden="true"
+                      focusable="false"
+                    />
+                  }
+                  disabled={busy || !providers.github}
+                  onClick={() => void choose('github')}
+                >
+                  Continue with GitHub
+                </Button>
+                <Button
+                  color="neutral"
+                  disabled={busy || !providers.wallet}
+                  onClick={() => void choose('wallet')}
+                >
+                  Connect wallet
+                </Button>
+              </>
             )}
             <Button
               color="neutral"

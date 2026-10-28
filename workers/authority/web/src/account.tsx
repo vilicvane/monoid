@@ -1,6 +1,6 @@
-import {ArrowLeftRight, Mail, UserRound, Wallet} from 'lucide-react';
+import {ArrowLeftRight, UserRound, Wallet} from 'lucide-react';
 import {styled} from 'styled-components';
-import type {SocialProvider} from '../../src/domain.js';
+import type {Account} from '../../src/domain.js';
 import {Address} from '../../../../src/@components/@ui/address.js';
 import {AppIcon} from '../../../../src/@components/@ui/app-icon.js';
 import {IconButton} from '../../../../src/@components/@ui/icon-button.js';
@@ -15,16 +15,11 @@ import {
   ListItemName,
   ListItemDescription,
 } from '../../../../src/@components/@ui/list.js';
-import type {Identity} from './reown.js';
 
-export const PROVIDER_NAMES: Record<SocialProvider, string> = {
+export const SOURCE_NAMES = {
   google: 'Google',
-  x: 'X',
-  github: 'GitHub',
-  discord: 'Discord',
-  apple: 'Apple',
-  facebook: 'Facebook',
-  farcaster: 'Farcaster',
+  'github-user': 'GitHub',
+  wallet: 'Wallet',
 };
 
 // Card Applets' row geometry, inside an InfoFieldset instead of an IconList.
@@ -66,25 +61,12 @@ export function AccountCard({
   busy,
   onChange,
 }: {
-  account: Identity;
+  account: Account;
   busy: boolean;
   onChange: () => void;
 }) {
-  const description =
-    account.method === 'social'
-      ? PROVIDER_NAMES[account.provider!]
-      : account.method === 'wallet'
-        ? 'Wallet'
-        : 'Email';
-  const icon =
-    account.method === 'wallet'
-      ? Wallet
-      : account.method === 'social'
-        ? UserRound
-        : Mail;
-  const name =
-    account.email ||
-    (account.method === 'social' ? `${description} account` : 'Signed in.');
+  const description = SOURCE_NAMES[account.source];
+  const icon = account.source === 'wallet' ? Wallet : UserRound;
 
   return (
     <InfoFieldset>
@@ -95,12 +77,15 @@ export function AccountCard({
         </Symbol>
         <ListItemContent>
           <ListItemName>
-            {account.method === 'wallet' ? (
-              <Address title={account.login} aria-label={account.login}>
-                {account.login}
+            {account.source === 'wallet' ? (
+              <Address
+                title={account.displayName}
+                aria-label={account.displayName}
+              >
+                {account.displayName}
               </Address>
             ) : (
-              name
+              account.displayName
             )}
           </ListItemName>
           <ListItemDescription>{description}</ListItemDescription>

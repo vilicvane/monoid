@@ -75,8 +75,43 @@ export class AuthorityStore {
     );
   }
 
+  takeMatch(
+    key: string,
+    proof: string,
+    expected: string,
+    now: number,
+  ): string | null {
+    return (
+      this.storage.sql
+        .exec<{
+          value: string;
+        }>(
+          'DELETE FROM records WHERE key = ? AND proof = ? AND value = ? AND expires > ? RETURNING value',
+          key,
+          proof,
+          expected,
+          now,
+        )
+        .toArray()[0]?.value ?? null
+    );
+  }
+
   remove(key: string): void {
     this.storage.sql.exec('DELETE FROM records WHERE key = ?', key);
+  }
+
+  replace(key: string, expected: string, value: string, now: number): boolean {
+    return (
+      this.storage.sql
+        .exec(
+          'UPDATE records SET value = ? WHERE key = ? AND value = ? AND expires > ? RETURNING key',
+          value,
+          key,
+          expected,
+          now,
+        )
+        .toArray().length > 0
+    );
   }
 
   namespace(owner: Owner, fallback: string, displayName?: string): Namespace {
@@ -138,13 +173,15 @@ export class AuthorityStore {
       : null;
   }
 
-  groups(owner: Owner, after: string): Group[] {
+  groups(owner: Owner, after: string | null = null): Group[] {
+    // No cursor includes the unnamed bundle; an empty cursor advances past it.
+    const comparison = after === null ? '>=' : '>';
     return this.storage.sql
       .exec<{name: string; allow_peer_extension: number; created_at: number}>(
-        'SELECT name, allow_peer_extension, created_at FROM groups WHERE owner_source = ? AND owner_id = ? AND name > ? ORDER BY name LIMIT 100',
+        `SELECT name, allow_peer_extension, created_at FROM groups WHERE owner_source = ? AND owner_id = ? AND name ${comparison} ? ORDER BY name LIMIT 100`,
         owner.source,
         owner.id,
-        after,
+        after ?? '',
       )
       .toArray()
       .map(row => ({

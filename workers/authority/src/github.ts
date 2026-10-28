@@ -1,5 +1,5 @@
 import {HttpError} from './http.js';
-import type {Account, Session} from './domain.js';
+import type {Account, Namespace, Session} from './domain.js';
 
 export async function githubRequest(
   path: string,
@@ -36,19 +36,23 @@ export async function githubAccount(
     user.type !== 'User'
   )
     throw new HttpError(502, 'invalid_github_identity');
-  return {id: String(user.id), login: user.login};
+  return {source: 'github-user', id: String(user.id), displayName: user.login};
 }
 
 export async function organizations(
   session: Session,
   fetcher: typeof fetch,
-): Promise<Account[]> {
-  if (!session.github) throw new HttpError(403, 'github_connection_required');
-  const result: Account[] = [];
+): Promise<Namespace[]> {
+  if (session.account.source !== 'github-user' || !session.githubToken)
+    throw new HttpError(403, 'github_sign_in_required');
+  const current = await githubAccount(session.githubToken, fetcher);
+  if (current.id !== session.account.id)
+    throw new HttpError(401, 'github_identity_changed');
+  const result: Namespace[] = [];
   for (let page = 1; page <= 10; page++) {
     const response = await githubRequest(
       `/user/memberships/orgs?state=active&per_page=100&page=${page}`,
-      session.github.token,
+      session.githubToken,
       fetcher,
     );
     const rows = await response.json<
@@ -66,8 +70,9 @@ export async function organizations(
         row.organization.id > 0
       ) {
         result.push({
+          source: 'github-organization',
           id: String(row.organization.id),
-          login: row.organization.login,
+          displayName: row.organization.login,
         });
       }
     }

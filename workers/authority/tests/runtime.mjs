@@ -5,18 +5,22 @@ import {createECDH} from 'node:crypto';
 import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {basename, dirname, join} from 'node:path';
-import {randomToken, tokenHash} from '../.bld/encoding.js';
-
-const project = 'runtime-test';
-const base = 'https://authority.monoid.app';
+import {tokenHash} from '../.bld/encoding.js';
+import {
+  base,
+  client,
+  environment,
+  providerFixture,
+  signer,
+} from './login-fixture.mjs';
 
 async function removePersistence(root) {
   assert.equal(dirname(root), tmpdir());
-  assert.equal(basename(root).startsWith('monoid-authority-runtime-'), true);
+  assert.ok(basename(root).startsWith('monoid-authority-runtime-'));
   await rm(root, {recursive: true, force: true});
 }
-
-function options(resourcePersistencePath, script) {
+function options(root, fixture, script) {
+  const {AUTHORITY_STATE, REQUEST_LIMIT, ...bindings} = environment(null);
   return {
     ...convertV4MiniflareOptions({
       name: 'authority-test',
@@ -27,364 +31,335 @@ function options(resourcePersistencePath, script) {
         AUTHORITY_STATE: {className: 'AuthorityState', useSQLite: true},
       },
       ratelimits: {
-        REQUEST_LIMIT: {namespace_id: '1002', simple: {limit: 30, period: 60}},
+        REQUEST_LIMIT: {
+          namespace_id: '1002',
+          simple: {limit: 1000, period: 60},
+        },
       },
-      bindings: {
-        AUTHORITY_URL: 'https://authority.monoid.app',
-        APP_ORIGINS: '[]',
-        APP_REDIRECT_URIS: '["app.monoid://authority/callback"]',
-        REOWN_PROJECT_ID: project,
-        REOWN_AUTH_ORIGINS: '["https://authority.monoid.app"]',
-      },
-      outboundService: request => {
-        const url = new URL(request.url);
-        assert.equal(url.hostname, 'api.web3modal.org');
-        assert.equal(url.pathname, '/auth/v1/me');
-        assert.equal(url.searchParams.get('projectId'), project);
-        assert.equal(url.searchParams.get('st'), 'appkit');
-        assert.equal(url.searchParams.get('sv'), 'html-ethers-1.8.24');
-        assert.equal(request.headers.get('Authorization'), 'Bearer test-token');
-        return Response.json({
-          projectIdKey: project,
-          profileUuid: '11111111-1111-4111-8111-111111111111',
-          exp: Math.floor(Date.now() / 1000) + 3600,
-          uri: 'https://authority.monoid.app/login',
-          domain: 'authority.monoid.app',
-          address: '0x' + 'ab'.repeat(20),
-          chainNamespace: 'eip155',
-          email: 'verified@example.com',
-        });
-      },
+      bindings,
+      handleStructuredLogs: log => fixture.upstream.logs.push(log),
+      outboundService: async request =>
+        fixture.fetcher(request.url, {
+          method: request.method,
+          headers: Object.fromEntries(request.headers),
+          body: ['GET', 'HEAD'].includes(request.method)
+            ? undefined
+            : new Uint8Array(await request.arrayBuffer()),
+        }),
     }),
-    // V5's persistence option must not pass through the V4 adapter.
-    resourcePersistencePath,
+    resourcePersistencePath: root,
   };
 }
-
-test('workerd keeps generated keys, group roots and sessions across a complete restart', async context => {
-  const root = await mkdtemp(join(tmpdir(), 'monoid-authority-runtime-'));
-  let mf = new Miniflare(options(root));
-  context.after(async () => {
+async function setup(t) {
+  const root = await mkdtemp(join(tmpdir(), 'monoid-authority-runtime-')),
+    fixture = providerFixture();
+  fixture.upstream.logs = [];
+  let mf = new Miniflare(options(root, fixture));
+  t.after(async () => {
     await mf.dispose();
     await removePersistence(root);
   });
   const call = (path, body, token, headers = {}) =>
     mf.dispatchFetch(base + path, {
-      method: 'POST',
+      redirect: 'manual',
+      method: body === undefined ? 'GET' : 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        ...(token ? {Authorization: `Bearer ${token}`} : {}),
+        ...(body === undefined ? {} : {'Content-Type': 'application/json'}),
+        ...(token ? {Authorization: 'Bearer ' + token} : {}),
         ...headers,
       },
-      body: JSON.stringify(body),
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
-  const firstRequests = await Promise.all(
-    Array.from({length: 5}, () => mf.dispatchFetch(base + '/v1/metadata')),
-  );
-  const metadata = await Promise.all(firstRequests.map(r => r.json()));
-  for (const value of metadata)
-    assert.equal(value.publicKey, metadata[0].publicKey);
-  assert.deepEqual(Object.keys(metadata[0]).sort(), [
-    'bundle',
-    'publicKey',
-    'time',
-  ]);
-  const challenge = Buffer.alloc(32, 1).toString('base64url');
-  const signed = await call('/v1/time', {challenge});
-  assert.equal(signed.status, 200);
-  assert.equal((await signed.json()).publicKey, metadata[0].publicKey);
-  const namespace = await mf.getDurableObjectNamespace('AUTHORITY_STATE');
-  const stub = namespace.getByName('authority');
-  assert.equal(await stub.get('authority-keys:v1'), null);
-  assert.equal(await stub.take('authority-keys:v1', ''), null);
-  for (const path of ['/v1/keys', '/v1/keys/export', '/v1/keys/rotate'])
-    assert.equal((await call(path, {})).status, 404);
-  const login = await call('/auth/reown', {
-    token: 'test-token',
-    method: 'wallet',
-  });
-  assert.equal(login.status, 200, await login.clone().text());
-  const session = await login.json();
-  const recipient = createECDH('prime256v1');
-  recipient.generateKeys();
-  const input = {
-    owner: {source: 'reown', id: session.account.id},
-    groupName: 'family',
-    allowPeerExtension: false,
-    recipientPublicKey: recipient.getPublicKey().toString('base64url'),
-  };
-  const issued = await call('/v1/bundle', input, session.accessToken);
-  assert.equal(issued.status, 200, await issued.clone().text());
-  const original = await issued.clone().json();
-  const renamed = await call(
-    '/v1/namespaces/name',
-    {owner: input.owner, displayName: 'Local family'},
-    session.accessToken,
-  );
-  assert.equal(renamed.status, 200);
-  const afterRename = await (
-    await call('/v1/bundle', input, session.accessToken)
-  ).json();
-  assert.equal(afterRename.bundle, original.bundle);
-  assert.equal(afterRename.owner.displayName, 'Local family');
-  assert.equal(
-    Buffer.from((await issued.json()).data, 'base64url').length,
-    182,
-  );
-  assert.equal(
-    (
-      await call(
-        '/v1/bundle',
-        {...input, allowPeerExtension: true},
-        session.accessToken,
-      )
-    ).status,
-    409,
-  );
-
-  await mf.dispose();
-  mf = new Miniflare(options(root));
-  const restored = await (await mf.dispatchFetch(base + '/v1/metadata')).json();
-  assert.deepEqual(restored, metadata[0]);
-  const afterRestart = await call('/v1/bundle', input, session.accessToken);
-  assert.equal(afterRestart.status, 200, await afterRestart.clone().text());
-  const restoredBundle = await afterRestart.json();
-  assert.equal(restoredBundle.bundle, original.bundle);
-  assert.equal(restoredBundle.publicKey, original.publicKey);
-  assert.equal(restoredBundle.owner.displayName, 'Local family');
-  const afterRestartTime = await call('/v1/time', {challenge});
-  const proof = await afterRestartTime.json();
-  const publicKey = await crypto.subtle.importKey(
-    'raw',
-    Buffer.from(restored.publicKey, 'base64url'),
-    {name: 'ECDSA', namedCurve: 'P-256'},
-    false,
-    ['verify'],
-  );
-  assert.equal(
-    await crypto.subtle.verify(
-      {name: 'ECDSA', hash: 'SHA-256'},
-      publicKey,
-      Buffer.from(proof.signature, 'base64url'),
-      Buffer.concat([
-        Buffer.from('Monoid Authority Time'),
-        Buffer.from(proof.data, 'base64url'),
-      ]),
-    ),
-    true,
-  );
-  assert.equal(
-    (await call('/auth/logout', {}, session.accessToken)).status,
-    204,
-  );
-  assert.equal(
-    (await call('/v1/bundle', input, session.accessToken)).status,
-    401,
-  );
-
-  const redirectUri = 'app.monoid://authority/callback';
-  const verifier = randomToken();
-  const state = randomToken();
-  const start = await call('/auth/login/start', {
-    redirectUri,
-    state,
-    codeChallenge: await tokenHash(verifier),
-    codeChallengeMethod: 'S256',
-  });
-  assert.equal(start.status, 200);
-  const authorized = await mf.dispatchFetch(
-    (await start.json()).authorizationUrl,
-    {redirect: 'manual'},
-  );
-  assert.equal(authorized.status, 303);
-  assert.equal(new URL(authorized.headers.get('Location')).pathname, '/login');
-  const flow = new URL(authorized.headers.get('Location')).searchParams.get(
-    'flow',
-  );
-  const completed = await call(
-    '/auth/login/complete',
-    {flow, token: 'test-token', method: 'wallet'},
-    undefined,
-    {
-      Cookie: authorized.headers.get('Set-Cookie').split(';')[0],
-      Origin: 'https://authority.monoid.app',
-    },
-  );
-  assert.equal(completed.status, 200, await completed.clone().text());
-  const callback = new URL((await completed.json()).redirectUrl);
-  assert.equal(callback.searchParams.get('state'), state);
-  const grant = {
-    code: callback.searchParams.get('code'),
-    codeVerifier: verifier,
-    redirectUri,
-  };
-  const exchanges = await Promise.all([
-    call('/auth/login/token', grant),
-    call('/auth/login/token', grant),
-  ]);
-  assert.deepEqual(
-    exchanges.map(response => response.status).sort(),
-    [200, 400],
-  );
-  const hostedSession = await exchanges
-    .find(response => response.status === 200)
-    .json();
-  assert.equal(
-    (await call('/v1/bundle', input, hostedSession.accessToken)).status,
-    200,
-  );
-});
-
-for (const method of ['wallet', 'email', 'social']) {
-  test(`workerd persists hosted ${method} method and enforces wallet eligibility after restart`, async context => {
-    const root = await mkdtemp(join(tmpdir(), 'monoid-authority-runtime-'));
-    let mf = new Miniflare(options(root));
-    context.after(async () => {
+  return {
+    call,
+    upstream: fixture.upstream,
+    ...client(call, fixture.upstream),
+    stub: async () =>
+      (await mf.getDurableObjectNamespace('AUTHORITY_STATE')).getByName(
+        'authority',
+      ),
+    restart: async () => {
       await mf.dispose();
-      await removePersistence(root);
-    });
-    const call = (path, body, headers = {}) =>
-      mf.dispatchFetch(base + path, {
-        method: body === undefined ? 'GET' : 'POST',
-        headers: {'Content-Type': 'application/json', ...headers},
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-    const verifier = randomToken();
-    const redirectUri = 'app.monoid://authority/callback';
-    const start = await call('/auth/login/start', {
-      redirectUri,
-      state: randomToken(),
-      codeChallenge: await tokenHash(verifier),
-      codeChallengeMethod: 'S256',
-    });
-    const authorized = await mf.dispatchFetch(
-      (await start.json()).authorizationUrl,
-      {redirect: 'manual'},
+      mf = new Miniflare(options(root, fixture));
+    },
+  };
+}
+
+for (const provider of ['google', 'github'])
+  test(`workerd ${provider} OAuth, encrypted identity, PKCE and persistent owner/session`, async t => {
+    const f = await setup(t),
+      metadata = await (await f.call('/v1/metadata')).json();
+    const flow = await f.begin(),
+      attempt = await f.oauth(flow, provider);
+    await f.restart();
+    assert.equal(
+      (await f.call(attempt.callback, undefined, undefined, flow.headers))
+        .status,
+      303,
     );
-    const flow = new URL(authorized.headers.get('Location')).searchParams.get(
-      'flow',
+    const grant = await f.complete(flow),
+      session = await (await f.call('/auth/login/token', grant)).json();
+    assert.equal(
+      session.account.source,
+      provider === 'github' ? 'github-user' : 'google',
     );
-    const browserHeaders = {
-      Origin: base,
-      Cookie: authorized.headers.get('Set-Cookie').split(';')[0],
-    };
-    const invalid = await call(
-      '/auth/login/complete',
-      {flow, token: 'test-token', method: {kind: method}},
-      browserHeaders,
-    );
-    assert.equal(invalid.status, 400);
-    const complete = await call(
-      '/auth/login/complete',
-      {
-        flow,
-        token: 'test-token',
-        method,
-        ...(method === 'social' ? {provider: 'github'} : {}),
-      },
-      browserHeaders,
-    );
-    assert.equal(complete.status, 200);
-    const code = new URL((await complete.json()).redirectUrl).searchParams.get(
-      'code',
-    );
-    // The pending code contains the method too, independently of the browser.
-    await mf.dispose();
-    mf = new Miniflare(options(root));
-    const exchanged = await call('/auth/login/token', {
-      code,
-      codeVerifier: verifier,
-      redirectUri,
-    });
-    assert.equal(exchanged.status, 200);
-    const session = await exchanged.json();
-    assert.ok(session.expiresIn > 0 && session.expiresIn <= 300);
-    const account = {
-      id: `${project}:11111111-1111-4111-8111-111111111111`,
-      login: '0x' + 'ab'.repeat(20),
-      email: 'verified@example.com',
-      method,
-      ...(method === 'social' ? {provider: 'github'} : {}),
-    };
-    assert.deepEqual(session.account, account);
-    await mf.dispose();
-    mf = new Miniflare(options(root));
-    const headers = {Authorization: `Bearer ${session.accessToken}`};
-    assert.deepEqual(await (await call('/v1/me', undefined, headers)).json(), {
-      account,
-    });
-    const {namespaces} = await (
-      await call('/v1/namespaces', undefined, headers)
-    ).json();
-    assert.deepEqual(
-      namespaces.map(item => item.source),
-      method === 'wallet' ? ['reown', 'wallet'] : ['reown'],
-    );
-    const owner = {source: 'wallet', id: `eip155:${account.login}`};
+    assert.equal((await f.call('/auth/login/token', grant)).status, 400);
+    const stub = await f.stub(),
+      key = 'session:' + (await tokenHash(session.accessToken)),
+      sealed = await stub.get(key);
+    assert.ok(!sealed.includes(session.account.displayName));
     const recipient = createECDH('prime256v1');
     recipient.generateKeys();
-    for (const [path, body] of [
-      ['/v1/groups/list', {owner}],
-      ['/v1/namespaces/name', {owner, displayName: 'Wallet'}],
-      [
-        '/v1/bundle',
-        {
-          owner,
-          groupName: 'family',
-          allowPeerExtension: false,
-          recipientPublicKey: recipient.getPublicKey().toString('base64url'),
-        },
-      ],
-    ]) {
-      const response = await call(path, body, headers);
+    const input = {
+      owner: {source: session.account.source, id: session.account.id},
+      groupName: 'Runtime',
+      allowPeerExtension: false,
+      recipientPublicKey: recipient.getPublicKey().toString('base64url'),
+    };
+    assert.equal(
+      (await f.call('/v1/bundle', input, session.accessToken)).status,
+      200,
+    );
+    await f.restart();
+    assert.equal(
+      (await (await f.call('/v1/metadata')).json()).publicKey,
+      metadata.publicKey,
+    );
+    assert.deepEqual(
+      await (await f.call('/v1/me', undefined, session.accessToken)).json(),
+      {account: session.account},
+    );
+    assert.equal(
+      (
+        await (
+          await f.call(
+            '/v1/groups/list',
+            {owner: input.owner},
+            session.accessToken,
+          )
+        ).json()
+      ).groups[0].name,
+      'Runtime',
+    );
+    if (provider === 'github') {
       assert.equal(
-        response.status,
-        method === 'wallet' ? 200 : 403,
-        await response.clone().text(),
+        (
+          await (
+            await f.call('/v1/namespaces', undefined, session.accessToken)
+          ).json()
+        ).namespaces.length,
+        2,
+      );
+      f.upstream.role = 'member';
+      assert.equal(
+        (
+          await f.call(
+            '/v1/groups/list',
+            {owner: {source: 'github-organization', id: '42'}},
+            session.accessToken,
+          )
+        ).status,
+        403,
       );
     }
   });
-}
 
-test('workerd never renews an idle-expired, capped or revoked session', async context => {
-  const root = await mkdtemp(join(tmpdir(), 'monoid-authority-runtime-'));
-  const mf = new Miniflare(options(root));
-  context.after(async () => {
-    await mf.dispose();
-    await removePersistence(root);
-  });
-  const response = await mf.dispatchFetch(base + '/auth/reown', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({token: 'test-token', method: 'email'}),
-  });
+test('workerd persists unnamed bundle policy and distinguishes start from an empty-name cursor', async t => {
+  const f = await setup(t),
+    session = await f.login();
+  const owner = {source: session.account.source, id: session.account.id};
+  const recipient = createECDH('prime256v1');
+  recipient.generateKeys();
+  const input = {
+    owner,
+    allowPeerExtension: false,
+    recipientPublicKey: recipient.getPublicKey().toString('base64url'),
+  };
+  const issue = changes =>
+    f.call('/v1/bundle', {...input, ...changes}, session.accessToken);
+  const list = changes =>
+    f.call('/v1/groups/list', {owner, ...changes}, session.accessToken);
+  const response = await issue({});
   assert.equal(response.status, 200);
-  const session = await response.json();
-  assert.ok(session.expiresIn > 0 && session.expiresIn <= 300);
-  const stub = (
-    await mf.getDurableObjectNamespace('AUTHORITY_STATE')
-  ).getByName('authority');
-  const key = `session:${await tokenHash(session.accessToken)}`;
-  const saved = await stub.get(key);
-  const cap = JSON.parse(await stub.openSession(saved)).absoluteExpiresAt;
-  assert.equal(await stub.touchSession(key, cap), true);
-  assert.equal(await stub.touchSession(key, Date.now() - 1), false);
-  const headers = {Authorization: `Bearer ${session.accessToken}`};
+  const unnamed = await response.json();
+  assert.equal(unnamed.groupName, '');
+  await f.restart();
   assert.equal(
-    (await mf.dispatchFetch(base + '/v1/me', {headers})).status,
-    200,
+    (await (await issue({groupName: ''})).json()).bundle,
+    unnamed.bundle,
   );
-  await stub.remove(key);
-  await stub.put(key, saved, '', Date.now() - 1);
-  assert.equal(await stub.touchSession(key, cap), false);
+  assert.equal((await issue({allowPeerExtension: true})).status, 409);
+  const named = await issue({groupName: 'treasury', allowPeerExtension: true});
+  assert.equal(named.status, 200);
+  assert.notEqual((await named.json()).bundle, unnamed.bundle);
+  assert.deepEqual(
+    (await (await list({})).json()).groups.map(group => group.name),
+    ['', 'treasury'],
+  );
+  assert.deepEqual(
+    (await (await list({after: ''})).json()).groups.map(group => group.name),
+    ['treasury'],
+  );
+  assert.equal((await list({after: null})).status, 400);
   assert.equal(
-    (await mf.dispatchFetch(base + '/v1/me', {headers})).status,
-    401,
+    (
+      await f.call(
+        '/v1/namespaces/name',
+        {owner, displayName: ''},
+        session.accessToken,
+      )
+    ).status,
+    400,
   );
-  await stub.remove(key);
-  assert.equal(await stub.touchSession(key, cap), false);
-  assert.equal(await stub.get(key), null);
+  const stub = await f.stub();
+  for (let i = 0; i < 100; i++)
+    await stub.group(owner, `n${String(i).padStart(3, '0')}`, false);
+  const first = await (await list({})).json();
+  assert.equal(first.groups[0].name, '');
+  assert.equal(first.next, 'n098');
+  const second = await (await list({after: first.next})).json();
+  assert.deepEqual(
+    second.groups.map(group => group.name),
+    ['n099', 'treasury'],
+  );
+  assert.equal(second.next, null);
 });
+
+test('workerd rejects an invalid OIDC nonce before a session exists', async t => {
+  const f = await setup(t),
+    flow = await f.begin(),
+    attempt = await f.oauth(flow);
+  f.upstream.claims.nonce = 'wrong';
+  assert.equal(
+    (await f.call(attempt.callback, undefined, undefined, flow.headers)).status,
+    303,
+  );
+  await t.waitFor(() =>
+    f.upstream.logs.some(log => log.message.startsWith('[oidc] ')),
+  );
+  assert.deepEqual(
+    f.upstream.logs.map(log => log.message),
+    ['[oidc] {"provider":"google","check":"nonce"}'],
+  );
+  assert.equal(
+    (
+      await f.call(
+        '/auth/login/complete',
+        {flow: flow.flow},
+        undefined,
+        flow.headers,
+      )
+    ).status,
+    400,
+  );
+});
+
+for (const provider of ['google', 'github'])
+  test(`workerd ${provider} exchange logs only bounded OAuth error fields`, async t => {
+    const f = await setup(t),
+      flow = await f.begin(),
+      attempt = await f.oauth(flow, provider);
+    const privateValues = ['fixture-token'];
+    f.upstream.tokenResponse = form => {
+      privateValues.push(
+        form.get('code'),
+        form.get('code_verifier'),
+        form.get('client_secret'),
+      );
+      const fields = {
+        error: 'invalid_grant',
+        error_description: 'Code exchange rejected. ' + privateValues.join(' '),
+        access_token: privateValues[0],
+      };
+      return provider === 'google'
+        ? Response.json(fields, {status: 400})
+        : new Response(new URLSearchParams(fields), {status: 401});
+    };
+    assert.equal(
+      (await f.call(attempt.callback, undefined, undefined, flow.headers))
+        .status,
+      303,
+    );
+    const context = await (
+      await f.call(
+        '/auth/login/context?flow=' + flow.flow,
+        undefined,
+        undefined,
+        flow.headers,
+      )
+    ).json();
+    assert.equal(context.error, `${provider}_authorization_failed`);
+    assert.equal(context.account, null);
+    await t.waitFor(() =>
+      f.upstream.logs.some(log => log.message.startsWith('[oauth] ')),
+    );
+    assert.equal(f.upstream.logs.length, 1);
+    const {level, message} = f.upstream.logs[0];
+    assert.equal(level, 'warn');
+    assert.deepEqual(JSON.parse(message.slice('[oauth] '.length)), {
+      provider,
+      status: provider === 'google' ? 400 : 401,
+      error: 'invalid_grant',
+      error_description:
+        'Code exchange rejected. [redacted] [redacted] [redacted] [redacted]',
+    });
+    for (const secret of privateValues) assert.ok(!message.includes(secret));
+  });
+
+for (const contract of [false, true])
+  test(`workerd validates ${contract ? 'ERC-1271 via RPC' : 'EOA'} SIWE and rejects replay`, async t => {
+    const f = await setup(t),
+      flow = await f.begin(),
+      address = contract ? '0x' + '22'.repeat(20) : signer.address;
+    const challenge = await (
+      await f.call(
+        '/auth/login/wallet/nonce',
+        {flow: flow.flow, address, chainId: 'eip155:1'},
+        undefined,
+        flow.headers,
+      )
+    ).json();
+    const signature = contract
+      ? '0x1234'
+      : await signer.signMessage({message: challenge.message});
+    const input = {flow: flow.flow, message: challenge.message, signature};
+    const verified = await f.call(
+      '/auth/login/wallet/verify',
+      input,
+      undefined,
+      flow.headers,
+    );
+    assert.equal(verified.status, 200, await verified.clone().text());
+    assert.equal(
+      (
+        await f.call(
+          '/auth/login/wallet/verify',
+          input,
+          undefined,
+          flow.headers,
+        )
+      ).status,
+      400,
+    );
+    const session = await (
+      await f.call('/auth/login/token', await f.complete(flow))
+    ).json();
+    assert.equal(session.account.id, 'eip155:' + address.toLowerCase());
+    const stub = await f.stub(),
+      key = 'session:' + (await tokenHash(session.accessToken)),
+      saved = await stub.get(key);
+    const cap = JSON.parse(await stub.openSession(saved)).absoluteExpiresAt;
+    assert.equal(await stub.touchSession(key, cap), true);
+    await stub.remove(key);
+    await stub.put(key, saved, '', Date.now() - 1);
+    assert.equal(await stub.touchSession(key, cap), false);
+    assert.equal(
+      (await f.call('/v1/me', undefined, session.accessToken)).status,
+      401,
+    );
+    await stub.remove(key);
+    assert.equal(await stub.touchSession(key, cap), false);
+  });
 
 test('first internal key generation retires old credentials once while retaining group policy', async context => {
   const root = await mkdtemp(join(tmpdir(), 'monoid-authority-runtime-'));
@@ -400,8 +375,8 @@ test('first internal key generation retires old credentials once while retaining
         sql.exec("CREATE TABLE namespace_names (source TEXT NOT NULL, id TEXT NOT NULL, display_name TEXT NOT NULL, PRIMARY KEY (source, id))");
         sql.exec("INSERT INTO records VALUES (?, ?, ?, ?)", "session:retired", "old-ciphertext", "", Date.now() + 3600000);
         sql.exec("INSERT INTO records VALUES (?, ?, ?, ?)", "login-code:retired", "old-grant", "", Date.now() + 60000);
-        sql.exec("INSERT INTO groups VALUES (?, ?, ?, ?, ?)", "github", "7", "retained", 0, 123);
-        sql.exec("INSERT INTO namespace_names VALUES (?, ?, ?)", "github", "7", "Existing name");
+        sql.exec("INSERT INTO groups VALUES (?, ?, ?, ?, ?)", "github-user", "7", "retained", 0, 123);
+        sql.exec("INSERT INTO namespace_names VALUES (?, ?, ?)", "github-user", "7", "Existing name");
       }
     }
     export default { async fetch(request, env) {
@@ -409,14 +384,14 @@ test('first internal key generation retires old credentials once while retaining
       return new Response('seeded');
     }};
   `;
-  let mf = new Miniflare(options(root, legacy));
+  let mf = new Miniflare(options(root, providerFixture(), legacy));
   context.after(async () => {
     await mf.dispose();
     await removePersistence(root);
   });
   assert.equal((await mf.dispatchFetch(base)).status, 200);
   await mf.dispose();
-  mf = new Miniflare(options(root));
+  mf = new Miniflare(options(root, providerFixture()));
   const namespace = await mf.getDurableObjectNamespace('AUTHORITY_STATE');
   const stub = namespace.getByName('authority');
   const metadata = await stub.metadata();
@@ -428,7 +403,7 @@ test('first internal key generation retires old credentials once while retaining
     'authority-keys:v1',
   ])
     assert.equal(await stub.get(key), null);
-  const owner = {source: 'github', id: '7'};
+  const owner = {source: 'github-user', id: '7'};
   const retained = await stub.group(owner, 'retained', true);
   assert.equal(retained.name, 'retained');
   assert.equal(retained.allowPeerExtension, false);
@@ -439,7 +414,7 @@ test('first internal key generation retires old credentials once while retaining
   );
   await stub.put('current-record', 'survives-restart', '', Date.now() + 60000);
   await mf.dispose();
-  mf = new Miniflare(options(root));
+  mf = new Miniflare(options(root, providerFixture()));
   const restarted = (
     await mf.getDurableObjectNamespace('AUTHORITY_STATE')
   ).getByName('authority');

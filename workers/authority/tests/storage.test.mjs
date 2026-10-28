@@ -41,7 +41,7 @@ test('idle touches only extend live sessions, never resurrect logout/expiry, and
 
 test('first policy persists; groups are owner scoped and paginated', context => {
   const store = database(context);
-  const owner = {source: 'reown', id: '1'};
+  const owner = {source: 'google', id: '1'};
   store.group(owner, 'fixed', false, 1);
   assert.equal(store.group(owner, 'fixed', true, 2).allowPeerExtension, false);
   assert.equal(
@@ -50,7 +50,29 @@ test('first policy persists; groups are owner scoped and paginated', context => 
   );
   for (let i = 0; i < 101; i++)
     store.group(owner, `g${String(i).padStart(3, '0')}`, false);
-  const page = store.groups(owner, '');
+  const page = store.groups(owner);
   assert.equal(page.length, 100);
   assert.equal(store.groups(owner, page.at(-1).name).length, 2);
+});
+
+test('unnamed bundles sort first; the empty cursor excludes them without losing the next row', context => {
+  const store = database(context);
+  const owner = {source: 'google', id: '1'};
+  store.group(owner, '', false, 1);
+  assert.equal(store.group(owner, '', true, 2).allowPeerExtension, false);
+  assert.deepEqual(
+    store.groups(owner).map(group => group.name),
+    [''],
+  );
+  assert.deepEqual(store.groups(owner, ''), []);
+  store.group(owner, 'treasury', true, 3);
+  assert.deepEqual(
+    store.groups(owner).map(group => group.name),
+    ['', 'treasury'],
+  );
+  assert.deepEqual(
+    store.groups(owner, '').map(group => group.name),
+    ['treasury'],
+  );
+  assert.deepEqual(store.groups({...owner, id: 'other'}), []);
 });
