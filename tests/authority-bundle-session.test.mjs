@@ -31,10 +31,7 @@ function hello(id = 1, overrides = {}) {
 }
 function fixture() {
   const current = hello();
-  const session = new AuthorityBundleSession(
-    url,
-    readBackupCardIdentity(current),
-  );
+  const session = new AuthorityBundleSession(readBackupCardIdentity(current));
   session.choose(choice);
   const calls = [];
   const applet = {
@@ -47,6 +44,7 @@ function fixture() {
     },
   };
   const authority = {
+    authorityUrl: url,
     async issueBundle(input) {
       calls.push(['issue', input]);
       return {
@@ -165,7 +163,7 @@ test('uncertain Join is never replayed; a later Hello recognizes the issued hash
 });
 
 test('Authority eligibility names the card and normalizes URLs', () => {
-  const session = new AuthorityBundleSession(url);
+  const session = new AuthorityBundleSession(readBackupCardIdentity(hello()));
   assert.throws(
     () =>
       session.addPrepared(readBackupCardIdentity(hello(1, {authority: false}))),
@@ -211,6 +209,27 @@ test('only Join 6985 maps to an Authority key mismatch', async () => {
   await assert.rejects(state.join(), error => error === rejected);
 });
 
+test('a client for another authority is rejected before authentication or any request', async () => {
+  const state = fixture();
+  state.authority.authorityUrl = 'https://different.example/';
+  await assert.rejects(state.join(), /different authority/);
+  assert.deepEqual(state.calls, []);
+});
+
+test('a prepared card supplies the authority and a card without one cannot start a flow', () => {
+  const card = readBackupCardIdentity(
+    hello(1, {authority: 'HTTPS://CARD.EXAMPLE/authority'}),
+  );
+  const session = new AuthorityBundleSession(card);
+  assert.equal(session.authorityUrl, 'https://card.example/authority/');
+  assert.equal(session.nextCard.publicKey, card.publicKey);
+  assert.throws(
+    () => new AuthorityBundleSession({...card, authority: false}),
+    /doesn't trust an authority/,
+  );
+  assert.equal(new AuthorityBundleSession().authorityUrl, undefined);
+});
+
 test('401 and cancellation before Join preserve cards without attempting a mutation', async () => {
   const state = fixture();
   state.authority.issueBundle = async () => {
@@ -240,7 +259,7 @@ test('install detour retains selection and cards and reuses the just-set Secret 
   const flow = store.getOrCreate('flow', () => new CardBundleSession(), {
     bundle: 'authority',
     createAuthority: () =>
-      new AuthorityBundleSession(url, readBackupCardIdentity(hello())),
+      new AuthorityBundleSession(readBackupCardIdentity(hello())),
   });
   flow.authority.choose(choice);
   const installed = hello(2);

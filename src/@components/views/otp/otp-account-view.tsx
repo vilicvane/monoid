@@ -11,10 +11,7 @@ import {
   assertCardPINs,
   setItemAlias,
 } from '../../../@lib/monoid/index.js';
-import {
-  OTPAuthorityWarmup,
-  getDefaultOTPAuthorityUrl,
-} from '../../../@lib/otp-authority.js';
+import {OTPAuthorityWarmup} from '../../../@lib/otp-authority.js';
 import {
   type OTPBatch,
   OTP_AID,
@@ -285,7 +282,6 @@ export const OTPAccountView = observer(
       if (!account) return;
       await runOperation(async ({signal, active, scan}) => {
         const warmup = new OTPAuthorityWarmup(signal);
-        warmup.start(otpStore.authorityHint ?? getDefaultOTPAuthorityUrl());
         let prepared: PreparedOTP | undefined;
         try {
           await scan(
@@ -306,7 +302,6 @@ export const OTPAccountView = observer(
             },
             hello => {
               assertCardPINs(hello);
-              otpStore.authorityHint = hello.authority;
               warmup.start(hello.authority);
             },
             signal,

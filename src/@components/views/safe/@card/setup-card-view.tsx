@@ -88,7 +88,6 @@ export const SetupCardView = observer(
       errorService,
       copyItemsStore,
       cardBundleStore,
-      authorityService,
       monoidApplet,
       cardStore,
       monoidCredentialsStore,
@@ -113,11 +112,7 @@ export const SetupCardView = observer(
           bundle: fixedBundle,
           createAuthority:
             fixedBundle === 'authority'
-              ? () =>
-                  new AuthorityBundleSession(
-                    authorityService.authorityUrl,
-                    sourceCard,
-                  )
+              ? () => new AuthorityBundleSession(sourceCard)
               : undefined,
         },
       ),
@@ -789,10 +784,7 @@ export const SetupCardView = observer(
           }
           runInAction(() => {
             if (mode === 'authority')
-              flow.authority ??= new AuthorityBundleSession(
-                authorityService.authorityUrl,
-                sourceCard,
-              );
+              flow.authority ??= new AuthorityBundleSession(sourceCard);
             flow.bundle = mode === 'none' ? undefined : mode;
             flow.sourceConsumed = mode === 'card';
           });

@@ -10,7 +10,7 @@ const createSession = () => new CardBundleSession();
 
 test('new flows initialize their mode and Authority session together; existing flows ignore initial options', () => {
   const store = new CardBundleStore();
-  const session = new AuthorityBundleSession('https://authority.monoid.app/');
+  const session = new AuthorityBundleSession();
   const flow = store.getOrCreate('authority', createSession, {
     bundle: 'authority',
     createAuthority: () => session,

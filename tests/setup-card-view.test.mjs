@@ -778,7 +778,6 @@ function mount(
   };
   state.entrances = {
     cardBundleStore: bundleStore,
-    authorityService: {authorityUrl: 'https://authority.monoid.app/'},
     monoidCredentialsStore: {
       createPINSession: () => state.pinSession,
     },
@@ -2337,7 +2336,9 @@ test('Authority mode is selectable without starting card setup, and fixed Author
     'Setup cards',
   );
   assert.deepEqual(state.scans, []);
-  const source = preparedCard(bundleCard(1));
+  const source = preparedCard(
+    bundleCard(1, {authority: 'https://card.example/authority/'}),
+  );
   const fixed = mount(
     SetupCardView,
     {cardInformation: undefined, card: source, bundle: 'authority'},
@@ -2352,6 +2353,11 @@ test('Authority mode is selectable without starting card setup, and fixed Author
     undefined,
   );
   assert.ok(find(fixed.tree, node => node.type === 'authority-setup'));
+  assert.equal(
+    find(fixed.tree, node => node.type === 'authority-setup').props.session
+      .authorityUrl,
+    source.authority,
+  );
   assert.deepEqual(fixed.scans, []);
   assert.deepEqual(fixed.bundleCalls, []);
 });

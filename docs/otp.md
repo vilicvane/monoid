@@ -115,13 +115,15 @@ installing Identity for the first time or through Fresh install. Defaults come
 from public build configuration:
 
 ```dotenv
-VITE_AUTHORITY_URL=https://authority.monoid.app/
+VITE_DEFAULT_INSTALLATION_AUTHORITY_URL=https://authority.monoid.app/
 # Optional pin for the configured default site:
-VITE_AUTHORITY_PUBLIC_KEY=<65-byte uncompressed P-256 public key in hex>
+VITE_DEFAULT_INSTALLATION_AUTHORITY_PUBLIC_KEY=<65-byte uncompressed P-256 public key in hex>
 ```
 
-The URL is the Authority worker's base (its `AUTHORITY_URL`); the API and login
-UI live beneath it. The app adds `v1/metadata` or `v1/time`. The hosted
+These defaults only prefill Identity installation options; they never choose a
+server for an existing card. The URL is the Authority worker's base (its
+`AUTHORITY_URL`); the API and login UI live beneath it. The app adds `v1/metadata`
+or `v1/time`. The hosted
 Authority is `https://authority.monoid.app/` (development default in
 `.env.development`); a local worker is `http://<host>:8787/api/authority`.
 Users can change that URL or disable Authority before installation. Unless the
@@ -149,12 +151,11 @@ For a tapped account, one NFC connection performs:
    The card uses its current configuration and secret; the response supplies the
    period and codes used for display. No View, Get or whole-list scan is needed.
 
-At the start of retrieval, a public metadata request warms the last observed
-Authority (or the configured default before a card is known), in parallel with
-PIN vault unlock and waiting for NFC. Hello starts the same warm-up for a different
-tapped card's URL, overlapping OTP SELECT and Challenge. A known phone-time card
-does not warm a service. The hint is kept only in memory, is not tied to an account
-or card, and never selects the time mode or changes trust. Warm-up is deduplicated
+After reading the current card's Hello, a public metadata request warms only
+that card's authority, overlapping OTP SELECT and Challenge. There is no request
+to a build default or previously scanned card's server. A phone-time card does
+not warm a service. Warm-up never selects the time mode or changes trust. It is
+deduplicated
 within the scan, never awaited, and cancelled on exit/completion; failures do not
 replace the real signed-time request. No time proofs are prefetched or reused.
 Prepare must finish before Access PIN authentication because it revokes the

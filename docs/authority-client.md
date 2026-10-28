@@ -1,8 +1,15 @@
 # Authority client
 
-`entrances.authorityService` owns the hosted Authority connection. Its base is
-`VITE_AUTHORITY_URL`, falling back to `https://authority.monoid.app/`. Setup cards
-uses the client to choose a bundle and issue enrollment packets for each card.
+`entrances.authorityService` is a registry. Call
+`forAuthority(normalizeAuthorityUrl(hello.authority))` after reading a card that
+trusts an authority. It returns an `AuthorityClient` for that URL, including its
+base path; equivalent normalized URLs reuse the same client. There is no
+build-time request target or fallback. Each client owns its bearer, account,
+idle clock, pending PKCE login and observable sign-in state. Setup uses that
+card's client to sign in, list bundles and issue enrollment packets.
+Authority requests reject redirects, so a response cannot select another server.
+
+The table below describes an `AuthorityClient`.
 
 | API                                                                       | Result                                                                                                   |
 | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -44,15 +51,21 @@ remain signed in; Monoid's bearer lifetime below is independent.
 State and the PKCE verifier use `crypto.getRandomValues`. S256 uses the existing
 SHA-256 implementation, so HTTP development WebViews do not need `randomUUID`
 or `crypto.subtle`. Before opening the page, the app persists only the Authority
-URL, state, verifier and ten-minute expiry under `authorityLogin`. Both platforms
+URL, state, verifier and ten-minute expiry under `authorityLogin`, as an array
+with at most one pending attempt per normalized URL. Startup also reads the
+previous single-attempt format so an already-open browser login can finish.
+Writes are serialized across clients; cancelling or finishing one authority's
+attempt preserves the others. Both platforms
 accept the exact `app.monoid://authority/callback` link through `appUrlOpen` or
-`getLaunchUrl`. A cold start restores the pending login only to accept its
-matching callback. A synchronous claim prevents double redemption; the saved
-attempt is removed before code exchange.
+`getLaunchUrl`. A cold start restores each pending login to its saved authority
+URL, independently of any card page currently open. Callback state selects that
+login's client and token exchange goes only to its saved URL. A synchronous claim
+prevents double redemption; the saved attempt is removed before code exchange.
 
 The Sign in button loads only while starting, saving and opening the browser,
 then returns to idle without waiting visibly. Restored attempts also start idle.
-Every new tap replaces the pending login; old or unrelated callbacks are ignored.
+Every new tap replaces that authority's pending login; old or unrelated callbacks
+are ignored.
 A matching callback loads during code exchange and completes sign-in. Hosted
 `error=access_denied` with the matching state cancels quietly. Cancellation and
 expiry clear the saved attempt and return to idle. Closing the browser is not
@@ -75,8 +88,11 @@ Done, leaving the Authority view, unmounting and a protected 401 also end the
 session. Each end attempts `POST /auth/logout` with that bearer and clears locally
 without waiting for the network; logout failures are silent, and repeated end
 signals cannot log out the same session twice. A late response cannot restore an
-ended session or sign out a newer one. A mid-flow end returns to Choose bundle
-signed out while retaining the chosen bundle and cards. An installation detour
+ended session or sign out a newer one. These rules apply independently per
+authority: ending one flow does not sign out another authority, and activity
+against one server does not extend another's idle clock. App hiding clears all
+held sessions. A mid-flow end returns to Sign in while retaining the chosen bundle
+and cards. An installation detour
 also signs out; its returned card stays in the flow until sign-in resumes.
 
 Errors expose only stable codes: `unauthorized`,
@@ -99,14 +115,21 @@ still require device validation.
 
 Setup cards offers None, Cards and Authority bundle modes at the top of the first
 step's body; fixed card entry points omit these capsules. Cards locks the mode
-after adding a card; Authority locks it after the first join. Authority uses two
-steps: Choose bundle and Add cards. Sign-in lives inside Choose bundle, whose
-footer is Sign in when signed out and Continue when signed in. The completed
-step shows the owner text alone for an unnamed bundle, or owner / name for a
-named bundle. The owner text is the namespace display name or a middle-truncated
-wallet address, with end ellipsis for long paths. Choose bundle uses an owner selector when there are multiple
-eligible namespaces, labeled Google, GitHub or Wallet. Its name input starts with the owner's most recent bundle,
-and a trailing action opens a picker that fills the input without advancing.
+after adding a card; Authority locks it after the first join. Authority uses
+four derive-style steps: **Scan card**, **Sign in**, **Choose bundle**, **Add cards**.
+The mode capsules live in Scan card. Its read supplies the trusted URL and keeps
+that card as the first join candidate, without PIN input, reset or issuance.
+A Card-page entry already supplies that candidate and satisfies Scan card.
+Missing applets use the existing installation detour; the returned card then
+supplies the authority. Sign in names the card's authority host and uses that
+URL's session. Its completed summary shows the account. Choose bundle's footer
+is Continue. The completed bundle step shows the owner text alone for an unnamed
+bundle, or owner / name for a named bundle. The owner text is the namespace display
+name or a middle-truncated wallet address, with end ellipsis for long paths.
+Choose bundle uses an owner selector when there are multiple eligible namespaces,
+labeled Google, GitHub or Wallet. Its name input starts with the owner's most
+recent bundle, and a trailing action opens a picker that fills the input without
+advancing.
 The name is optional: an empty input selects the owner's unnamed bundle,
 distinct from every named bundle and with its own fixed policy. The placeholder
 is **Bundle name (optional)**. Issuance sends and returns `groupName: ""`; listings
@@ -126,7 +149,10 @@ the shared completion and Back to Card or Back to Safe.
 Each Join authenticates the card's Secret PIN before requesting an Authority
 packet, then checks the acknowledged bundle hash. The issued hash stays in the
 flow: a later explicit scan can recognize a successful join after a lost response
-without replaying Join. Cards must trust the same normalized Authority URL; Join
+without replaying Join. Further cards must trust the first card's normalized
+authority URL. A different or absent authority is rejected before any PIN,
+issuance or reset offer, including cards with unset PINs or existing bundles.
+Cards without an authority retain the reinstall message. Join
 6985 names a mismatched Authority key. A 401 returns to Sign in and keeps the cards
 and selected bundle. Installation and PIN setup use the existing Card Applets
 detour, retaining flow state in CardBundleStore and reusing only the just-verified,

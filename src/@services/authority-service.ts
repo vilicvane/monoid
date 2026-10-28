@@ -28,7 +28,7 @@ import type {StorageService} from './storage-service.js';
 declare global {
   // eslint-disable-next-line @typescript-eslint/consistent-type-definitions
   interface StorageMapping {
-    authorityLogin: AuthorityPendingLogin;
+    authorityLogin: AuthorityPendingLogin | AuthorityPendingLogin[];
   }
 }
 
@@ -48,7 +48,8 @@ export type AuthoritySignInState =
   | {status: 'idle' | 'pending' | 'complete'}
   | {status: 'error'; error: AuthorityError};
 
-export class AuthorityService {
+/** One authority's bearer, idle clock and PKCE attempt. */
+export class AuthorityClient {
   private readonly session = new HeldPINValue<Session>(session => {
     if (session) this.logout(session);
     runInAction(() => this.accountState.set(undefined));
@@ -65,10 +66,15 @@ export class AuthorityService {
   private loginTimer: ReturnType<typeof setTimeout> | undefined;
   private writing = Promise.resolve();
 
-  private constructor(
-    private readonly storage: StorageService,
+  constructor(
     readonly authorityUrl: string,
-  ) {}
+    private readonly persist: (
+      pending?: AuthorityPendingLogin,
+    ) => Promise<void>,
+    pending?: AuthorityPendingLogin,
+  ) {
+    if (pending) this.begin(pending);
+  }
 
   get account(): AuthorityAccount | undefined {
     this.session.peek();
@@ -170,7 +176,7 @@ export class AuthorityService {
     };
   }
 
-  private async handleCallback(url: string): Promise<void> {
+  async handleCallback(url: string): Promise<void> {
     const login = this.login;
     if (!login || login.claimed) return;
     let code: string;
@@ -323,11 +329,7 @@ export class AuthorityService {
   }
 
   private savePending(pending?: AuthorityPendingLogin): Promise<void> {
-    const writing = this.writing.then(() =>
-      pending
-        ? this.storage.set('authorityLogin', pending)
-        : this.storage.remove('authorityLogin'),
-    );
+    const writing = this.persist(pending);
     this.writing = writing.catch(() => {});
     return writing;
   }
@@ -402,34 +404,90 @@ export class AuthorityService {
       throw new AuthorityError('service_error');
     }
   }
+}
 
-  static async create(
-    storage: StorageService,
-    baseUrl = import.meta.env?.VITE_AUTHORITY_URL ||
-      'https://authority.monoid.app/',
-  ): Promise<AuthorityService> {
-    const service = new AuthorityService(
-      storage,
-      normalizeAuthorityUrl(baseUrl),
+/** Clients are selected only after reading the card's trusted authority URL. */
+export class AuthorityService {
+  private readonly clients = new Map<string, AuthorityClient>();
+  private readonly pending = new Map<string, AuthorityPendingLogin>();
+  private writing = Promise.resolve();
+
+  private constructor(private readonly storage: StorageService) {}
+
+  forAuthority(value: string): AuthorityClient {
+    const url = normalizeAuthorityUrl(value);
+    let client = this.clients.get(url);
+    if (!client) {
+      client = new AuthorityClient(url, pending =>
+        this.savePending(url, pending),
+      );
+      this.clients.set(url, client);
+    }
+    return client;
+  }
+
+  private savePending(
+    url: string,
+    pending?: AuthorityPendingLogin,
+  ): Promise<void> {
+    if (pending) this.pending.set(url, pending);
+    else this.pending.delete(url);
+    return this.save();
+  }
+
+  private save(): Promise<void> {
+    const pending = [...this.pending.values()];
+    const writing = this.writing.then(() =>
+      pending.length
+        ? this.storage.set('authorityLogin', pending)
+        : this.storage.remove('authorityLogin'),
     );
+    this.writing = writing.catch(() => {});
+    return writing;
+  }
+
+  static async create(storage: StorageService): Promise<AuthorityService> {
+    const service = new AuthorityService(storage);
     const saved = await storage.get('authorityLogin');
     if (saved !== undefined) {
-      if (
-        AuthorityPendingLogin.is(saved) &&
-        saved.authorityUrl === service.authorityUrl &&
-        /^[A-Za-z0-9_-]{43}$/.test(saved.state) &&
-        /^[A-Za-z0-9_-]{43}$/.test(saved.codeVerifier) &&
-        saved.expiresAt > Date.now() &&
-        saved.expiresAt <= Date.now() + AUTHORITY_LOGIN_TTL
-      )
-        service.begin(saved);
-      else await storage.remove('authorityLogin');
+      // Accept the previously persisted single attempt as well as per-URL attempts.
+      for (const value of Array.isArray(saved) ? saved : [saved]) {
+        if (
+          !AuthorityPendingLogin.is(value) ||
+          !/^[A-Za-z0-9_-]{43}$/.test(value.state) ||
+          !/^[A-Za-z0-9_-]{43}$/.test(value.codeVerifier) ||
+          value.expiresAt <= Date.now() ||
+          value.expiresAt > Date.now() + AUTHORITY_LOGIN_TTL
+        )
+          continue;
+        try {
+          const authorityUrl = normalizeAuthorityUrl(value.authorityUrl);
+          service.pending.set(authorityUrl, {...value, authorityUrl});
+        } catch {
+          // Invalid saved URLs cannot choose a callback's destination.
+        }
+      }
+      for (const [url, pending] of service.pending) {
+        service.clients.set(
+          url,
+          new AuthorityClient(
+            url,
+            pending => service.savePending(url, pending),
+            pending,
+          ),
+        );
+      }
+      await service.save();
     }
+    const handleCallback = (url: string): void => {
+      for (const client of service.clients.values())
+        void client.handleCallback(url);
+    };
     await App.addListener('appUrlOpen', ({url}) => {
-      void service.handleCallback(url);
+      handleCallback(url);
     });
     const launch = await App.getLaunchUrl();
-    if (launch?.url) void service.handleCallback(launch.url);
+    if (launch?.url) handleCallback(launch.url);
     return service;
   }
 }

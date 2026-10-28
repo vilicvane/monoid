@@ -1,4 +1,4 @@
-import {List as list} from 'lucide-react';
+import {List as list, Plus as plus} from 'lucide-react';
 import {reaction, runInAction} from 'mobx';
 import {observer} from 'mobx-react-lite';
 import {type ReactNode, useCallback, useEffect, useRef, useState} from 'react';
@@ -35,6 +35,7 @@ import {
 import {scanCardPrompt} from '../../../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
 import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
+import {AppIcon} from '../../../@ui/app-icon.js';
 import {AuthorityAccountInfo} from '../../../@ui/authority-account.js';
 import {Button, Buttons} from '../../../@ui/button.js';
 import {
@@ -70,6 +71,7 @@ import type {
   AuthorityBundleSession,
 } from './authority-bundle-session.js';
 import type {CardResetIdentity} from './card-reset-session.js';
+import {readCardForSetup} from './read-card-for-setup.js';
 import {useBundleCardAddition} from './use-bundle-card-addition.js';
 
 // Use the recipient picker's full-bleed list layout inside DetailsPopup.
@@ -130,13 +132,11 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
   view: RouteComponentProps<Router['safe']['setupCard']>['view'];
   session: AuthorityBundleSession;
 }): ReactNode {
-  const {
-    authorityService: authority,
-    errorService,
-    router,
-    cardStore,
-    monoidApplet,
-  } = useEntrances();
+  const {authorityService, errorService, router, cardStore, monoidApplet} =
+    useEntrances();
+  const authority = session.authorityUrl
+    ? authorityService.forAuthority(session.authorityUrl)
+    : undefined;
   const isViewActive = useViewActive(view);
   const secretPINSession = session.secretPINs;
   const chosen = session.choice;
@@ -156,13 +156,15 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
       hello: MonoidAppletHello,
       signal: AbortSignal,
       setState?: (message: string) => void,
-    ) =>
-      session.resolveBundle(
+    ) => {
+      if (!authority) throw new AuthorityError('unauthorized');
+      return session.resolveBundle(
         readBackupCardIdentity(hello),
         authority,
         signal,
         setState,
-      ),
+      );
+    },
     [session, authority],
   );
   const acceptsBundle = useCallback(
@@ -216,7 +218,7 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
     return () => {
       mounted.current = false;
       operation.current?.abort();
-      void authority.signOut();
+      void authority?.signOut();
       if (!installing.current) secretPINSession.clear();
     };
   }, [authority, secretPINSession]);
@@ -226,7 +228,7 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
         if (active) installing.current = false;
         else {
           operation.current?.abort();
-          void authority.signOut();
+          void authority?.signOut();
           if (!installing.current) secretPINSession.clear();
         }
       }),
@@ -236,11 +238,30 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
     () =>
       reaction(
         () =>
-          isViewActive() && authority.signedIn && !busy
+          isViewActive() &&
+          !busy &&
+          (!session.authorityUrl || (authority?.signedIn && session.choice))
             ? session.installedCard
             : undefined,
         hello => {
           if (!hello) return;
+          if (!session.authorityUrl) {
+            errorService.catch(
+              (async () => {
+                let needsPINs = false;
+                try {
+                  session.prepareCard(hello);
+                  needsPINs = !hello.pins.secret || !hello.pins.access;
+                } finally {
+                  if (!needsPINs && session.installedCard === hello)
+                    runInAction(() => {
+                      session.installedCard = undefined;
+                    });
+                }
+              })(),
+            );
+            return;
+          }
           errorService.catch(
             (async () => {
               let consumed = false;
@@ -262,7 +283,7 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
       ),
     [authority, busy, errorService, isViewActive, session],
   );
-  const account = authority.account;
+  const account = authority?.account;
   const [namespaces, setNamespaces] = useState<AuthorityNamespace[]>([]);
   const [owner, setOwner] = useState<AuthorityNamespace>();
   const [groups, setGroups] = useState<AuthorityGroup[]>();
@@ -277,7 +298,7 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
     setOwner(undefined);
     setShowBundles(false);
     setLoading(!!account);
-    if (!account) return;
+    if (!account || !authority) return;
 
     errorService.catch(
       authority
@@ -311,7 +332,7 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
     setName('');
     setAllowPeerExtension(true);
     setShowBundles(false);
-    if (!owner || !account) return;
+    if (!owner || !account || !authority) return;
     setLoading(true);
 
     errorService.catch(
@@ -344,15 +365,24 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
   }
   const existing = groups?.find(group => group.name === validName);
   const policy = existing?.allowPeerExtension ?? allowPeerExtension;
-  const step = complete ? 3 : account && chosen ? 2 : 1;
-  const host = new URL(authority.authorityUrl).host;
+  const step = complete ? 4 : !authority ? 1 : account && chosen ? 3 : 2;
+  const host = authority && new URL(authority.authorityUrl).host;
   const backToCard = view.card
     ? router.$backTo(router.safe.card.$exact)
     : undefined;
   const back = backToCard ?? router.$backTo(router.safe.$exact);
 
   const join = async (card: AuthorityBundleCard): Promise<void> => {
-    if (operation.current || busy || !isActive() || card.joined) return;
+    if (
+      !authority ||
+      !account ||
+      !session.choice ||
+      operation.current ||
+      busy ||
+      !isActive() ||
+      card.joined
+    )
+      return;
     const controller = new AbortController();
     operation.current = controller;
     setWorking(true);
@@ -449,6 +479,35 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
     }
   };
 
+  const scanFirstCard = async (): Promise<void> => {
+    if (authority || operation.current || busy || !isActive()) return;
+    const controller = new AbortController();
+    operation.current = controller;
+    setWorking(true);
+    try {
+      let result: Awaited<ReturnType<typeof readCardForSetup>> | undefined;
+      await scan('Scan a card', async (sessionId, setState, scanSignal) => {
+        const signal = AbortSignal.any([controller.signal, scanSignal]);
+        result = await readCardForSetup(
+          sessionId,
+          monoidApplet,
+          setState,
+          signal,
+        );
+        if (result.type === 'ready')
+          session.validateAddition(readBackupCardIdentity(result.hello));
+      });
+      if (!result || !isActive() || controller.signal.aborted) return;
+      if (result.type === 'setup') onNeedsInstall(result.cardInformation);
+      else session.prepareCard(result.hello);
+    } catch (error) {
+      if (!isOperationCancelled(error, controller.signal)) throw error;
+    } finally {
+      if (operation.current === controller) operation.current = undefined;
+      if (mounted.current) setWorking(false);
+    }
+  };
+
   return (
     <>
       <ViewContent
@@ -459,6 +518,10 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
                 {backToCard ? 'Back to Card' : 'Back to Safe'}
               </Button>
             )
+          ) : !authority ? (
+            <Button loading={busy} onClick={errorService.catch(scanFirstCard)}>
+              Scan card
+            </Button>
           ) : !account ? (
             <Button
               loading={authority.signInState.status === 'pending'}
@@ -478,17 +541,19 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
             >
               Sign in
             </Button>
-          ) : step === 1 ? (
+          ) : step === 2 ? (
             <Button
               disabled={loading || !owner || !groups || validName === undefined}
-              onClick={() => {
+              onClick={errorService.catch(async () => {
                 if (validName === undefined) return;
                 session.choose({
                   owner: owner!,
                   name: validName,
                   allowPeerExtension: policy,
                 });
-              }}
+                const firstCard = session.cards[0];
+                if (firstCard && !session.installedCard) await join(firstCard);
+              })}
             >
               Continue
             </Button>
@@ -554,8 +619,28 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
             }}
           >
             <Step
-              title="Choose bundle"
+              title="Scan card"
               numero={1}
+              activeNumero={step}
+              processing={busy && !authority}
+              summary={session.cards[0] && cardName(session.cards[0])}
+            >
+              {children}
+              <CardGrid>
+                <CardPreviewButton
+                  aria-label="Scan a card"
+                  disabled={busy}
+                  onClick={errorService.catch(scanFirstCard)}
+                >
+                  <CardPlaceholder>
+                    <AppIcon icon={plus} />
+                  </CardPlaceholder>
+                </CardPreviewButton>
+              </CardGrid>
+            </Step>
+            <Step
+              title="Choose bundle"
+              numero={2}
               activeNumero={step}
               processing={!!account && loading}
               summary={
@@ -567,7 +652,6 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
                 )
               }
             >
-              {children}
               {account ? (
                 <AuthorityAccountInfo account={account} />
               ) : (
@@ -637,7 +721,7 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
                   )}
                 </InfoSectionHeader>
               }
-              numero={2}
+              numero={3}
               activeNumero={step}
               processing={busy}
               keepExpanded
@@ -671,11 +755,13 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
                   </CardPreviewButton>
                 ))}
                 <CardPreviewButton
-                  aria-label="Add card"
+                  aria-label="Add a card"
                   disabled={busy}
                   onClick={errorService.catch(addition.resume)}
                 >
-                  <CardPlaceholder aria-hidden="true">+</CardPlaceholder>
+                  <CardPlaceholder>
+                    <AppIcon icon={plus} />
+                  </CardPlaceholder>
                 </CardPreviewButton>
               </CardGrid>
             </Step>

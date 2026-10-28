@@ -17,7 +17,7 @@ import {
   readBackupCardIdentity,
   rethrowAuthorityJoinError,
 } from '../../../../@lib/monoid/index.js';
-import type {AuthorityService} from '../../../../@services/index.js';
+import type {AuthorityClient} from '../../../../@services/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 
 import {CardSecretPINSession} from './card-secret-pin-session.js';
@@ -27,9 +27,11 @@ type BundleChoice = Pick<AuthorityGroup, 'name' | 'allowPeerExtension'> & {
   owner: AuthorityNamespace;
 };
 export type AuthorityBundleCard = CardBackupIdentity & {joined: boolean};
+type BundleIssuer = Pick<AuthorityClient, 'authorityUrl' | 'issueBundle'>;
 
 /** The same in-memory flow survives an install detour; PINs retain their own expiry. */
 export class AuthorityBundleSession {
+  authorityUrl: string | undefined;
   choice: BundleChoice | undefined;
   bundle: string | undefined;
   cards: AuthorityBundleCard[] = [];
@@ -38,21 +40,17 @@ export class AuthorityBundleSession {
   busy = false;
   readonly secretPINs = new CardSecretPINSession();
 
-  constructor(
-    readonly authorityUrl: string,
-    source?: CardBackupIdentity,
-  ) {
+  constructor(source?: CardBackupIdentity) {
     if (source) {
       const {id, publicKey, bundle, alias, authority, allowPeerExtension} =
         source;
-      this.cards.push({
+      this.addPrepared({
         id,
         publicKey,
         bundle,
         alias,
         authority,
         allowPeerExtension,
-        joined: false,
       });
     }
     makeAutoObservable(this, {
@@ -77,20 +75,19 @@ export class AuthorityBundleSession {
 
   validateAddition(
     card: Pick<CardBackupIdentity, 'id' | 'alias' | 'authority'>,
-  ): void {
+  ): string {
     if (!card.authority) {
       throw new MonoidCardError(
         `Card ${cardName(card)} doesn't trust an authority. Reinstall its applets with one.`,
       );
     }
-    if (
-      normalizeAuthorityUrl(card.authority) !==
-      normalizeAuthorityUrl(this.authorityUrl)
-    ) {
+    const url = normalizeAuthorityUrl(card.authority);
+    if (this.authorityUrl && url !== this.authorityUrl) {
       throw new MonoidCardError(
         `Card ${cardName(card)} trusts a different authority.`,
       );
     }
+    return url;
   }
 
   acceptsBundle(hello: MonoidAppletHello): boolean {
@@ -100,7 +97,8 @@ export class AuthorityBundleSession {
   }
 
   addPrepared(card: CardBackupIdentity, replaced?: CardIdentity): void {
-    this.validateAddition(card);
+    const url = this.validateAddition(card);
+    this.authorityUrl ??= url;
     const joined = card.bundle !== false && card.bundle === this.bundle;
     const existing = this.cards.find(
       current => current.publicKey === (replaced?.publicKey ?? card.publicKey),
@@ -121,14 +119,22 @@ export class AuthorityBundleSession {
     this.addPrepared(readBackupCardIdentity(hello), replaced);
   }
 
+  /** The first read chooses the authority without asking for or changing PINs. */
+  prepareCard(hello: MonoidAppletHello): void {
+    this.addPrepared(readBackupCardIdentity(hello));
+    if (!hello.pins.secret || !hello.pins.access) this.installedCard = hello;
+  }
+
   /** Resolve membership before any reset offer; issuance does not touch the card. */
   async resolveBundle(
     card: CardBackupIdentity,
-    authority: Pick<AuthorityService, 'issueBundle'>,
+    authority: BundleIssuer,
     signal: AbortSignal,
     setState?: (message: string) => void,
   ): Promise<void> {
     this.validateAddition(card);
+    if (normalizeAuthorityUrl(authority.authorityUrl) !== this.authorityUrl)
+      throw new MonoidCardError('Card trusts a different authority.');
     signal.throwIfAborted();
     if (card.bundle === false || this.bundle) return;
     setState?.('Requesting bundle, hold tight...');
@@ -139,8 +145,8 @@ export class AuthorityBundleSession {
 
   private issue(
     recipientPublicKey: Uint8Array,
-    authority: Pick<AuthorityService, 'issueBundle'>,
-  ): ReturnType<AuthorityService['issueBundle']> {
+    authority: BundleIssuer,
+  ): ReturnType<AuthorityClient['issueBundle']> {
     const choice = this.choice!;
     return authority.issueBundle({
       owner: {source: choice.owner.source, id: choice.owner.id},
@@ -189,7 +195,7 @@ export class AuthorityBundleSession {
     applet: MonoidApplet,
     hello: MonoidAppletHello,
     card: AuthorityBundleCard,
-    authority: Pick<AuthorityService, 'issueBundle'>,
+    authority: BundleIssuer,
     pin: string,
     onAuthenticated: () => void,
     signal: AbortSignal,

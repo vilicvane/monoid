@@ -112,7 +112,7 @@ const flush = async () => {
 
 async function fixture(
   t,
-  {saved, launchUrl, deliverLaunchTwice, respond} = {},
+  {saved, launchUrl, deliverLaunchTwice, respond, base = BASE} = {},
 ) {
   const clock = pinClock(t);
   clock.elapse(999_000);
@@ -126,8 +126,8 @@ async function fixture(
     respond,
     requests: [],
     get pending() {
-      return this.requests.findLast(
-        request => request.path === '/auth/login/start',
+      return this.requests.findLast(request =>
+        request.path.endsWith('/auth/login/start'),
       )?.body;
     },
     complete(url = callback(this.pending)) {
@@ -144,6 +144,7 @@ async function fixture(
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     const path = new URL(url).pathname;
     const request = {
+      url,
       path,
       options,
       body: options.body && JSON.parse(options.body),
@@ -151,26 +152,27 @@ async function fixture(
     current.requests.push(request);
     const custom = await current.respond?.(request);
     if (custom) return custom;
-    if (path === '/auth/login/start')
+    if (path.endsWith('/auth/login/start'))
       return Response.json({
-        authorizationUrl: `${BASE}auth/login?request=opaque`,
+        authorizationUrl: url.replace(/\/start$/, '?request=opaque'),
         expiresIn: 600,
       });
-    if (path === '/auth/login/token')
+    if (path.endsWith('/auth/login/token'))
       return Response.json({
         accessToken: BEARER,
         tokenType: 'Bearer',
         expiresIn: 300,
         account: ACCOUNT,
       });
-    if (path === '/auth/logout') return new Response(null, {status: 204});
-    if (path === '/v1/namespaces')
+    if (path.endsWith('/auth/logout')) return new Response(null, {status: 204});
+    if (path.endsWith('/v1/namespaces'))
       return Response.json({namespaces: [{...OWNER, displayName: 'Personal'}]});
     throw new Error('Unexpected test request');
   });
-  current.service = await AuthorityService.create(
+  current.registry = await AuthorityService.create(
     await StorageService.create(),
   );
+  current.service = current.registry.forAuthority(base);
   return current;
 }
 
@@ -221,7 +223,7 @@ test('sign-in persists PKCE before opening the system browser and becomes idle u
   });
   assert.deepEqual(current.opened, [{url: `${BASE}auth/login?request=opaque`}]);
   assert.equal(current.service.signInState.status, 'idle');
-  const saved = current.storage.get('authorityLogin');
+  const [saved] = current.storage.get('authorityLogin');
   assert.deepEqual(saved, {
     authorityUrl: BASE,
     state: pending.state,
@@ -485,7 +487,7 @@ test('replacement while saving serializes storage and never opens the replaced l
   await flush();
   assert.equal(current.opened.length, 1);
   assert.equal(
-    current.storage.get('authorityLogin').state,
+    current.storage.get('authorityLogin')[0].state,
     current.pending.state,
   );
   current.complete();
@@ -838,7 +840,7 @@ test('every sign-in replaces the pending login and its old callback is unrelated
   assert.equal(current.service.signInState.status, 'idle');
   assert.equal(current.service.pendingSignIn, replacement);
   assert.equal(
-    current.storage.get('authorityLogin').state,
+    current.storage.get('authorityLogin')[0].state,
     current.pending.state,
   );
   assert.equal(current.requests.length, 2);
@@ -872,3 +874,228 @@ test('openUrl returning completed false ends loading and removes the saved attem
   assert.equal(current.service.signInState.status, 'error');
   assert.equal(current.requests.length, 1);
 });
+
+const CARD_AUTHORITY = 'https://card.example/authority/';
+const OTHER_AUTHORITY = 'https://other.example/';
+
+test('clients normalize card URLs and route every endpoint with only that authority bearer', async t => {
+  const current = await fixture(t, {base: CARD_AUTHORITY});
+  const first = current.service;
+  const second = current.registry.forAuthority(OTHER_AUTHORITY);
+  assert.equal(
+    current.registry.forAuthority(' HTTPS://CARD.EXAMPLE/authority/// '),
+    first,
+  );
+  assert.notEqual(first, second);
+  assert.equal(current.requests.length, 0);
+  current.respond = ({url, path}) => {
+    const authority = url.startsWith(CARD_AUTHORITY)
+      ? CARD_AUTHORITY
+      : OTHER_AUTHORITY;
+    assert.ok(url.startsWith(authority));
+    if (path.endsWith('/auth/login/token'))
+      return Response.json({
+        accessToken: authority,
+        tokenType: 'Bearer',
+        expiresIn: 300,
+        account: {...ACCOUNT, id: authority},
+      });
+    if (path.endsWith('/v1/metadata'))
+      return Response.json({
+        publicKey: encoded(65),
+        bundle: 'hpke-auth-p256-sha256-aes128gcm',
+        time: {
+          protocol: 'monoid-authority-time',
+          version: 1,
+          algorithm: 'ecdsa-p256-sha256-p1363',
+        },
+      });
+    if (path.endsWith('/v1/groups/list'))
+      return Response.json({groups: [], next: null});
+    if (path.endsWith('/v1/bundle'))
+      return Response.json({
+        publicKey: encoded(65),
+        data: encoded(182),
+        bundle: encoded(32),
+        owner: OWNER,
+        groupName: '',
+        allowPeerExtension: false,
+      });
+    return undefined;
+  };
+  for (const client of [first, second]) {
+    const count = current.requests.length;
+    await assert.rejects(client.namespaces(), failure('unauthorized'));
+    assert.equal(current.requests.length, count);
+    const login = client.signIn();
+    await flush();
+    current.complete();
+    await login;
+    await client.metadata();
+    await client.namespaces();
+    await client.groups(OWNER);
+    await client.issueBundle({
+      owner: OWNER,
+      groupName: '',
+      allowPeerExtension: false,
+      recipientPublicKey: new Uint8Array(65),
+    });
+    assert.equal(client.account.id, client.authorityUrl);
+  }
+  await first.signOut();
+  assert.equal(second.signedIn, true);
+  await second.signOut();
+  const authenticated = new Set([
+    'v1/namespaces',
+    'v1/groups/list',
+    'v1/bundle',
+    'auth/logout',
+  ]);
+  for (const request of current.requests) {
+    const authority = request.url.startsWith(CARD_AUTHORITY)
+      ? CARD_AUTHORITY
+      : OTHER_AUTHORITY;
+    assert.ok(request.url.startsWith(authority));
+    const endpoint = request.url.slice(authority.length);
+    assert.equal(request.options.redirect, 'error');
+    assert.equal(
+      request.options.headers.Authorization,
+      authenticated.has(endpoint) ? `Bearer ${authority}` : undefined,
+    );
+  }
+  assert.ok(
+    current.opened.every(
+      ({url}) =>
+        url.startsWith(CARD_AUTHORITY) || url.startsWith(OTHER_AUTHORITY),
+    ),
+  );
+  assert.ok(current.requests.every(({url}) => !url.startsWith(BASE)));
+});
+
+test('pending PKCE attempts and their serialized storage survive cancellation of another authority', async t => {
+  const current = await fixture(t, {base: CARD_AUTHORITY});
+  const first = current.service;
+  const second = current.registry.forAuthority(OTHER_AUTHORITY);
+  const initial = first.signIn();
+  await flush();
+  const firstPending = current.storage.get('authorityLogin')[0];
+  const next = second.signIn();
+  await flush();
+  const secondPending = current.storage
+    .get('authorityLogin')
+    .find(p => p.authorityUrl === OTHER_AUTHORITY);
+  assert.equal(current.storage.get('authorityLogin').length, 2);
+  assert.equal(first.pendingSignIn, initial);
+  assert.equal(second.pendingSignIn, next);
+  const cancelled = assert.rejects(initial, failure('cancelled'));
+  await first.signOut();
+  await cancelled;
+  assert.deepEqual(current.storage.get('authorityLogin'), [secondPending]);
+  current.complete(callback(firstPending));
+  await flush();
+  assert.equal(second.pendingSignIn, next);
+  assert.equal(current.requests.length, 2);
+  current.complete(callback(secondPending));
+  await next;
+  assert.equal(first.signedIn, false);
+  assert.equal(second.signedIn, true);
+  assert.equal(
+    current.requests.at(-1).url,
+    `${OTHER_AUTHORITY}auth/login/token`,
+  );
+  await second.signOut();
+});
+
+for (const mode of ['idle', '401', 'hidden']) {
+  test(`authority sessions keep independent lifetimes: ${mode}`, async t => {
+    const current = await fixture(t, {base: CARD_AUTHORITY});
+    const first = current.service;
+    const second = current.registry.forAuthority(OTHER_AUTHORITY);
+    for (const client of [first, second]) {
+      const login = client.signIn();
+      await flush();
+      current.complete();
+      await login;
+    }
+    if (mode === 'idle') {
+      await current.tick(240_000);
+      await first.namespaces();
+      await current.tick(60_000);
+      assert.equal(first.signedIn, true);
+      assert.equal(second.signedIn, false);
+    } else if (mode === '401') {
+      current.respond = ({url}) =>
+        url === `${CARD_AUTHORITY}v1/namespaces`
+          ? Response.json({error: 'unauthorized'}, {status: 401})
+          : undefined;
+      await assert.rejects(first.namespaces(), failure('unauthorized'));
+      assert.equal(first.signedIn, false);
+      assert.equal(second.signedIn, true);
+    } else {
+      current.clock.visibility('hidden');
+      assert.equal(first.signedIn, false);
+      assert.equal(second.signedIn, false);
+      assert.deepEqual(
+        current.requests
+          .filter(r => r.path.endsWith('/auth/logout'))
+          .map(r => r.url)
+          .sort(),
+        [
+          `${CARD_AUTHORITY}auth/logout`,
+          `${OTHER_AUTHORITY}auth/logout`,
+        ].sort(),
+      );
+    }
+    await first.signOut();
+    await second.signOut();
+  });
+}
+
+for (const multiple of [false, true]) {
+  test(`cold start uses saved card URLs${multiple ? ' for multiple pending logins' : ' from the previous single-login format'}`, async t => {
+    const first = {
+      authorityUrl: CARD_AUTHORITY,
+      state: encoded(32, 1),
+      codeVerifier: encoded(32, 2),
+      expiresAt: 1_500_000,
+    };
+    const second = {
+      ...first,
+      authorityUrl: OTHER_AUTHORITY,
+      state: encoded(32, 5),
+      codeVerifier: encoded(32, 6),
+    };
+    const pending = multiple ? second : first;
+    const current = await fixture(t, {
+      saved: multiple
+        ? [first, second]
+        : {...first, authorityUrl: 'HTTPS://CARD.EXAMPLE/authority'},
+      launchUrl: callback(pending),
+      deliverLaunchTwice: true,
+    });
+    const client = current.registry.forAuthority(pending.authorityUrl);
+    await client.pendingSignIn;
+    await flush();
+    assert.equal(client.signedIn, true);
+    assert.deepEqual(
+      current.requests.map(r => r.url),
+      [`${pending.authorityUrl}auth/login/token`],
+    );
+    assert.equal(current.requests[0].body.codeVerifier, pending.codeVerifier);
+    assert.equal(current.service.signedIn, false);
+    if (multiple) {
+      const remaining = current.registry.forAuthority(CARD_AUTHORITY);
+      assert.ok(remaining.pendingSignIn);
+      assert.deepEqual(current.storage.get('authorityLogin'), [first]);
+      const completion = remaining.pendingSignIn;
+      current.complete(callback(first));
+      await completion;
+      assert.equal(
+        current.requests.at(-1).url,
+        `${CARD_AUTHORITY}auth/login/token`,
+      );
+      await remaining.signOut();
+    }
+    await client.signOut();
+  });
+}

@@ -360,6 +360,64 @@ test('a rejected target never opens PIN setup or reset confirmation', async () =
   assert.equal(find(state.hook.content, 'setup-pin'), undefined);
 });
 
+for (const authority of [false, 'https://different.example/']) {
+  for (const bundled of [false, true]) {
+    test(`authority setup rejects ${authority || 'no authority'} (${bundled ? 'bundled' : 'unset PINs'}) before PINs, issuance or reset`, async () => {
+      const trusted = 'https://card.example/authority/';
+      const session = new AuthorityBundleSession(
+        readBackupCardIdentity({...hello(), authority: trusted}),
+      );
+      let requests = 0;
+      const client = {
+        authorityUrl: trusted,
+        issueBundle: async () => {
+          requests++;
+        },
+      };
+      const state = mount({
+        validateAddition: (card, signal, status) =>
+          session.resolveBundle(
+            readBackupCardIdentity(card),
+            client,
+            signal,
+            status,
+          ),
+      });
+      state.result.hello = {
+        ...hello({
+          pins: {secret: false, access: false},
+          bundle: bundled ? new Uint8Array(32) : false,
+        }),
+        authority,
+      };
+      const operation = state.hook.addCard();
+      const rejected = assert.rejects(
+        operation,
+        /doesn't trust an authority|trusts a different authority/,
+      );
+      let failure;
+      try {
+        await state.tap();
+      } catch (error) {
+        failure = error;
+      }
+      assert.match(
+        failure?.message ?? '',
+        /doesn't trust an authority|trusts a different authority/,
+      );
+      state.scans[0].reject(failure);
+      await rejected;
+      state.render();
+      assert.deepEqual(state.inputs, []);
+      assert.deepEqual(state.credentialCalls, []);
+      assert.deepEqual(state.added, []);
+      assert.equal(requests, 0);
+      assert.equal(find(state.hook.content, 'confirm-popup'), undefined);
+      assert.equal(find(state.hook.content, 'setup-pin'), undefined);
+    });
+  }
+}
+
 test('a bundled target requires the existing two-stage reset confirmation after cleanup', async () => {
   const state = mount();
   state.result.hello = hello({bundle: new Uint8Array(16).fill(2)});
@@ -392,7 +450,9 @@ for (const [entry, member] of [
 ]) {
   test(`first issuance for a ${entry} card ${member ? 'recognizes a member without reset' : 'confirms a foreign bundle before offering reset'}`, async () => {
     const url = 'https://authority.monoid.app/';
-    const session = new AuthorityBundleSession(url);
+    const session = new AuthorityBundleSession(
+      readBackupCardIdentity({...hello(), authority: url}),
+    );
     session.choose({
       owner: {source: 'google', id: 'account'},
       name: 'Family',
@@ -402,6 +462,7 @@ for (const [entry, member] of [
     const pending = deferred();
     let requests = 0;
     const authority = {
+      authorityUrl: url,
       issueBundle: async () => {
         requests++;
         await pending.promise;
@@ -456,7 +517,7 @@ for (const [entry, member] of [
         find(confirmation, 'p').props.children.join(''),
         'Card Travel already belongs to a bundle.',
       );
-      assert.equal(session.cards.length, entry === 'prepared' ? 1 : 0);
+      assert.equal(session.cards.length, 1);
     }
   });
 }

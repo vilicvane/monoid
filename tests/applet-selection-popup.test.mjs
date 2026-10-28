@@ -40,7 +40,7 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
 });
 mock.module('../.bld/app/@lib/otp-authority.js', {
   namedExports: {
-    getDefaultOTPAuthorityUrl: () => '',
+    getDefaultInstallationAuthorityUrl: () => '',
     resolveOTPAuthorityInstallationOptions: async () =>
       assert.fail('Authority is disabled'),
   },

@@ -7,8 +7,8 @@ import {authorityApiUrl, normalizeAuthorityUrl} from './authority-url.js';
 import type {IdentityInstallationOptions} from './monoid/index.js';
 
 /** Defaults are editable before installing Identity; existing cards keep their trust. */
-export function getDefaultOTPAuthorityUrl(): string {
-  return import.meta.env?.VITE_AUTHORITY_URL ?? '';
+export function getDefaultInstallationAuthorityUrl(): string {
+  return import.meta.env?.VITE_DEFAULT_INSTALLATION_AUTHORITY_URL ?? '';
 }
 
 /** Warm the public service while PIN input and NFC are still in progress. */
@@ -37,6 +37,7 @@ export class OTPAuthorityWarmup {
     const response = await fetch(url, {
       credentials: 'omit',
       cache: 'no-store',
+      redirect: 'error',
       signal: AbortSignal.any([
         this.signal,
         this.controller.signal,
@@ -59,8 +60,9 @@ export async function resolveOTPAuthorityInstallationOptions(
   const authorityUrl = normalizeAuthorityUrl(value);
   if (new TextEncoder().encode(authorityUrl).length > 146)
     throw new Error('Authority URL is too long');
-  const configuredKey = import.meta.env?.VITE_AUTHORITY_PUBLIC_KEY;
-  const configuredUrl = getDefaultOTPAuthorityUrl();
+  const configuredKey = import.meta.env
+    ?.VITE_DEFAULT_INSTALLATION_AUTHORITY_PUBLIC_KEY;
+  const configuredUrl = getDefaultInstallationAuthorityUrl();
   let authorityPublicKey: Uint8Array;
   if (
     configuredKey &&
@@ -76,6 +78,7 @@ export async function resolveOTPAuthorityInstallationOptions(
       const response = await fetch(
         authorityApiUrl(authorityUrl, 'v1/metadata'),
         {
+          redirect: 'error',
           signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
         },
       );

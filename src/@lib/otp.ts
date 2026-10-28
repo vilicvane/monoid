@@ -265,6 +265,7 @@ export async function fetchOTPTimeProof(
     body: JSON.stringify({challenge: base64urlnopad.encode(challenge)}),
     credentials: 'omit',
     cache: 'no-store',
+    redirect: 'error',
     signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
   });
   if (!response.ok) throw new MonoidCardError('Could not get verified time');

@@ -30,6 +30,7 @@ test('Authority warm-up is nonblocking, consumes the public response and dedupli
   assert.equal(requests[0].url, 'https://authority.example/v1/metadata');
   assert.equal(requests[0].options.credentials, 'omit');
   assert.equal(requests[0].options.cache, 'no-store');
+  assert.equal(requests[0].options.redirect, 'error');
   assert.equal(requests[0].options.body, undefined);
   assert.equal(consumed.mock.callCount(), 0);
   complete();
@@ -92,6 +93,7 @@ test('a failed or invalid hint does not block warming the actual card service', 
 test('installation resolves the selected Authority and normalizes its URL', async t => {
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     assert.equal(url, 'http://100.64.0.1:8787/v1/metadata');
+    assert.equal(options.redirect, 'error');
     assert.ok(options.signal instanceof AbortSignal);
     return Response.json({publicKey: base64urlnopad.encode(key)});
   });

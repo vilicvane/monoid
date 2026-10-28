@@ -234,6 +234,7 @@ test('time fetch posts only a fresh challenge and preserves aborts and failures'
     challenge: base64urlnopad.encode(challenge),
   });
   assert.equal(requests[0].options.cache, 'no-store');
+  assert.equal(requests[0].options.redirect, 'error');
   const aborted = new AbortController();
   aborted.abort();
   await assert.rejects(fetchOTPTimeProof(challenge, authority, aborted.signal));

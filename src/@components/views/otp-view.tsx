@@ -312,7 +312,6 @@ export const OTPView = observer(
             hello => {
               if (card) assertSameCard(hello, card);
               assertCardPINs(hello);
-              otpStore.authorityHint = hello.authority;
             };
           const authentication: MonoidScanAuthentication | undefined =
             operation.type === 'add' || operation.type === 'remove'

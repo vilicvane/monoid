@@ -140,7 +140,6 @@ mock.module('../.bld/app/@lib/otp-card.js', {
 });
 mock.module('../.bld/app/@lib/otp-authority.js', {
   namedExports: {
-    getDefaultOTPAuthorityUrl: () => 'https://default.example',
     OTPAuthorityWarmup: class {
       owner = fixture;
       constructor(signal) {
@@ -668,15 +667,14 @@ test('account taps use the scanned card Authority mode without APP service confi
     assert.equal(state.scans.length, 1);
     await state.tap(card);
     assert.equal(state.prepared.authority, authority);
-    assert.deepEqual(state.warmups, ['https://default.example', authority]);
-    assert.equal(state.entrances.otpStore.authorityHint, authority);
+    assert.deepEqual(state.warmups, [authority]);
     assert.equal(state.warmupStopped, true);
     assert.deepEqual(state.errors, []);
     assert(find(state.tree, node => node.type === 'CopyButton'));
   }
 });
 
-test('Authority warm-up starts before biometric unlock and does not gate NFC', async () => {
+test('Authority warm-up waits for the current card and ignores a previous card hint', async () => {
   const card = {...cachedCard(1), authority: 'https://backup.example'};
   const state = mount([card]);
   state.entrances.otpStore.authorityHint = 'https://previous.example';
@@ -684,24 +682,23 @@ test('Authority warm-up starts before biometric unlock and does not gate NFC', a
   state.openAccount(card);
   await state.flush();
   assert.deepEqual(state.events, ['unlock']);
-  assert.deepEqual(state.warmups, ['https://previous.example']);
+  assert.equal(state.warmups, undefined);
   assert.equal(state.scans.length, 0);
   state.unlock.resolve();
   await state.flush();
   assert.equal(state.scans.length, 1);
   await state.tap(card);
-  assert.deepEqual(state.warmups, ['https://previous.example', card.authority]);
+  assert.deepEqual(state.warmups, [card.authority]);
   assert.equal(state.prepared.authority, card.authority);
   assert.equal(state.warmupStopped, true);
 });
 
-test('a known phone-time card suppresses the default hint and leaving cancels warm-up', async () => {
+test('leaving before the card read makes no authority warm-up request', async () => {
   const card = cachedCard(1);
   const state = mount([card]);
-  state.entrances.otpStore.authorityHint = false;
   state.openAccount(card);
   await state.flush();
-  assert.deepEqual(state.warmups, [false]);
+  assert.equal(state.warmups, undefined);
   state.leave();
   await state.flush();
   assert.equal(state.warmupSignal.aborted, true);

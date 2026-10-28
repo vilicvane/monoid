@@ -48,16 +48,6 @@ test('OTP import handoffs are one-use and never persist their URI or secret', as
   assert.equal(storage.set.mock.callCount(), 0);
 });
 
-test('Authority hints remain session-local and do not bind accounts to a card', async context => {
-  const storage = storageFixture(context);
-  const store = await OTPStore.create(storage);
-  store.authorityHint = 'https://authority.example';
-  await store.save([account()]);
-  const restored = await OTPStore.create(storage);
-  assert.equal(restored.authorityHint, undefined);
-  assert.deepEqual(restored.accounts, store.accounts);
-});
-
 test('scans merge across cards and duplicate backup accounts update in place', async context => {
   const storage = storageFixture(context);
   const store = await OTPStore.create(storage);

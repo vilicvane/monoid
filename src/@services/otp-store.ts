@@ -62,8 +62,6 @@ function readAccount(value: unknown): OTPAccount | undefined {
 
 /** Only display metadata survives a page exit; PINs, secrets and codes do not. */
 export class OTPStore {
-  /** Session-only connection hint; the next card's Hello remains authoritative. */
-  authorityHint?: string | false;
   private records = observable.map<SafeIndexHex, OTPAccount>([], {deep: false});
   private writing = Promise.resolve();
   private pendingImport?: {id: string; uri: string};

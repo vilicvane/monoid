@@ -10,7 +10,7 @@ import {
   validateCardAlias,
 } from '../../../@lib/monoid/index.js';
 import {
-  getDefaultOTPAuthorityUrl,
+  getDefaultInstallationAuthorityUrl,
   resolveOTPAuthorityInstallationOptions,
 } from '../../../@lib/otp-authority.js';
 import {Button} from '../../@ui/button.js';
@@ -47,7 +47,9 @@ export function AppletSelectionPopup({
   ) => void;
   onDismiss: () => void;
 }): ReactNode {
-  const [authorityUrl, setAuthorityUrl] = useState(getDefaultOTPAuthorityUrl);
+  const [authorityUrl, setAuthorityUrl] = useState(
+    getDefaultInstallationAuthorityUrl,
+  );
   const [authorityEnabled, setAuthorityEnabled] = useState(!!authorityUrl);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string>();

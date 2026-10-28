@@ -22,6 +22,7 @@ mock.module('styled-components', {
 mock.module('lucide-react', {
   namedExports: {
     List: 'list-icon',
+    Plus: 'plus-icon',
     UserRound: 'user-icon',
     Wallet: 'wallet-icon',
   },
@@ -162,8 +163,10 @@ mock.module('../.bld/app/@components/@monoid/use-isodep-scan-prompt.js', {
   namedExports: {
     useIsoDepScanPrompt: () => {
       const state = current;
-      return async (_prompt, callback) => {
+      return async (prompt, callback) => {
         state.scans++;
+        state.scanPrompts.push(prompt);
+        if (state.scanError) throw state.scanError;
         return callback('test', () => {}, new AbortController().signal);
       };
     },
@@ -177,10 +180,16 @@ mock.module('../.bld/app/@components/@ui/use-input-modal.js', {
         undefined,
         async options => {
           state.pinPrompts++;
-          return state.promptPIN ? state.promptPIN(options) : 'Secret-42';
+          return state.promptPIN?.(options);
         },
       ];
     },
+  },
+});
+mock.module('../.bld/app/@components/views/safe/@card/read-card-for-setup.js', {
+  namedExports: {
+    readCardForSetup: async () =>
+      current.firstScan ?? {type: 'ready', hello: current.firstHello},
   },
 });
 mock.module(
@@ -194,6 +203,7 @@ mock.module(
           busy: false,
           content: undefined,
           acceptCard: async hello => {
+            state.acceptedCards.push(hello);
             await options.onAdded(hello);
             return true;
           },
@@ -234,7 +244,7 @@ function fixture(
     children,
     namespaces = owners,
     groups = bundles,
-    sourceCard,
+    sourceCard = prepared(),
     flow,
   } = {},
 ) {
@@ -245,16 +255,15 @@ function fixture(
     calls: [],
     dirty: true,
     scans: 0,
+    scanPrompts: [],
     pinPrompts: 0,
+    acceptedCards: [],
   };
   state.active = observable.box(true);
   state.isActive = () => state.active.get();
   state.logouts = 0;
   state.flow = flow ?? {};
-  state.flow.authority ??= new AuthorityBundleSession(
-    'https://authority.monoid.app/',
-    sourceCard,
-  );
+  state.flow.authority ??= new AuthorityBundleSession(sourceCard);
   state.view = {bundleId: 'flow'};
   const account = observable.box(
     signedIn
@@ -276,7 +285,8 @@ function fixture(
     get signedIn() {
       return !!account.get();
     },
-    authorityUrl: 'https://authority.monoid.app/',
+    authorityUrl:
+      state.flow.authority.authorityUrl ?? 'https://authority.monoid.app/',
     signInState: {status: 'idle'},
     namespaces: async () => namespaces,
     groups: async owner => {
@@ -288,6 +298,8 @@ function fixture(
       service.account = undefined;
     },
   };
+  state.authority = service;
+  state.selectedAuthorities = [];
   state.entrances = {
     router: {
       $backTo: () => () => state.calls.push('back'),
@@ -296,7 +308,13 @@ function fixture(
     },
     cardStore: {get: () => undefined},
     monoidApplet: {openSession: async () => state.applet},
-    authorityService: service,
+    authorityService: {
+      forAuthority: url => {
+        state.selectedAuthorities.push(url);
+        assert.equal(url, service.authorityUrl);
+        return service;
+      },
+    },
     errorService: {
       catch: task => {
         const capture = async (...args) => {
@@ -378,8 +396,309 @@ function prepared(id = 1) {
   };
 }
 
+function scanned(id = 1, overrides = {}) {
+  return {
+    ...prepared(id),
+    version: 1,
+    id: Uint8Array.of(0, 0, 0, id),
+    publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(id)),
+    pins: {secret: 5, access: 5},
+    ...overrides,
+  };
+}
+
+test('Setup is card-first, keeps mode capsules in Scan card and retains that card as the join candidate', async t => {
+  const mode = {type: 'mode-capsules', props: {}};
+  const state = fixture(t, {sourceCard: null, signedIn: false, children: mode});
+  const url = 'https://card.example/authority/';
+  state.authority.authorityUrl = url;
+  state.firstHello = scanned(1, {authority: 'HTTPS://CARD.EXAMPLE/authority'});
+  assert.deepEqual(
+    steps(state).map(step => [text(step.props.title), step.props.numero]),
+    [
+      ['Scan card', 1],
+      ['Choose bundle', 2],
+      ['Add cards', 3],
+    ],
+  );
+  assert.ok(nodes(steps(state)[0]).some(node => node.type === 'mode-capsules'));
+  const scanCard = state.find('CardPreviewButton');
+  assert.equal(scanCard.props['aria-label'], 'Scan a card');
+  const placeholder = state.find('CardPlaceholder');
+  assert.equal(placeholder.props.children.type, 'AppIcon');
+  assert.equal(placeholder.props.children.props.icon, 'plus-icon');
+  assert.ok(state.find('Button', 'Scan card'));
+  assert.equal(state.find('Button', 'Sign in'), undefined);
+  assert.deepEqual(state.selectedAuthorities, []);
+  await state.click('Button', 'Scan card');
+  assert.equal(state.flow.authority.authorityUrl, url);
+  assert.equal(state.flow.authority.cards[0].publicKey, prepared().publicKey);
+  assert.equal(state.pinPrompts, 0);
+  assert.equal(state.scans, 1);
+  assert.equal(steps(state)[0].props.summary, prepared().alias);
+  assert.equal(steps(state)[1].props.activeNumero, 2);
+  assert.equal(
+    text(nodes(steps(state)[1]).find(node => node.type === 'InfoMessage')),
+    'Bundles are issued by card.example.',
+  );
+  state.authority.signIn = async () => {
+    state.calls.push(['signIn', url]);
+    state.authority.account = owners[0];
+  };
+  await state.click('Button', 'Sign in');
+  assert.equal(steps(state)[1].props.activeNumero, 2);
+  assert.equal(state.find('InfoMessage'), undefined);
+  assert.ok(state.find('InfoFieldset'));
+  await state.click('Button', 'Continue');
+  assert.equal(steps(state)[2].props.activeNumero, 3);
+  const candidate = state.find('CardPreview');
+  assert.equal(candidate.props.id, prepared().id);
+  assert.equal(candidate.props.alias, prepared().alias);
+  assert.equal(candidate.props.$scan, 'next');
+  assert.equal(state.flow.authority.nextCard, state.flow.authority.cards[0]);
+  assert.ok(state.find('Button', 'Scan card to join'));
+  assert.ok(state.selectedAuthorities.every(selected => selected === url));
+  assert.equal(state.flow.authority.cards.length, 1);
+});
+
+test('Card entry signs in, lists bundles and joins using its own normalized authority', async t => {
+  const url = 'https://card.example/authority/';
+  const sourceCard = {
+    ...prepared(),
+    authority: 'HTTPS://CARD.EXAMPLE/authority',
+  };
+  const state = fixture(t, {sourceCard, signedIn: false});
+  state.view.card = sourceCard;
+  const events = [];
+  assert.equal(steps(state)[0].props.numero, 1);
+  assert.equal(steps(state)[0].props.activeNumero, 2);
+  assert.equal(steps(state)[0].props.summary, sourceCard.alias);
+  assert.equal(steps(state)[0].props.children, undefined);
+  assert.equal(steps(state)[1].props.title, 'Choose bundle');
+  assert.equal(steps(state)[1].props.activeNumero, 2);
+  assert.equal(state.find('Button', 'Scan card'), undefined);
+  assert.equal(state.scans, 0);
+  assert.equal(
+    text(nodes(steps(state)[1]).find(node => node.type === 'InfoMessage')),
+    'Bundles are issued by card.example.',
+  );
+  state.authority.signIn = async () => {
+    events.push(['signIn', state.authority.authorityUrl]);
+    state.authority.account = owners[0];
+  };
+  state.authority.groups = async () => {
+    events.push(['groups', state.authority.authorityUrl]);
+    return bundles;
+  };
+  const hash = new Uint8Array(32).fill(42);
+  state.authority.issueBundle = async () => {
+    events.push(['issue', state.authority.authorityUrl]);
+    return {
+      publicKey: new Uint8Array(65),
+      data: new Uint8Array(182),
+      bundle: hash,
+      allowPeerExtension: false,
+    };
+  };
+  state.applet = {
+    hello: async () => scanned(1, {authority: url}),
+    authenticate: async () => {},
+    joinBundle: async () => ({bundle: hash}),
+  };
+  state.promptPIN = () => 'Secret-42';
+  await state.click('Button', 'Sign in');
+  await state.click('Button', 'Continue');
+  const candidate = state.find('CardPreview');
+  assert.equal(candidate.props.id, sourceCard.id);
+  assert.equal(candidate.props.alias, sourceCard.alias);
+  assert.equal(candidate.props.$scan, 'ready');
+  assert.equal(state.flow.authority.nextCard, undefined);
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(events, [
+    ['signIn', url],
+    ['groups', url],
+    ['issue', url],
+  ]);
+  assert.equal(state.flow.authority.joinedCount, 1);
+  assert.equal(state.pinPrompts, 1);
+  assert.equal(state.scans, 1);
+  assert.ok(state.selectedAuthorities.every(selected => selected === url));
+});
+
+test('Continue joins only the first scanned card once, after its Secret PIN', async t => {
+  const state = fixture(t, {sourceCard: null});
+  state.firstHello = scanned();
+  await state.click('Button', 'Scan card');
+  const session = state.flow.authority;
+  session.addPrepared(prepared(2));
+  const hash = new Uint8Array(32).fill(42);
+  let joins = 0;
+  let issues = 0;
+  state.applet = {
+    hello: async () => scanned(),
+    authenticate: async () => {},
+    joinBundle: async () => {
+      joins++;
+      return {bundle: hash};
+    },
+  };
+  state.authority.issueBundle = async () => {
+    issues++;
+    return {
+      publicKey: scanned().publicKey,
+      data: new Uint8Array(),
+      bundle: hash,
+      allowPeerExtension: false,
+    };
+  };
+  let submitPIN;
+  state.promptPIN = options => {
+    assert.equal(options.placeholder, 'Enter Secret PIN');
+    assert.equal(options.description, `Card ${prepared().alias}`);
+    assert.equal(session.choice.name, 'Recovery');
+    return new Promise(resolve => {
+      submitPIN = resolve;
+    });
+  };
+  const joining = state.find('Button', 'Continue').props.onClick();
+  await state.flush();
+  assert.equal(steps(state)[2].props.activeNumero, 3);
+  assert.equal(state.pinPrompts, 1);
+  assert.equal(state.scans, 1);
+  assert.equal(joins, 0);
+  submitPIN('Secret-42');
+  await joining;
+  await state.flush();
+  assert.deepEqual(state.errors, []);
+  assert.equal(state.scans, 2);
+  assert.deepEqual(state.scanPrompts, [
+    'Scan a card',
+    `Scan card ${prepared().id}`,
+  ]);
+  assert.equal(issues, 1);
+  assert.equal(joins, 1);
+  assert.equal(session.joinedCount, 1);
+  assert.equal(session.nextCard.id, prepared(2).id);
+  assert.ok(state.find('Button', 'Scan next card to join'));
+  session.addPrepared(prepared(3));
+  await state.flush();
+  assert.equal(state.pinPrompts, 1);
+  assert.equal(state.scans, 2);
+});
+
+for (const outcome of [
+  'PIN cancellation',
+  'scan cancellation',
+  'scan failure',
+]) {
+  test(`Continue leaves a manual retry after ${outcome}, without replay on re-entry`, async t => {
+    const state = fixture(t);
+    await state.flush();
+    const cancelledPIN = outcome === 'PIN cancellation';
+    const failure = new Error(outcome);
+    if (outcome === 'scan cancellation') failure.name = 'AbortError';
+    state.promptPIN = () => (cancelledPIN ? undefined : 'Secret-42');
+    state.scanError = failure;
+    await state.click('Button', 'Continue');
+    assert.equal(steps(state)[2].props.activeNumero, 3);
+    assert.equal(state.pinPrompts, 1);
+    assert.equal(state.scans, cancelledPIN ? 0 : 1);
+    assert.equal(state.flow.authority.joinedCount, 0);
+    assert.deepEqual(state.errors, outcome === 'scan failure' ? [failure] : []);
+    assert.equal(
+      state.find('Button', 'Scan card to join').props.loading,
+      false,
+    );
+    await state.flush();
+    assert.equal(state.pinPrompts, 1);
+    assert.equal(state.scans, cancelledPIN ? 0 : 1);
+    state.unmount();
+    const restored = fixture(t, {flow: state.flow});
+    await restored.flush();
+    assert.equal(steps(restored)[2].props.activeNumero, 3);
+    assert.equal(restored.pinPrompts, 0);
+    assert.equal(restored.scans, 0);
+    await restored.click('Button', 'Scan card to join');
+    assert.equal(restored.pinPrompts, 1);
+    assert.equal(restored.scans, 0);
+    assert.deepEqual(restored.errors, []);
+  });
+}
+
+test('an already-joined first card does not auto-start the next card on entry', async t => {
+  const session = new AuthorityBundleSession(prepared());
+  session.choose({owner: owners[0], ...bundles[1]});
+  runInAction(() => {
+    session.cards[0].joined = true;
+  });
+  session.addPrepared(prepared(2));
+  const state = fixture(t, {flow: {authority: session}});
+  await state.flush();
+  assert.equal(steps(state)[2].props.activeNumero, 3);
+  assert.equal(state.pinPrompts, 0);
+  assert.equal(state.scans, 0);
+  assert.ok(state.find('Button', 'Scan next card to join'));
+  assert.deepEqual(state.errors, []);
+});
+
+test('a first card without authority is rejected before sign-in or PIN input', async t => {
+  const state = fixture(t, {sourceCard: null, signedIn: false});
+  state.firstHello = scanned(1, {
+    authority: false,
+    pins: {secret: false, access: false},
+  });
+  await state.click('Button', 'Scan card');
+  assert.match(
+    state.errors[0].message,
+    /doesn't trust an authority\. Reinstall its applets with one\./,
+  );
+  assert.equal(state.flow.authority.authorityUrl, undefined);
+  assert.equal(state.flow.authority.cards.length, 0);
+  assert.equal(state.pinPrompts, 0);
+  assert.deepEqual(state.selectedAuthorities, []);
+});
+
+test('first-card PIN setup waits for sign-in and bundle selection', async t => {
+  const state = fixture(t, {sourceCard: null, signedIn: false});
+  state.firstHello = scanned(1, {pins: {secret: false, access: false}});
+  await state.click('Button', 'Scan card');
+  assert.equal(state.pinPrompts, 0);
+  assert.deepEqual(state.acceptedCards, []);
+  state.authority.account = owners[0];
+  await state.flush();
+  assert.deepEqual(state.acceptedCards, []);
+  await state.click('Button', 'Continue');
+  assert.deepEqual(state.acceptedCards, [state.firstHello]);
+  assert.equal(state.flow.authority.installedCard, undefined);
+});
+
+test('card-first setup resumes an installation detour using the returned card authority before sign-in', async t => {
+  const state = fixture(t, {sourceCard: null, signedIn: false});
+  state.firstScan = {type: 'setup', cardInformation: {id: 'chip'}};
+  await state.click('Button', 'Scan card');
+  assert.deepEqual(state.calls.at(-1), {
+    cardInformation: {id: 'chip'},
+    returnTo: 'bundle',
+    bundleId: 'flow',
+  });
+  assert.deepEqual(state.selectedAuthorities, []);
+  const url = 'https://installed-card.example/';
+  state.authority.authorityUrl = url;
+  runInAction(() => {
+    state.active.set(false);
+    state.flow.authority.installedCard = scanned(2, {authority: url});
+    state.active.set(true);
+  });
+  await state.flush();
+  assert.equal(state.flow.authority.authorityUrl, url);
+  assert.equal(state.flow.authority.nextCard.id, prepared(2).id);
+  assert.equal(state.flow.authority.installedCard, undefined);
+  assert.equal(state.pinPrompts, 0);
+  assert.ok(state.find('Button', 'Sign in'));
+});
+
 for (const member of [false, true]) {
-  test(`a bundled prepared card ${member ? 'is recognized' : 'opens reset confirmation'} without PIN or scan after issuance`, async t => {
+  test(`Continue ${member ? 'recognizes an already-joined' : 'opens reset confirmation for a'} bundled prepared card before PIN or scan`, async t => {
     const hash = new Uint8Array(32).fill(42);
     const bundle = member ? hash : new Uint8Array(32).fill(7);
     const sourceCard = {
@@ -388,9 +707,8 @@ for (const member of [false, true]) {
     };
     const state = fixture(t, {sourceCard});
     await state.flush();
-    await state.click('Button', 'Continue');
     const events = [];
-    state.entrances.authorityService.issueBundle = async input => {
+    state.authority.issueBundle = async input => {
       assert.equal(
         Buffer.from(input.recipientPublicKey).toString('hex'),
         sourceCard.publicKey,
@@ -402,7 +720,7 @@ for (const member of [false, true]) {
       assert.deepEqual(card, {...sourceCard, joined: false});
       events.push('reset confirmation');
     };
-    await state.click('Button', 'Scan card to join');
+    await state.click('Button', 'Continue');
     assert.deepEqual(state.errors, []);
     assert.deepEqual(
       events,
@@ -451,7 +769,7 @@ test('prepared and mixed cards use one next ring, pending labels, and acknowledg
     authenticate: async () => {},
     joinBundle: async () => ({bundle: hash}),
   };
-  state.entrances.authorityService.issueBundle = async () => ({
+  state.authority.issueBundle = async () => ({
     publicKey: hello.publicKey,
     data: new Uint8Array(),
     bundle: hash,
@@ -462,6 +780,7 @@ test('prepared and mixed cards use one next ring, pending labels, and acknowledg
     get: () => cached,
     set: card => assert.equal(card, cached),
   };
+  state.promptPIN = () => 'Secret-42';
   await state.click('Button', 'Scan card to join');
   assert.deepEqual(state.errors, []);
   assert.equal(cached.bundle, '2a'.repeat(32));
@@ -474,21 +793,16 @@ test('prepared and mixed cards use one next ring, pending labels, and acknowledg
       ['pending', 'join later'],
     ],
   );
-  assert.equal(text(steps(state)[1].props.title), 'Add cards1/3');
+  assert.equal(text(steps(state)[2].props.title), 'Add cards1/3');
   assert.ok(state.find('Button', 'Scan next card to join'));
   assert.equal(state.find('Button', 'Change bundle'), undefined);
 });
 
-test('the footer distinguishes adding from joining and preserves pending PIN/reset actions', async t => {
+test('the footer joins the first card and preserves pending PIN/reset actions', async t => {
   const state = fixture(t);
   await state.flush();
   await state.click('Button', 'Continue');
-  await state.click('Button', 'Add a card');
-  assert.equal(state.calls.at(-1), 'add');
-  assert.equal(state.find('Button', 'Scan card to join'), undefined);
-
   const session = state.flow.authority;
-  session.addPrepared(prepared());
   assert.ok(state.find('Button', 'Scan card to join'));
   for (const [pending, label] of [
     ['pendingPIN', 'Set Secret PIN'],
@@ -498,7 +812,7 @@ test('the footer distinguishes adding from joining and preserves pending PIN/res
     await state.click('Button', label);
     assert.equal(state.calls.at(-1), 'add');
     assert.equal(state.find('Button', 'Scan card to join'), undefined);
-    assert.equal(state.pinPrompts, 0);
+    assert.equal(state.pinPrompts, 1);
     assert.equal(state.scans, 0);
   }
   state.additionState = undefined;
@@ -519,7 +833,7 @@ test('Done exits the grid and steps before showing only completion and its neutr
   assert.equal(state.find('Button', 'Add another card').props.color, undefined);
   await state.click('Button', 'Done');
   assert.equal(state.logouts, 1);
-  assert.equal(state.entrances.authorityService.signedIn, false);
+  assert.equal(state.authority.signedIn, false);
   const exiting = state.find('OperationSteps');
   assert.equal(exiting.props.$exiting, true);
   assert.ok(state.find('CardGrid'));
@@ -543,7 +857,7 @@ for (const leaving of ['inactive', 'unmount']) {
     if (leaving === 'inactive') runInAction(() => state.active.set(false));
     else state.unmount();
     assert.equal(state.logouts, 1);
-    assert.equal(state.entrances.authorityService.signedIn, false);
+    assert.equal(state.authority.signedIn, false);
     assert.equal(session.cards.length, 1);
     assert.equal(session.choice.name, 'Recovery');
   });
@@ -558,18 +872,18 @@ test('a mid-flow session end returns to Choose bundle signed out and resumes the
   runInAction(() => {
     session.cards[0].joined = true;
   });
-  const account = state.entrances.authorityService.account;
-  await state.entrances.authorityService.signOut();
+  const account = state.authority.account;
+  await state.authority.signOut();
   await state.flush();
   assert.ok(state.find('Button', 'Sign in'));
-  assert.equal(steps(state)[0].props.activeNumero, 1);
+  assert.equal(steps(state)[1].props.activeNumero, 2);
   assert.equal(session.cards.length, 2);
   assert.equal(session.joinedCount, 1);
   assert.equal(session.choice.name, 'Recovery');
   let signIns = 0;
-  state.entrances.authorityService.signIn = async () => {
+  state.authority.signIn = async () => {
     signIns++;
-    state.entrances.authorityService.account = account;
+    state.authority.account = account;
   };
   await state.click('Button', 'Sign in');
   assert.equal(signIns, 1);
@@ -582,7 +896,7 @@ test('an installation detour signs out and retains the returned card until sign-
   const state = fixture(t, {sourceCard: prepared()});
   await state.flush();
   await state.click('Button', 'Continue');
-  const account = state.entrances.authorityService.account;
+  const account = state.authority.account;
   state.addition.onNeedsInstall({id: 'chip'});
   runInAction(() => state.active.set(false));
   assert.equal(state.logouts, 1);
@@ -598,16 +912,15 @@ test('an installation detour signs out and retains the returned card until sign-
   await state.flush();
   assert.equal(state.flow.authority.installedCard, installed);
   assert.equal(state.flow.authority.cards.length, 1);
-  state.entrances.authorityService.account = account;
+  state.authority.account = account;
   await state.flush();
   assert.equal(state.flow.authority.installedCard, undefined);
   assert.equal(state.flow.authority.cards.length, 2);
 });
 
-test('401 during issuance returns to Sign in and retains cards and the chosen bundle', async t => {
+test('401 during issuance returns to Choose bundle signed out and retains cards and the chosen bundle', async t => {
   const state = fixture(t, {sourceCard: prepared()});
   await state.flush();
-  await state.click('Button', 'Continue');
   const card = prepared();
   state.applet = {
     hello: async () => ({
@@ -620,11 +933,12 @@ test('401 during issuance returns to Sign in and retains cards and the chosen bu
     authenticate: async () => {},
     joinBundle: async () => assert.fail('Join after 401'),
   };
-  state.entrances.authorityService.issueBundle = async () => {
-    state.entrances.authorityService.account = undefined;
+  state.authority.issueBundle = async () => {
+    state.authority.account = undefined;
     throw new AuthorityError('unauthorized');
   };
-  await state.click('Button', 'Scan card to join');
+  state.promptPIN = () => 'Secret-42';
+  await state.click('Button', 'Continue');
   assert.equal(state.errors.at(-1).code, 'unauthorized');
   assert.ok(state.find('Button', 'Sign in'));
   assert.equal(state.flow.authority.cards.length, 1);
@@ -645,7 +959,7 @@ test('the install redirect carries the flow ID and returns through the addition 
   const restored = fixture(t, {flow: state.flow});
   await restored.flush();
   assert.equal(restored.flow.authority, session);
-  assert.equal(steps(restored)[1].props.activeNumero, 2);
+  assert.equal(steps(restored)[2].props.activeNumero, 3);
   assert.equal(session.choice.name, 'Recovery');
   assert.equal(session.cards.length, 1);
 });
@@ -658,7 +972,7 @@ function input(state, value) {
   state.render();
 }
 
-test('Sign in names the Authority in an InfoMessage; pending state and cancellation stay service-owned', async t => {
+test('Choose bundle names the Authority before sign-in; pending state and cancellation stay service-owned', async t => {
   const state = fixture(t, {signedIn: false});
   assert.equal(
     text(state.find('InfoMessage')),
@@ -672,13 +986,15 @@ test('Sign in names the Authority in an InfoMessage; pending state and cancellat
       step.props.activeNumero,
     ]),
     [
-      ['Choose bundle', 1],
-      ['Add cards', 1],
+      ['Scan card', 2],
+      ['Choose bundle', 2],
+      ['Add cards', 2],
     ],
   );
-  const authority = state.entrances.authorityService;
+  const authority = state.authority;
   authority.signInState = {status: 'pending'};
   assert.equal(state.find('Button', 'Sign in').props.loading, true);
+  assert.equal(steps(state)[1].props.processing, false);
   authority.signInState = {status: 'idle'};
   authority.signIn = async () => {
     throw new AuthorityError('cancelled');
@@ -696,8 +1012,8 @@ test('Sign in names the Authority in an InfoMessage; pending state and cancellat
 test('signed-in entry starts at Choose bundle, prefills the most recent bundle, and Continue produces summaries', async t => {
   const state = fixture(t, {groups: [bundles[1], bundles[0]]});
   await state.flush();
-  assert.equal(steps(state)[0].props.summary, undefined);
-  assert.equal(steps(state)[0].props.activeNumero, 1);
+  assert.equal(steps(state)[1].props.summary, undefined);
+  assert.equal(steps(state)[1].props.activeNumero, 2);
   assert.equal(state.find('InputWithAction').props.value, 'Recovery');
   assert.equal(state.find('Toggle').props.checked, false);
   assert.equal(state.find('Toggle').props.disabled, true);
@@ -714,13 +1030,14 @@ test('signed-in entry starts at Choose bundle, prefills the most recent bundle, 
       step.props.activeNumero,
     ]),
     [
-      ['Choose bundle', 'test@example.com / Recovery', 2],
-      ['Add cards', undefined, 2],
+      ['Scan card', prepared().alias, 3],
+      ['Choose bundle', 'test@example.com / Recovery', 3],
+      ['Add cards', undefined, 3],
     ],
   );
   assert.ok(state.find('CardGrid'));
   assert.equal(state.find('Button', 'Change bundle').props.color, 'neutral');
-  assert.ok(state.find('Button', 'Add a card'));
+  assert.ok(state.find('Button', 'Scan card to join'));
   await state.click('Button', 'Change bundle');
   assert.equal(state.find('InputWithAction').props.value, 'Recovery');
 });
@@ -741,9 +1058,9 @@ for (const owner of [
     input(state, name);
     await state.click('Button', 'Continue');
     const expected = `${owner.displayName} / ${name}`;
-    assert.equal(text(steps(state)[0].props.summary), expected);
+    assert.equal(text(steps(state)[1].props.summary), expected);
     assert.deepEqual({...state.flow.authority.choice.owner}, owner);
-    const wallet = nodes(steps(state)[0].props.summary).find(
+    const wallet = nodes(steps(state)[1].props.summary).find(
       node => node.type === 'EllipsisInMiddle',
     );
     assert.equal(
@@ -753,7 +1070,7 @@ for (const owner of [
     state.unmount();
     const restored = fixture(t, {flow: state.flow, namespaces: [owner]});
     await restored.flush();
-    assert.equal(text(steps(restored)[0].props.summary), expected);
+    assert.equal(text(steps(restored)[1].props.summary), expected);
   });
 }
 
@@ -770,7 +1087,7 @@ test('owner selector uses source labels, excludes organizations and loads the ne
     selector.props.options.map(option => option.label),
     ['Google', 'Wallet', 'GitHub'],
   );
-  state.entrances.authorityService.groups = async owner => {
+  state.authority.groups = async owner => {
     state.calls.push(owner);
     return [{name: 'Wallet bundle', allowPeerExtension: true, createdAt: 3}];
   };
@@ -780,11 +1097,11 @@ test('owner selector uses source labels, excludes organizations and loads the ne
   assert.equal(state.find('InputWithAction').props.value, 'Wallet bundle');
 });
 
-test('Choose bundle orders mode, account, owner and bundle controls', async t => {
+test('Choose bundle orders account, owner and bundle controls; mode stays in Scan card', async t => {
   const mode = {type: 'mode-capsules', props: {}};
   const state = fixture(t, {children: mode});
   await state.flush();
-  const controls = nodes(steps(state)[0]).filter(node =>
+  const controls = nodes(steps(state)[1]).filter(node =>
     [
       'mode-capsules',
       'InfoFieldset',
@@ -795,13 +1112,7 @@ test('Choose bundle orders mode, account, owner and bundle controls', async t =>
   );
   assert.deepEqual(
     controls.map(node => node.type),
-    [
-      'mode-capsules',
-      'InfoFieldset',
-      'SegmentedControl',
-      'InputWithAction',
-      'Toggle',
-    ],
+    ['InfoFieldset', 'SegmentedControl', 'InputWithAction', 'Toggle'],
   );
 });
 
@@ -818,7 +1129,7 @@ for (const account of [
 ]) {
   test(`${account.source} account row displays ${account.displayName}`, async t => {
     const state = fixture(t, {namespaces: [account]});
-    state.entrances.authorityService.account = account;
+    state.authority.account = account;
     await state.flush();
     const fieldset = state.find('InfoFieldset');
     assert.equal(text(state.find('InfoLegend')), 'Signed in as');
@@ -872,7 +1183,7 @@ test('one eligible namespace has no owner selector; no bundles has no picker act
   );
   await state.click('Button', 'Continue');
   assert.equal(state.flow.authority.choice.name, '');
-  assert.equal(text(steps(state)[0].props.summary), owners[0].displayName);
+  assert.equal(text(steps(state)[1].props.summary), owners[0].displayName);
   await state.click('Button', 'Change bundle');
   input(state, 'Family');
   assert.equal(state.find('Button', 'Continue').props.disabled, false);
@@ -891,7 +1202,7 @@ test('the most recent unnamed bundle prefills empty and locks its own policy', a
   await state.click('Button', 'Continue');
   assert.equal(state.flow.authority.choice.name, '');
   assert.equal(state.flow.authority.choice.allowPeerExtension, false);
-  assert.equal(text(steps(state)[0].props.summary), owners[0].displayName);
+  assert.equal(text(steps(state)[1].props.summary), owners[0].displayName);
   await state.click('Button', 'Change bundle');
   input(state, 'Daily wallet');
   assert.equal(state.find('Toggle').props.checked, true);
@@ -932,11 +1243,11 @@ for (const owner of [
     assert.equal(state.find('Toggle').props.disabled, true);
     assert.equal(state.find('Button', 'Continue').props.disabled, false);
     await state.click('Button', 'Continue');
-    assert.equal(text(steps(state)[0].props.summary), owner.displayName);
+    assert.equal(text(steps(state)[1].props.summary), owner.displayName);
     assert.equal(state.flow.authority.choice.name, '');
     if (owner.source === 'wallet')
       assert.ok(
-        nodes(steps(state)[0].props.summary).find(
+        nodes(steps(state)[1].props.summary).find(
           node => node.type === 'EllipsisInMiddle',
         ),
       );
@@ -953,7 +1264,7 @@ test('picker has a divider and plain rows; a row fills the input without advanci
   await state.click('ListItemButton', 'Daily walletMembers can add cards');
   assert.equal(state.find('DetailsPopup'), undefined);
   assert.equal(state.find('InputWithAction').props.value, 'Daily wallet');
-  assert.equal(steps(state)[0].props.activeNumero, 1);
+  assert.equal(steps(state)[1].props.activeNumero, 2);
   state.find('InputWithAction').props.action.onClick();
   await state.click('Button', 'Cancel');
   assert.equal(state.find('InputWithAction').props.value, 'Daily wallet');
@@ -977,7 +1288,7 @@ test('typing an existing normalized name locks its policy; a new name has editab
   );
   await state.click('Button', 'Continue');
   assert.equal(
-    text(steps(state)[0].props.summary),
+    text(steps(state)[1].props.summary),
     'test@example.com / \u00e9',
   );
   await state.click('Button', 'Change bundle');
@@ -1000,25 +1311,26 @@ test('a new decomposed name is normalized in the input and the completed summary
   assert.equal(state.find('InputWithAction').props.value, 'Caf\u00e9');
   await state.click('Button', 'Continue');
   assert.equal(
-    text(steps(state)[0].props.summary),
+    text(steps(state)[1].props.summary),
     'test@example.com / Caf\u00e9',
   );
 });
 
-test('loading uses Step processing; a 401 clears selection and returns to Sign in without stale results', async t => {
+test('loading uses Choose bundle processing; a 401 returns there signed out without stale results', async t => {
   const state = fixture(t);
   let reject;
-  state.entrances.authorityService.groups = () =>
+  state.authority.groups = () =>
     new Promise((_, fail) => {
       reject = fail;
     });
   await state.flush();
-  assert.equal(steps(state)[0].props.processing, true);
+  assert.equal(steps(state)[1].props.processing, true);
   assert.equal(state.find('Button', 'Continue').props.disabled, true);
-  state.entrances.authorityService.account = undefined;
+  state.authority.account = undefined;
   reject(new AuthorityError('unauthorized'));
   await state.flush();
-  assert.equal(steps(state)[0].props.activeNumero, 1);
+  assert.equal(steps(state)[1].props.activeNumero, 2);
+  assert.equal(steps(state)[1].props.processing, false);
   assert.ok(state.find('Button', 'Sign in'));
   assert.equal(state.find('InputWithAction'), undefined);
   assert.equal(state.errors.at(-1).code, 'unauthorized');
@@ -1027,12 +1339,12 @@ test('loading uses Step processing; a 401 clears selection and returns to Sign i
 test('an old owner response cannot overwrite the selected owner input', async t => {
   const state = fixture(t);
   let resolve;
-  state.entrances.authorityService.groups = () =>
+  state.authority.groups = () =>
     new Promise(accept => {
       resolve = accept;
     });
   await state.flush();
-  state.entrances.authorityService.groups = async () => [];
+  state.authority.groups = async () => [];
   state.find('SegmentedControl').props.onChange('1');
   await state.flush();
   input(state, 'New wallet bundle');
@@ -1046,9 +1358,8 @@ for (const outcome of ['correct', 'cancel', 'blocked']) {
   test(`authority join retries rejected Secret PIN: ${outcome}, preserving choice and card`, async t => {
     const state = fixture(t, {sourceCard: prepared()});
     await state.flush();
-    await state.click('Button', 'Continue');
     const session = state.flow.authority;
-    const chosen = session.choice;
+    let chosen;
     const card = session.cards[0];
     const hex = value => Uint8Array.from(Buffer.from(value, 'hex'));
     let authentications = 0;
@@ -1074,7 +1385,7 @@ for (const outcome of ['correct', 'cancel', 'blocked']) {
         return {bundle: new Uint8Array(32).fill(42)};
       },
     };
-    state.entrances.authorityService.issueBundle = async () => {
+    state.authority.issueBundle = async () => {
       issues++;
       return {
         publicKey: hex(card.publicKey),
@@ -1083,6 +1394,7 @@ for (const outcome of ['correct', 'cancel', 'blocked']) {
       };
     };
     state.promptPIN = options => {
+      chosen ??= session.choice;
       if (state.pinPrompts === 2) {
         assert.equal(options.description, 'Incorrect PIN, tries remaining: 4');
         assert.equal(state.scans, 1);
@@ -1091,7 +1403,7 @@ for (const outcome of ['correct', 'cancel', 'blocked']) {
       }
       return 'Secret-42';
     };
-    await state.click('Button', 'Scan card to join');
+    await state.click('Button', 'Continue');
     assert.equal(session.choice, chosen);
     assert.equal(session.cards[0], card);
     assert.equal(session.joinedCount, outcome === 'correct' ? 1 : 0);
