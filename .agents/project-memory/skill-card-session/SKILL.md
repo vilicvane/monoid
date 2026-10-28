@@ -5,7 +5,7 @@ description: Monoid NFC card sessions, Access/Safe PIN ownership, biometric vaul
 
 # Monoid card sessions
 
-Source: `../records.md`, especially records 29–32, 34, 38–41, 47–50, 63, 83 and 90, and `../29.md`, `../48.md` and `../50.md`. Treat records
+Source: `../records.md`, especially records 29–32, 34, 38–41, 47–50, 63, 83 and 90–92, and `../29.md`, `../48.md` and `../50.md`. Treat records
 as authoritative and keep them up to date. Records 19–24 describe an older WIP;
 do not reintroduce their plain-storage design or assume those TODOs still exist.
 
@@ -23,12 +23,15 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   After unlock, check cancellation/page activity before input or NFC. Clear a
   failed unlock session so an explicit retry can authorize again. Keep successful
   borrowed sessions page-owned and dispose temporary sessions when finished.
-- If Access PIN saving reports `AUTHORIZATION_EXPIRED`, `MonoidPINSession.setPIN`
-  disposes the expired access, shares one renewed unlock and retries only the
-  local save once. Preserve the native 60-second lifetime; never replay card
-  work or renew on cancellation/background/closed access/other storage errors.
-  Abort and page exit cancel renewal. A failed renewal or second expiry keeps
-  the existing save warning. Read/removal operations do not automatically renew.
+- If the vault reports `AUTHORIZATION_EXPIRED` mid-procedure, `MonoidPINSession`
+  (`getPINs`, `setPIN`, `removePIN`, `authenticate`) disposes the expired access,
+  shares one renewed unlock and retries only the local vault operation once.
+  Preserve the native 60-second lifetime; never replay card work or renew on
+  cancellation/background/closed access/other storage errors. Abort and page
+  exit cancel renewal; a failed renewal or second expiry keeps the existing
+  warning. Never open a biometric prompt inside a live NFC callback: vault writes
+  run after NFC, and the in-scan removal before Reset (`allowUnlock = false`)
+  hands off, renews outside NFC and asks for another tap (record 92).
 - Keep PIN inputs remounted per prompt. On Android, DOM autofocus after biometric
   unlock may not open the IME: use the shared input modal's explicit keyboard
   request, which waits for native window focus. Cancel pending keyboard work on
@@ -38,6 +41,12 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   PINs to the card's `hello.id`, verify the intended card before credentials, and
   authenticate again on every tap. Do not await a web modal inside a live card
   callback. Save a successfully verified Access PIN after native cleanup.
+- Bundle Export/Import accept the Access PIN once a Secret Authenticate has
+  bound the Monoid install (firmware c05cce2), so ordinary Sync uses the Access
+  scan prompt; maintenance Sync, bundle join/extension and Copy keep Secret. Never
+  turn an Access failure (generic `6982`) into a Secret PIN fallback. Monoid RPC
+  ISO errors arrive as CBOR `INTERNAL`/`ISOException` with a signed-short
+  `reason`, decoded by `CBORAppletError`. See record 91.
 - Secret PINs are entered explicitly and never persisted. New Secret and Access
   PINs require confirmation; initialization/Reset defaults to a separate Access
   PIN, with an unchecked option to reuse the confirmed Secret PIN. Restore an
