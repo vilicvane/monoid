@@ -215,7 +215,7 @@ test('feature scanning decodes records while Copy and Sync retain every opaque i
         applet,
         applet.hello,
         signal(),
-        'Secret-42',
+        {pin: 'Secret-42'},
         value => progress.push(value),
       );
       items = card.items;

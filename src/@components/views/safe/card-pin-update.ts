@@ -1,4 +1,9 @@
-import {type MonoidIdHex, MonoidPIN} from '../../../@atomics.js';
+import {
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
+  type MonoidIdHex,
+  MonoidPIN,
+} from '../../../@atomics.js';
 import {
   type MonoidApplet,
   type MonoidAppletHello,
@@ -28,7 +33,9 @@ export async function updateCardPIN(
   if (hello.pins.secret === false)
     throw new MonoidCardError('Secret PIN not set');
   if (!MonoidPIN.is(currentSecretPIN) || !MonoidPIN.is(newPIN)) {
-    throw new MonoidCardError('PIN must contain 6 to 16 characters');
+    throw new MonoidCardError(
+      `PIN must contain ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} characters`,
+    );
   }
 
   await authenticateCardPIN(applet, currentSecretPIN);

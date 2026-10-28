@@ -277,7 +277,7 @@ const hex = value => Buffer.from(value).toString('hex');
 const signal = () => new AbortController().signal;
 const emptyCard = {
   authenticate: async request => {
-    assert.deepEqual(request, {secret: true, pin: PIN});
+    assert.equal(request.pin, PIN);
   },
   list: async () => ({items: []}),
 };
@@ -299,7 +299,7 @@ function publicCard(number) {
     authentications,
     applet: {
       authenticate: async request => {
-        assert.deepEqual(request, {secret: true, pin: PIN});
+        assert.equal(request.pin, PIN);
         authentications.push(request);
       },
       list: async () => ({
@@ -389,13 +389,25 @@ function mount({
     async startScan(label, pin = PIN) {
       const scanCount = state.scans.length;
       const inputCount = state.inputs.length;
+      state.nextAccessPIN = pin;
       state.click(label);
-      assert.equal(state.scans.length, scanCount, 'PIN precedes NFC');
-      assert.equal(state.inputs.length, inputCount + 1);
-      state.inputs.at(-1).finished.resolve(pin);
+      if (state.flow.maintenance) {
+        assert.equal(state.scans.length, scanCount, 'Secret PIN precedes NFC');
+        assert.equal(state.inputs.length, inputCount + 1);
+        state.inputs.at(-1).finished.resolve(pin);
+      } else {
+        assert.equal(
+          state.inputs.length,
+          inputCount,
+          'Access input belongs to the shared prompt',
+        );
+      }
       await state.flush();
       assert.equal(state.scans.length, scanCount + 1);
-      assert.equal(state.scans.at(-1).options.auth, false);
+      const options = state.scans.at(-1).options;
+      assert.equal(options.auth, state.flow.maintenance ? false : 'access');
+      if (!state.flow.maintenance)
+        assert.equal(options.pinSession, state.pinSession);
     },
     async startWriteScan() {
       await state.startScan('Scan a pending card');
@@ -406,6 +418,13 @@ function mount({
       const scan = state.scans.at(-1);
       try {
         scan.validate?.(cardHello);
+        if (scan.options.auth === 'access') {
+          const id = hex(cardHello.id);
+          const pin =
+            scan.options.pinSession.pins.get(id) ?? state.nextAccessPIN ?? PIN;
+          await authenticateCardPIN(applet, pin, {kind: 'Access'});
+          scan.options.pinSession.pins.set(id, pin);
+        }
         scan.applet = state.entrances.cardStore.observeApplet(
           applet,
           cardHello,
@@ -448,6 +467,13 @@ function mount({
   if (source) cardStore.set(source);
   const safeRoute = {$exact: {}, card: {$exact: {}}};
   const appletsRoute = {$exact: {}};
+  state.pinSession = {
+    pins: new Map(),
+    clear() {
+      state.accessClears = (state.accessClears ?? 0) + 1;
+      this.pins.clear();
+    },
+  };
   state.entrances = {
     walletStorageService: {keys: state.localKeys},
     router: {
@@ -489,9 +515,7 @@ function mount({
       },
     },
     monoidCredentialsStore: {
-      createPINSession() {
-        assert.fail('Sync must not open an Access PIN vault session');
-      },
+      createPINSession: () => state.pinSession,
     },
     errorService: {
       catch: promise => promise.catch(error => state.errors.push(error)),
@@ -525,7 +549,8 @@ test('opening from Card keeps its preview but requires a fresh authenticated rea
 
   await state.startScan('Scan card');
   const scan = state.scans[0];
-  assert.equal(scan.options.auth, false);
+  assert.equal(scan.options.auth, 'access');
+  assert.equal(scan.options.pinSession, state.pinSession);
   assert.equal(scan.options.ensureSetup, false);
   assert.equal(scan.options.retryOnError, false);
   assert.throws(() => scan.validate(hello(2)), MonoidWrongCardError);
@@ -543,6 +568,86 @@ test('opening from Card keeps its preview but requires a fresh authenticated rea
   assert.equal(state.flow.sourceConsumed, true);
   assert.ok(state.button('Add another card'));
 });
+
+test('ordinary Sync lets the Access prompt reuse saved PINs without Secret input', async () => {
+  const state = mount();
+  const card = publicCard(1);
+  state.pinSession.pins.set(hex(card.hello.id), 'Saved-42');
+  card.applet.authenticate = async request => {
+    assert.deepEqual(request, {pin: 'Saved-42'});
+    card.authentications.push(request);
+  };
+  await state.startScan('Add a card', 'Unused-42');
+  await state.tap(card.hello, card.applet);
+  await state.finishScan();
+  assert.deepEqual(card.authentications, [{pin: 'Saved-42'}]);
+  assert.equal(state.inputs.length, 0);
+  assert.deepEqual(state.errors, []);
+});
+
+for (const [pins, message] of [
+  [{access: false, secret: 5}, 'Set up card PINs first'],
+  [{access: 5, secret: false}, 'Set up card PINs first'],
+  [{access: 0, secret: 5}, 'Access PIN blocked'],
+]) {
+  test(`ordinary Sync rejects PIN state ${JSON.stringify(pins)} before Access authentication`, async () => {
+    const state = mount();
+    await state.startScan('Add a card');
+    const scan = await state.tap(
+      {...hello(1), pins},
+      {
+        authenticate: () => assert.fail('Validate PIN state first'),
+      },
+    );
+    assert.equal(scan.error.message, message);
+    assert.equal(state.session.cards.length, 0);
+    assert.equal(state.inputs.length, 0);
+  });
+}
+
+for (const phase of ['leaving', 'inactive', 'unmounted']) {
+  test(`ordinary Sync clears its Access PIN session when ${phase}`, async () => {
+    const state = mount();
+    state.pinSession.pins.set('00000001', PIN);
+    if (phase === 'leaving')
+      runInAction(() => {
+        state.view.$leaving = true;
+      });
+    if (phase === 'inactive')
+      runInAction(() => {
+        state.view.$match.$exact.$active = false;
+      });
+    if (phase === 'unmounted') state.unmount();
+    assert.equal(state.pinSession.pins.size, 0);
+    assert.ok(state.accessClears > 0);
+  });
+}
+
+for (const error of [
+  new CBORAppletError({code: 'ACCESS_DENIED'}),
+  new CBORAppletError({
+    code: 'INTERNAL',
+    exception: 'ISOException',
+    reason: 0x6982,
+  }),
+]) {
+  test(`ordinary Sync propagates ${error.message} without a Secret fallback`, async () => {
+    const state = mount();
+    await state.startScan('Add a card');
+    await state.tap(hello(1), {
+      authenticate: async request => {
+        assert.deepEqual(request, {pin: PIN});
+      },
+      list: async () => {
+        throw error;
+      },
+    });
+    assert.deepEqual(state.errors, [error]);
+    assert.equal(state.inputs.length, 0);
+    assert.equal(state.scans.length, 1);
+    assert.equal(state.session.cards.length, 0);
+  });
+}
 
 test('collecting cards preserves the original Card cache without loading address previews', async () => {
   const first = publicCard(1);
@@ -579,18 +684,14 @@ test('collecting cards preserves the original Card cache without loading address
   assert.deepEqual(state.toasts, []);
 });
 
-test('cancelling the known source Secret PIN does not start NFC or collect cached data', async () => {
-  const source = {
-    ...readBackupCardIdentity(hello(1, new Uint8Array(32).fill(1))),
-    items: [{index: '02400000000000000001', type: 'seed', secret: true}],
-  };
+test('cancelling the ordinary Access scan keeps the source unconsumed without page Secret input', async () => {
+  const source = {...readBackupCardIdentity(hello(1)), items: []};
   const state = mount({source});
-  state.click('Scan card');
-  assert.equal(state.inputs.length, 1);
-  assert.equal(state.scans.length, 0);
-  state.inputs[0].finished.resolve(undefined);
+  await state.startScan('Scan card');
+  assert.equal(state.inputs.length, 0);
+  state.scans[0].finished.reject(cancelled());
   await state.flush();
-  assert.equal(state.scans.length, 0);
+  assert.equal(state.scans.length, 1);
   assert.equal(state.session.cards.length, 0);
   assert.equal(state.flow.sourceConsumed, false);
 });
@@ -613,14 +714,14 @@ test('a wrong-card scan uses the shared error handler without adding page conten
   assert.ok(steps.props.children.every(node => node.type === 'Step'));
 });
 
-test('adding an unknown card requests Secret PIN before NFC and authenticates before reading in one scan', async () => {
+test('adding an unknown card uses the Access prompt and authenticates before reading in one scan', async () => {
   const state = mount();
   const target = hello(2, new Uint8Array(32).fill(1));
   const calls = [];
   await state.startScan('Add a card');
   await state.tap(target, {
     authenticate: async request => {
-      assert.deepEqual(request, {secret: true, pin: PIN});
+      assert.deepEqual(request, {pin: PIN});
       calls.push('authenticate');
     },
     list: async () => {
@@ -632,16 +733,16 @@ test('adding an unknown card requests Secret PIN before NFC and authenticates be
   assert.deepEqual(calls, ['authenticate', 'list']);
   assert.equal(state.session.cards.length, 1);
   await state.finishScan();
-  assert.equal(state.inputs.length, 1);
+  assert.equal(state.inputs.length, 0);
   assert.equal(state.scans.length, 1);
-  assert.equal(state.scans[0].options.auth, false);
+  assert.equal(state.scans[0].options.auth, 'access');
   assert.ok(state.button('Add another card'));
 });
 
 for (const phase of ['leaving', 'inactive', 'unmounted']) {
-  test(`resolving an add Secret PIN after the view is ${phase} does not open NFC`, async () => {
-    const state = mount();
-    state.click('Add a card');
+  test(`resolving a maintenance Secret PIN after the view is ${phase} does not open NFC`, async () => {
+    const state = await mountMaintenance({addPeer: false});
+    state.click('Add another card');
     assert.equal(state.inputs.length, 1);
     if (phase === 'leaving')
       runInAction(() => {
@@ -655,7 +756,7 @@ for (const phase of ['leaving', 'inactive', 'unmounted']) {
     state.inputs[0].finished.resolve(PIN);
     await state.flush();
     assert.equal(state.scans.length, 0);
-    assert.equal(state.session.cards.length, 0);
+    assert.equal(state.session.cards.length, 1);
   });
 }
 
@@ -691,8 +792,8 @@ test('a write ACK arriving after unmount retains progress and invalidates the st
   const second = publicCard(2);
   const source = {...readBackupCardIdentity(first.hello), items: []};
   const state = mount({source});
-  await state.session.add(first.applet, first.hello, signal(), PIN);
-  await state.session.add(second.applet, second.hello, signal(), PIN);
+  await state.session.add(first.applet, first.hello, signal(), {pin: PIN});
+  await state.session.add(second.applet, second.hello, signal(), {pin: PIN});
   state.flow.consumeSource();
   state.session.prepare();
   const started = deferred();
@@ -741,8 +842,8 @@ test('only writing the original Card reloads its addresses and restores the comp
     index: '03010000000000000001',
     wallets: [{addressType: 'evm', publicKey: `02${'11'.repeat(32)}`}],
   });
-  await state.session.add(first.applet, first.hello, signal(), PIN);
-  await state.session.add(second.applet, second.hello, signal(), PIN);
+  await state.session.add(first.applet, first.hello, signal(), {pin: PIN});
+  await state.session.add(second.applet, second.hello, signal(), {pin: PIN});
   state.flow.consumeSource();
   const otherIdentity = readBackupCardIdentity(second.hello);
   state.entrances.cardStore.set({...otherIdentity, items: []});
@@ -806,7 +907,7 @@ test('an operation failing before a new snapshot does not overwrite a richer Car
     ],
   };
   const state = mount({source});
-  await state.session.add(card.applet, card.hello, signal(), PIN);
+  await state.session.add(card.applet, card.hello, signal(), {pin: PIN});
   const previousSnapshot = state.session.confirmedSnapshot;
   const stored = state.entrances.cardStore.get(source);
   t.mock.method(state.session, 'add', async () => {
@@ -824,8 +925,8 @@ test('the second round accepts pending cards in either order and completes only 
   const state = mount();
   const first = publicCard(1);
   const second = publicCard(2);
-  await state.session.add(first.applet, first.hello, signal(), PIN);
-  await state.session.add(second.applet, second.hello, signal(), PIN);
+  await state.session.add(first.applet, first.hello, signal(), {pin: PIN});
+  await state.session.add(second.applet, second.hello, signal(), {pin: PIN});
   state.click('Continue');
   await state.flush();
   assert.equal(state.session.phase, 'write');
@@ -837,7 +938,7 @@ test('the second round accepts pending cards in either order and completes only 
   assert.equal(state.session.cards[0].complete, false);
   assert.deepEqual(second.requests, [['create', '0fff0000000000000001']]);
   assert.equal(second.authentications.length, 2);
-  assert.equal(state.inputs.length, 1);
+  assert.equal(state.inputs.length, 0);
 
   await state.startWriteScan();
   await state.tap(first.hello, first.applet);
@@ -873,31 +974,29 @@ test('the second round accepts pending cards in either order and completes only 
   );
 });
 
-test('cancelling the write Secret PIN leaves NFC and card data untouched', async () => {
+test('cancelling the ordinary write scan keeps card data untouched without Secret input', async () => {
   const state = mount();
   const first = publicCard(1);
   const second = publicCard(2);
-  await state.session.add(first.applet, first.hello, signal(), PIN);
-  await state.session.add(second.applet, second.hello, signal(), PIN);
+  await state.session.add(first.applet, first.hello, signal());
+  await state.session.add(second.applet, second.hello, signal());
   state.session.prepare();
-  state.click('Scan a pending card');
-  assert.equal(state.inputs.length, 1);
-  assert.equal(state.scans.length, 0);
-  state.inputs[0].finished.resolve(undefined);
+  await state.startWriteScan();
+  assert.equal(state.inputs.length, 0);
+  state.scans[0].finished.reject(cancelled());
   await state.flush();
-  assert.equal(state.scans.length, 0);
-  assert.deepEqual(first.authentications, [{secret: true, pin: PIN}]);
+  assert.deepEqual(first.authentications, []);
   assert.equal(state.session.cards[0].completed, 0);
 });
 
-test('collection verifies each card PIN once and arbitrary write order reuses the matching PIN', async () => {
+test('ordinary collection and arbitrary write order reuse each card Access PIN session', async () => {
   const state = mount();
   const cards = [publicCard(1), publicCard(2)];
   const pins = ['First-42', 'Second-42'];
   for (let index = 0; index < cards.length; index++) {
     const card = cards[index];
     card.applet.authenticate = async request => {
-      assert.deepEqual(request, {secret: true, pin: pins[index]});
+      assert.deepEqual(request, {pin: pins[index]});
       card.authentications.push(request);
     };
     await state.startScan(
@@ -914,8 +1013,8 @@ test('collection verifies each card PIN once and arbitrary write order reuses th
     await state.flush();
     assert.equal(
       state.inputs.length,
-      2,
-      'the write round must not ask for PINs again',
+      0,
+      'Access scans must not ask for Secret PINs',
     );
     await state.tap(card.hello, card.applet);
     await state.finishScan();
@@ -926,6 +1025,8 @@ test('collection verifies each card PIN once and arbitrary write order reuses th
     );
   }
   assert.equal(state.session.phase, 'complete');
+  assert.equal(state.pinSession.pins.size, 0);
+  assert.ok(state.accessClears > 0);
 });
 
 test('leaving Sync clears verified PINs while keeping the collected cards', async () => {
@@ -948,8 +1049,10 @@ test('leaving Sync clears verified PINs while keeping the collected cards', asyn
   runInAction(() => {
     state.view.$match.$exact.$active = true;
   });
+  assert.equal(state.pinSession.pins.size, 0);
+  assert.ok(state.accessClears > 0);
   await state.startWriteScan();
-  assert.equal(state.inputs.length, 3);
+  assert.equal(state.inputs.length, 0);
   assert.equal(state.session.cards.length, 2);
   state.scans
     .at(-1)
@@ -960,29 +1063,35 @@ test('leaving Sync clears verified PINs while keeping the collected cards', asyn
 });
 
 for (const alreadyWritten of [false, true]) {
-  test(`an ${alreadyWritten ? 'already synced' : 'unchanged'} card skips authentication, reads and previews`, async t => {
+  test(`an ${alreadyWritten ? 'already synced' : 'unchanged'} card skips session writes, reads and previews after Access authentication`, async t => {
     const state = mount();
     const first = publicCard(1);
     const second = publicCard(2);
-    await state.session.add(first.applet, first.hello, signal(), PIN);
-    await state.session.add(second.applet, second.hello, signal(), PIN);
+    await state.session.add(first.applet, first.hello, signal(), {pin: PIN});
+    await state.session.add(second.applet, second.hello, signal(), {pin: PIN});
     if (!alreadyWritten) {
       await second.applet.create({
         index: bytes('0fff0000000000000001'),
         secret: false,
         data: Uint8Array.of(1),
       });
-      await state.session.add(second.applet, second.hello, signal(), PIN);
+      await state.session.add(second.applet, second.hello, signal(), {
+        pin: PIN,
+      });
     }
     state.session.prepare();
     if (alreadyWritten)
-      await state.session.write(second.applet, second.hello, signal(), PIN);
+      await state.session.write(second.applet, second.hello, signal(), {
+        pin: PIN,
+      });
     assert.equal(state.session.cards[1].complete, true);
     const write = t.mock.method(state.session, 'write', () =>
       assert.fail('Already synced card must skip write'),
     );
     await state.startWriteScan();
-    const scan = await state.tap(second.hello, {});
+    const scan = await state.tap(second.hello, {
+      authenticate: async request => assert.deepEqual(request, {pin: PIN}),
+    });
     assert.equal(scan.error, undefined);
     assert.deepEqual(scan.result, {message: 'Already synced'});
     assert.equal(write.mock.callCount(), 0);
@@ -996,10 +1105,10 @@ test('a lost card preserves another card already synced and keeps the pending sc
   const state = mount();
   const first = publicCard(1);
   const second = publicCard(2);
-  await state.session.add(first.applet, first.hello, signal(), PIN);
-  await state.session.add(second.applet, second.hello, signal(), PIN);
+  await state.session.add(first.applet, first.hello, signal(), {pin: PIN});
+  await state.session.add(second.applet, second.hello, signal(), {pin: PIN});
   state.session.prepare();
-  await state.session.write(second.applet, second.hello, signal(), PIN);
+  await state.session.write(second.applet, second.hello, signal(), {pin: PIN});
   await state.startWriteScan();
   const scan = state.scans.at(-1);
   scan.controller.abort(cancelled());
@@ -1015,11 +1124,11 @@ test('a failed original-card address preview retains completion and requires a f
   const second = publicCard(2);
   const source = {...readBackupCardIdentity(first.hello), items: []};
   const state = mount({source});
-  await state.session.add(first.applet, first.hello, signal(), PIN);
-  await state.session.add(second.applet, second.hello, signal(), PIN);
+  await state.session.add(first.applet, first.hello, signal(), {pin: PIN});
+  await state.session.add(second.applet, second.hello, signal(), {pin: PIN});
   state.flow.consumeSource();
   state.session.prepare();
-  await state.session.write(second.applet, second.hello, signal(), PIN);
+  await state.session.write(second.applet, second.hello, signal(), {pin: PIN});
   state.previewFailure = new Error('Address preview failed');
 
   await state.startWriteScan();
@@ -1047,8 +1156,8 @@ for (const contents of ['empty', 'identical public']) {
     const state = mount({source});
     const first = contents === 'empty' ? emptyCard : publicCard(1).applet;
     const second = contents === 'empty' ? emptyCard : publicCard(1).applet;
-    await state.session.add(first, hello(1), signal(), PIN);
-    await state.session.add(second, hello(2), signal(), PIN);
+    await state.session.add(first, hello(1), signal(), {pin: PIN});
+    await state.session.add(second, hello(2), signal(), {pin: PIN});
     state.flow.consumeSource();
 
     assert.equal(state.button('Continue'), undefined);
@@ -1076,8 +1185,8 @@ for (const contents of ['empty', 'identical public']) {
 test('no-op collection falls back to Safe when the original Card is absent from history', async () => {
   const source = {...readBackupCardIdentity(hello(1)), items: []};
   const state = mount({source, canBackToCard: false});
-  await state.session.add(emptyCard, hello(1), signal(), PIN);
-  await state.session.add(emptyCard, hello(2), signal(), PIN);
+  await state.session.add(emptyCard, hello(1), signal(), {pin: PIN});
+  await state.session.add(emptyCard, hello(2), signal(), {pin: PIN});
   state.flow.consumeSource();
   assert.equal(state.button('Continue'), undefined);
   assert.equal(state.button('Back to Card'), undefined);
@@ -1090,8 +1199,8 @@ test('no-op collection falls back to Safe when the original Card is absent from 
 
 test('standalone sync ignores unrelated Card history and returns to Safe', async () => {
   const state = mount({canBackToCard: true});
-  await state.session.add(emptyCard, hello(1), signal(), PIN);
-  await state.session.add(emptyCard, hello(2), signal(), PIN);
+  await state.session.add(emptyCard, hello(1), signal(), {pin: PIN});
+  await state.session.add(emptyCard, hello(2), signal(), {pin: PIN});
   assert.equal(state.button('Back to Card'), undefined);
   const back = state.button('Back to Safe');
   assert.ok(back);
@@ -1101,12 +1210,12 @@ test('standalone sync ignores unrelated Card history and returns to Safe', async
 
 test('adding and removing cards updates no-op navigation without freezing the collection', async () => {
   const state = mount();
-  await state.session.add(emptyCard, hello(1), signal(), PIN);
-  await state.session.add(emptyCard, hello(2), signal(), PIN);
+  await state.session.add(emptyCard, hello(1), signal(), {pin: PIN});
+  await state.session.add(emptyCard, hello(2), signal(), {pin: PIN});
   assert.ok(state.button('Back to Safe'));
 
   const third = publicCard(3);
-  await state.session.add(third.applet, third.hello, signal(), PIN);
+  await state.session.add(third.applet, third.hello, signal(), {pin: PIN});
   assert.ok(state.button('Continue'));
   assert.equal(state.button('Back to Safe'), undefined);
   assert.equal(state.session.phase, 'collect');
@@ -1134,8 +1243,8 @@ test('identical opaque Secret copies can return without another scan', async () 
     exportItem: async () => ({data: Uint8Array.of(1)}),
   };
   const bundle = new Uint8Array(32).fill(1);
-  await state.session.add(opaqueCard, hello(1, bundle), signal(), PIN);
-  await state.session.add(opaqueCard, hello(2, bundle), signal(), PIN);
+  await state.session.add(opaqueCard, hello(1, bundle), signal(), {pin: PIN});
+  await state.session.add(opaqueCard, hello(2, bundle), signal(), {pin: PIN});
 
   assert.ok(state.button('Back to Safe'));
   assert.equal(state.button('Continue'), undefined);
@@ -1153,8 +1262,8 @@ test('a conflicting collection stays actionable and reports the conflict through
       ],
     }),
   };
-  await state.session.add(first.applet, first.hello, signal(), PIN);
-  await state.session.add(conflicting, hello(2), signal(), PIN);
+  await state.session.add(first.applet, first.hello, signal(), {pin: PIN});
+  await state.session.add(conflicting, hello(2), signal(), {pin: PIN});
 
   assert.equal(state.button('Back to Safe'), undefined);
   assert.ok(state.button('Continue'));
@@ -1192,8 +1301,8 @@ test('a conflicting collection stays actionable and reports the conflict through
 test('no-op collection has no Continue or return button without matching route history', async () => {
   const source = {...readBackupCardIdentity(hello(1)), items: []};
   const state = mount({source, canBack: false});
-  await state.session.add(emptyCard, hello(1), signal(), PIN);
-  await state.session.add(emptyCard, hello(2), signal(), PIN);
+  await state.session.add(emptyCard, hello(1), signal(), {pin: PIN});
+  await state.session.add(emptyCard, hello(2), signal(), {pin: PIN});
   state.flow.consumeSource();
   await state.flush();
   assert.equal(state.session.phase, 'collect');
@@ -1213,12 +1322,12 @@ test('completed writes have no return button without matching route history', as
   const state = mount({source, canBack: false});
   const first = publicCard(1);
   const second = publicCard(2);
-  await state.session.add(first.applet, first.hello, signal(), PIN);
-  await state.session.add(second.applet, second.hello, signal(), PIN);
+  await state.session.add(first.applet, first.hello, signal(), {pin: PIN});
+  await state.session.add(second.applet, second.hello, signal(), {pin: PIN});
   state.click('Continue');
   await state.flush();
-  await state.session.write(first.applet, first.hello, signal(), PIN);
-  await state.session.write(second.applet, second.hello, signal(), PIN);
+  await state.session.write(first.applet, first.hello, signal(), {pin: PIN});
+  await state.session.write(second.applet, second.hello, signal(), {pin: PIN});
   assert.equal(state.session.phase, 'complete');
   assert.equal(state.button('Back to Safe'), undefined);
   assert.equal(state.button('Back to Card'), undefined);
@@ -1293,10 +1402,10 @@ async function mountMaintenance({
     },
   };
   const flow = new SyncCardsState(undefined, draft);
-  await flow.session.add(target.applet, target.hello, signal(), PIN);
+  await flow.session.add(target.applet, target.hello, signal(), {pin: PIN});
   if (addPeer)
     for (const peer of peers) {
-      await flow.session.add(peer.applet, peer.hello, signal(), PIN);
+      await flow.session.add(peer.applet, peer.hello, signal(), {pin: PIN});
       flow.addMaintenanceCard(
         {
           id: hex(peer.hello.id),
@@ -1706,12 +1815,9 @@ test('an already complete maintenance peer skips authentication and export while
       data: Uint8Array.of(number),
     });
   }
-  await state.session.add(
-    completePeer.applet,
-    completePeer.hello,
-    signal(),
-    PIN,
-  );
+  await state.session.add(completePeer.applet, completePeer.hello, signal(), {
+    pin: PIN,
+  });
   state.click('Continue');
   await state.flush();
   assert.equal(
@@ -2154,10 +2260,9 @@ for (const [mode, updateAvailable, title] of [
 }
 
 for (const outcome of ['correct', 'cancel', 'blocked']) {
-  test(`Sync collection wrong Secret PIN: ${outcome}, keeping its cards`, async () => {
-    const source = {...readBackupCardIdentity(hello(1)), items: []};
-    const state = mount({source});
-    await state.startScan('Scan card');
+  test(`maintenance Sync collection wrong Secret PIN: ${outcome}, keeping its cards`, async () => {
+    const state = await mountMaintenance({addPeer: false});
+    await state.startScan('Add another card');
     const wrong = {
       ...emptyCard,
       authenticate: async () => {
@@ -2167,9 +2272,9 @@ for (const outcome of ['correct', 'cancel', 'blocked']) {
         });
       },
     };
-    await state.tap(hello(1), wrong);
+    await state.tap(state.peer.hello, wrong);
     assert.equal(state.scans.length, 1);
-    assert.equal(state.session.cards.length, 0);
+    assert.equal(state.session.cards.length, 1);
     if (outcome === 'blocked') {
       assert.equal(state.inputs.length, 1);
       assert.equal(state.errors[0].message, 'Secret PIN blocked');
@@ -2184,9 +2289,9 @@ for (const outcome of ['correct', 'cancel', 'blocked']) {
       .finished.resolve(outcome === 'correct' ? PIN : undefined);
     await state.flush();
     if (outcome === 'correct') {
-      await state.tap(hello(1));
+      await state.tap(state.peer.hello);
       await state.finishScan();
-      assert.equal(state.session.cards.length, 1);
+      assert.equal(state.session.cards.length, 2);
     } else assert.equal(state.scans.length, 1);
     assert.deepEqual(state.errors, []);
   });

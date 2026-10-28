@@ -272,72 +272,79 @@ export function useBundleCardAddition({
         operation.signal.throwIfAborted();
         if (!isActive()) return;
       }
-      await scanPrompt(
-        scanCardPrompt(reset.replacement ?? reset.card),
-        async (sessionId, setState, scanSignal) => {
-          const signal = AbortSignal.any([
-            scanSignal,
-            operation.signal,
-            pinSignal,
-          ]);
-          signal.throwIfAborted();
-          const applet = await monoidApplet.openSession(sessionId);
-          signal.throwIfAborted();
-          const current = MonoidAppletHello.satisfies(await applet.hello({}));
-          setState(
-            reset.attempted
-              ? 'Checking card, hold tight...'
-              : 'Resetting card, hold tight...',
-          );
-          const cached = cardStore.get(reset.card);
-          let hello = await reset.readOrReset(
-            applet,
-            current,
-            () => pinSession.removePIN(reset.card.id, undefined, signal),
-            () =>
-              runInAction(() => {
-                if (cached) {
-                  cached.items = [];
-                  cached.bundle = false;
-                  cached.allowPeerExtension = false;
-                  cached.requiresPINSetup = true;
-                }
-              }),
-            signal,
-          );
-          cacheSetup(
-            hello,
-            hello.pins.secret === false && hello.pins.access === false,
-          );
-          await validateScan(hello, signal, setState);
-          if (pin !== undefined) {
-            signal.throwIfAborted();
-            const rememberPIN = secretPINSession.onAuthenticated(
-              readBackupCardIdentity(hello),
-              pin,
-            );
-            setState('Setting Secret PIN, hold tight...');
-            hello = await initializeMonoidCard(
-              applet,
-              hello,
-              pin,
-              signal,
-              accessPIN,
-            );
-            rememberPIN();
-            cacheSetup(hello);
-            completed = hello;
-            setState('Authenticating, hold tight...');
-            await authenticateCardPIN(applet, accessPIN!, {
-              kind: 'Access',
-              retryable: false,
-            });
-            signal.throwIfAborted();
-            accessPINId = uint8ArrayToHex(hello.id);
-          }
-          initialized = hello;
-          if (hasInitializedPINs(hello)) completed = hello;
-        },
+      await reset.run(
+        pinSession,
+        AbortSignal.any([operation.signal, pinSignal]),
+        removePIN =>
+          scanPrompt(
+            scanCardPrompt(reset.replacement ?? reset.card),
+            async (sessionId, setState, scanSignal) => {
+              const signal = AbortSignal.any([
+                scanSignal,
+                operation.signal,
+                pinSignal,
+              ]);
+              signal.throwIfAborted();
+              const applet = await monoidApplet.openSession(sessionId);
+              signal.throwIfAborted();
+              const current = MonoidAppletHello.satisfies(
+                await applet.hello({}),
+              );
+              setState(
+                reset.attempted
+                  ? 'Checking card, hold tight...'
+                  : 'Resetting card, hold tight...',
+              );
+              const cached = cardStore.get(reset.card);
+              let hello = await reset.readOrReset(
+                applet,
+                current,
+                () => removePIN(signal),
+                () =>
+                  runInAction(() => {
+                    if (cached) {
+                      cached.items = [];
+                      cached.bundle = false;
+                      cached.allowPeerExtension = false;
+                      cached.requiresPINSetup = true;
+                    }
+                  }),
+                signal,
+              );
+              cacheSetup(
+                hello,
+                hello.pins.secret === false && hello.pins.access === false,
+              );
+              await validateScan(hello, signal, setState);
+              if (pin !== undefined) {
+                signal.throwIfAborted();
+                const rememberPIN = secretPINSession.onAuthenticated(
+                  readBackupCardIdentity(hello),
+                  pin,
+                );
+                setState('Setting Secret PIN, hold tight...');
+                hello = await initializeMonoidCard(
+                  applet,
+                  hello,
+                  pin,
+                  signal,
+                  accessPIN,
+                );
+                rememberPIN();
+                cacheSetup(hello);
+                completed = hello;
+                setState('Authenticating, hold tight...');
+                await authenticateCardPIN(applet, accessPIN!, {
+                  kind: 'Access',
+                  retryable: false,
+                });
+                signal.throwIfAborted();
+                accessPINId = uint8ArrayToHex(hello.id);
+              }
+              initialized = hello;
+              if (hasInitializedPINs(hello)) completed = hello;
+            },
+          ),
       );
       if (accessPINId && pin && isActive() && !operation.signal.aborted) {
         try {

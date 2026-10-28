@@ -764,19 +764,87 @@ test('Safe access errors retain their card error codes', async () => {
   }
 });
 
-test('Import preserves ISO status for invalid artifacts and conflicting existing items', async () => {
-  for (const sw of [0x6984, 0x6985]) {
-    const {applet} = await createSession({}, sw);
-
+test('Import decodes RPC-wrapped ISO errors for invalid artifacts and conflicting items', async () => {
+  for (const reason of [0x6984, 0x6985]) {
+    const source = {code: 'INTERNAL', exception: 'ISOException', reason};
+    const {applet} = await createSession({error: source});
     await assert.rejects(
       applet.importItem({
         index,
         senderPublicKey: identityPublicKey,
         data: new Uint8Array(144),
       }),
-      error => error instanceof AppletISOError && error.sw === sw,
+      error =>
+        error instanceof CBORAppletError && error.source.reason === reason,
     );
   }
+});
+
+for (const [source, message] of [
+  [
+    {code: 'INTERNAL', exception: 'ISOException', reason: 27268},
+    '0x6a84 Not enough storage on card',
+  ],
+  [
+    {code: 'INTERNAL', exception: 'ISOException', reason: 27010},
+    '0x6982 Security condition not satisfied',
+  ],
+  [
+    {code: 'INTERNAL', exception: 'ISOException', reason: 0x9abc - 0x10000},
+    '0x9abc Unknown SW',
+  ],
+  [{code: 'INTERNAL', exception: 'ISOException'}, 'INTERNAL: ISOException'],
+  [
+    {code: 'INTERNAL', exception: 'CryptoException', reason: 5},
+    'INTERNAL: CryptoException (5)',
+  ],
+  [
+    {code: 'INTERNAL', exception: 'CryptoException', reason: 0},
+    'INTERNAL: CryptoException (0)',
+  ],
+  [
+    {code: 'INTERNAL', exception: 'CryptoException'},
+    'INTERNAL: CryptoException',
+  ],
+  [
+    {code: 'INTERNAL', exception: 'SecurityException'},
+    'INTERNAL: SecurityException',
+  ],
+  [
+    {code: 'INTERNAL', exception: 'IndexOutOfBoundsException'},
+    'INTERNAL: IndexOutOfBoundsException',
+  ],
+  [{code: 'INTERNAL'}, 'INTERNAL'],
+  [
+    {code: 'ACCESS_DENIED', exception: 'ISOException', reason: 27010},
+    'ACCESS_DENIED',
+  ],
+]) {
+  test(`RPC error decodes ${JSON.stringify(source)}`, async () => {
+    const error = {...source, futureField: {detail: true}};
+    const {applet} = await createSession({error});
+    await assert.rejects(applet.view({index}), value => {
+      assert.ok(value instanceof CBORAppletError);
+      assert.deepEqual(value.source, error);
+      assert.equal(value.message, message);
+      return true;
+    });
+  });
+}
+
+test('transport storage errors use the same readable status as RPC errors', async () => {
+  const {applet} = await createSession({}, 0x6a84);
+  await assert.rejects(applet.view({index}), error => {
+    assert.ok(error instanceof AppletISOError);
+    assert.equal(error.sw, 0x6a84);
+    const rpc = new CBORAppletError({
+      code: 'INTERNAL',
+      exception: 'ISOException',
+      reason: 27268,
+    });
+    assert.ok(error.message.startsWith(rpc.message));
+    return true;
+  });
 });
 
 test('Authenticate and SetPIN follow their different firmware field orders', async () => {

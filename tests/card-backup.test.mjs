@@ -1290,7 +1290,7 @@ test('shared initialization rejects invalid PIN formats before writing a new Saf
   const state = uninitializedTarget();
   await assert.rejects(
     initializeMonoidCard(state.applet, state.fresh, 'short', signal()),
-    /6 to 16 characters/,
+    /6 to 32 characters/,
   );
   assert.deepEqual(state.calls, []);
 });

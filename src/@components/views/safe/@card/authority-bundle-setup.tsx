@@ -5,7 +5,11 @@ import {type ReactNode, useCallback, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
-import {MonoidPIN} from '../../../../@atomics.js';
+import {
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
+  MonoidPIN,
+} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import {
   AuthorityError,
@@ -373,14 +377,14 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
                 ...getPINInputPlaceholder('Secret', 'Enter'),
                 description,
                 center: true,
-                maxLength: 16,
+                maxLength: MONOID_PIN_MAX_LENGTH,
               },
               signal,
             );
             if (input === undefined || !isActive()) return;
             signal.throwIfAborted();
             if (MonoidPIN.is(input)) return input;
-            description = 'Use 6 to 16 ASCII characters';
+            description = `Use ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} ASCII characters`;
           }
         },
         (credentials, pinSignal) =>

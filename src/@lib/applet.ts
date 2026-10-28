@@ -201,7 +201,7 @@ export abstract class Applet<TCommandDefinitions> {
   }
 }
 
-const ISO7816_SW_CODE_TEXT_MAP = new Map([
+export const ISO7816_SW_CODE_TEXT_MAP = new Map([
   [0x9000, 'No Error'],
   [0x6100, 'Response bytes remaining'],
   [0x6700, 'Wrong length'],
@@ -222,7 +222,7 @@ const ISO7816_SW_CODE_TEXT_MAP = new Map([
   [0x6d00, 'INS value not supported'],
   [0x6e00, 'CLA value not supported'],
   [0x6f00, 'No precise diagnosis'],
-  [0x6a84, 'Not enough memory space in the file'],
+  [0x6a84, 'Not enough storage on card'],
 ]);
 
 export class AppletISOError extends Error {

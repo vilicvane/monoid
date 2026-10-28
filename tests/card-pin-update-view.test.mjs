@@ -253,7 +253,7 @@ test('invalid input and mismatching confirmation stay in the input flow without 
   await state.answer('short');
   assert.equal(
     state.inputs.at(-1).options.description,
-    'Use 6 to 16 ASCII characters',
+    'Use 6 to 32 ASCII characters',
   );
   await state.answer('old-safe');
   await state.answer('new-pin');

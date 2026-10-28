@@ -5,6 +5,7 @@ import {type ReactNode, useCallback, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
+import {MONOID_PIN_MAX_LENGTH} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import {readCardInformation} from '../../../../@lib/global-platform/card-information.js';
 import {
@@ -12,6 +13,7 @@ import {
   type CardBackupIdentity,
   type MonoidAppletHello,
   MonoidCardError,
+  assertCardPINs,
   assertSameCardWithBundle,
   cardName,
   createMonoidApplet,
@@ -71,6 +73,7 @@ import {CardResourceIssues} from './card-resource-issues.js';
 import {CardSecretPINSession} from './card-secret-pin-session.js';
 import {
   type CardSyncProgress,
+  type CardSyncSecretPIN,
   authenticateCardSync,
 } from './card-sync-session.js';
 import {SyncCardsState} from './sync-cards-state.js';
@@ -128,6 +131,7 @@ export const SyncCardsView = observer(
     const {
       router,
       cardStore,
+      monoidCredentialsStore,
       walletStorageService,
       syncCardsStore,
       cardMaintenanceService,
@@ -158,6 +162,15 @@ export const SyncCardsView = observer(
       !collecting &&
       !pendingPeers.length &&
       !flow.maintenanceSaved;
+    const [pinSession] = useState(() =>
+      monoidCredentialsStore.createPINSession(),
+    );
+    const [accessPINInput, scanWithAccess] = useMonoidScanPrompt({
+      auth: 'access',
+      ensureSetup: false,
+      retryOnError: false,
+      pinSession,
+    });
     const [scanContent, scan] = useMonoidScanPrompt({
       auth: false,
       ensureSetup: false,
@@ -245,10 +258,11 @@ export const SyncCardsView = observer(
       return () => {
         mounted.current = false;
         operation.current?.abort();
+        pinSession.clear();
         secretPINs.clear();
         releaseProcedurePINs();
       };
-    }, [secretPINs, releaseProcedurePINs]);
+    }, [pinSession, secretPINs, releaseProcedurePINs]);
 
     useEffect(
       () =>
@@ -257,6 +271,7 @@ export const SyncCardsView = observer(
           active => {
             if (!active) {
               operation.current?.abort();
+              pinSession.clear();
               secretPINs.clear();
               releaseProcedurePINs();
               setDetails(undefined);
@@ -265,12 +280,15 @@ export const SyncCardsView = observer(
           },
           {fireImmediately: true},
         ),
-      [isViewActive, secretPINs, releaseProcedurePINs],
+      [isViewActive, pinSession, secretPINs, releaseProcedurePINs],
     );
 
     useEffect(() => {
-      if (complete) secretPINs.clear();
-    }, [complete, secretPINs]);
+      if (complete) {
+        pinSession.clear();
+        secretPINs.clear();
+      }
+    }, [complete, pinSession, secretPINs]);
 
     const run = async (
       callback: (signal: AbortSignal) => Promise<void>,
@@ -304,329 +322,334 @@ export const SyncCardsView = observer(
       const previewCard = view.card ?? flow.sourceCard;
       signal.throwIfAborted();
       if (!mounted.current || !isViewActive()) return;
-      await secretPINs.run(
-        expected
-          ? [expected]
-          : collecting
-            ? []
-            : maintenance
-              ? pendingPeers.length && !allMaintenanceTargets
+      const scanWithCredentials = async (
+        credentials?: (card: CardBackupIdentity) => CardSyncSecretPIN,
+        pinSignal = signal,
+      ): Promise<void> => {
+        await (maintenance ? scan : scanWithAccess)(
+          suggested
+            ? scanCardPrompt(suggested, expected ? undefined : 'to export')
+            : collecting
+              ? 'Scan a card'
+              : needsRecoveryExport
+                ? 'Scan a card to export'
+                : 'Scan a pending card',
+          async (
+            applet,
+            setState,
+            hello,
+            nativeSignal,
+          ): Promise<void | {message: string}> => {
+            const activeSignal = AbortSignal.any([
+              signal,
+              nativeSignal,
+              pinSignal,
+            ]);
+            activeSignal.throwIfAborted();
+            const identity = readBackupCardIdentity(hello);
+            const scanned = session.cards.find(
+              card => card.publicKey === identity.publicKey,
+            );
+            if (
+              !collecting &&
+              session.series.hasFinished(identity.publicKey) &&
+              !(
+                maintenance &&
+                flow.needsExport(identity.publicKey) &&
+                (needsRecoveryExport || allMaintenanceTargets)
+              )
+            ) {
+              return {message: 'Already synced'};
+            }
+            const secretPIN = credentials?.(identity);
+            const pin = secretPIN?.pin;
+            const onAuthenticated = secretPIN?.onAuthenticated;
+            flow.markInterrupted(identity.publicKey, false);
+            const isPreviewCard =
+              previewCard?.id === identity.id &&
+              previewCard.publicKey === identity.publicKey;
+            const knownCard =
+              !collecting && isPreviewCard
+                ? cardStore.get(previewCard!)
+                : undefined;
+            const knownItems = knownCard
+              ? knownCard.items.map(item => ({
+                  index: item.index,
+                  type: item.type,
+                  secret: item.secret,
+                  publicKey: item.publicKey,
+                  derivations: [
+                    ...(item.derivations ?? []),
+                    ...Object.values(item.refs).map(
+                      ({addressType, seed, curve, path, publicKey}) => ({
+                        addressType,
+                        seed,
+                        curve,
+                        path,
+                        publicKey,
+                      }),
+                    ),
+                  ],
+                }))
+              : flow.sourceCard?.items;
+            try {
+              setState(
+                maintenance
+                  ? 'Authenticating, hold tight...'
+                  : collecting
+                    ? 'Reading items, hold tight...'
+                    : 'Syncing items, hold tight...',
+              );
+              if (collecting) {
+                await session.add(
+                  applet,
+                  hello,
+                  activeSignal,
+                  secretPIN,
+                  progress => {
+                    setState(progressContent(progress));
+                  },
+                );
+                if (maintenance) {
+                  const sessionId = applet.activeSessionId;
+                  const information = await readCardInformation(
+                    sessionId,
+                    activeSignal,
+                  );
+                  const installed = await readMonoidAppletInstallation(
+                    sessionId,
+                    activeSignal,
+                    {authenticateRegistry: true},
+                  );
+                  const appletAid = await resolveMonoidAppletMaintenanceAid(
+                    sessionId,
+                    installed,
+                    activeSignal,
+                  );
+                  const maintenanceApplet = await createMonoidApplet(
+                    hexToUint8Array(appletAid),
+                  ).openSession(sessionId);
+                  await authenticateCardSync(
+                    maintenanceApplet,
+                    hello,
+                    pin,
+                    activeSignal,
+                  );
+                  const candidate = await cardMaintenanceService.prepare(
+                    maintenanceApplet,
+                    {
+                      mode:
+                        maintenance.mode === 'update' ? 'update' : 'reinstall',
+                      appletAid,
+                      cardInformation: information,
+                      selectedOptionalStages: Object.entries(
+                        installed.optional,
+                      ).flatMap(([stage, state]) =>
+                        state?.installed || state?.loaded
+                          ? [stage as AppletStage]
+                          : [],
+                      ),
+                      signal: activeSignal,
+                    },
+                  );
+                  const updateAvailable =
+                    cardMaintenanceService.isUpdateAvailable(hello);
+                  flow.addMaintenanceCard(candidate, updateAvailable);
+                  // Ask while the card is fresh in mind; an up-to-date card
+                  // has nothing to update.
+                  if (
+                    (maintenance.mode !== 'update' ||
+                      updateAvailable !== false) &&
+                    identity.publicKey !== maintenance.card.publicKey &&
+                    !flow.maintenanceCards.get(identity.publicKey)?.target
+                  )
+                    setMaintenanceProposal(identity);
+                }
+                flow.consumeSource();
+              } else {
+                // Completed peers still need a fresh authenticated export;
+                // session.write intentionally skips auth for no-op writes.
+                if (maintenance && scanned?.complete) {
+                  await authenticateCardSync(
+                    applet,
+                    hello,
+                    pin,
+                    activeSignal,
+                    onAuthenticated,
+                  );
+                }
+                await session.write(
+                  applet,
+                  hello,
+                  activeSignal,
+                  secretPIN,
+                  progress => {
+                    setState(progressContent(progress));
+                  },
+                );
+                if (
+                  maintenance &&
+                  maintenanceTarget &&
+                  (!flow.pendingMaintenanceCards.length ||
+                    allMaintenanceTargets) &&
+                  flow.needsExport(identity.publicKey)
+                ) {
+                  const target = flow.maintenanceTargets.find(
+                    target =>
+                      target.card.publicKey !== identity.publicKey &&
+                      !flow.recoveries.has(target.id),
+                  )!;
+                  const archive = await session.exportRecovery(
+                    applet,
+                    hello,
+                    session.cards.find(
+                      card => card.publicKey === target.card.publicKey,
+                    )!,
+                    activeSignal,
+                    progress => setState(progressContent(progress)),
+                    session.cards,
+                  );
+                  flow.acceptRecovery(archive);
+                  const targets = flow.maintenanceTargets;
+                  if (targets.every(target => flow.recoveries.has(target.id))) {
+                    try {
+                      if (targets.length === 1)
+                        await cardMaintenanceService.saveBundleRecovery(
+                          maintenance,
+                          flow.recoveries.get(maintenance.id)!,
+                          activeSignal,
+                        );
+                      else
+                        await cardMaintenanceService.saveBundleRecoveryBatch(
+                          targets.map(operation => ({
+                            operation,
+                            recovery: flow.recoveries.get(operation.id)!,
+                          })),
+                          activeSignal,
+                        );
+                      flow.finishMaintenance();
+                      releaseProcedurePINs();
+                    } catch (error) {
+                      flow.recoveries.clear();
+                      throw error;
+                    }
+                  }
+                }
+              }
+            } catch (error) {
+              flow.markInterrupted(identity.publicKey, true);
+              throw error;
+            }
+
+            const confirmed = session.confirmedSnapshot;
+            if (
+              activeSignal.aborted ||
+              !mounted.current ||
+              !isViewActive() ||
+              collecting ||
+              maintenance ||
+              !isPreviewCard ||
+              confirmed?.id !== identity.id ||
+              confirmed.publicKey !== identity.publicKey
+            )
+              return;
+
+            // Confirmed sync progress survives a later address-preview failure.
+            setState('Reading addresses, hold tight...');
+            const items = await readCardAddressPreviews(
+              applet,
+              confirmed.items,
+              (current, total) => {
+                setState(
+                  <MonoidScanStatePromptProgress
+                    current={current}
+                    total={total}
+                  >
+                    Reading addresses
+                  </MonoidScanStatePromptProgress>,
+                );
+              },
+              activeSignal,
+              knownItems,
+              walletStorageService.keys,
+            ).catch(error => {
+              if (!activeSignal.aborted && mounted.current && isViewActive()) {
+                toast({
+                  message: 'Card contents saved, address preview unavailable',
+                  color: 'warning',
+                  position: 'top',
+                });
+              }
+              if (activeSignal.aborted) throw error;
+              return undefined;
+            });
+            if (items) {
+              cardStore.set({...confirmed, items});
+            }
+          },
+          hello => {
+            signal.throwIfAborted();
+            if (!mounted.current || !isViewActive()) {
+              throw Object.assign(new Error('Sync cancelled'), {
+                code: 'CANCELLED',
+              });
+            }
+            if (expected) assertSyncCard(hello, expected);
+            if (maintenance && maintenanceTarget) {
+              const identity = readBackupCardIdentity(hello);
+              if (
+                (collecting &&
+                  identity.publicKey === maintenanceTarget.publicKey) ||
+                (!collecting &&
+                  flow.deferredCards.has(identity.publicKey) &&
+                  !flow.needsExport(identity.publicKey))
+              )
+                throw new MonoidCardError('Scan another card in this bundle');
+              if (identity.bundle !== maintenanceTarget.bundle)
+                throw new MonoidCardError('Scan a card in the same bundle');
+            }
+            if (!collecting) {
+              const identity = readBackupCardIdentity(hello);
+              const target = session.cards.find(
+                card => card.publicKey === identity.publicKey,
+              );
+              if (!target)
+                throw new MonoidCardError('Scan a card added to this sync');
+              assertSyncCard(hello, target);
+            }
+            if (!maintenance) assertCardPINs(hello);
+          },
+        );
+      };
+      if (maintenance) {
+        await secretPINs.run(
+          expected
+            ? [expected]
+            : collecting
+              ? []
+              : pendingPeers.length && !allMaintenanceTargets
                 ? pendingPeers
                 : session.cards.filter(
                     card =>
                       flow.needsExport(card.publicKey) ||
                       pendingPeers.includes(card),
-                  )
-              : session.cards.filter(card => !card.complete),
-        (card, pinSignal, message) =>
-          showPINInput(
-            {
-              type: 'password',
-              ...getPINInputPlaceholder('Secret', 'Enter card'),
-              description: message ?? (card && cardName(card)),
-              center: true,
-              maxLength: 16,
-            },
-            AbortSignal.any([signal, pinSignal]),
-          ),
-        async (credentials, pinSignal) => {
-          await scan(
-            suggested
-              ? scanCardPrompt(suggested, expected ? undefined : 'to export')
-              : collecting
-                ? 'Scan a card'
-                : needsRecoveryExport
-                  ? 'Scan a card to export'
-                  : 'Scan a pending card',
-            async (
-              applet,
-              setState,
-              hello,
-              nativeSignal,
-            ): Promise<void | {message: string}> => {
-              const activeSignal = AbortSignal.any([
-                signal,
-                nativeSignal,
-                pinSignal,
-              ]);
-              activeSignal.throwIfAborted();
-              const identity = readBackupCardIdentity(hello);
-              const scanned = session.cards.find(
-                card => card.publicKey === identity.publicKey,
-              );
-              if (
-                !collecting &&
-                session.series.hasFinished(identity.publicKey) &&
-                !(
-                  maintenance &&
-                  flow.needsExport(identity.publicKey) &&
-                  (needsRecoveryExport || allMaintenanceTargets)
-                )
-              ) {
-                return {message: 'Already synced'};
-              }
-              const {pin, onAuthenticated} = credentials(identity);
-              flow.markInterrupted(identity.publicKey, false);
-              const isPreviewCard =
-                previewCard?.id === identity.id &&
-                previewCard.publicKey === identity.publicKey;
-              const knownCard =
-                !collecting && isPreviewCard
-                  ? cardStore.get(previewCard!)
-                  : undefined;
-              const knownItems = knownCard
-                ? knownCard.items.map(item => ({
-                    index: item.index,
-                    type: item.type,
-                    secret: item.secret,
-                    publicKey: item.publicKey,
-                    derivations: [
-                      ...(item.derivations ?? []),
-                      ...Object.values(item.refs).map(
-                        ({addressType, seed, curve, path, publicKey}) => ({
-                          addressType,
-                          seed,
-                          curve,
-                          path,
-                          publicKey,
-                        }),
-                      ),
-                    ],
-                  }))
-                : flow.sourceCard?.items;
-              try {
-                setState('Authenticating, hold tight...');
-                if (collecting) {
-                  await session.add(
-                    applet,
-                    hello,
-                    activeSignal,
-                    pin,
-                    progress => {
-                      setState(progressContent(progress));
-                    },
-                    onAuthenticated,
-                  );
-                  if (maintenance) {
-                    const sessionId = applet.activeSessionId;
-                    const information = await readCardInformation(
-                      sessionId,
-                      activeSignal,
-                    );
-                    const installed = await readMonoidAppletInstallation(
-                      sessionId,
-                      activeSignal,
-                      {authenticateRegistry: true},
-                    );
-                    const appletAid = await resolveMonoidAppletMaintenanceAid(
-                      sessionId,
-                      installed,
-                      activeSignal,
-                    );
-                    const maintenanceApplet = await createMonoidApplet(
-                      hexToUint8Array(appletAid),
-                    ).openSession(sessionId);
-                    await authenticateCardSync(
-                      maintenanceApplet,
-                      hello,
-                      pin,
-                      activeSignal,
-                    );
-                    const candidate = await cardMaintenanceService.prepare(
-                      maintenanceApplet,
-                      {
-                        mode:
-                          maintenance.mode === 'update'
-                            ? 'update'
-                            : 'reinstall',
-                        appletAid,
-                        cardInformation: information,
-                        selectedOptionalStages: Object.entries(
-                          installed.optional,
-                        ).flatMap(([stage, state]) =>
-                          state?.installed || state?.loaded
-                            ? [stage as AppletStage]
-                            : [],
-                        ),
-                        signal: activeSignal,
-                      },
-                    );
-                    const updateAvailable =
-                      cardMaintenanceService.isUpdateAvailable(hello);
-                    flow.addMaintenanceCard(candidate, updateAvailable);
-                    // Ask while the card is fresh in mind; an up-to-date card
-                    // has nothing to update.
-                    if (
-                      (maintenance.mode !== 'update' ||
-                        updateAvailable !== false) &&
-                      identity.publicKey !== maintenance.card.publicKey &&
-                      !flow.maintenanceCards.get(identity.publicKey)?.target
-                    )
-                      setMaintenanceProposal(identity);
-                  }
-                  flow.consumeSource();
-                } else {
-                  // Completed peers still need a fresh authenticated export;
-                  // ordinary Sync intentionally skips auth for no-op writes.
-                  if (maintenance && scanned?.complete) {
-                    await authenticateCardSync(
-                      applet,
-                      hello,
-                      pin,
-                      activeSignal,
-                      onAuthenticated,
-                    );
-                  }
-                  await session.write(
-                    applet,
-                    hello,
-                    activeSignal,
-                    pin,
-                    progress => {
-                      setState(progressContent(progress));
-                    },
-                    onAuthenticated,
-                  );
-                  if (
-                    maintenance &&
-                    maintenanceTarget &&
-                    (!flow.pendingMaintenanceCards.length ||
-                      allMaintenanceTargets) &&
-                    flow.needsExport(identity.publicKey)
-                  ) {
-                    const target = flow.maintenanceTargets.find(
-                      target =>
-                        target.card.publicKey !== identity.publicKey &&
-                        !flow.recoveries.has(target.id),
-                    )!;
-                    const archive = await session.exportRecovery(
-                      applet,
-                      hello,
-                      session.cards.find(
-                        card => card.publicKey === target.card.publicKey,
-                      )!,
-                      activeSignal,
-                      progress => setState(progressContent(progress)),
-                      session.cards,
-                    );
-                    flow.acceptRecovery(archive);
-                    const targets = flow.maintenanceTargets;
-                    if (
-                      targets.every(target => flow.recoveries.has(target.id))
-                    ) {
-                      try {
-                        if (targets.length === 1)
-                          await cardMaintenanceService.saveBundleRecovery(
-                            maintenance,
-                            flow.recoveries.get(maintenance.id)!,
-                            activeSignal,
-                          );
-                        else
-                          await cardMaintenanceService.saveBundleRecoveryBatch(
-                            targets.map(operation => ({
-                              operation,
-                              recovery: flow.recoveries.get(operation.id)!,
-                            })),
-                            activeSignal,
-                          );
-                        flow.finishMaintenance();
-                        releaseProcedurePINs();
-                      } catch (error) {
-                        flow.recoveries.clear();
-                        throw error;
-                      }
-                    }
-                  }
-                }
-              } catch (error) {
-                flow.markInterrupted(identity.publicKey, true);
-                throw error;
-              }
-
-              const confirmed = session.confirmedSnapshot;
-              if (
-                activeSignal.aborted ||
-                !mounted.current ||
-                !isViewActive() ||
-                collecting ||
-                maintenance ||
-                !isPreviewCard ||
-                confirmed?.id !== identity.id ||
-                confirmed.publicKey !== identity.publicKey
-              )
-                return;
-
-              // Confirmed sync progress survives a later address-preview failure.
-              setState('Reading addresses, hold tight...');
-              const items = await readCardAddressPreviews(
-                applet,
-                confirmed.items,
-                (current, total) => {
-                  setState(
-                    <MonoidScanStatePromptProgress
-                      current={current}
-                      total={total}
-                    >
-                      Reading addresses
-                    </MonoidScanStatePromptProgress>,
-                  );
-                },
-                activeSignal,
-                knownItems,
-                walletStorageService.keys,
-              ).catch(error => {
-                if (
-                  !activeSignal.aborted &&
-                  mounted.current &&
-                  isViewActive()
-                ) {
-                  toast({
-                    message: 'Card contents saved, address preview unavailable',
-                    color: 'warning',
-                    position: 'top',
-                  });
-                }
-                if (activeSignal.aborted) throw error;
-                return undefined;
-              });
-              if (items) {
-                cardStore.set({...confirmed, items});
-              }
-            },
-            hello => {
-              signal.throwIfAborted();
-              if (!mounted.current || !isViewActive()) {
-                throw Object.assign(new Error('Sync cancelled'), {
-                  code: 'CANCELLED',
-                });
-              }
-              if (expected) assertSyncCard(hello, expected);
-              if (maintenance && maintenanceTarget) {
-                const identity = readBackupCardIdentity(hello);
-                if (
-                  (collecting &&
-                    identity.publicKey === maintenanceTarget.publicKey) ||
-                  (!collecting &&
-                    flow.deferredCards.has(identity.publicKey) &&
-                    !flow.needsExport(identity.publicKey))
-                )
-                  throw new MonoidCardError('Scan another card in this bundle');
-                if (identity.bundle !== maintenanceTarget.bundle)
-                  throw new MonoidCardError('Scan a card in the same bundle');
-              }
-              if (!collecting) {
-                const identity = readBackupCardIdentity(hello);
-                const target = session.cards.find(
-                  card => card.publicKey === identity.publicKey,
-                );
-                if (!target)
-                  throw new MonoidCardError('Scan a card added to this sync');
-                assertSyncCard(hello, target);
-              }
-            },
-          );
-        },
-      );
+                  ),
+          (card, pinSignal, message) =>
+            showPINInput(
+              {
+                type: 'password',
+                ...getPINInputPlaceholder('Secret', 'Enter card'),
+                description: message ?? (card && cardName(card)),
+                center: true,
+                maxLength: MONOID_PIN_MAX_LENGTH,
+              },
+              AbortSignal.any([signal, pinSignal]),
+            ),
+          scanWithCredentials,
+        );
+      } else {
+        await scanWithCredentials();
+      }
     };
 
     const readCard = (expected?: CardBackupIdentity): void => {
@@ -884,6 +907,7 @@ export const SyncCardsView = observer(
           </ViewContent>
         </View>
         {scanContent}
+        {accessPINInput}
         {pinInput}
         {selectedCard && isViewActive() && (
           <DetailsPopup
@@ -982,6 +1006,7 @@ export const SyncCardsView = observer(
             onCancel={() => setConfirmRestart(false)}
             onConfirm={() => {
               setConfirmRestart(false);
+              pinSession.clear();
               secretPINs.clear();
               releaseProcedurePINs();
               flow.restart();

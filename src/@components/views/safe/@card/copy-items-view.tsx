@@ -11,7 +11,11 @@ import {type ReactNode, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
-import {MonoidPIN} from '../../../../@atomics.js';
+import {
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
+  MonoidPIN,
+} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import type {CardInformation} from '../../../../@lib/global-platform/card-information.js';
 import {
@@ -412,7 +416,7 @@ export const CopyItemsView = observer(
           return;
         if (!MonoidPIN.is(pin)) {
           toast({
-            message: 'Secret PIN must contain 6 to 16 characters',
+            message: `Secret PIN must contain ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} characters`,
             color: 'danger',
             position: 'top',
           });
@@ -551,7 +555,7 @@ export const CopyItemsView = observer(
                   ...getPINInputPlaceholder('Secret', 'Enter source card'),
                   description: message ?? (card && cardName(card)),
                   center: true,
-                  maxLength: 16,
+                  maxLength: MONOID_PIN_MAX_LENGTH,
                 },
                 pinSignal,
               ),
@@ -610,7 +614,7 @@ export const CopyItemsView = observer(
                   ...getPINInputPlaceholder('Secret', 'Enter destination card'),
                   description: message ?? (card && cardName(card)),
                   center: true,
-                  maxLength: 16,
+                  maxLength: MONOID_PIN_MAX_LENGTH,
                 },
                 pinSignal,
               ),

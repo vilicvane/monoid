@@ -179,7 +179,7 @@ test('format and confirmation errors remain in the corresponding prompt', async 
     ),
     {secret, access},
   );
-  assert.match(ui.inputs[1].description, /6 to 16/);
+  assert.match(ui.inputs[1].description, /6 to 32/);
   assert.equal(ui.inputs[3].description, 'PINs do not match');
   assert.equal(ui.inputs[6].description, 'PINs do not match');
 });

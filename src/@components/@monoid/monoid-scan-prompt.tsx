@@ -9,7 +9,12 @@ import {
 } from 'react';
 import {styled} from 'styled-components';
 
-import {type MonoidIdHex, MonoidPIN} from '../../@atomics.js';
+import {
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
+  type MonoidIdHex,
+  MonoidPIN,
+} from '../../@atomics.js';
 import {useEntrances} from '../../@entrances.js';
 import {AppletNotFoundError} from '../../@lib/applet.js';
 import {CBORAppletError} from '../../@lib/cbor-applet.js';
@@ -306,7 +311,7 @@ export function useMonoidScanPrompt({
               ...getPINInputPlaceholder('Access'),
               description: errorMessage,
               center: true,
-              maxLength: 16,
+              maxLength: MONOID_PIN_MAX_LENGTH,
             },
             credentialsRequest.signal,
           );
@@ -318,7 +323,7 @@ export function useMonoidScanPrompt({
           if (!MonoidPIN.is(value)) {
             promptPIN(
               request,
-              'Incorrect PIN format, expected 6 to 16 characters.',
+              `Incorrect PIN format, expected ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} characters.`,
             );
             return;
           }

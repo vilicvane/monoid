@@ -1,6 +1,8 @@
 import {observable, runInAction} from 'mobx';
 
 import {
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
   MonoidIdHex,
   MonoidPIN,
   PublicKey,
@@ -338,7 +340,9 @@ export class CardBundleSession {
     return this.exclusive(async () => {
       const card = this.validateCard(hello);
       if (!MonoidPIN.is(pin)) {
-        throw new MonoidCardError('Secret PIN must contain 6 to 16 characters');
+        throw new MonoidCardError(
+          `Secret PIN must contain ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} characters`,
+        );
       }
       throwIfCancelled(signal);
       const currentBundle =

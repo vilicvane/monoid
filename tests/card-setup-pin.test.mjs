@@ -367,7 +367,7 @@ test('a new card unlocks storage before Secret PIN input and saves through that 
   const {options} = state.inputs[0];
   assert.equal(options.placeholder, 'Set Secret PIN');
   assert.equal(options.type, 'password');
-  assert.equal(options.maxLength, 16);
+  assert.equal(options.maxLength, 32);
   assert.equal(options.defaultValue, undefined);
   assert.equal(options.checkbox.defaultChecked, true);
   assert.equal(options.checkbox.label, 'Set a different Access PIN');
@@ -519,11 +519,11 @@ test('an already initialized card returns its confirmed hello without prompting 
 
 test('invalid PIN formats stay in the input flow without scanning', async () => {
   const state = mount();
-  for (const invalid of ['short', '汉字不是ASCII', 'x'.repeat(17)]) {
+  for (const invalid of ['short', '汉字不是ASCII', 'x'.repeat(33)]) {
     await state.answer(invalid);
     assert.equal(
       state.inputs.at(-1).options.description,
-      'Use 6 to 16 ASCII characters',
+      'Use 6 to 32 ASCII characters',
     );
     assert.equal(state.inputs.at(-1).options.defaultValue, undefined);
     assert.deepEqual(state.scans, []);

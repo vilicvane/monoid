@@ -62,7 +62,7 @@ const CARD_ID = 'a1b2c3d4';
 const OTHER_CARD_ID = '1020304050';
 const ENTRY_ID = 'monoid.access-pins';
 const PIN = 'Access 42!';
-const SECRET_MARKER = 'DO-NOT-LEAK-SECRET';
+const SECRET_MARKER = 'DO-NOT-LEAK-SECRET'.repeat(2);
 
 beforeEach(() => {
   releases = [];
@@ -613,7 +613,7 @@ test('invalid incoming card IDs and PINs reject before any native secret operati
   for (const pin of [
     '',
     '12345',
-    '12345678901234567',
+    'x'.repeat(33),
     '秘密123456',
     SECRET_MARKER,
     null,

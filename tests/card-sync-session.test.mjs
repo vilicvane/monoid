@@ -184,9 +184,9 @@ const plain = (overrides = {}) => ({
   ...overrides,
 });
 const add = (session, card, pin = PIN) =>
-  session.add(card, card.hello, signal(), pin);
+  session.add(card, card.hello, signal(), {pin});
 const write = (session, card, pin = PIN) =>
-  session.write(card, card.hello, signal(), pin);
+  session.write(card, card.hello, signal(), {pin});
 const mutationCalls = card =>
   card.calls.filter(([kind]) => ['create', 'set', 'import'].includes(kind));
 
@@ -345,11 +345,112 @@ test('incompatible record filtering does not swallow transport failures', async 
   assert.equal(session.cards.length, 0);
 });
 
-test('missing Secret PIN stops before reading or exporting card contents', async () => {
+for (const bundle of [false, 1]) {
+  test(`ordinary Sync uses caller-provided Access authentication with bundle ${bundle}`, async () => {
+    const session = new CardSyncSession();
+    const source = mockCard(1, bundle, [plain(), ...(bundle ? [root()] : [])]);
+    const target = mockCard(2, bundle);
+    for (const card of [source, target]) {
+      card.authenticate = () =>
+        assert.fail('Access prompt already authenticated');
+      await session.add(card, card.hello, signal());
+    }
+    session.prepare();
+    target.calls.length = 0;
+    await session.write(target, target.hello, signal());
+    assert.equal(session.phase, 'complete');
+    assert.equal(target.records.get(publicIndex).data, 'aa');
+    if (bundle) {
+      assert.equal(target.records.get(keyIndex).secret, true);
+      assert.ok(source.calls.some(([kind]) => kind === 'export'));
+      assert.ok(target.calls.some(([kind]) => kind === 'import'));
+    } else {
+      assert.ok(!source.calls.some(([kind]) => kind === 'export'));
+      assert.ok(!target.calls.some(([kind]) => kind === 'import'));
+    }
+  });
+}
+
+test('maintenance calls onAuthenticated after each successful Secret authentication', async () => {
+  const session = new CardSyncSession();
+  const source = mockCard(1, false, [plain()]);
+  const target = mockCard(2, false);
+  let authenticated = 0;
+  const credentials = {pin: PIN, onAuthenticated: () => authenticated++};
+  await session.add(source, source.hello, signal(), credentials);
+  await session.add(target, target.hello, signal(), credentials);
+  assert.equal(authenticated, 2);
+  session.prepare();
+  await session.write(target, target.hello, signal(), credentials);
+  assert.equal(authenticated, 3);
+  assert.deepEqual(target.calls[0], ['authenticate', {secret: true, pin: PIN}]);
+});
+
+test('an already authenticated cancelled collection never reads or exports', async () => {
+  const session = new CardSyncSession();
+  const card = mockCard(1, 1, [root()]);
+  const abort = new AbortController();
+  abort.abort();
+  await assert.rejects(
+    session.add(card, card.hello, abort.signal),
+    error => error.code === 'CANCELLED',
+  );
+  assert.deepEqual(card.calls, []);
+});
+
+for (const error of [
+  new CBORAppletError({code: 'ACCESS_DENIED'}),
+  new CBORAppletError({
+    code: 'INTERNAL',
+    exception: 'ISOException',
+    reason: 0x6a84,
+  }),
+  new CBORAppletError({
+    code: 'INTERNAL',
+    exception: 'ISOException',
+    reason: 0x6982,
+  }),
+]) {
+  for (const stage of ['export', 'import']) {
+    test(`Sync stops on ${stage} ${error.message} without skipping or asking for Secret PIN`, async () => {
+      const session = new CardSyncSession();
+      const source = mockCard(1, 1, [root()]);
+      const target = mockCard(2, 1);
+      source.authenticate = target.authenticate = () =>
+        assert.fail('No Secret fallback');
+      if (stage === 'export') {
+        source.exportItem = async () => {
+          throw error;
+        };
+        await assert.rejects(
+          session.add(source, source.hello, signal()),
+          value => value === error,
+        );
+        assert.equal(session.cards.length, 0);
+      } else {
+        await session.add(source, source.hello, signal());
+        await session.add(target, target.hello, signal());
+        session.prepare();
+        target.importItem = async () => {
+          throw error;
+        };
+        await assert.rejects(
+          session.write(target, target.hello, signal()),
+          value => value === error,
+        );
+        assert.equal(session.phase, 'write');
+        assert.equal(session.cards[1].complete, false);
+        assert.deepEqual(session.cards[1].issues, []);
+      }
+    });
+  }
+}
+
+test('maintenance missing Secret PIN stops before reading or exporting card contents', async () => {
   const session = new CardSyncSession();
   const card = mockCard(1, 1, [root()]);
   await assert.rejects(
-    session.add(card, card.hello, signal()),
+    session.add(card, card.hello, signal(), {pin: undefined}),
     /Enter Secret PIN/,
   );
   assert.equal(session.cards.length, 0);
@@ -360,7 +461,7 @@ test('missing Secret PIN stops before reading or exporting card contents', async
 });
 
 for (const access of [false, 0]) {
-  test(`public-only collection uses Secret authentication with Access PIN ${access}`, async () => {
+  test(`maintenance public-only collection uses Secret authentication with Access PIN ${access}`, async () => {
     const session = new CardSyncSession();
     const card = mockCard(1, false, [plain()]);
     card.hello.pins.access = access;
@@ -398,7 +499,7 @@ test('collection never reads after authentication fails or is cancelled', async 
     abort.abort();
   };
   await assert.rejects(
-    session.add(card, card.hello, abort.signal, PIN),
+    session.add(card, card.hello, abort.signal, {pin: PIN}),
     error => error.code === 'CANCELLED',
   );
   assert.deepEqual(card.calls, []);
@@ -434,7 +535,7 @@ test('normal writes use the collected snapshot and complete without rereading th
   target.hello.pins.access = 0;
   target.calls.length = 0;
   const stages = [];
-  await session.write(target, target.hello, signal(), PIN, progress => {
+  await session.write(target, target.hello, signal(), {pin: PIN}, progress => {
     stages.push(progress.stage);
   });
   assert.deepEqual(target.calls, [
@@ -664,7 +765,7 @@ test('ACKs survive cancellation and publish the confirmed metadata before later 
     abort.abort();
   };
   await assert.rejects(
-    session.write(target, target.hello, abort.signal, PIN),
+    session.write(target, target.hello, abort.signal, {pin: PIN}),
     error => error.code === 'CANCELLED',
   );
   assert.equal(session.cards[1].completed, 1);
@@ -688,7 +789,7 @@ test('a final ACK completes the card even when cancellation arrives at the same 
   target.calls.length = 0;
   const abort = new AbortController();
   target.afterMutation = () => abort.abort();
-  await session.write(target, target.hello, abort.signal, PIN);
+  await session.write(target, target.hello, abort.signal, {pin: PIN});
   assert.equal(session.phase, 'complete');
   assert.equal(session.cards[1].completed, 1);
   assert.equal(session.cards[1].complete, true);

@@ -10,7 +10,11 @@ import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 import {UnmountAnimationClone} from 'unmount-animation-clone';
 
-import {MonoidPIN} from '../../@atomics.js';
+import {
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
+  MonoidPIN,
+} from '../../@atomics.js';
 import {useEntrances} from '../../@entrances.js';
 import {
   MonoidCardError,
@@ -241,7 +245,7 @@ export const OTPView = observer(
                     type: 'password',
                     ...getPINInputPlaceholder('Access'),
                     center: true,
-                    maxLength: 16,
+                    maxLength: MONOID_PIN_MAX_LENGTH,
                     description,
                   },
                   signal,
@@ -252,7 +256,7 @@ export const OTPView = observer(
                   pinSession.rememberPIN(expected.id, value);
                   break;
                 }
-                description = 'Use 6 to 16 ASCII characters';
+                description = `Use ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} ASCII characters`;
               }
             }
           }

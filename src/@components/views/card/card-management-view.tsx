@@ -444,6 +444,7 @@ export const CardManagementView = observer(
       let pin: MonoidPIN | undefined;
       let requestedPINs: CardSetupPINs | undefined;
       let accessPINId: MonoidIdHex | undefined;
+      let staleAccessPINId: MonoidIdHex | undefined;
       let appletsChanged = false;
       let syncId: string | undefined;
       let syncPreparation: CardMaintenanceOperation | undefined;
@@ -686,7 +687,7 @@ export const CardManagementView = observer(
               information,
               installation: {...current, hello: next},
             });
-            await flow.session.add(applet, next, signal, pin, update =>
+            await flow.session.add(applet, next, signal, {pin}, update =>
               setState(
                 <MonoidScanStatePromptProgress
                   current={update.current}
@@ -725,11 +726,7 @@ export const CardManagementView = observer(
             );
             appletsChanged = replacing;
             if (saved.mode === 'fresh' && saved.card.id) {
-              await pinSession.removePIN(
-                MonoidIdHex.satisfies(saved.card.id),
-                undefined,
-                signal,
-              );
+              staleAccessPINId = MonoidIdHex.satisfies(saved.card.id);
             }
           } else if (action === 'install') {
             retryable = false;
@@ -841,18 +838,21 @@ export const CardManagementView = observer(
           () => retryable,
         );
 
-        if (accessPINId) {
+        if (accessPINId && !operation.signal.aborted) {
           try {
             await pinSession.setPIN(
               accessPINId,
               requestedPINs!.access!,
               operation.signal,
             );
+            if (accessPINId === staleAccessPINId) staleAccessPINId = undefined;
           } catch {
-            toast({
-              message: 'Access PIN was not saved on this device',
-              color: 'warning',
-            });
+            if (!operation.signal.aborted) {
+              toast({
+                message: 'Access PIN was not saved on this device',
+                color: 'warning',
+              });
+            }
           }
         }
       } catch (error) {
@@ -860,6 +860,24 @@ export const CardManagementView = observer(
           errorService.catch(Promise.reject(error));
         }
       } finally {
+        // Replacement keeps the Card ID even if later setup fails. Clean its
+        // stale PIN only after NFC and presentation cleanup, unless overwritten.
+        if (staleAccessPINId && !operation.signal.aborted) {
+          try {
+            await pinSession.removePIN(
+              staleAccessPINId,
+              undefined,
+              operation.signal,
+            );
+          } catch {
+            if (!operation.signal.aborted) {
+              toast({
+                message: 'Old Access PIN is still saved on this device',
+                color: 'warning',
+              });
+            }
+          }
+        }
         pin = undefined;
         requestedPINs = undefined;
         pinSession.clear();

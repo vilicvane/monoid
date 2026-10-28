@@ -1,4 +1,8 @@
-import {MonoidPIN} from '../../@atomics.js';
+import {
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
+  MonoidPIN,
+} from '../../@atomics.js';
 
 import {MonoidCardError} from './card-error.js';
 import {
@@ -27,7 +31,9 @@ export async function initializeMonoidCard(
   assertCardPINsNotBlocked(hello);
 
   if (!MonoidPIN.is(pin)) {
-    throw new MonoidCardError('Secret PIN must contain 6 to 16 characters');
+    throw new MonoidCardError(
+      `Secret PIN must contain ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} characters`,
+    );
   }
 
   if (hello.pins.secret === false && hello.pins.access !== false) {
@@ -38,7 +44,9 @@ export async function initializeMonoidCard(
     return hello;
   }
   if (hello.pins.access === false && !MonoidPIN.is(accessPIN)) {
-    throw new MonoidCardError('Access PIN must contain 6 to 16 characters');
+    throw new MonoidCardError(
+      `Access PIN must contain ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} characters`,
+    );
   }
 
   if (hello.pins.secret !== false) {

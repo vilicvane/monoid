@@ -3,7 +3,12 @@ import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useRef} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
-import {type MonoidIdHex, MonoidPIN} from '../../../../@atomics.js';
+import {
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
+  type MonoidIdHex,
+  MonoidPIN,
+} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import {assertSameCard} from '../../../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
@@ -93,7 +98,7 @@ export const CardPINUpdate = observer(
             ...getPINInputPlaceholder(pinKind, prefix),
             description,
             center: true,
-            maxLength: 16,
+            maxLength: MONOID_PIN_MAX_LENGTH,
           }).then(value => {
             signal.removeEventListener('abort', cancel);
             resolve(signal.aborted ? undefined : value);
@@ -109,7 +114,7 @@ export const CardPINUpdate = observer(
         for (;;) {
           const value = await prompt(pinKind, prefix, description);
           if (value === undefined || MonoidPIN.is(value)) return value;
-          description = 'Use 6 to 16 ASCII characters';
+          description = `Use ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} ASCII characters`;
         }
       };
 

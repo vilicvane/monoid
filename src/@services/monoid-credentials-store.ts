@@ -410,8 +410,8 @@ export class MonoidPINSession implements AsyncDisposable {
   ): Promise<BiometricVaultAccess> {
     throwIfCancelled(owner);
     if (this.access === expired) {
-      // Concurrent saves share the replacement authorization. Keep the page's
-      // owner and PIN cache; clearing the session would cancel the save itself.
+      // Concurrent requests share the replacement authorization. Keep the page's
+      // owner and PIN cache; clearing the session would cancel the request itself.
       this.access = expired
         .then(async access => {
           await access[Symbol.asyncDispose]();
@@ -423,6 +423,47 @@ export class MonoidPINSession implements AsyncDisposable {
         });
     }
     return this.getAccess(owner);
+  }
+
+  private async withRenewal<T>(
+    owner: AbortSignal,
+    operation: (getAccess: GetAccess) => Promise<T>,
+    allowUnlock = true,
+  ): Promise<T> {
+    let access: Promise<BiometricVaultAccess> | undefined;
+    const attempt = async (): Promise<T> => {
+      try {
+        return await operation(() => {
+          throwIfCancelled(owner);
+          // Live NFC callbacks may use existing access, but must hand off to
+          // their caller before any biometric prompt, including the first one.
+          if (!allowUnlock && !this.access) {
+            throw credentialError({code: 'ACCESS_CLOSED'});
+          }
+          access = this.getAccess(owner);
+          return access;
+        });
+      } catch (error) {
+        throw credentialError(error);
+      }
+    };
+
+    try {
+      return await attempt();
+    } catch (error) {
+      if (
+        !allowUnlock ||
+        credentialError(error).code !== 'AUTHORIZATION_EXPIRED' ||
+        !access
+      ) {
+        throw error;
+      }
+      // Native expiry guarantees no write committed. Retry only this local
+      // operation once; cancellation and every other failure must propagate.
+      await this.renewAccess(owner, access);
+      throwIfCancelled(owner);
+      return attempt();
+    }
   }
 
   private async request<T>(
@@ -450,20 +491,24 @@ export class MonoidPINSession implements AsyncDisposable {
   }
 
   authenticate(signal?: AbortSignal): Promise<void> {
-    return this.request(signal, async owner => {
-      try {
-        await this.getAccess(owner);
-      } catch (error) {
-        throw credentialError(error);
-      }
-    });
+    return this.request(signal, owner =>
+      this.withRenewal(owner, async getAccess => {
+        const reused = this.access !== undefined;
+        const access = await getAccess();
+        throwIfCancelled(owner);
+        // A resolved access promise does not reveal native expiry. Probe reused
+        // access without parsing or retaining the document; fresh unlocks need no probe.
+        if (reused) await access.get({id: ENTRY_ID});
+      }),
+    );
   }
 
   getPINs(signal?: AbortSignal): Promise<MonoidPINs> {
     return this.request(signal, async owner => {
       if (!this.held.get()) {
-        this.loading ??= this.store
-          .getPINs(owner, () => this.getAccess(owner))
+        this.loading ??= this.withRenewal(owner, getAccess =>
+          this.store.getPINs(owner, getAccess),
+        )
           .then(snapshot => {
             throwIfCancelled(owner);
             this.held.set({unlocked: snapshot, pins: snapshot}, owner);
@@ -504,29 +549,15 @@ export class MonoidPINSession implements AsyncDisposable {
     return this.request(
       signal,
       async owner => {
-        let access: Promise<BiometricVaultAccess> | undefined;
-        const save = (): Promise<MonoidPINs> =>
-          this.store.setPIN(id, pin, owner, this.held.get()?.unlocked, () => {
-            access = this.getAccess(owner);
-            return access;
-          });
-
-        let snapshot: MonoidPINs;
-        try {
-          snapshot = await save();
-        } catch (error) {
-          if (
-            credentialError(error).code !== 'AUTHORIZATION_EXPIRED' ||
-            !access
-          ) {
-            throw error;
-          }
-          // Expiry rejects before a vault write commits. Reauthorize once and
-          // retry only this local save, never the completed card operation.
-          await this.renewAccess(owner, access);
-          throwIfCancelled(owner);
-          snapshot = await save();
-        }
+        const snapshot = await this.withRenewal(owner, getAccess =>
+          this.store.setPIN(
+            id,
+            pin,
+            owner,
+            this.held.get()?.unlocked,
+            getAccess,
+          ),
+        );
         if (owner.aborted) return;
         const pins = {...(this.held.get()?.pins ?? snapshot), [id]: pin};
         this.held.set({unlocked: snapshot, pins}, owner);
@@ -539,16 +570,22 @@ export class MonoidPINSession implements AsyncDisposable {
     id: MonoidIdHex,
     expectedPIN?: MonoidPIN,
     signal?: AbortSignal,
+    allowUnlock = true,
   ): Promise<void> {
     return this.request(
       signal,
       async owner => {
-        const snapshot = await this.store.removePIN(
-          id,
-          expectedPIN,
+        const snapshot = await this.withRenewal(
           owner,
-          this.held.get()?.unlocked,
-          () => this.getAccess(owner),
+          getAccess =>
+            this.store.removePIN(
+              id,
+              expectedPIN,
+              owner,
+              this.held.get()?.unlocked,
+              getAccess,
+            ),
+          allowUnlock,
         );
         if (owner.aborted) return;
         const pins = {...(this.held.get()?.pins ?? snapshot)};

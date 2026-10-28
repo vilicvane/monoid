@@ -448,7 +448,10 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
   };
   state.pinSession = {
     authenticate: async () => state.events.push({type: 'vault'}),
-    removePIN: async () => {},
+    removePIN: async (id, expectedPIN, signal) => {
+      state.events.push({type: 'remove-access', id, expectedPIN, signal});
+      if (state.removePINError) throw state.removePINError;
+    },
     getPINs: async signal => {
       await state.pinSession.authenticate(signal);
       return state.savedPINs ?? {};
@@ -533,7 +536,11 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
         id: 'fresh',
         mode: 'fresh',
         phase: 'ready',
-        card: {appletAid: AID, bundle: false},
+        card: {
+          ...(_hello && readCardIdentity(_hello)),
+          appletAid: AID,
+          bundle: false,
+        },
       };
       return state.pending;
     },
@@ -1323,6 +1330,210 @@ test('fresh installation uses danger confirmation with two explicit actions befo
   assert.equal(state.pending, undefined);
   finishProcessExit(state);
 });
+
+async function startFreshInstall(state) {
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.click('Card menu');
+  state.click('Fresh install');
+  state.node('AppletSelectionPopup').props.onInstall();
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.answer();
+}
+
+function vaultWrites(state) {
+  return state.events.filter(event =>
+    ['save-access', 'remove-access'].includes(event.type),
+  );
+}
+
+test('a slow fresh replacement waits for NFC cleanup and overwrites the stale Access PIN without removing it', async t => {
+  const clock = pinClock(t);
+  const state = mount({cardInformation: false});
+  const replacing = deferred();
+  const replace = state.maintenance.replace;
+  t.mock.method(state.maintenance, 'replace', async (...args) => {
+    await replacing.promise;
+    clock.elapse(61_000);
+    return replace(...args);
+  });
+  state.removePINError = Object.assign(new Error('Authorization expired'), {
+    code: 'AUTHORIZATION_EXPIRED',
+  });
+  await startFreshInstall(state);
+  const tapping = state.tap({finish: false});
+  await state.flush();
+  assert.deepEqual(vaultWrites(state), []);
+  replacing.resolve();
+  await tapping;
+  assert.equal(state.scans.at(-1).error, undefined);
+  assert.ok(state.events.some(event => event.type === 'initialize'));
+  assert.deepEqual(
+    vaultWrites(state),
+    [],
+    'wait for native and presentation exit',
+  );
+  state.scans.at(-1).finished.resolve();
+  await state.flush();
+  assert.deepEqual(vaultWrites(state), [
+    {type: 'save-access', id: '01020304', pin: PIN},
+  ]);
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.toasts, []);
+  finishProcessExit(state);
+});
+
+for (const removalError of [undefined, 'AUTHORIZATION_EXPIRED', 'IO_ERROR']) {
+  test(`fresh replacement without a new Access PIN removes the stale entry after NFC (${removalError ?? 'success'})`, async t => {
+    const state = mount({cardInformation: false});
+    const replace = state.maintenance.replace;
+    t.mock.method(state.maintenance, 'replace', async (...args) => {
+      await replace(...args);
+      // PINs may already be set when resuming a completed fresh replacement.
+      state.installation = installed(state.initialized);
+      return state.initialized;
+    });
+    if (removalError) {
+      state.removePINError = Object.assign(new Error(removalError), {
+        code: removalError,
+      });
+    }
+    await startFreshInstall(state);
+    await state.tap({finish: false});
+    assert.equal(state.scans.at(-1).error, undefined);
+    assert.deepEqual(vaultWrites(state), []);
+    state.scans.at(-1).finished.resolve();
+    await state.flush();
+    const writes = vaultWrites(state);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].type, 'remove-access');
+    assert.equal(writes[0].id, '01020304');
+    assert.equal(writes[0].expectedPIN, undefined);
+    assert.equal(writes[0].signal, state.inputs[0].signal);
+    assert.equal(writes[0].signal.aborted, false);
+    assert.deepEqual(state.errors, []);
+    assert.deepEqual(
+      state.toasts,
+      removalError
+        ? [
+            {
+              message: 'Old Access PIN is still saved on this device',
+              color: 'warning',
+            },
+          ]
+        : [],
+    );
+    finishProcessExit(state);
+  });
+}
+
+for (const failureStage of [
+  'PIN setup',
+  'alias restoration',
+  'scan cleanup',
+  'scan cancellation',
+]) {
+  test(`fresh replacement still cleans the stale PIN after ${failureStage} fails`, async t => {
+    const state = mount({cardInformation: false});
+    const failure = Object.assign(
+      new Error(failureStage),
+      failureStage === 'scan cancellation' ? {code: 'CANCELLED'} : {},
+    );
+    if (failureStage === 'PIN setup') state.initializeError = failure;
+    if (failureStage === 'alias restoration') {
+      state.aliasError = failure;
+      const prepareFresh = state.maintenance.prepareFresh;
+      t.mock.method(state.maintenance, 'prepareFresh', async (...args) => {
+        const saved = await prepareFresh(...args);
+        saved.card.alias = 'Daily';
+        return saved;
+      });
+    }
+    await startFreshInstall(state);
+    const scan = state.scans.at(-1);
+    const callback = scan.callback(
+      'session',
+      value => state.progress.push(value),
+      new AbortController().signal,
+    );
+    if (['PIN setup', 'alias restoration'].includes(failureStage)) {
+      await assert.rejects(callback, error => error === failure);
+    } else {
+      await callback;
+    }
+    assert.ok(state.events.some(event => event.type === 'replace'));
+    assert.deepEqual(vaultWrites(state), []);
+    scan.finished.reject(failure);
+    await state.flush();
+    const writes = vaultWrites(state);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].type, 'remove-access');
+    assert.equal(writes[0].id, '01020304');
+    assert.deepEqual(
+      state.errors,
+      failureStage === 'scan cancellation' ? [] : [failure],
+    );
+    assert.deepEqual(state.toasts, []);
+  });
+}
+
+test('a failed fresh replacement never removes the saved Access PIN', async t => {
+  const state = mount({cardInformation: false});
+  const failure = new Error('Replacement failed');
+  t.mock.method(state.maintenance, 'replace', async () => {
+    throw failure;
+  });
+  await startFreshInstall(state);
+  await state.tap();
+  assert.deepEqual(vaultWrites(state), []);
+  assert.deepEqual(state.errors, [failure]);
+  assert.deepEqual(state.toasts, []);
+});
+
+test('a failed Access PIN overwrite still cleans the stale entry without failing the fresh install', async t => {
+  const state = mount({cardInformation: false});
+  t.mock.method(state.pinSession, 'setPIN', async () => {
+    throw new Error('Save failed');
+  });
+  await startFreshInstall(state);
+  await state.tap();
+  assert.equal(vaultWrites(state).length, 1);
+  assert.equal(vaultWrites(state)[0].type, 'remove-access');
+  assert.equal(vaultWrites(state)[0].id, '01020304');
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.toasts, [
+    {message: 'Access PIN was not saved on this device', color: 'warning'},
+  ]);
+  finishProcessExit(state);
+});
+
+for (const leavingAt of ['replacement', 'scan cleanup']) {
+  test(`page exit during ${leavingAt} skips all fresh-install vault writes`, async t => {
+    const state = mount({cardInformation: false});
+    if (leavingAt === 'replacement') {
+      const replace = state.maintenance.replace;
+      t.mock.method(state.maintenance, 'replace', async (...args) => {
+        const hello = await replace(...args);
+        runInAction(() => {
+          state.view.$leaving = true;
+        });
+        return hello;
+      });
+    }
+    await startFreshInstall(state);
+    await state.tap({finish: false});
+    runInAction(() => {
+      state.view.$leaving = true;
+    });
+    state.scans.at(-1).finished.resolve();
+    await state.flush();
+    assert.equal(state.inputs[0].signal.aborted, true);
+    assert.deepEqual(vaultWrites(state), []);
+    assert.deepEqual(state.errors, []);
+    assert.deepEqual(state.toasts, []);
+  });
+}
 
 test('dismissing applet selection performs no PIN prompt, scan or installation', () => {
   const state = mount();

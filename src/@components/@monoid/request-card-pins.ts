@@ -1,4 +1,8 @@
-import {MonoidPIN} from '../../@atomics.js';
+import {
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
+  MonoidPIN,
+} from '../../@atomics.js';
 import {CardPINError} from '../../@lib/monoid/index.js';
 import type {InputModalOptions} from '../@ui/use-input-modal.js';
 
@@ -41,7 +45,7 @@ export async function retryCardPIN(
             ...getPINInputPlaceholder(error.kind, 'Enter'),
             description,
             center: true,
-            maxLength: 16,
+            maxLength: MONOID_PIN_MAX_LENGTH,
           },
           signal,
         );
@@ -52,7 +56,7 @@ export async function retryCardPIN(
           else pins.access = value;
           break;
         }
-        description = 'Use 6 to 16 ASCII characters';
+        description = `Use ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} ASCII characters`;
       }
     }
   }
@@ -92,7 +96,7 @@ export async function requestCardPINs(
           ...getPINInputPlaceholder(kind, existing ? 'Enter' : 'Set'),
           description,
           center: true,
-          maxLength: 16,
+          maxLength: MONOID_PIN_MAX_LENGTH,
           ...(!existing &&
             kind === 'Secret' && {
               checkbox: {
@@ -109,7 +113,7 @@ export async function requestCardPINs(
       signal.throwIfAborted();
       if (value === undefined) return;
       if (MonoidPIN.is(value)) break;
-      description = 'Use 6 to 16 ASCII characters';
+      description = `Use ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} ASCII characters`;
     }
     if (!existing) {
       description = undefined;
@@ -120,7 +124,7 @@ export async function requestCardPINs(
             ...getPINInputPlaceholder(kind, 'Confirm'),
             description,
             center: true,
-            maxLength: 16,
+            maxLength: MONOID_PIN_MAX_LENGTH,
           },
           signal,
         );

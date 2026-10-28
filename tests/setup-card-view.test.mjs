@@ -1032,6 +1032,68 @@ test('an existing Bundle is reset with the same ID and added once under its new 
   assert.deepEqual(state.errors, []);
 });
 
+test('Setup hands expired reset removal out of NFC and continues with the same PINs on the next tap', async () => {
+  const state = await replacementCard();
+  const removals = [];
+  const unlock = deferred();
+  let handedOff = false;
+  state.pinSession.removePIN = async (
+    id,
+    expectedPIN,
+    signal,
+    allowUnlock = true,
+  ) => {
+    removals.push({id, expectedPIN, allowUnlock});
+    if (removals.length === 1) throw {code: 'AUTHORIZATION_EXPIRED'};
+    if (allowUnlock) {
+      assert.equal(handedOff, true);
+      assert.equal(first.controller.signal.aborted, true);
+      signal.throwIfAborted();
+      await unlock.promise;
+    }
+  };
+  const adding = state.confirmation().props.onConfirm();
+  await state.answerBundlePIN('New-42');
+  const inputs = state.bundleInputs.length;
+  const first = state.bundleScans.at(-1);
+  first.deferFailure = true;
+  let handoff;
+  await assert.rejects(state.tapBundle(state.replacementHello), error => {
+    handoff = error;
+    assert.equal(error.code, 'CANCELLED');
+    return true;
+  });
+  assert.deepEqual(state.bundleCalls, []);
+  assert.equal(state.replacementSource.items.length, 1);
+  assert.equal(removals.length, 1);
+  handedOff = true;
+  first.controller.abort(handoff);
+  first.reject(handoff);
+  for (let index = 0; index < 20; index++) await Promise.resolve();
+  assert.equal(state.bundleScans.length, 1);
+  assert.equal(removals.length, 2);
+  unlock.resolve();
+  for (let index = 0; index < 20; index++) await Promise.resolve();
+  assert.equal(state.bundleScans.length, 2);
+  assert.equal(state.bundleInputs.length, inputs);
+  assert.deepEqual(state.bundleCalls, []);
+  await state.tapBundle(state.replacementHello);
+  state.bundleScans.at(-1).resolve();
+  await adding;
+
+  assert.deepEqual(
+    removals.map(call => call.allowUnlock),
+    [false, true, false],
+  );
+  assert.ok(removals.every(call => call.id === '00000001'));
+  assert.equal(
+    state.bundleCalls.filter(call => call.type === 'reset').length,
+    1,
+  );
+  assert.equal(state.card('00000001').props.description, 'ready');
+  assert.deepEqual(state.errors, []);
+});
+
 test('Setup names a cached bundled card in its confirmation and Reset scan', async () => {
   const state = await replacementCard('Travel');
   assert.match(

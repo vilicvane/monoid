@@ -1,4 +1,8 @@
-import {MonoidPIN} from '../../../../@atomics.js';
+import {
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
+  MonoidPIN,
+} from '../../../../@atomics.js';
 import {HeldPINs} from '../../../../@lib/held-pins.js';
 import {
   type CardBackupIdentity,
@@ -91,7 +95,9 @@ export class CardSecretPINSession {
       signal.throwIfAborted();
       if (value === undefined) return false;
       if (!MonoidPIN.is(value)) {
-        throw new MonoidCardError('Secret PIN must contain 6 to 16 characters');
+        throw new MonoidCardError(
+          `Secret PIN must contain ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} characters`,
+        );
       }
       entered = value;
       expected = card;

@@ -3,6 +3,12 @@ import {afterEach, mock, test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
 
 import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
+import {
+  assertSameCardWithBundle,
+  readBackupCardIdentity,
+} from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
+import {MonoidAppletHello} from '../.bld/app/@lib/monoid/monoid-applet.js';
 
 let fixture;
 let rendering;
@@ -12,6 +18,10 @@ const owners = [];
 mock.module('@capacitor/core', {
   namedExports: {Capacitor: {getPlatform: () => platform}},
 });
+mock.module('@capacitor/app', {
+  namedExports: {App: {addListener: async () => ({remove: async () => {}})}},
+});
+mock.module('capacitor-biometric-vault', {namedExports: {BiometricVault: {}}});
 
 mock.module('react/jsx-runtime', {
   namedExports: {
@@ -68,7 +78,13 @@ mock.module('../.bld/app/@services/index.js', {
 });
 
 mock.module('../.bld/app/@lib/monoid/index.js', {
-  namedExports: {MonoidCardError},
+  namedExports: {
+    MonoidCardError,
+    MonoidAppletHello,
+    assertSameCardWithBundle,
+    readBackupCardIdentity,
+    cardNameWithId,
+  },
 });
 
 const {MonoidScanPromptPresenter} = await import(
@@ -76,6 +92,12 @@ const {MonoidScanPromptPresenter} = await import(
 );
 const {useIsoDepScanPrompt} = await import(
   '../.bld/app/@components/@monoid/use-isodep-scan-prompt.js'
+);
+const {CardResetSession} = await import(
+  '../.bld/app/@components/views/safe/@card/card-reset-session.js'
+);
+const {MonoidCredentialsStore} = await import(
+  '../.bld/app/@services/monoid-credentials-store.js'
 );
 
 function deferred() {
@@ -129,7 +151,14 @@ function setup() {
     };
   };
 
-  return {presenter, owner, start, scans: fixture.scans, presentedErrors};
+  return {
+    presenter,
+    owner,
+    prompt,
+    start,
+    scans: fixture.scans,
+    presentedErrors,
+  };
 }
 
 async function connect(scan) {
@@ -444,3 +473,165 @@ test('another scan is blocked until cleanup ends and then can start explicitly',
   hide(presenter);
   assert.deepEqual(await second.promise, {success: true});
 });
+
+async function resetFixture(t) {
+  const state = setup();
+  const hello = {
+    version: 1,
+    id: Uint8Array.of(1, 2, 3, 4),
+    publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(5)),
+    bundle: new Uint8Array(32).fill(6),
+    authority: false,
+    alias: false,
+    allowPeerExtension: false,
+    pins: {access: 5, secret: 5},
+  };
+  const replacement = {
+    ...hello,
+    publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(9)),
+    bundle: false,
+    pins: {access: false, secret: false},
+  };
+  Object.assign(state, {
+    reset: new CardResetSession(readBackupCardIdentity(hello)),
+    controller: new AbortController(),
+    unlock: deferred(),
+    unlocks: 0,
+    disposals: 0,
+    resets: 0,
+    nativeStopped: false,
+    saved: JSON.stringify({'01020304': 'Old PIN'}),
+  });
+  const pinSession = new MonoidCredentialsStore({
+    async authenticate() {
+      const authorization = ++state.unlocks;
+      if (authorization === 2) {
+        assert.equal(state.nativeStopped, true);
+        assert.equal(state.presenter.current, undefined);
+        assert.equal(state.resets, 0);
+        await state.unlock.promise;
+        if (state.unlockError) throw {code: state.unlockError};
+      }
+      return {
+        async get() {
+          if (authorization === 1 || state.secondExpiry)
+            throw {code: 'AUTHORIZATION_EXPIRED'};
+          return {value: state.saved};
+        },
+        async remove() {
+          state.saved = null;
+        },
+        async [Symbol.asyncDispose]() {
+          state.disposals++;
+        },
+      };
+    },
+  }).createPINSession();
+  t.after(() => pinSession[Symbol.asyncDispose]());
+  t.after(() => state.unlock.resolve());
+  await pinSession.authenticate();
+  const applet = {
+    async reset() {
+      assert.equal(state.saved, null, 'Deletion must succeed before Reset');
+      state.resets++;
+    },
+    async hello() {
+      return replacement;
+    },
+  };
+  state.finished = state.reset
+    .run(pinSession, state.controller.signal, removePIN =>
+      state.prompt('Hold card', async (_id, _setState, signal) => {
+        await state.reset.readOrReset(
+          applet,
+          hello,
+          () => removePIN(signal),
+          () => {},
+          signal,
+        );
+      }),
+    )
+    .then(
+      () => ({success: true}),
+      error => ({error}),
+    );
+  return state;
+}
+
+for (const device of ['android', 'ios']) {
+  for (const order of ['stop-first', 'animation-first']) {
+    test(`${device}: expired reset removal waits for ${order} cleanup, unlocks and resets on the next tap`, async t => {
+      platform = device;
+      const state = await resetFixture(t);
+      const first = state.scans[0];
+      await connect(first);
+      assert.equal(state.resets, 0);
+      assert.equal(state.reset.attempted, false);
+      assert.deepEqual(first.closeOptions, {});
+      assert.deepEqual(state.presentedErrors, []);
+      assert.equal(state.unlocks, 1);
+
+      const finishStop = async () => {
+        state.nativeStopped = true;
+        first.stopped.resolve();
+        await setImmediate();
+      };
+      if (order === 'stop-first') await finishStop();
+      else hide(state.presenter);
+      await setImmediate();
+      assert.equal(state.unlocks, 1);
+      assert.equal(state.scans.length, 1);
+      if (order === 'stop-first') hide(state.presenter);
+      else await finishStop();
+      await setImmediate();
+      assert.equal(state.unlocks, 2);
+      assert.equal(state.disposals, 1);
+      assert.equal(state.scans.length, 1, 'Do not start NFC during unlock');
+
+      state.unlock.resolve();
+      await setImmediate();
+      assert.equal(state.scans.length, 2);
+      assert.equal(state.resets, 0, 'The user must tap again');
+      await connect(state.scans[1]);
+      assert.equal(state.resets, 1);
+      assert.equal(state.reset.confirmed, true);
+      state.scans[1].stopped.resolve();
+      hide(state.presenter);
+      assert.deepEqual(await state.finished, {success: true});
+      assert.equal(state.unlocks, 2);
+    });
+  }
+}
+
+for (const failure of [
+  'unlock-refused',
+  'second-expiry',
+  'cancelled-cleanup',
+]) {
+  test(`reset handoff ${failure} leaves the card unchanged and never restarts NFC`, async t => {
+    const state = await resetFixture(t);
+    state.unlockError = failure === 'unlock-refused' ? 'CANCELLED' : undefined;
+    state.secondExpiry = failure === 'second-expiry';
+    await connect(state.scans[0]);
+    if (failure === 'cancelled-cleanup') state.controller.abort();
+    state.nativeStopped = true;
+    state.scans[0].stopped.resolve();
+    hide(state.presenter);
+    state.unlock.resolve();
+    const result = await state.finished;
+
+    assert.equal(
+      failure === 'cancelled-cleanup' ? result.error.name : result.error.code,
+      failure === 'second-expiry'
+        ? 'AUTHORIZATION_EXPIRED'
+        : failure === 'cancelled-cleanup'
+          ? 'AbortError'
+          : 'CANCELLED',
+    );
+    assert.equal(state.resets, 0);
+    assert.equal(state.reset.attempted, false);
+    assert.equal(state.scans.length, 1);
+    assert.equal(state.unlocks, failure === 'cancelled-cleanup' ? 1 : 2);
+    assert.notEqual(state.saved, null);
+  });
+}

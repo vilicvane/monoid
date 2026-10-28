@@ -1,6 +1,12 @@
 import {computed, observable, runInAction} from 'mobx';
 
-import {MonoidIdHex, MonoidPIN, PublicKeyHex} from '../../../../@atomics.js';
+import {
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
+  MonoidIdHex,
+  MonoidPIN,
+  PublicKeyHex,
+} from '../../../../@atomics.js';
 import {CardItemNotFoundError} from '../../../../@lib/cbor-applet.js';
 import {
   type CardItem,
@@ -61,6 +67,12 @@ type Execution = {
   pending?: CardSyncOperation;
 };
 
+/** Omit when the scan prompt has already authenticated Access PIN. */
+export type CardSyncSecretPIN = {
+  pin: string | undefined;
+  onAuthenticated?: () => void;
+};
+
 type ProgressCallback = (progress: CardSyncProgress) => void;
 
 function cancelled(signal: AbortSignal): void {
@@ -115,7 +127,9 @@ export async function authenticateCardSync(
   assertCardPINNotBlocked(hello, 'secret');
   if (pin === undefined) throw new MonoidCardError('Enter Secret PIN');
   if (!MonoidPIN.is(pin)) {
-    throw new MonoidCardError('Secret PIN must contain 6 to 16 characters');
+    throw new MonoidCardError(
+      `Secret PIN must contain ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} characters`,
+    );
   }
 
   cancelled(signal);
@@ -331,21 +345,23 @@ export class CardSyncSession {
     applet: MonoidApplet,
     hello: MonoidAppletHello,
     signal: AbortSignal,
-    secretPIN?: string,
+    secretPIN?: CardSyncSecretPIN,
     onProgress?: ProgressCallback,
-    onAuthenticated?: () => void,
   ): Promise<CardSyncCard> {
     return this.exclusive(async () => {
       if (this.phase !== 'collect')
         throw new MonoidCardError('Start sync again to add cards');
       const identity = readBackupCardIdentity(hello);
-      await authenticateCardSync(
-        applet,
-        hello,
-        secretPIN,
-        signal,
-        onAuthenticated,
-      );
+      cancelled(signal);
+      if (secretPIN) {
+        await authenticateCardSync(
+          applet,
+          hello,
+          secretPIN.pin,
+          signal,
+          secretPIN.onAuthenticated,
+        );
+      }
       const read = await this.read(
         applet,
         identity,
@@ -593,9 +609,8 @@ export class CardSyncSession {
     applet: MonoidApplet,
     hello: MonoidAppletHello,
     signal: AbortSignal,
-    secretPIN?: string,
+    secretPIN?: CardSyncSecretPIN,
     onProgress?: ProgressCallback,
-    onAuthenticated?: () => void,
   ): Promise<CardSyncCard> {
     return this.exclusive(async () => {
       if (this.phase === 'collect')
@@ -609,13 +624,16 @@ export class CardSyncSession {
       if (this.series.hasFinished(identity.publicKey)) return card;
 
       const execution = this.executions.get(identity.publicKey)!;
-      await authenticateCardSync(
-        applet,
-        hello,
-        secretPIN,
-        signal,
-        onAuthenticated,
-      );
+      cancelled(signal);
+      if (secretPIN) {
+        await authenticateCardSync(
+          applet,
+          hello,
+          secretPIN.pin,
+          signal,
+          secretPIN.onAuthenticated,
+        );
+      }
       await this.reconcilePending(applet, execution, signal, onProgress);
 
       while (execution.next < execution.plan.operations.length) {

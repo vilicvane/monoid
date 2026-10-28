@@ -580,6 +580,82 @@ async function resetCandidate() {
   return state;
 }
 
+test('bundle addition hands expired removal out of NFC and preserves the reset until the next tap', async () => {
+  const state = await resetCandidate();
+  const original = hello({bundle: new Uint8Array(32).fill(2)});
+  let current = original;
+  const removals = [];
+  const unlock = deferred();
+  let handedOff = false;
+  let resets = 0;
+  state.pin = 'New-42';
+  state.pinSession.removePIN = async (
+    id,
+    expectedPIN,
+    signal,
+    allowUnlock = true,
+  ) => {
+    removals.push({id, expectedPIN, allowUnlock});
+    if (removals.length === 1) throw {code: 'AUTHORIZATION_EXPIRED'};
+    if (allowUnlock) {
+      assert.equal(handedOff, true);
+      signal.throwIfAborted();
+      await unlock.promise;
+    }
+  };
+  state.pinSession.setPIN = async () => {};
+  state.entrances.cardStore.set = card => card;
+  state.entrances.monoidApplet.openSession = async () => ({
+    hello: async () => current,
+    reset: async () => {
+      resets++;
+      current = {
+        ...hello({pins: {access: false, secret: false}}),
+        publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(34)),
+      };
+    },
+    setPIN: async () => {
+      current = {...current, pins: {access: 5, secret: 5}};
+    },
+    authenticate: async () => {},
+  });
+  const adding = find(state.hook.content, 'confirm-popup').props.onConfirm();
+  for (let index = 0; index < 20; index++) await Promise.resolve();
+  const inputs = state.inputs.length;
+  const first = state.scans.at(-1);
+  let handoff;
+  await assert.rejects(state.tap(), error => {
+    handoff = error;
+    assert.equal(error.code, 'CANCELLED');
+    return true;
+  });
+  assert.equal(resets, 0);
+  assert.equal(removals.length, 1);
+  handedOff = true;
+  first.reject(handoff);
+  for (let index = 0; index < 20; index++) await Promise.resolve();
+  assert.equal(state.scans.length, 1);
+  assert.equal(removals.length, 2);
+  unlock.resolve();
+  for (let index = 0; index < 20; index++) await Promise.resolve();
+  assert.equal(state.scans.length, 2);
+  assert.equal(state.inputs.length, inputs);
+  assert.equal(resets, 0);
+  await state.tap();
+  state.scans.at(-1).resolve();
+  await adding;
+
+  assert.deepEqual(
+    removals.map(call => call.allowUnlock),
+    [false, true, false],
+  );
+  assert.ok(removals.every(call => call.id === '01020304'));
+  assert.equal(resets, 1);
+  assert.deepEqual(current.id, original.id);
+  assert.deepEqual(state.added, [current]);
+  assert.deepEqual(state.errors, []);
+});
+
 test('an extension reset waits for vault unlock before requesting its new Secret PIN', async () => {
   const state = await resetCandidate();
   state.credentialPending = deferred();
