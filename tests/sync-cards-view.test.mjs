@@ -4,6 +4,7 @@ import {setImmediate} from 'node:timers/promises';
 
 import {observable, runInAction} from 'mobx';
 
+import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {HeldPINs} from '../.bld/app/@lib/held-pins.js';
 import {
   MonoidCardError,
@@ -11,6 +12,10 @@ import {
 } from '../.bld/app/@lib/monoid/card-error.js';
 import {readBackupCardIdentity} from '../.bld/app/@lib/monoid/card-identity.js';
 import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
+import {
+  CardPINError,
+  authenticateCardPIN,
+} from '../.bld/app/@lib/monoid/card-pins.js';
 import * as monoid from '../.bld/app/@lib/monoid/index.js';
 import {assertCardMaintenanceBundleRecovery} from '../.bld/app/@services/card-maintenance-service.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
@@ -33,6 +38,8 @@ mock.module('../.bld/app/@lib/global-platform/card-information.js', {
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    CardPINError,
+    authenticateCardPIN,
     ...monoid,
     readMonoidAppletInstallation: async () => ({
       optional: fixture.optionalInstallation ?? {},
@@ -2144,4 +2151,43 @@ for (const [mode, updateAvailable, title] of [
       );
     });
   }
+}
+
+for (const outcome of ['correct', 'cancel', 'blocked']) {
+  test(`Sync collection wrong Secret PIN: ${outcome}, keeping its cards`, async () => {
+    const source = {...readBackupCardIdentity(hello(1)), items: []};
+    const state = mount({source});
+    await state.startScan('Scan card');
+    const wrong = {
+      ...emptyCard,
+      authenticate: async () => {
+        throw new CBORAppletError({
+          code: 'INVALID_PIN',
+          tries: outcome === 'blocked' ? 0 : 4,
+        });
+      },
+    };
+    await state.tap(hello(1), wrong);
+    assert.equal(state.scans.length, 1);
+    assert.equal(state.session.cards.length, 0);
+    if (outcome === 'blocked') {
+      assert.equal(state.inputs.length, 1);
+      assert.equal(state.errors[0].message, 'Secret PIN blocked');
+      return;
+    }
+    assert.equal(
+      state.inputs.at(-1).options.description,
+      'Incorrect PIN, tries remaining: 4',
+    );
+    state.inputs
+      .at(-1)
+      .finished.resolve(outcome === 'correct' ? PIN : undefined);
+    await state.flush();
+    if (outcome === 'correct') {
+      await state.tap(hello(1));
+      await state.finishScan();
+      assert.equal(state.session.cards.length, 1);
+    } else assert.equal(state.scans.length, 1);
+    assert.deepEqual(state.errors, []);
+  });
 }

@@ -318,12 +318,12 @@ export const SyncCardsView = observer(
                       pendingPeers.includes(card),
                   )
               : session.cards.filter(card => !card.complete),
-        (card, pinSignal) =>
+        (card, pinSignal, message) =>
           showPINInput(
             {
               type: 'password',
               ...getPINInputPlaceholder('Secret', 'Enter card'),
-              description: card && cardName(card),
+              description: message ?? (card && cardName(card)),
               center: true,
               maxLength: 16,
             },

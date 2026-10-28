@@ -4,7 +4,7 @@ import {test} from 'node:test';
 import {CardSecretPINSession} from '../.bld/app/@components/views/safe/@card/card-secret-pin-session.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {HeldPINs} from '../.bld/app/@lib/held-pins.js';
-import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
+import {CardPINError} from '../.bld/app/@lib/monoid/card-pins.js';
 
 import {pinClock} from './helpers/held-pins.mjs';
 
@@ -129,45 +129,57 @@ test('a procedure drop during PIN input prevents its late authentication from re
   assert.equal(procedure.secretPIN(second), undefined);
 });
 
-test('rejected procedure PIN is dropped and an explicit retry prompts', async () => {
-  const procedure = procedureFixture();
-  procedure.holdSecretPIN(first, PIN);
-  const session = new CardSecretPINSession(procedure);
-  const owner = session.signal;
-  const procedureOwner = procedure.pins.signal;
-  const authenticateSecond = session.onAuthenticated(second, OTHER_PIN);
-  const failure = new MonoidCardError('Incorrect Secret PIN', {
-    cause: new CBORAppletError({code: 'INVALID_PIN', tries: 4}),
-  });
-  let attempts = 0;
-  await assert.rejects(
-    session.run([first], noPrompt, async credentials => {
-      credentials(first);
-      attempts++;
-      throw failure;
-    }),
-    error => error === failure,
-  );
-  assert.equal(attempts, 1);
-  assert.equal(owner.aborted, false);
-  assert.equal(procedureOwner.aborted, false);
-  assert.equal(procedure.secretPIN(first), undefined);
-  authenticateSecond();
-  assert.equal(procedure.secretPIN(second), OTHER_PIN);
-  let prompts = 0;
-  await session.run(
-    [first],
-    async () => {
-      prompts++;
-      return OTHER_PIN;
-    },
-    async credentials => {
-      credentials(first).onAuthenticated();
-    },
-  );
-  assert.equal(prompts, 1);
-  assert.equal(procedure.secretPIN(first), OTHER_PIN);
-});
+for (const backed of [false, true]) {
+  for (const result of ['correct', 'cancel', 'blocked']) {
+    test(`${backed ? 'procedure' : 'page'} wrong Secret PIN: ${result}, no resubmission before input`, async () => {
+      const procedure = backed ? procedureFixture() : undefined;
+      const session = new CardSecretPINSession(procedure);
+      await remember(session);
+      const owner = session.signal;
+      const authenticateSecond = session.onAuthenticated(second, OTHER_PIN);
+      let attempts = 0;
+      let prompts = 0;
+      const run = session.run(
+        [first],
+        async (card, signal, message) => {
+          assert.equal(card, first);
+          assert.equal(signal.aborted, false);
+          assert.equal(attempts, 1);
+          assert.equal(message, 'Incorrect PIN, tries remaining: 4');
+          assert.equal(procedure?.secretPIN(first), undefined);
+          prompts++;
+          return result === 'cancel' ? undefined : OTHER_PIN;
+        },
+        async credentials => {
+          const current = credentials(first);
+          attempts++;
+          if (attempts === 1)
+            throw new CardPINError(
+              'Secret',
+              result === 'blocked' ? 0 : 4,
+              true,
+              new CBORAppletError({
+                code: 'INVALID_PIN',
+                tries: result === 'blocked' ? 0 : 4,
+              }),
+            );
+          assert.equal(current.pin, OTHER_PIN);
+          current.onAuthenticated();
+        },
+      );
+      if (result === 'blocked') await assert.rejects(run, /Secret PIN blocked/);
+      else await run;
+      assert.equal(prompts, result === 'blocked' ? 0 : 1);
+      assert.equal(attempts, result === 'correct' ? 2 : 1);
+      assert.equal(owner.aborted, false);
+      authenticateSecond();
+      await session.run([second], noPrompt, async credentials =>
+        assert.equal(credentials(second).pin, OTHER_PIN),
+      );
+      session.clear();
+    });
+  }
+}
 
 async function remember(session, card = first, pin = PIN) {
   await session.run(
@@ -213,44 +225,6 @@ test('an uncached card closes its discovery before requesting a PIN bound to tha
       assert.equal(credentials(card).pin, expected);
     });
   }
-});
-
-test('a rejected cached PIN is discarded and neither authentication nor writes are retried', async () => {
-  const session = new CardSecretPINSession();
-  await remember(session);
-  const owner = session.signal;
-  const authenticateSecond = session.onAuthenticated(second, OTHER_PIN);
-  let attempts = 0;
-  const failure = new MonoidCardError('Incorrect Secret PIN, 4 tries left', {
-    cause: new CBORAppletError({code: 'INVALID_PIN', tries: 4}),
-  });
-  await assert.rejects(
-    session.run([first], noPrompt, async credentials => {
-      assert.equal(credentials(first).pin, PIN);
-      attempts++;
-      throw failure;
-    }),
-    error => error === failure,
-  );
-  assert.equal(attempts, 1);
-  assert.equal(owner.aborted, false);
-  assert.equal(session.signal, owner);
-  authenticateSecond();
-  await session.run([second], noPrompt, async credentials => {
-    assert.equal(credentials(second).pin, OTHER_PIN);
-  });
-  let prompts = 0;
-  await session.run(
-    [first],
-    async () => {
-      prompts++;
-      return OTHER_PIN;
-    },
-    async credentials => {
-      assert.equal(credentials(first).pin, OTHER_PIN);
-    },
-  );
-  assert.equal(prompts, 1);
 });
 
 test('a failure after successful authentication preserves the PIN but never replays the failed operation', async () => {
@@ -343,3 +317,24 @@ test('explicitly entering a new PIN while adding a card takes precedence over it
     },
   );
 });
+
+for (const failure of [
+  new CBORAppletError({code: 'INVALID_PIN', tries: 4}),
+  new CardPINError('Secret', 4, true, new Error('later authentication failed')),
+]) {
+  test(`a PIN-shaped error after authenticated work never repeats that tap (${failure.constructor.name})`, async () => {
+    const session = new CardSecretPINSession();
+    session.onAuthenticated(first, PIN)();
+    let writes = 0;
+    await assert.rejects(
+      session.run([first], noPrompt, async credentials => {
+        credentials(first).onAuthenticated();
+        writes++;
+        throw failure;
+      }),
+      error => error === failure,
+    );
+    assert.equal(writes, 1);
+    session.clear();
+  });
+}

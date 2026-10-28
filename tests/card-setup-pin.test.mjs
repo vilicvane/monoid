@@ -3,6 +3,7 @@ import {afterEach, mock, test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
 
 import {CardSecretPINSession} from '../.bld/app/@components/views/safe/@card/card-secret-pin-session.js';
+import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {
   MonoidCardError,
   MonoidWrongCardError,
@@ -12,7 +13,11 @@ import {
   readBackupCardIdentity,
 } from '../.bld/app/@lib/monoid/card-identity.js';
 import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
-import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
+import {
+  CardPINError,
+  assertCardPINsNotBlocked,
+  authenticateCardPIN,
+} from '../.bld/app/@lib/monoid/card-pins.js';
 import {initializeMonoidCard} from '../.bld/app/@lib/monoid/initialize-card.js';
 import {MonoidAppletInvalidPINError} from '../.bld/app/@lib/monoid/monoid-applet.js';
 import {
@@ -45,6 +50,8 @@ mock.module('../.bld/app/@entrances.js', {
 
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    CardPINError,
+    authenticateCardPIN,
     assertSameCardWithBundle,
     readBackupCardIdentity,
     assertCardPINsNotBlocked,
@@ -918,3 +925,60 @@ test('existing Access PIN does not trigger a vault unlock before PIN input', asy
   assert.deepEqual(state.saved, []);
   assert.deepEqual(state.results, [false]);
 });
+
+for (const outcome of ['correct', 'cancel', 'blocked', 'after-write']) {
+  test(`setup retries only the existing Secret PIN: ${outcome}, retaining new Access PIN`, async () => {
+    const state = mount({secretPIN: outcome === 'after-write' ? false : 5});
+    await state.answer('Wrong-42', 'New-access');
+    let attempts = 0;
+    state.onAuthenticate = () => {
+      if (++attempts === 1)
+        throw new CBORAppletError({
+          code: 'INVALID_PIN',
+          tries: outcome === 'blocked' ? 0 : 4,
+        });
+    };
+    await assert.rejects(state.tap());
+    await setImmediate();
+    assert.equal(state.scans.length, 1);
+    if (outcome === 'blocked' || outcome === 'after-write') {
+      await state.finished.promise;
+      assert.equal(state.inputs.length, outcome === 'after-write' ? 4 : 3);
+      assert.equal(
+        state.errors[0].message,
+        outcome === 'blocked'
+          ? 'Secret PIN blocked'
+          : 'Incorrect PIN, tries remaining: 4',
+      );
+      assert.equal(
+        state.commands.filter(([name]) => name === 'setPIN').length,
+        outcome === 'after-write' ? 1 : 0,
+      );
+      return;
+    }
+    assert.deepEqual(
+      state.commands.map(([name]) => name),
+      ['authenticate'],
+    );
+    assert.equal(
+      state.inputs.at(-1).options.description,
+      'Incorrect PIN, tries remaining: 4',
+    );
+    await state.answer(outcome === 'correct' ? 'Correct-42' : undefined);
+    if (outcome === 'correct') {
+      await state.tap();
+      await state.finishScan();
+      assert.deepEqual(
+        state.commands.filter(([name]) => name === 'setPIN'),
+        [['setPIN', {pin: 'New-access'}]],
+      );
+      assert.equal(state.saved[0].pin, 'New-access');
+      assert.deepEqual(state.results, [true]);
+    } else {
+      await state.finished.promise;
+      assert.equal(state.scans.length, 1);
+      assert.deepEqual(state.results, [false]);
+    }
+    assert.deepEqual(state.errors, []);
+  });
+}

@@ -363,9 +363,9 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
       }
       await secretPINSession.run(
         [card],
-        async (expected, pinSignal) => {
+        async (expected, pinSignal, message) => {
           const signal = AbortSignal.any([controller.signal, pinSignal]);
-          let description = `Card ${cardName(expected!)}`;
+          let description = message ?? `Card ${cardName(expected!)}`;
           for (;;) {
             const input = await showPINInput(
               {

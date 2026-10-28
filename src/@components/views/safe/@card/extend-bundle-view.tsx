@@ -183,13 +183,15 @@ export const ExtendBundleView = observer(
                 },
               ]
             : [],
-          async (card, pinSignal) => {
+          async (card, pinSignal, message) => {
             const signal = AbortSignal.any([controller.signal, pinSignal]);
-            let description: ReactNode = card
-              ? `Card ${cardName(card)}`
-              : phase === 'requesting'
-                ? 'For a card in this bundle'
-                : 'For another card in this bundle';
+            let description: ReactNode =
+              message ??
+              (card
+                ? `Card ${cardName(card)}`
+                : phase === 'requesting'
+                  ? 'For a card in this bundle'
+                  : 'For another card in this bundle');
             for (;;) {
               const input = await showPINInput(
                 {

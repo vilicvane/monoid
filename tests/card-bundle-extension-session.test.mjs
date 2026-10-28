@@ -554,7 +554,7 @@ for (const [phase, cardName, appletName] of [
       };
       await assert.rejects(
         session.configureCard(currentApplet, fixture[cardName], PIN, signal()),
-        tries ? /Incorrect Secret PIN.*4/ : /Secret PIN blocked/,
+        tries ? /Incorrect PIN.*4/ : /Secret PIN blocked/,
       );
       assert.equal(session.phase, phase);
       assert.equal(session.busy, false);
@@ -827,3 +827,54 @@ test('collecting and complete never send credentials or commands', async () => {
     assert.deepEqual(currentApplet.calls, []);
   }
 });
+
+for (const [phase, cardName, appletName] of [
+  ['requesting', 'source', 'sourceApplet'],
+  ['approving', 'approver', 'approverApplet'],
+  ['joining', 'target', 'targetApplet'],
+]) {
+  for (const outcome of ['correct', 'cancel', 'blocked']) {
+    test(`extension ${phase} wrong PIN: ${outcome}, retaining its stage`, async () => {
+      const fixture = await ready(phase);
+      const {session} = fixture;
+      const currentApplet = fixture[appletName];
+      const card = prepared(fixture[cardName]);
+      const pins = new CardSecretPINSession();
+      pins.onAuthenticated(card, PIN)();
+      let attempts = 0;
+      currentApplet.onAuthenticate = () => {
+        if (++attempts === 1)
+          throw new CBORAppletError({
+            code: 'INVALID_PIN',
+            tries: outcome === 'blocked' ? 0 : 4,
+          });
+      };
+      const task = pins.run(
+        [card],
+        async (_card, _signal, message) => {
+          assert.equal(attempts, 1);
+          assert.equal(session.phase, phase);
+          assert.equal(message, 'Incorrect PIN, tries remaining: 4');
+          return outcome === 'cancel' ? undefined : PIN;
+        },
+        async (credentials, activeSignal) => {
+          const {pin, onAuthenticated} = credentials(card);
+          await session.configureCard(
+            currentApplet,
+            fixture[cardName],
+            pin,
+            activeSignal,
+            onAuthenticated,
+          );
+        },
+      );
+      if (outcome === 'blocked')
+        await assert.rejects(task, /Secret PIN blocked/);
+      else await task;
+      assert.equal(attempts, outcome === 'correct' ? 2 : 1);
+      if (outcome === 'correct') assert.notEqual(session.phase, phase);
+      else assert.equal(session.phase, phase);
+      pins.clear();
+    });
+  }
+}

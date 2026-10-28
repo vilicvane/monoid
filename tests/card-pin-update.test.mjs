@@ -75,7 +75,7 @@ for (const tries of [4, 0]) {
     };
     await assert.rejects(state.run(), {
       message: tries
-        ? 'Incorrect Secret PIN, tries remaining: 4'
+        ? 'Incorrect PIN, tries remaining: 4'
         : 'Secret PIN blocked',
     });
     assert.equal(attempts, 1);

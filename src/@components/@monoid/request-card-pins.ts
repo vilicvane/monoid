@@ -1,4 +1,5 @@
 import {MonoidPIN} from '../../@atomics.js';
+import {CardPINError} from '../../@lib/monoid/index.js';
 import type {InputModalOptions} from '../@ui/use-input-modal.js';
 
 import {getPINInputPlaceholder} from './pin-input-placeholder.js';
@@ -10,6 +11,53 @@ type ShowInput = (
 
 export type CardSetupPINs = {secret: MonoidPIN; access?: MonoidPIN};
 
+/** The operation must finish native cleanup before rejecting with CardPINError. */
+export async function retryCardPIN(
+  show: ShowInput,
+  pins: CardSetupPINs,
+  operation: () => Promise<void>,
+  signal: AbortSignal,
+  canRetry: () => boolean = () => true,
+): Promise<void> {
+  for (;;) {
+    signal.throwIfAborted();
+    try {
+      await operation();
+      return;
+    } catch (error) {
+      signal.throwIfAborted();
+      if (
+        !(error instanceof CardPINError) ||
+        !error.retryable ||
+        error.tries === 0 ||
+        !canRetry()
+      )
+        throw error;
+      let description = error.message;
+      for (;;) {
+        const value = await show(
+          {
+            type: 'password',
+            ...getPINInputPlaceholder(error.kind, 'Enter'),
+            description,
+            center: true,
+            maxLength: 16,
+          },
+          signal,
+        );
+        signal.throwIfAborted();
+        if (value === undefined) return;
+        if (MonoidPIN.is(value)) {
+          if (error.kind === 'Secret') pins.secret = value;
+          else pins.access = value;
+          break;
+        }
+        description = 'Use 6 to 16 ASCII characters';
+      }
+    }
+  }
+}
+
 /** Collect credentials before NFC; existing PINs are authentication, not setup. */
 export async function requestCardPINs(
   show: ShowInput,
@@ -18,11 +66,13 @@ export async function requestCardPINs(
     accessSet,
     savedAccessPIN,
     heldSecretPIN,
+    secretMessage,
   }: {
     secretSet: boolean;
     accessSet: boolean;
     savedAccessPIN?: MonoidPIN;
     heldSecretPIN?: MonoidPIN;
+    secretMessage?: string;
   },
   signal: AbortSignal,
 ): Promise<CardSetupPINs | undefined> {
@@ -32,7 +82,7 @@ export async function requestCardPINs(
     kind: 'Secret' | 'Access',
     existing: boolean,
   ): Promise<MonoidPIN | undefined> => {
-    let description: string | undefined;
+    let description = kind === 'Secret' ? secretMessage : undefined;
     let value: string | undefined;
     for (;;) {
       signal.throwIfAborted();

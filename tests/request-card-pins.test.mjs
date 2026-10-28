@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-import {requestCardPINs} from '../.bld/app/@components/@monoid/request-card-pins.js';
+import {
+  requestCardPINs,
+  retryCardPIN,
+} from '../.bld/app/@components/@monoid/request-card-pins.js';
+import {CardPINError} from '../.bld/app/@lib/monoid/card-pins.js';
 
 const secret = 'Secret-42';
 const access = 'Access-43';
@@ -213,3 +217,59 @@ test('leaving during a prompt cannot return credentials or start another prompt'
   );
   assert.equal(calls, 1);
 });
+
+for (const kind of ['Secret', 'Access']) {
+  for (const result of [
+    'correct',
+    'cancel',
+    'blocked',
+    'after-write',
+    'unsafe-tap',
+  ]) {
+    test(`PIN retry ${kind}: ${result} retains other inputs and waits for input`, async () => {
+      const pins = {secret, access};
+      const replacement = 'Retry-44';
+      const failure = new CardPINError(
+        kind,
+        result === 'blocked' ? 0 : 4,
+        result !== 'after-write',
+        new Error('rejected'),
+      );
+      let attempts = 0;
+      let prompts = 0;
+      const task = retryCardPIN(
+        async options => {
+          prompts++;
+          assert.equal(attempts, 1);
+          assert.equal(
+            options.description,
+            'Incorrect PIN, tries remaining: 4',
+          );
+          assert.equal(options.placeholder, `Enter ${kind} PIN`);
+          return result === 'cancel' ? undefined : replacement;
+        },
+        pins,
+        async () => {
+          attempts++;
+          if (attempts === 1) throw failure;
+          assert.deepEqual(
+            pins,
+            kind === 'Secret'
+              ? {secret: replacement, access}
+              : {secret, access: replacement},
+          );
+        },
+        signal(),
+        () => result !== 'unsafe-tap',
+      );
+      if (['blocked', 'after-write', 'unsafe-tap'].includes(result)) {
+        await assert.rejects(task, error => error === failure);
+        assert.equal(prompts, 0);
+      } else {
+        await task;
+        assert.equal(prompts, 1);
+      }
+      assert.equal(attempts, result === 'correct' ? 2 : 1);
+    });
+  }
+}

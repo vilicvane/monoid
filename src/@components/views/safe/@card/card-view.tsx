@@ -10,6 +10,7 @@ import {useEntrances} from '../../../../@entrances.js';
 import {
   type MonoidApplet,
   assertSameCard,
+  authenticateCardPIN,
   removeItems,
   setCardAlias,
   validateCardAlias,
@@ -42,7 +43,10 @@ import {
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
 import {PINKind} from '../../../@monoid/pin-input-placeholder.js';
-import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
+import {
+  requestCardPINs,
+  retryCardPIN,
+} from '../../../@monoid/request-card-pins.js';
 import {scanNextCards} from '../../../@monoid/scan-next-cards.js';
 import {AppIcon} from '../../../@ui/app-icon.js';
 import {Button, Buttons} from '../../../@ui/button.js';
@@ -355,28 +359,34 @@ const CardContent = observer(
               signal,
             );
             if (!pins) return;
-            await aliasScan(
-              scanCardPrompt(card, 'to save alias'),
-              async (applet, setState, hello, scanSignal) => {
-                const activeSignal = AbortSignal.any([signal, scanSignal]);
-                activeSignal.throwIfAborted();
-                assertSameCard(hello, card);
-                await applet.authenticate({secret: true, pin: pins.secret});
-                setState('Saving alias, hold tight...');
-                const verified = await setCardAlias(
-                  applet,
-                  hello,
-                  alias,
-                  activeSignal,
-                );
-                runInAction(() => {
-                  card.alias = verified.alias;
-                  card.allowPeerExtension = verified.allowPeerExtension;
-                  card.authority = verified.authority;
-                  cardStore.set(card);
-                });
-              },
-              hello => assertSameCard(hello, card),
+            await retryCardPIN(
+              showAliasInput,
+              pins,
+              () =>
+                aliasScan(
+                  scanCardPrompt(card, 'to save alias'),
+                  async (applet, setState, hello, scanSignal) => {
+                    const activeSignal = AbortSignal.any([signal, scanSignal]);
+                    activeSignal.throwIfAborted();
+                    assertSameCard(hello, card);
+                    await authenticateCardPIN(applet, pins.secret);
+                    setState('Saving alias, hold tight...');
+                    const verified = await setCardAlias(
+                      applet,
+                      hello,
+                      alias,
+                      activeSignal,
+                    );
+                    runInAction(() => {
+                      card.alias = verified.alias;
+                      card.allowPeerExtension = verified.allowPeerExtension;
+                      card.authority = verified.authority;
+                      cardStore.set(card);
+                    });
+                  },
+                  hello => assertSameCard(hello, card),
+                  signal,
+                ),
               signal,
             );
           } catch (error) {

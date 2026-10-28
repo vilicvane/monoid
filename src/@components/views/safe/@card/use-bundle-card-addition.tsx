@@ -7,6 +7,7 @@ import type {CardInformation} from '../../../../@lib/global-platform/card-inform
 import {
   MonoidAppletHello,
   assertCardPINsNotBlocked,
+  authenticateCardPIN,
   cardName,
   initializeMonoidCard,
   readBackupCardIdentity,
@@ -327,7 +328,10 @@ export function useBundleCardAddition({
             cacheSetup(hello);
             completed = hello;
             setState('Authenticating, hold tight...');
-            await applet.authenticate({pin: accessPIN!});
+            await authenticateCardPIN(applet, accessPIN!, {
+              kind: 'Access',
+              retryable: false,
+            });
             signal.throwIfAborted();
             accessPINId = uint8ArrayToHex(hello.id);
           }

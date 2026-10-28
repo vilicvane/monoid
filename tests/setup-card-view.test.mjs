@@ -4,6 +4,7 @@ import {afterEach, mock, test} from 'node:test';
 import * as actualMobx from 'mobx';
 
 import {AuthorityBundleSession} from '../.bld/app/@components/views/safe/@card/authority-bundle-session.js';
+import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {
   MonoidCardError,
   MonoidWrongCardError,
@@ -15,7 +16,11 @@ import {
   readCardIdentity,
 } from '../.bld/app/@lib/monoid/card-identity.js';
 import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
-import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
+import {
+  CardPINError,
+  assertCardPINsNotBlocked,
+  authenticateCardPIN,
+} from '../.bld/app/@lib/monoid/card-pins.js';
 import {initializeMonoidCard} from '../.bld/app/@lib/monoid/initialize-card.js';
 import {
   MonoidAppletHello,
@@ -333,6 +338,8 @@ const install = async (sessionId, onProgress, signal) => {
 };
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    CardPINError,
+    authenticateCardPIN,
     cardName,
     cardNameWithId,
     assertSameCard,
@@ -2409,5 +2416,50 @@ for (const [bundle, title, firstStep] of [
       );
       assert.ok(content.props.session instanceof AuthorityBundleSession);
     }
+  });
+}
+
+for (const outcome of ['correct', 'cancel', 'blocked']) {
+  test(`Create bundle wrong Secret PIN: ${outcome}, keeping collected cards`, async () => {
+    const state = await roundTwo([1, 2]);
+    const authenticate = state.bundleApplet.authenticate;
+    let attempts = 0;
+    state.bundleApplet.authenticate = async request => {
+      if (++attempts === 1)
+        throw new CBORAppletError({
+          code: 'INVALID_PIN',
+          tries: outcome === 'blocked' ? 0 : 4,
+        });
+      return authenticate(request);
+    };
+    state.click('Scan a card');
+    await state.answerBundlePIN();
+    await assert.rejects(state.tapBundle(state.members[0]));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(attempts, 1);
+    assert.equal(state.bundleScans.length, 1);
+    assert.ok(state.card('00000001'));
+    assert.ok(state.card('00000002'));
+    if (outcome === 'blocked') {
+      await state.finished;
+      assert.equal(state.errors[0].message, 'Secret PIN blocked');
+      return;
+    }
+    assert.equal(
+      state.bundleInputs.at(-1).options.description,
+      'Incorrect PIN, tries remaining: 4',
+    );
+    await state.answerBundlePIN(
+      outcome === 'correct' ? 'Correct-42' : undefined,
+    );
+    if (outcome === 'correct') {
+      await state.tapBundle(state.members[0]);
+      await state.finishBundle();
+      assert.equal(state.card('00000001').props.description, 'complete');
+    } else {
+      await state.finished;
+      assert.equal(state.bundleScans.length, 1);
+    }
+    assert.deepEqual(state.errors, []);
   });
 }

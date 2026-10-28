@@ -4,6 +4,7 @@ import {afterEach, mock, test} from 'node:test';
 import {observable, onReactionError, runInAction, toJS} from 'mobx';
 import {routra} from 'routra';
 
+import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {
   setCardAlias,
   validateCardAlias,
@@ -14,6 +15,10 @@ import {
 } from '../.bld/app/@lib/monoid/card-error.js';
 import {assertSameCard} from '../.bld/app/@lib/monoid/card-identity.js';
 import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
+import {
+  CardPINError,
+  authenticateCardPIN,
+} from '../.bld/app/@lib/monoid/card-pins.js';
 import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
 import {
   acceptMatchingItem,
@@ -102,6 +107,8 @@ mock.module('../.bld/app/@services/index.js', {
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    CardPINError,
+    authenticateCardPIN,
     cardName,
     cardNameWithId,
     assertSameCard,
@@ -2489,5 +2496,67 @@ for (const label of ['Sync cards', 'Create bundle', 'Join authority bundle']) {
     assert.equal(router.safe.card.$active, false);
     assert.deepEqual(source.$entries, []);
     assert.deepEqual(errors, []);
+  });
+}
+
+for (const outcome of ['correct', 'cancel', 'blocked', 'write-failure']) {
+  test(`alias wrong-PIN handling: ${outcome}, retaining the entered alias`, async () => {
+    const state = mount({});
+    const retry = deferred();
+    const alias = 'Keep this alias';
+    state.answers.push(alias, 'Wrong-42', retry.promise);
+    let attempts = 0;
+    const failure = new CBORAppletError({
+      code: 'INVALID_PIN',
+      tries: outcome === 'blocked' ? 0 : 4,
+    });
+    state.applet.authenticate = async request => {
+      state.authentications.push(request);
+      if (++attempts === 1 && outcome !== 'write-failure') throw failure;
+    };
+    if (outcome === 'write-failure') state.aliasError = failure;
+    find(
+      state.render(),
+      node => node.props?.['aria-label'] === 'Edit card alias',
+    ).props.onClick();
+    await new Promise(resolve => setImmediate(resolve));
+    await assert.rejects(state.tap(), error => {
+      state.scans.at(-1).reject(error);
+      return true;
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(attempts, 1);
+    assert.equal(state.scans.length, 1);
+    if (outcome === 'blocked' || outcome === 'write-failure') {
+      await state.finished;
+      assert.equal(state.inputs.length, 2);
+      assert.equal(state.errors.length, 1);
+      if (outcome === 'blocked')
+        assert.equal(state.errors[0].message, 'Secret PIN blocked');
+      assert.equal(
+        state.cardAliasWrites.length,
+        outcome === 'write-failure' ? 1 : 0,
+      );
+      return;
+    }
+    assert.deepEqual(state.cardAliasWrites, []);
+    assert.equal(
+      state.inputs.at(-1).options.description,
+      'Incorrect PIN, tries remaining: 4',
+    );
+    assert.equal(state.inputs.at(-1).options.placeholder, 'Enter Secret PIN');
+    retry.resolve(outcome === 'cancel' ? undefined : 'Correct-42');
+    await new Promise(resolve => setImmediate(resolve));
+    if (outcome === 'correct') {
+      assert.equal(state.scans.length, 2);
+      await state.tap();
+      await state.finish();
+      assert.deepEqual(state.cardAliasWrites, [alias]);
+      assert.equal(state.card.alias, alias);
+    } else {
+      await state.finished;
+      assert.equal(state.scans.length, 1);
+    }
+    assert.deepEqual(state.errors, []);
   });
 }

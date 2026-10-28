@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {afterEach, mock, test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
 
+import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {appletBundle} from '../.bld/app/@lib/monoid/@applet-bundle.js';
 import {APPLET_NAMES} from '../.bld/app/@lib/monoid/applet-install-progress.js';
 import {
@@ -13,7 +14,11 @@ import {
   readBackupCardIdentity,
 } from '../.bld/app/@lib/monoid/card-identity.js';
 import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
-import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
+import {
+  CardPINError,
+  assertCardPINsNotBlocked,
+  authenticateCardPIN,
+} from '../.bld/app/@lib/monoid/card-pins.js';
 import {isOperationCancelled} from '../.bld/app/@lib/operation-cancelled.js';
 
 // Exercise the built hooks with effect cleanup and state-driven rerenders, without a DOM or sensor.
@@ -127,15 +132,6 @@ mock.module('../.bld/app/@components/@ui/use-input-modal.js', {
   },
 });
 
-class CBORAppletError extends Error {
-  constructor(source) {
-    super(source.code);
-    this.source = source;
-  }
-}
-mock.module('../.bld/app/@lib/cbor-applet.js', {
-  namedExports: {CBORAppletError},
-});
 class AppletISOError extends Error {
   constructor(note, sw, data) {
     super(note);
@@ -186,6 +182,8 @@ const {initializeMonoidCard} = await import(
 );
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    CardPINError,
+    authenticateCardPIN,
     APPLET_NAMES,
     getAppletCatalog: () => appletBundle,
     cardName,
@@ -937,7 +935,7 @@ for (const pinSource of ['saved Access', 'entered Access', 'Secret']) {
     }
     const previousInputs = state.inputs.length;
     const scan = await state.tap();
-    const errorMessage = `Incorrect ${secret ? 'Secret ' : ''}PIN, tries remaining: 4`;
+    const errorMessage = 'Incorrect PIN, tries remaining: 4';
 
     assert.deepEqual(scan.closeOptions, {errorMessage});
     assert.equal(scan.waitingForRemoval, false);
@@ -1816,7 +1814,12 @@ test('prompt: incorrect Secret PIN reopens input after cleanup without mutating 
   await state.tap();
   await state.finishExit();
   assert.equal(state.businessCompleted, 1);
-  assert.equal(state.savedPINs[CARD_ID], SECRET_PIN);
+  assert.equal(
+    state.savedPINs[CARD_ID],
+    OLD_PIN,
+    'The chosen Access PIN survives the Secret PIN retry',
+  );
+  assert.equal(state.inputs.length, 4, 'Access PIN is not requested again');
   assert.equal(state.outcome, 'resolved');
 });
 

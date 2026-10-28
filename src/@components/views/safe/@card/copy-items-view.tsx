@@ -20,6 +20,7 @@ import {
   MonoidCardError,
   assertCardPINsNotBlocked,
   assertSameCardWithBundle,
+  authenticateCardPIN,
   cardName,
   readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
@@ -38,7 +39,10 @@ import {
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
-import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
+import {
+  requestCardPINs,
+  retryCardPIN,
+} from '../../../@monoid/request-card-pins.js';
 import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
 import {AppIcon} from '../../../@ui/app-icon.js';
 import {Button, Buttons} from '../../../@ui/button.js';
@@ -414,51 +418,62 @@ export const CopyItemsView = observer(
           });
           return;
         }
-        const onAuthenticated = secretPINs.onAuthenticated(identity, pin);
-        await scan(
-          scanCardPrompt(identity),
-          async (applet, setState, hello, nativeSignal) => {
-            const signal = AbortSignal.any([nativeSignal, pinSignal]);
-            const operation = new AbortController();
-            const cancel = (): void => operation.abort();
-            signal.addEventListener('abort', cancel, {once: true});
-            if (signal.aborted) cancel();
-            const stopWatching = reaction(
-              () => !isViewActive(),
-              leaving => {
-                if (leaving) cancel();
-              },
-              {fireImmediately: true},
-            );
+        await retryCardPIN(
+          showSecretPINInput,
+          requested!,
+          () => {
+            pin = requested!.secret;
+            const onAuthenticated = secretPINs.onAuthenticated(identity, pin);
+            return scan(
+              scanCardPrompt(identity),
+              async (applet, setState, hello, nativeSignal) => {
+                const signal = AbortSignal.any([nativeSignal, pinSignal]);
+                const operation = new AbortController();
+                const cancel = (): void => operation.abort();
+                signal.addEventListener('abort', cancel, {once: true});
+                if (signal.aborted) cancel();
+                const stopWatching = reaction(
+                  () => !isViewActive(),
+                  leaving => {
+                    if (leaving) cancel();
+                  },
+                  {fireImmediately: true},
+                );
 
-            try {
-              setState(
-                isNew
-                  ? 'Setting Secret PIN, hold tight...'
-                  : 'Setting Access PIN, hold tight...',
-              );
-              const initialized = await initializeBackupTarget(
-                applet,
-                hello,
-                expected,
-                pin!,
-                operation.signal,
-                onAuthenticated,
-                requested?.access,
-              );
-              if (expected.pins.access === false) {
-                await applet.authenticate({pin: requested!.access!});
-                initializedAccessPIN = true;
-              }
-              await session.addTarget(initialized);
-            } finally {
-              stopWatching();
-              signal.removeEventListener('abort', cancel);
-            }
+                try {
+                  setState(
+                    isNew
+                      ? 'Setting Secret PIN, hold tight...'
+                      : 'Setting Access PIN, hold tight...',
+                  );
+                  const initialized = await initializeBackupTarget(
+                    applet,
+                    hello,
+                    expected,
+                    pin!,
+                    operation.signal,
+                    onAuthenticated,
+                    requested?.access,
+                  );
+                  if (expected.pins.access === false) {
+                    await authenticateCardPIN(applet, requested!.access!, {
+                      kind: 'Access',
+                      retryable: false,
+                    });
+                    initializedAccessPIN = true;
+                  }
+                  await session.addTarget(initialized);
+                } finally {
+                  stopWatching();
+                  signal.removeEventListener('abort', cancel);
+                }
+              },
+              hello => {
+                assertSameCardWithBundle(hello, identity);
+              },
+            );
           },
-          hello => {
-            assertSameCardWithBundle(hello, identity);
-          },
+          pinSignal,
         );
       } finally {
         if (
@@ -529,12 +544,12 @@ export const CopyItemsView = observer(
           copyState.markInterrupted(backup.source.publicKey, false);
           await secretPINs.run(
             [backup.source],
-            (card, pinSignal) =>
+            (card, pinSignal, message) =>
               showSecretPINInput(
                 {
                   type: 'password',
                   ...getPINInputPlaceholder('Secret', 'Enter source card'),
-                  description: card && cardName(card),
+                  description: message ?? (card && cardName(card)),
                   center: true,
                   maxLength: 16,
                 },
@@ -588,12 +603,12 @@ export const CopyItemsView = observer(
         try {
           await secretPINs.run(
             targets.filter(card => !card.complete),
-            (card, pinSignal) =>
+            (card, pinSignal, message) =>
               showSecretPINInput(
                 {
                   type: 'password',
                   ...getPINInputPlaceholder('Secret', 'Enter destination card'),
-                  description: card && cardName(card),
+                  description: message ?? (card && cardName(card)),
                   center: true,
                   maxLength: 16,
                 },

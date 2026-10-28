@@ -7,6 +7,7 @@ import {
   MonoidCardError,
   assertCardPINsNotBlocked,
   assertSameCardWithBundle,
+  authenticateCardPIN,
   initializeMonoidCard,
   readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
@@ -17,7 +18,10 @@ import {
   scanCardPrompt,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
-import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
+import {
+  requestCardPINs,
+  retryCardPIN,
+} from '../../../@monoid/request-card-pins.js';
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 
@@ -129,76 +133,88 @@ export function CardSetupPIN({
         signal.throwIfAborted();
 
         try {
-          await waitForOperation(
-            scan(
-              scanCardPrompt(hello),
-              async (applet, setState, current, scanSignal) => {
-                const cancel = (): void => operation.abort(scanSignal.reason);
-                scanSignal.addEventListener('abort', cancel, {once: true});
-                if (scanSignal.aborted) cancel();
+          await retryCardPIN(
+            showInput,
+            requested,
+            () => {
+              pin = requested.secret;
+              return waitForOperation(
+                scan(
+                  scanCardPrompt(hello),
+                  async (applet, setState, current, scanSignal) => {
+                    const cancel = (): void =>
+                      operation.abort(scanSignal.reason);
+                    scanSignal.addEventListener('abort', cancel, {once: true});
+                    if (scanSignal.aborted) cancel();
 
-                try {
-                  signal.throwIfAborted();
-                  writing = (async () => {
-                    if (isInitialized(current)) {
-                      latestHello = current;
-                      initialized = true;
-                      return;
-                    }
-
-                    if (
-                      hello.pins.secret === false &&
-                      current.pins.secret !== false
-                    ) {
-                      throw new MonoidCardError(
-                        'Secret PIN already set, enter existing PIN',
-                      );
-                    }
-
-                    const rememberPIN = secretPINSession?.onAuthenticated(
-                      readBackupCardIdentity(current),
-                      pin!,
-                    );
-
-                    setState(
-                      current.pins.secret === false
-                        ? 'Setting Secret PIN, hold tight...'
-                        : 'Setting Access PIN, hold tight...',
-                    );
-                    const result = await initializeMonoidCard(
-                      applet,
-                      current,
-                      pin!,
-                      signal,
-                      accessPIN,
-                    );
-                    latestHello = result;
-                    initialized = true;
-                    rememberPIN?.();
-                    signal.throwIfAborted();
-
-                    if (current.pins.access === false) {
-                      accessPINId = uint8ArrayToHex(result.id);
-                      setState('Authenticating, hold tight...');
-                      await applet.authenticate({pin: accessPIN!});
+                    try {
                       signal.throwIfAborted();
-                      accessPINAuthenticated = true;
+                      writing = (async () => {
+                        if (isInitialized(current)) {
+                          latestHello = current;
+                          initialized = true;
+                          return;
+                        }
+
+                        if (
+                          hello.pins.secret === false &&
+                          current.pins.secret !== false
+                        ) {
+                          throw new MonoidCardError(
+                            'Secret PIN already set, enter existing PIN',
+                          );
+                        }
+
+                        const rememberPIN = secretPINSession?.onAuthenticated(
+                          readBackupCardIdentity(current),
+                          pin!,
+                        );
+
+                        setState(
+                          current.pins.secret === false
+                            ? 'Setting Secret PIN, hold tight...'
+                            : 'Setting Access PIN, hold tight...',
+                        );
+                        const result = await initializeMonoidCard(
+                          applet,
+                          current,
+                          pin!,
+                          signal,
+                          accessPIN,
+                        );
+                        latestHello = result;
+                        initialized = true;
+                        rememberPIN?.();
+                        signal.throwIfAborted();
+
+                        if (current.pins.access === false) {
+                          accessPINId = uint8ArrayToHex(result.id);
+                          setState('Authenticating, hold tight...');
+                          await authenticateCardPIN(applet, accessPIN!, {
+                            kind: 'Access',
+                            retryable: false,
+                          });
+                          signal.throwIfAborted();
+                          accessPINAuthenticated = true;
+                        }
+                      })();
+                      await writing;
+                    } finally {
+                      scanSignal.removeEventListener('abort', cancel);
                     }
-                  })();
-                  await writing;
-                } finally {
-                  scanSignal.removeEventListener('abort', cancel);
-                }
-              },
-              current => {
-                signal.throwIfAborted();
-                assertSameCardWithBundle(
-                  current,
-                  readBackupCardIdentity(hello),
-                );
-                latestHello = current;
-              },
-            ),
+                  },
+                  current => {
+                    signal.throwIfAborted();
+                    assertSameCardWithBundle(
+                      current,
+                      readBackupCardIdentity(hello),
+                    );
+                    latestHello = current;
+                  },
+                ),
+                signal,
+              );
+            },
             signal,
           );
           scanCompleted = true;

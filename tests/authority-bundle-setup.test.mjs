@@ -9,6 +9,7 @@ import {
   AuthorityError,
   validateAuthorityBundleName,
 } from '../.bld/app/@lib/authority-client.js';
+import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 
 mock.module('styled-components', {
   namedExports: {
@@ -174,9 +175,9 @@ mock.module('../.bld/app/@components/@ui/use-input-modal.js', {
       const state = current;
       return [
         undefined,
-        async () => {
+        async options => {
           state.pinPrompts++;
-          return 'Secret-42';
+          return state.promptPIN ? state.promptPIN(options) : 'Secret-42';
         },
       ];
     },
@@ -1040,3 +1041,64 @@ test('an old owner response cannot overwrite the selected owner input', async t 
   assert.equal(state.find('InputWithAction').props.value, 'New wallet bundle');
   assert.equal(state.find('InputWithAction').props.action, undefined);
 });
+
+for (const outcome of ['correct', 'cancel', 'blocked']) {
+  test(`authority join retries rejected Secret PIN: ${outcome}, preserving choice and card`, async t => {
+    const state = fixture(t, {sourceCard: prepared()});
+    await state.flush();
+    await state.click('Button', 'Continue');
+    const session = state.flow.authority;
+    const chosen = session.choice;
+    const card = session.cards[0];
+    const hex = value => Uint8Array.from(Buffer.from(value, 'hex'));
+    let authentications = 0;
+    let issues = 0;
+    let joins = 0;
+    state.applet = {
+      hello: async () => ({
+        ...prepared(),
+        version: 1,
+        id: hex(card.id),
+        publicKey: hex(card.publicKey),
+        pins: {secret: 5, access: 5},
+      }),
+      authenticate: async () => {
+        if (++authentications === 1)
+          throw new CBORAppletError({
+            code: 'INVALID_PIN',
+            tries: outcome === 'blocked' ? 0 : 4,
+          });
+      },
+      joinBundle: async () => {
+        joins++;
+        return {bundle: new Uint8Array(32).fill(42)};
+      },
+    };
+    state.entrances.authorityService.issueBundle = async () => {
+      issues++;
+      return {
+        publicKey: hex(card.publicKey),
+        data: new Uint8Array(),
+        bundle: new Uint8Array(32).fill(42),
+      };
+    };
+    state.promptPIN = options => {
+      if (state.pinPrompts === 2) {
+        assert.equal(options.description, 'Incorrect PIN, tries remaining: 4');
+        assert.equal(state.scans, 1);
+        assert.equal(issues, 0);
+        if (outcome === 'cancel') return undefined;
+      }
+      return 'Secret-42';
+    };
+    await state.click('Button', 'Scan card to join');
+    assert.equal(session.choice, chosen);
+    assert.equal(session.cards[0], card);
+    assert.equal(session.joinedCount, outcome === 'correct' ? 1 : 0);
+    assert.equal(authentications, outcome === 'correct' ? 2 : 1);
+    assert.equal(joins, outcome === 'correct' ? 1 : 0);
+    if (outcome === 'blocked')
+      assert.equal(state.errors[0].message, 'Secret PIN blocked');
+    else assert.deepEqual(state.errors, []);
+  });
+}

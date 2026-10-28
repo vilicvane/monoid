@@ -17,6 +17,7 @@ import {readCardInformation} from '../../@lib/global-platform/card-information.j
 import {IsoDepScanError} from '../../@lib/isodep.js';
 import {
   APPLET_NAMES,
+  CardPINError,
   type MonoidApplet,
   type MonoidAppletHello,
   MonoidAppletInvalidPINError,
@@ -129,7 +130,7 @@ export type MonoidScanPrompt = (
 
 type PINRequest =
   | {type: 'access'; id: MonoidIdHex}
-  | {type: 'setup'; hello: MonoidAppletHello};
+  | {type: 'setup'; hello: MonoidAppletHello; pins?: CardSetupPINs};
 
 /** The scan ended quietly because another page will handle the card. */
 export class MonoidScanRedirectError extends Error {
@@ -285,7 +286,10 @@ export function useMonoidScanPrompt({
             {
               secretSet: request.hello.pins.secret !== false,
               accessSet: request.hello.pins.access !== false,
-              savedAccessPIN: saved[uint8ArrayToHex(request.hello.id)],
+              savedAccessPIN:
+                request.pins?.access ??
+                saved[uint8ArrayToHex(request.hello.id)],
+              secretMessage: errorMessage,
             },
             credentialsRequest.signal,
           );
@@ -300,6 +304,7 @@ export function useMonoidScanPrompt({
             {
               type: 'password',
               ...getPINInputPlaceholder('Access'),
+              description: errorMessage,
               center: true,
               maxLength: 16,
             },
@@ -506,16 +511,11 @@ export function useMonoidScanPrompt({
             } catch (error) {
               if (disposed) return;
 
-              if (
-                error instanceof CBORAppletError &&
-                MonoidAppletInvalidPINError.is(error.source)
-              ) {
-                if (error.source.tries === 0) {
+              if (error instanceof CardPINError) {
+                if (error.tries === 0 || !error.retryable) {
                   result = {
                     type: 'error',
-                    error: new MonoidCardError('Secret PIN blocked', {
-                      cause: error,
-                    }),
+                    error,
                     retry: false,
                   };
                   return;
@@ -527,10 +527,11 @@ export function useMonoidScanPrompt({
                     type: 'setup',
                     hello: {
                       ...setupHello,
-                      pins: {...setupHello.pins, secret: error.source.tries},
+                      pins: {...setupHello.pins, secret: error.tries},
                     },
+                    pins: setup.pins,
                   },
-                  message: `Incorrect Secret PIN, tries remaining: ${error.source.tries}`,
+                  message: error.message,
                 };
                 return;
               }
@@ -595,6 +596,19 @@ export function useMonoidScanPrompt({
                 error instanceof CBORAppletError &&
                 MonoidAppletInvalidPINError.is(error.source)
               ) {
+                if (initializedAccessPIN) {
+                  result = {
+                    type: 'error',
+                    error: new CardPINError(
+                      'Access',
+                      error.source.tries,
+                      false,
+                      error,
+                    ),
+                    retry: false,
+                  };
+                  return;
+                }
                 if (error.source.tries === 0) {
                   throw new MonoidCardError('Access PIN blocked', {
                     cause: error,

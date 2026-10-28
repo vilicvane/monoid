@@ -7,7 +7,6 @@ import {styled} from 'styled-components';
 
 import {MonoidIdHex, type MonoidPIN, PublicKeyHex} from '../../../@atomics.js';
 import {useEntrances} from '../../../@entrances.js';
-import {CBORAppletError} from '../../../@lib/cbor-applet.js';
 import {
   type CardInformation,
   readCardInformation,
@@ -17,14 +16,15 @@ import {getCardInstallationChecks} from '../../../@lib/global-platform/installat
 import {
   APPLET_NAMES,
   type AppletStage,
+  CardPINError,
   type IdentityInstallationOptions,
   type MonoidApplet,
   type MonoidAppletHello,
-  MonoidAppletInvalidPINError,
   MonoidCardError,
   MonoidWrongCardError,
   assertCardPINsNotBlocked,
   assertSameCard,
+  authenticateCardPIN,
   cardNameWithId,
   createMonoidApplet,
   getAppletCatalog,
@@ -61,6 +61,7 @@ import {
 import {
   type CardSetupPINs,
   requestCardPINs,
+  retryCardPIN,
 } from '../../@monoid/request-card-pins.js';
 import {useIsoDepScanPrompt} from '../../@monoid/use-isodep-scan-prompt.js';
 import {AppIcon} from '../../@ui/app-icon.js';
@@ -507,18 +508,24 @@ export const CardManagementView = observer(
         pin = requestedPINs.secret;
         operation.signal.throwIfAborted();
 
+        let retryable = true;
         const rejectSecretPIN = (error: unknown): never => {
           if (
             procedureCard &&
-            error instanceof CBORAppletError &&
-            MonoidAppletInvalidPINError.is(error.source)
+            error instanceof CardPINError &&
+            error.kind === 'Secret'
           )
             maintenance.dropSecretPIN(procedureCard);
           throw error;
         };
 
         const prompt = namedCard ? scanCardPrompt(namedCard) : 'Scan the card';
-        await scan(prompt, async (sessionId, setState, scanSignal) => {
+        const scanCard: Parameters<typeof scan>[1] = async (
+          sessionId,
+          setState,
+          scanSignal,
+        ) => {
+          pin = requestedPINs!.secret;
           const signal = AbortSignal.any([operation.signal, scanSignal]);
           const progress = (progress: CardMaintenanceProgress): void =>
             setState(<Progress progress={progress} />);
@@ -546,11 +553,15 @@ export const CardManagementView = observer(
               signal,
               requestedPINs?.access,
             ).catch(rejectSecretPIN);
+            retryable = false;
             rememberSetupPIN?.();
             if (procedureCard && pending && maintenance.get(pending.id))
               holdSecretPIN(procedureCard, pin!);
             if (accessUnset) {
-              await applet.authenticate({pin: requestedPINs!.access!});
+              await authenticateCardPIN(applet, requestedPINs!.access!, {
+                kind: 'Access',
+                retryable: false,
+              });
               signal.throwIfAborted();
               accessPINId = uint8ArrayToHex(initialized.id);
             }
@@ -641,10 +652,9 @@ export const CardManagementView = observer(
             const applet = await createMonoidApplet(
               hexToUint8Array(appletAid),
             ).openSession(sessionId);
-            await applet
-              .authenticate({secret: true, pin: pin!})
-              .catch(rejectSecretPIN);
+            await authenticateCardPIN(applet, pin!).catch(rejectSecretPIN);
             signal.throwIfAborted();
+            retryable = false;
             saved = await maintenance.prepare(applet, {
               mode: action,
               selectedOptionalStages: options.selectedOptionalStages,
@@ -706,6 +716,7 @@ export const CardManagementView = observer(
                 publicKey: PublicKeyHex.satisfies(saved.card.publicKey),
               });
             }
+            if (replacing) retryable = false;
             next = await maintenance.replace(
               sessionId,
               saved.id,
@@ -721,6 +732,7 @@ export const CardManagementView = observer(
               );
             }
           } else if (action === 'install') {
+            retryable = false;
             next = await installMonoidApplets(
               sessionId,
               progress,
@@ -764,9 +776,8 @@ export const CardManagementView = observer(
           if (typeof alias === 'string') {
             if ((next.alias || '') !== alias) {
               setState('Saving alias, hold tight...');
-              await applet
-                .authenticate({secret: true, pin: pin!})
-                .catch(rejectSecretPIN);
+              await authenticateCardPIN(applet, pin!).catch(rejectSecretPIN);
+              retryable = false;
               next = await setCardAlias(applet, next, alias, signal);
             }
             if (saved?.mode === 'fresh' && maintenance.get(saved.id))
@@ -793,11 +804,10 @@ export const CardManagementView = observer(
               );
             }
             setState('Authenticating, hold tight...');
-            await applet
-              .authenticate({secret: true, pin: pin!})
-              .catch(rejectSecretPIN);
+            await authenticateCardPIN(applet, pin!).catch(rejectSecretPIN);
             signal.throwIfAborted();
             holdSecretPIN(saved.card, pin!);
+            retryable = false;
             const restored = await maintenance.restore(
               applet,
               saved.id,
@@ -822,7 +832,14 @@ export const CardManagementView = observer(
           // Publish the snapshot with completion after the scan and handoff,
           // so the applet list never flashes beneath the closing scan overlay.
           result = {hello: next, snapshot: latest};
-        });
+        };
+        await retryCardPIN(
+          showPIN,
+          requestedPINs,
+          () => scan(prompt, scanCard),
+          operation.signal,
+          () => retryable,
+        );
 
         if (accessPINId) {
           try {

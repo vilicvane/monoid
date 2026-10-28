@@ -7,22 +7,19 @@ import {
   PublicKeyHex,
   SafeIndex,
 } from '../../../../@atomics.js';
-import {
-  CBORAppletError,
-  CardItemNotFoundError,
-} from '../../../../@lib/cbor-applet.js';
+import {CardItemNotFoundError} from '../../../../@lib/cbor-applet.js';
 import {
   type CardBackupIdentity,
   CardItemConflictError,
   type CardItemIssue,
   type MonoidApplet,
   type MonoidAppletHello,
-  MonoidAppletInvalidPINError,
   MonoidCardError,
   MultiCardSeries,
   acceptMatchingItem,
   assertCardPINsNotBlocked,
   assertSameCardWithBundle,
+  authenticateCardPIN,
   cardItemIssue,
   cardNameWithId,
   initializeMonoidCard,
@@ -200,23 +197,7 @@ async function authenticateSecretPIN(
 
   throwIfCancelled(signal);
 
-  try {
-    await applet.authenticate({secret: true, pin});
-  } catch (error) {
-    if (
-      error instanceof CBORAppletError &&
-      MonoidAppletInvalidPINError.is(error.source)
-    ) {
-      throw new MonoidCardError(
-        error.source.tries === 0
-          ? 'Secret PIN blocked'
-          : `Incorrect Secret PIN, ${error.source.tries} ${error.source.tries === 1 ? 'try' : 'tries'} left`,
-        {cause: error},
-      );
-    }
-
-    throw error;
-  }
+  await authenticateCardPIN(applet, pin);
 
   throwIfCancelled(signal);
   onAuthenticated?.();
@@ -252,32 +233,16 @@ export async function initializeBackupTarget(
     throw new MonoidCardError('Secret PIN must contain 6 to 16 characters.');
   }
 
-  try {
-    const initialized = await initializeMonoidCard(
-      applet,
-      hello,
-      pin,
-      signal,
-      accessPIN,
-    );
-    assertBackupCard(initialized, expectedIdentity);
-    onAuthenticated?.();
-    return initialized;
-  } catch (error) {
-    if (
-      error instanceof CBORAppletError &&
-      MonoidAppletInvalidPINError.is(error.source)
-    ) {
-      throw new MonoidCardError(
-        error.source.tries === 0
-          ? 'Secret PIN blocked'
-          : `Incorrect Secret PIN, ${error.source.tries} ${error.source.tries === 1 ? 'try' : 'tries'} left`,
-        {cause: error},
-      );
-    }
-
-    throw error;
-  }
+  const initialized = await initializeMonoidCard(
+    applet,
+    hello,
+    pin,
+    signal,
+    accessPIN,
+  );
+  assertBackupCard(initialized, expectedIdentity);
+  onAuthenticated?.();
+  return initialized;
 }
 
 export class CardBackupSession {

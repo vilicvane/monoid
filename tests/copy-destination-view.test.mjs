@@ -27,7 +27,11 @@ import {
   readBackupCardIdentity,
 } from '../.bld/app/@lib/monoid/card-identity.js';
 import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
-import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
+import {
+  CardPINError,
+  assertCardPINsNotBlocked,
+  authenticateCardPIN,
+} from '../.bld/app/@lib/monoid/card-pins.js';
 import {MonoidAppletInvalidPINError} from '../.bld/app/@lib/monoid/monoid-applet.js';
 
 let fixture;
@@ -90,6 +94,8 @@ mock.module('../.bld/app/@services/index.js', {
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    CardPINError,
+    authenticateCardPIN,
     cardName,
     cardNameWithId,
     assertSameCardWithBundle,
@@ -169,6 +175,7 @@ mock.module('../.bld/app/@components/views/safe/@card/card-backup-session.js', {
 
     initializeBackupTarget: async (...args) => {
       fixture.initializations.push(args);
+      if (fixture.initializationError) throw fixture.initializationError;
       if (fixture.initializationPending) {
         await fixture.initializationPending.promise;
       }
@@ -1331,3 +1338,70 @@ test('the editable Copy destination popup names the card by alias', async () => 
     'Backup',
   );
 });
+
+for (const outcome of ['correct', 'cancel', 'blocked', 'after-write']) {
+  test(`Copy destination setup retries only rejected authentication: ${outcome}`, async () => {
+    const state = mount({initialized: false});
+    state.hello.pins.secret = 5;
+    state.click('Scan destination card');
+    await state.tapRaw();
+    state.rawScans[0].finished.resolve();
+    await state.flush();
+    await enterSetupPINs(state);
+    const failure = new CardPINError(
+      'Secret',
+      outcome === 'blocked' ? 0 : 4,
+      outcome !== 'after-write',
+      new Error('rejected'),
+    );
+    state.initializationError = failure;
+    const attempt = async () => {
+      const scan = state.monoidScans.at(-1);
+      try {
+        await scan.callback(
+          {authenticate: async () => {}},
+          () => {},
+          state.hello,
+          new AbortController().signal,
+        );
+        scan.finished.resolve();
+      } catch (error) {
+        scan.finished.reject(error);
+      }
+      await state.flush();
+    };
+    await attempt();
+    assert.equal(state.monoidScans.length, 1);
+    assert.equal(state.sessions[0].backup.targets.length, 0);
+    if (outcome === 'blocked' || outcome === 'after-write') {
+      assert.deepEqual(
+        state.errors,
+        [],
+        'card errors are already displayed by the scan',
+      );
+      assert.equal(state.initializations.length, 1);
+      assert.equal(state.inputs.length, 3);
+      return;
+    }
+    assert.equal(
+      state.inputs.at(-1).options.description,
+      'Incorrect PIN, tries remaining: 4',
+    );
+    state.inputs
+      .at(-1)
+      .finished.resolve(outcome === 'correct' ? 'Correct-42' : undefined);
+    await state.flush();
+    if (outcome === 'correct') {
+      state.initializationError = undefined;
+      await attempt();
+      assert.equal(state.initializations[1][3], 'Correct-42');
+      assert.equal(
+        state.initializations[1][6],
+        PIN,
+        'chosen Access PIN is unchanged',
+      );
+      assert.equal(state.sessions[0].backup.targets.length, 1);
+    } else assert.equal(state.monoidScans.length, 1);
+    assert.deepEqual(state.errors, []);
+  });
+}

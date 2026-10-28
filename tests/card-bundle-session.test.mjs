@@ -115,7 +115,7 @@ function deferred() {
   return {promise, resolve};
 }
 
-test('a verified PIN survives a join retry but an invalid-PIN response removes it without replay', async () => {
+test('a rejected PIN re-prompts before joining, while a lost join response is never replayed', async () => {
   const {session, members, applets} = await ready([1, 2]);
   await session.configureCard(applets[0], members[0], PIN, signal());
   const pins = new CardSecretPINSession();
@@ -125,8 +125,13 @@ test('a verified PIN survives a join retry but an invalid-PIN response removes i
   const run = () =>
     pins.run(
       [card],
-      async () => {
+      async (_card, _signal, message) => {
         prompts++;
+        if (message) {
+          assert.equal(message, 'Incorrect PIN, tries remaining: 4');
+          assert.equal(applets[1].calls.length, 1);
+          applets[1].onAuthenticate = undefined;
+        }
         return PIN;
       },
       async (credentials, signal) => {
@@ -145,10 +150,6 @@ test('a verified PIN survives a join retry but an invalid-PIN response removes i
   applets[1].onAuthenticate = () => {
     throw failure;
   };
-  await assert.rejects(run(), error => error.cause === failure);
-  assert.equal(prompts, 0);
-  assert.equal(applets[1].calls.length, 1);
-  applets[1].onAuthenticate = undefined;
   applets[1].onJoin = () => {
     throw new Error('Lost response');
   };
@@ -499,7 +500,7 @@ test('Secret authentication failures do not lock creation or use Access authenti
     };
     await assert.rejects(
       session.configureCard(applets[0], members[0], PIN, signal()),
-      tries ? /Incorrect Secret PIN.*4/ : /Secret PIN blocked/,
+      tries ? /Incorrect PIN.*4/ : /Secret PIN blocked/,
     );
     assert.equal(session.generationUncertain, false);
     assert.equal(session.creator, undefined);

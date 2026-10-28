@@ -1,22 +1,19 @@
 import {computed, observable, runInAction} from 'mobx';
 
 import {MonoidIdHex, MonoidPIN, PublicKeyHex} from '../../../../@atomics.js';
-import {
-  CBORAppletError,
-  CardItemNotFoundError,
-} from '../../../../@lib/cbor-applet.js';
+import {CardItemNotFoundError} from '../../../../@lib/cbor-applet.js';
 import {
   type CardItem,
   CardItemConflictError,
   type CardItemIssue,
   type MonoidApplet,
   type MonoidAppletHello,
-  MonoidAppletInvalidPINError,
   MonoidCardError,
   MultiCardSeries,
   acceptMatchingItem,
   assertCardPINNotBlocked,
   assertSameCardWithBundle,
+  authenticateCardPIN,
   cardItemIssue,
   monoidCommandDefinitions,
   readBackupCardIdentity,
@@ -123,23 +120,7 @@ export async function authenticateCardSync(
 
   cancelled(signal);
 
-  try {
-    await applet.authenticate({secret: true, pin});
-  } catch (error) {
-    if (
-      error instanceof CBORAppletError &&
-      MonoidAppletInvalidPINError.is(error.source)
-    ) {
-      throw new MonoidCardError(
-        error.source.tries === 0
-          ? 'Secret PIN blocked'
-          : `Incorrect Secret PIN, ${error.source.tries} ${error.source.tries === 1 ? 'try' : 'tries'} left`,
-        {cause: error},
-      );
-    }
-
-    throw error;
-  }
+  await authenticateCardPIN(applet, pin);
 
   cancelled(signal);
   onAuthenticated?.();

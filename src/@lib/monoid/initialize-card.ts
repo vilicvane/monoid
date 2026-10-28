@@ -5,7 +5,7 @@ import {
   assertSameCardWithBundle,
   readBackupCardIdentity,
 } from './card-identity.js';
-import {assertCardPINsNotBlocked} from './card-pins.js';
+import {assertCardPINsNotBlocked, authenticateCardPIN} from './card-pins.js';
 import {type MonoidApplet, MonoidAppletHello} from './monoid-applet.js';
 
 function throwIfCancelled(signal: AbortSignal): void {
@@ -42,7 +42,7 @@ export async function initializeMonoidCard(
   }
 
   if (hello.pins.secret !== false) {
-    await applet.authenticate({secret: true, pin});
+    await authenticateCardPIN(applet, pin);
     throwIfCancelled(signal);
     await applet.setPIN({pin: accessPIN!});
   } else {
@@ -50,7 +50,7 @@ export async function initializeMonoidCard(
     await applet.setPIN({secret: true, pin});
     if (accessPIN !== pin) {
       throwIfCancelled(signal);
-      await applet.authenticate({secret: true, pin});
+      await authenticateCardPIN(applet, pin, {retryable: false});
       throwIfCancelled(signal);
       await applet.setPIN({pin: accessPIN!});
     }

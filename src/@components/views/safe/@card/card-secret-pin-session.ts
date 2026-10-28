@@ -1,9 +1,8 @@
 import {MonoidPIN} from '../../../../@atomics.js';
-import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {HeldPINs} from '../../../../@lib/held-pins.js';
 import {
   type CardBackupIdentity,
-  MonoidAppletInvalidPINError,
+  CardPINError,
   MonoidCardError,
   assertSameCardWithBundle,
 } from '../../../../@lib/monoid/index.js';
@@ -71,6 +70,7 @@ export class CardSecretPINSession {
     requestPIN: (
       card: Identity | undefined,
       signal: AbortSignal,
+      message?: string,
     ) => Promise<string | undefined>,
     scan: (
       credentials: (card: Identity) => Credentials,
@@ -83,8 +83,11 @@ export class CardSecretPINSession {
     let expected: Identity | undefined;
     let attempted: Identity | undefined;
 
-    const request = async (card?: Identity): Promise<boolean> => {
-      const value = await requestPIN(card, signal);
+    const request = async (
+      card?: Identity,
+      message?: string,
+    ): Promise<boolean> => {
+      const value = await requestPIN(card, signal, message);
       signal.throwIfAborted();
       if (value === undefined) return false;
       if (!MonoidPIN.is(value)) {
@@ -101,6 +104,8 @@ export class CardSecretPINSession {
       }
       for (;;) {
         signal.throwIfAborted();
+        attempted = undefined;
+        let authenticated = false;
         try {
           await scan(card => {
             signal.throwIfAborted();
@@ -113,7 +118,10 @@ export class CardSecretPINSession {
             attempted = card;
             return {
               pin,
-              onAuthenticated: () => hold(card, pin),
+              onAuthenticated: () => {
+                authenticated = true;
+                hold(card, pin);
+              },
             };
           }, signal);
           return;
@@ -125,14 +133,18 @@ export class CardSecretPINSession {
             if (!(await request(error.card))) return;
             continue;
           }
-          const cause = error instanceof Error ? error.cause : undefined;
           if (
             attempted &&
-            cause instanceof CBORAppletError &&
-            MonoidAppletInvalidPINError.is(cause.source)
+            error instanceof CardPINError &&
+            error.kind === 'Secret'
           ) {
             this.pins.delete(key(attempted));
             this.procedure?.dropSecretPIN(attempted);
+            if (!authenticated && error.retryable && error.tries > 0) {
+              entered = undefined;
+              if (!(await request(attempted, error.message))) return;
+              continue;
+            }
           }
           throw error;
         }

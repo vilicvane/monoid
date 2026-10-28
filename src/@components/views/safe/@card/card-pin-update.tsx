@@ -14,6 +14,7 @@ import {
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
+import {retryCardPIN} from '../../../@monoid/request-card-pins.js';
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 import {useViewActive} from '../../../@view/index.js';
@@ -136,37 +137,46 @@ export const CardPINUpdate = observer(
           confirmation = undefined;
           if (signal.aborted) return;
 
+          const pins = {secret: currentPIN};
           try {
-            await waitForOperation(
-              scan(
-                scanCardPrompt(card, `to update ${kind} PIN`),
-                async (applet, setState, hello, scanSignal) => {
-                  const cancel = (): void => operation.abort();
-                  scanSignal.addEventListener('abort', cancel, {once: true});
-                  if (scanSignal.aborted) cancel();
-                  try {
-                    setState(`Updating ${kind} PIN, hold tight...`);
-                    writing = (async () => {
-                      updatedCardId = await updateCardPIN(
-                        applet,
-                        hello,
-                        card,
-                        kind,
-                        currentPIN!,
-                        newPIN!,
-                        signal,
-                      );
-                      if (kind === 'Access' && active()) {
-                        pinSession.rememberPIN(updatedCardId, newPIN!);
+            await retryCardPIN(
+              showInput,
+              pins,
+              () =>
+                waitForOperation(
+                  scan(
+                    scanCardPrompt(card, `to update ${kind} PIN`),
+                    async (applet, setState, hello, scanSignal) => {
+                      const cancel = (): void => operation.abort();
+                      scanSignal.addEventListener('abort', cancel, {
+                        once: true,
+                      });
+                      if (scanSignal.aborted) cancel();
+                      try {
+                        setState(`Updating ${kind} PIN, hold tight...`);
+                        writing = (async () => {
+                          updatedCardId = await updateCardPIN(
+                            applet,
+                            hello,
+                            card,
+                            kind,
+                            pins.secret,
+                            newPIN!,
+                            signal,
+                          );
+                          if (kind === 'Access' && active()) {
+                            pinSession.rememberPIN(updatedCardId, newPIN!);
+                          }
+                        })();
+                        await writing;
+                      } finally {
+                        scanSignal.removeEventListener('abort', cancel);
                       }
-                    })();
-                    await writing;
-                  } finally {
-                    scanSignal.removeEventListener('abort', cancel);
-                  }
-                },
-                hello => assertSameCard(hello, card),
-              ),
+                    },
+                    hello => assertSameCard(hello, card),
+                  ),
+                  signal,
+                ),
               signal,
             );
           } finally {

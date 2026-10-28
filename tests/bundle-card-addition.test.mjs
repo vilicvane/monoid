@@ -16,7 +16,11 @@ import {
   readCardIdentity,
 } from '../.bld/app/@lib/monoid/card-identity.js';
 import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
-import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
+import {
+  CardPINError,
+  assertCardPINsNotBlocked,
+  authenticateCardPIN,
+} from '../.bld/app/@lib/monoid/card-pins.js';
 import {initializeMonoidCard} from '../.bld/app/@lib/monoid/initialize-card.js';
 import {
   MonoidAppletHello,
@@ -86,6 +90,8 @@ mock.module('../.bld/app/@entrances.js', {
 
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    CardPINError,
+    authenticateCardPIN,
     cardName,
     cardNameWithId,
     assertSameCard,

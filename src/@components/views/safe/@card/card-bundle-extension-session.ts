@@ -6,16 +6,15 @@ import {
   PublicKey,
   PublicKeyHex,
 } from '../../../../@atomics.js';
-import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {
   type CardIdentity as BaseCardIdentity,
   type CardDisplayData,
   type MonoidApplet,
   type MonoidAppletHello,
-  MonoidAppletInvalidPINError,
   MonoidCardError,
   assertCardPINsNotBlocked,
   assertSameCard,
+  authenticateCardPIN,
 } from '../../../../@lib/monoid/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 import type {ScannedCardData} from '../common.js';
@@ -257,22 +256,7 @@ export class CardBundleExtensionSession {
         throw new MonoidCardError('Secret PIN must contain 6 to 16 characters');
       }
       throwIfCancelled(signal);
-      try {
-        await applet.authenticate({secret: true, pin});
-      } catch (error) {
-        if (
-          error instanceof CBORAppletError &&
-          MonoidAppletInvalidPINError.is(error.source)
-        ) {
-          throw new MonoidCardError(
-            error.source.tries === 0
-              ? 'Secret PIN blocked'
-              : `Incorrect Secret PIN, tries remaining: ${error.source.tries}`,
-            {cause: error},
-          );
-        }
-        throw error;
-      }
+      await authenticateCardPIN(applet, pin);
       onAuthenticated?.();
       throwIfCancelled(signal);
 

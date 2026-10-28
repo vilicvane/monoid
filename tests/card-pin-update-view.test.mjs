@@ -4,6 +4,7 @@ import {setImmediate} from 'node:timers/promises';
 
 import {observable, runInAction} from 'mobx';
 
+import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {MonoidWrongCardError} from '../.bld/app/@lib/monoid/card-error.js';
 import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 import {
@@ -425,3 +426,50 @@ test('unavailable protected storage still allows changing Access PIN without a s
   ]);
   assert.deepEqual(state.errors, []);
 });
+
+for (const kind of ['Access', 'Secret']) {
+  for (const outcome of ['correct', 'cancel', 'blocked']) {
+    test(`${kind} update retries the old Secret PIN: ${outcome}, preserving the new PIN`, async () => {
+      const state = mount(kind);
+      await state.prepare();
+      const failure = new CBORAppletError({
+        code: 'INVALID_PIN',
+        tries: outcome === 'blocked' ? 0 : 4,
+      });
+      state.applet.authenticate = async request => {
+        state.auth.push(request);
+        if (state.auth.length === 1) throw failure;
+      };
+      await assert.rejects(state.tap(), error => {
+        state.scans.at(-1).reject(error);
+        return true;
+      });
+      await setImmediate();
+      assert.equal(state.scans.length, 1);
+      assert.deepEqual(state.writes, []);
+      if (outcome === 'blocked') {
+        await state.finished.promise;
+        assert.equal(state.inputs.length, 3);
+        assert.equal(state.errors[0].message, 'Secret PIN blocked');
+        return;
+      }
+      assert.equal(
+        state.inputs.at(-1).options.description,
+        'Incorrect PIN, tries remaining: 4',
+      );
+      await state.answer(outcome === 'correct' ? 'Correct-42' : undefined);
+      if (outcome === 'correct') {
+        await state.tap();
+        await state.finishScan();
+        assert.deepEqual(state.writes, [
+          {pin: 'new-pin', ...(kind === 'Secret' && {secret: true})},
+        ]);
+        assert.equal(state.auth.at(-1).pin, 'Correct-42');
+      } else {
+        await state.finished.promise;
+        assert.equal(state.scans.length, 1);
+      }
+      assert.deepEqual(state.errors, []);
+    });
+  }
+}

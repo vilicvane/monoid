@@ -1207,7 +1207,7 @@ test('incorrect existing Secret PIN is attempted once and never followed by a wr
       undefined,
       PIN,
     ),
-    /4 tries left/i,
+    /tries remaining: 4/i,
   );
   assert.deepEqual(
     state.calls.map(([method]) => method),
@@ -1263,7 +1263,7 @@ test('shared initialization preserves an invalid Secret PIN error for interactiv
 
   await assert.rejects(
     initializeMonoidCard(state.applet, state.fresh, PIN, signal(), PIN),
-    error => error === invalidPIN,
+    error => error.cause === invalidPIN && error.retryable,
   );
   assert.deepEqual(state.calls, [['authenticate', {secret: true, pin: PIN}]]);
 });
@@ -1314,7 +1314,7 @@ test('wrong Secret PIN is attempted once and never exports or retains the PIN', 
   const {session, source} = await ready();
   await assert.rejects(
     session.exportItems(source, source.hello, 'Wrong-PIN', signal(), progress),
-    /4 tries left/,
+    /tries remaining: 4/,
   );
   assert.deepEqual(
     source.calls.map(([method]) => method),
@@ -1330,7 +1330,7 @@ test('destination import verifies Secret PIN before writing and does not retain 
 
   await assert.rejects(
     session.importItems(target, target.hello, 'Wrong-PIN', signal(), progress),
-    /Incorrect Secret PIN, 4 tries left/,
+    /Incorrect PIN, tries remaining: 4/,
   );
 
   assert.deepEqual(target.authentications, [{secret: true, pin: 'Wrong-PIN'}]);

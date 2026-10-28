@@ -11,6 +11,7 @@ import {
   MonoidCardError,
   assertCardPINsNotBlocked,
   assertSameCard,
+  authenticateCardPIN,
   cardName,
   initializeMonoidCard,
   readBackupCardIdentity,
@@ -503,7 +504,10 @@ export const SetupCardView = observer(
               cacheSetup(hello);
               completed = hello;
               setState('Authenticating, hold tight...');
-              await applet.authenticate({pin: accessPIN!});
+              await authenticateCardPIN(applet, accessPIN!, {
+                kind: 'Access',
+                retryable: false,
+              });
               signal.throwIfAborted();
               accessPINId = uint8ArrayToHex(hello.id);
             }
@@ -569,10 +573,15 @@ export const SetupCardView = observer(
           : bundleSession.cards.filter(card => card.status !== 'complete');
         await secretPINSession.run(
           candidates.map(card => ({...card, bundle: card.bundle ?? false})),
-          (card, signal) =>
+          (card, signal, message) =>
             requestSecretPIN(
               'Enter',
-              card ? <>Card {cardName(card)}</> : 'For the card you will scan',
+              message ??
+                (card ? (
+                  <>Card {cardName(card)}</>
+                ) : (
+                  'For the card you will scan'
+                )),
               AbortSignal.any([signal, operation.signal]),
             ),
           (credentials, pinSignal) =>

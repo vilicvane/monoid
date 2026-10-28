@@ -1915,7 +1915,7 @@ for (const phase of ['ready', 'restore']) {
     state.heldPINs.clear();
   });
 
-  test(`a rejected held Secret during ${phase} is dropped without retry and the next attempt prompts`, async () => {
+  test(`a rejected held Secret during ${phase} is dropped; only authentication before writes re-prompts`, async () => {
     const state = mount({cardInformation: false});
     state.installation = installed(state.initialized);
     state.click('Scan a card');
@@ -1931,7 +1931,13 @@ for (const phase of ['ready', 'restore']) {
     };
     state.maintenance.holdSecretPIN(card, PIN);
     const failure = new CBORAppletError({code: 'INVALID_PIN', tries: 4});
-    if (phase === 'ready') state.initializeError = failure;
+    if (phase === 'ready')
+      state.initializeError = new monoid.CardPINError(
+        'Secret',
+        4,
+        true,
+        failure,
+      );
     else
       state.applet.authenticate = async () => {
         throw failure;
@@ -1947,10 +1953,18 @@ for (const phase of ['ready', 'restore']) {
     assert.equal(state.inputs.length, 0);
     await state.tap();
     assert.equal(state.scans.length, 2, 'one read and one failed attempt');
-    assert.deepEqual(state.errors, [failure]);
     assert.equal(state.maintenance.secretPIN(card), undefined);
-    state.installation = installed(state.initialized);
-    state.click('Restore items');
+    if (phase === 'ready') {
+      assert.equal(state.errors[0].cause, failure);
+      state.installation = installed(state.initialized);
+      state.click('Restore items');
+    } else {
+      assert.deepEqual(state.errors, []);
+      assert.equal(
+        state.inputs.at(-1).options.description,
+        'Incorrect PIN, tries remaining: 4',
+      );
+    }
     await state.flush();
     assert.equal(state.inputs.length, 1);
     assert.equal(state.inputs[0].options.placeholder, 'Enter Secret PIN');
@@ -2799,3 +2813,77 @@ test('a failed fresh alias restoration keeps the record and an explicit retry re
     1,
   );
 });
+
+for (const stage of ['prepare', 'restore']) {
+  for (const outcome of ['correct', 'cancel', 'blocked']) {
+    test(`maintenance ${stage} rejected Secret PIN: ${outcome}, retaining the procedure`, async () => {
+      const state = mount({cardInformation: false});
+      state.installation = installed(state.initialized);
+      state.click('Scan a card');
+      await state.tap();
+      if (stage === 'restore')
+        state.pending = {
+          id: 'retry-restore',
+          mode: 'reinstall',
+          phase: 'restore',
+          card: {...readCardIdentity(state.initialized), appletAid: AID},
+          archive: {items: []},
+        };
+      const plan = state.pending;
+      const original = state.applet.authenticate;
+      let attempts = 0;
+      state.applet.authenticate = async request => {
+        if (++attempts === 1)
+          throw new CBORAppletError({
+            code: 'INVALID_PIN',
+            tries: outcome === 'blocked' ? 0 : 4,
+          });
+        return original(request);
+      };
+      if (stage === 'prepare') {
+        state.click('Card menu');
+        state.click('Reinstall Monoid Applet');
+        state.node('ConfirmPopup').props.onConfirm();
+      } else state.click('Restore items');
+      await state.answer();
+      const inputs = state.inputs.length;
+      await state.tap();
+      assert.equal(attempts, 1);
+      assert.equal(state.scans.length, 2);
+      assert.equal(
+        state.events.some(event =>
+          (stage === 'prepare'
+            ? ['prepare', 'replace', 'restore']
+            : ['restore']
+          ).includes(event.type),
+        ),
+        false,
+      );
+      assert.equal(state.pending, plan);
+      if (outcome === 'blocked') {
+        assert.equal(state.errors[0].message, 'Secret PIN blocked');
+        assert.equal(state.inputs.length, inputs);
+        return;
+      }
+      assert.equal(state.inputs.length, inputs + 1);
+      assert.equal(
+        state.inputs.at(-1).options.description,
+        'Incorrect PIN, tries remaining: 4',
+      );
+      state.inputs
+        .at(-1)
+        .finished.resolve(outcome === 'cancel' ? undefined : 'Correct-42');
+      await state.flush();
+      if (outcome === 'correct') {
+        await state.tap();
+        assert.ok(state.events.some(event => event.type === stage));
+        assert.ok(
+          state.events
+            .filter(event => event.type === 'auth' && event.secret)
+            .every(event => event.pin === 'Correct-42'),
+        );
+      } else assert.equal(state.scans.length, 2);
+      assert.deepEqual(state.errors, []);
+    });
+  }
+}
