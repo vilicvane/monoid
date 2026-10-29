@@ -5,25 +5,32 @@ import type {RouteComponentProps} from 'routra-react';
 
 import {BIP39PathString} from '../../../../../@atomics.js';
 import {useEntrances} from '../../../../../@entrances.js';
-import {CBORAppletError} from '../../../../../@lib/cbor-applet.js';
-import {getAppletKey} from '../../../../../@lib/monoid/index.js';
-import type {AddressType} from '../../../../../@lib/wallet-address.js';
+import {CardItemNotFoundError} from '../../../../../@lib/cbor-applet.js';
+import {
+  assertSameCard,
+  getAppletKey,
+} from '../../../../../@lib/monoid/index.js';
 import {
   ADDRESS_TYPES,
+  type AddressType,
   getDerivationPathError,
 } from '../../../../../@lib/wallet-address.js';
 import type {Router} from '../../../../../@routes.js';
-import type {WalletKeyPublicKeyData} from '../../../../../@services/index.js';
 import {
+  type WalletKeyPublicKeyData,
   getWalletData,
   getWalletReference,
 } from '../../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../../@utils/index.js';
 import {AddressTypeSelector} from '../../../../@key/address-type-selector.js';
-import {useMonoidScanPrompt} from '../../../../@monoid/monoid-scan-prompt.js';
+import {
+  scanCardPrompt,
+  useMonoidScanPrompt,
+} from '../../../../@monoid/monoid-scan-prompt.js';
 import {Button} from '../../../../@ui/button.js';
 import {ResettableInput} from '../../../../@ui/input.js';
 import {InteractiveAddress} from '../../../../@ui/interactive-address.js';
+import {SegmentedControl} from '../../../../@ui/segmented-control.js';
 import {Step, Steps} from '../../../../@ui/step.js';
 import {
   View,
@@ -38,16 +45,43 @@ import {
   getLocalCardWalletDerivation,
   readCardKeyAddress,
 } from '../../card-address.js';
-import {assertCardForUpdate} from '../../card-alias-update.js';
 import {writeCardDerivationRecord} from '../../card-derivations.js';
 import type {ScannedCardData} from '../../common.js';
 
-export const DeriveKeyView = observer(
+import {DeriveSeedKeyView} from './derive-seed-key-view.js';
+
+type DeriveViewProps = RouteComponentProps<
+  Router['safe']['derivableKey']['derive']
+>;
+
+export function DeriveKeyView(props: DeriveViewProps): ReactNode {
+  const [purpose, setPurpose] = useState<'wallet' | 'key'>('wallet');
+  const purposeSelector = (disabled: boolean): ReactNode => (
+    <SegmentedControl
+      aria-label="Derivation purpose"
+      value={purpose}
+      options={[
+        {value: 'wallet', label: 'Wallet'},
+        {value: 'key', label: 'Key'},
+      ]}
+      disabled={disabled}
+      onChange={setPurpose}
+    />
+  );
+  return purpose === 'key' ? (
+    <DeriveSeedKeyView {...props} purposeSelector={purposeSelector} />
+  ) : (
+    <DeriveWalletView {...props} purposeSelector={purposeSelector} />
+  );
+}
+
+const DeriveWalletView = observer(
   ({
     view,
-  }: RouteComponentProps<
-    Router['safe']['derivableKey']['derive']
-  >): ReactNode => {
+    purposeSelector,
+  }: RouteComponentProps<Router['safe']['derivableKey']['derive']> & {
+    purposeSelector: (disabled: boolean) => ReactNode;
+  }): ReactNode => {
     const {
       router,
       cardStore,
@@ -179,10 +213,7 @@ export const DeriveKeyView = observer(
                 ...(options.taproot && {taproot: true}),
               })
               .catch(error => {
-                if (
-                  error instanceof CBORAppletError &&
-                  error.source.code === 'NOT_FOUND'
-                ) {
+                if (error instanceof CardItemNotFoundError) {
                   throw new Error('Key not found, wrong card?', {cause: error});
                 }
 
@@ -219,12 +250,12 @@ export const DeriveKeyView = observer(
       }
 
       const {wallet} = derived;
-      let card = derived.card;
+      let card = derived.card && (cardStore.get(derived.card) ?? derived.card);
       const wallets = [getWalletReference(wallet)];
 
       await runOperation('import', async controller => {
         await scanPrompt(
-          'Scan card to import',
+          card ? scanCardPrompt(card, 'to import') : 'Scan card to import',
           async (applet, setStateContent, hello, signal) => {
             const cancel = (): void => controller.abort();
             signal.addEventListener('abort', cancel, {once: true});
@@ -250,6 +281,7 @@ export const DeriveKeyView = observer(
               }
 
               setStateContent('Saving derivation, hold tight...');
+              const cachedCard = cardStore.get(card);
               const resource = await writeCardDerivationRecord(
                 applet,
                 key,
@@ -263,7 +295,6 @@ export const DeriveKeyView = observer(
               );
               // Acknowledged card writes are committed locally before cancellation
               // or route checks; only navigation waits for the scan to finish.
-              const cachedCard = cardStore.get(card);
               if (cachedCard) {
                 const cachedKey = cachedCard.items.find(
                   item => item.index === key.index && item.type === key.type,
@@ -297,9 +328,8 @@ export const DeriveKeyView = observer(
                     // keys have not been read for this page's preview cache.
                     cachedCard.upsert(resource);
                     cachedKey.setRecordedWallets(derivations);
+                    cardStore.set(cachedCard);
                   });
-                } else {
-                  cardStore.forget(card);
                 }
               }
               walletStorageService.addWallet(key.index, wallet);
@@ -308,7 +338,7 @@ export const DeriveKeyView = observer(
             }
           },
           hello => {
-            if (card) assertCardForUpdate(hello, card);
+            if (card) assertSameCard(hello, card);
           },
         );
 
@@ -364,6 +394,7 @@ export const DeriveKeyView = observer(
                 activeNumero={step}
                 summary={effectivePath}
               >
+                {purposeSelector(busy !== undefined)}
                 <div inert={busy !== undefined}>
                   <AddressTypeSelector
                     value={addressType}

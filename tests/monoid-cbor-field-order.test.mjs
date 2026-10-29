@@ -20,6 +20,7 @@ const path = new Uint8Array([0x80, 0, 0, 0x2c]);
 const digest = new Uint8Array(32);
 const context = new TextEncoder().encode('example.com');
 const identityPublicKey = new Uint8Array([4, ...new Uint8Array(64)]);
+const aid = Uint8Array.of(0xf0, 0x6d, 0x6f, 0x6e, 0x6f, 0x69, 0x64, 0x03, 0x01);
 const taprootValues = [undefined, false, true, {}, {merkleRoot: digest}];
 
 const keyFamilies = [
@@ -37,14 +38,22 @@ const keyFamilies = [
 ];
 
 const fixtures = {
+  setAlias: [{alias: '旅行卡'}, {alias: ''}],
   hello: [{}],
-  authenticate: [{pin: '123456'}, {secret: true, pin: '123456'}],
+  authenticate: [
+    {pin: '123456'},
+    {secret: true, pin: '123456'},
+    {aid, pin: '123456'},
+    {aid, secret: true, pin: '123456'},
+  ],
   setPIN: [{pin: '123456'}, {pin: '123456', secret: true}],
   createBundle: [{publicKeys: [identityPublicKey, identityPublicKey]}],
-  joinBundle: [{senderPublicKey: identityPublicKey, data: context}],
+  joinBundle: [{publicKey: identityPublicKey, data: context}],
+  extendBundle: [{publicKey: identityPublicKey}],
+  approveBundleExtension: [{data: context}],
   reset: [{}],
   systemInformation: [{}],
-  list: [{}, {type: 'seed', keyPrefix: context}, {type: 0x1001}],
+  list: [{}, {type: 'seed', metadataPrefix: context}, {type: 0x1001}],
   view: [{index}],
   get: [{index}],
   set: [
@@ -56,8 +65,20 @@ const fixtures = {
   create: [
     {data: context, type: 'seed'},
     {data: context, type: 0x1001},
-    {data: context, key: context, alias: 'Main', secret: true, type: 'seed'},
-    {data: context, key: new Uint8Array(), alias: '', secret: false, index},
+    {
+      data: context,
+      metadata: context,
+      alias: 'Main',
+      secret: true,
+      type: 'seed',
+    },
+    {
+      data: context,
+      metadata: new Uint8Array(),
+      alias: '',
+      secret: false,
+      index,
+    },
   ],
   remove: [{index}],
   exportItem: [{index}, {index, recipientPublicKey: identityPublicKey}],
@@ -67,7 +88,7 @@ const fixtures = {
     {
       index,
       senderPublicKey: identityPublicKey,
-      key: context,
+      metadata: context,
       alias: 'Main',
       data: context,
     },
@@ -78,6 +99,26 @@ const fixtures = {
   ],
   viewKey: [],
   sign: [],
+  listAppletGrants: [{}],
+  setAppletGrant: [
+    {aid},
+    {
+      aid,
+      types: [
+        [0x1000, false],
+        [-2, true],
+      ],
+    },
+    {aid, types: [], keys: []},
+    {aid, seed: {index, domain: context}},
+    {
+      aid,
+      types: [[0x1000, true]],
+      keys: [{index, type: 'secp256k1'}],
+      seed: {index, domain: context},
+    },
+  ],
+  removeAppletGrant: [{aid}],
 };
 
 for (const {type, derivation, cipher} of keyFamilies) {
@@ -87,6 +128,7 @@ for (const {type, derivation, cipher} of keyFamilies) {
   ];
 
   for (const key of keys) {
+    fixtures.setAppletGrant.push({aid, keys: [key]});
     fixtures.sign.push({
       ...key,
       cipher,
@@ -116,6 +158,7 @@ function isMap(value) {
 }
 
 function reverseFields(value) {
+  if (Array.isArray(value)) return value.map(reverseFields);
   if (!isMap(value)) {
     return value;
   }
@@ -138,26 +181,34 @@ function assertEncodedOrder(ins, schema, request) {
   assert.deepEqual(encoded, request, `INS ${command}: request fields changed.`);
 
   for (const [path, order] of Object.entries(configured)) {
-    const value = path
+    const values = path
       .split('.')
       .slice(1)
-      .reduce((value, key) => value?.[key], encoded);
+      .reduce(
+        (values, key) =>
+          values.flatMap(value =>
+            key.endsWith('[]')
+              ? (value?.[key.slice(0, -2)] ?? [])
+              : [value?.[key]],
+          ),
+        [encoded],
+      );
 
-    if (!isMap(value)) {
-      continue;
+    for (const value of values) {
+      if (!isMap(value)) continue;
+
+      const actual = Object.keys(value);
+      const expected = [
+        ...order.filter(key => Object.hasOwn(value, key)),
+        ...actual.filter(key => !order.includes(key)),
+      ];
+
+      assert.deepEqual(
+        actual,
+        expected,
+        `INS ${command}, ${path}: encoded [${actual.join(', ')}], expected [${expected.join(', ')}].`,
+      );
     }
-
-    const actual = Object.keys(value);
-    const expected = [
-      ...order.filter(key => Object.hasOwn(value, key)),
-      ...actual.filter(key => !order.includes(key)),
-    ];
-
-    assert.deepEqual(
-      actual,
-      expected,
-      `INS ${command}, ${path}: encoded [${actual.join(', ')}], expected [${expected.join(', ')}].`,
-    );
   }
 }
 
@@ -226,6 +277,27 @@ test('the assertion detects BIP340 intersection members placing taproot before c
         'digest',
       ]);
 
+      return true;
+    },
+  );
+});
+
+test('the assertion checks field order inside applet grant key arrays', () => {
+  const wrongOrder = x.object({
+    aid: XUint8Array,
+    keys: x.array(x.object({type: x.literal('secp256k1'), index: XUint8Array})),
+  });
+
+  assert.throws(
+    () =>
+      assertEncodedOrder(0x51, wrongOrder, {
+        aid,
+        keys: [{index, type: 'secp256k1'}],
+      }),
+    error => {
+      assert.match(error.message, /INS 0x51, \$\.keys\[\]/);
+      assert.deepEqual(error.actual, ['type', 'index']);
+      assert.deepEqual(error.expected, ['index', 'type']);
       return true;
     },
   );

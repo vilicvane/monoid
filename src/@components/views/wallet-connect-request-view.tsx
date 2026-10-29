@@ -63,6 +63,7 @@ import {
   type WalletConnectSigningState,
 } from './@sessions/wallet-connect-sign-button.js';
 import {WalletConnectSolanaTransactions} from './@sessions/wallet-connect-solana-transactions.js';
+import {WalletConnectSSHRequest} from './@sessions/wallet-connect-ssh-request.js';
 import {WalletConnectTypedData} from './@sessions/wallet-connect-typed-data.js';
 
 const TransactionTypeLabel = styled.span`
@@ -73,7 +74,27 @@ const TransactionTypeLabel = styled.span`
   white-space: nowrap;
 `;
 
-export const WalletConnectRequestView = observer(
+export const WalletConnectRequestView: (
+  props: RouteComponentProps<Router['sessions']['request']>,
+) => ReactNode = observer(function WalletConnectRequestView(
+  props: RouteComponentProps<Router['sessions']['request']>,
+): ReactNode {
+  const {walletKitService} = useEntrances();
+  const [ssh] = useState(() => {
+    const request = walletKitService.requests.get(props.view.id);
+    return (
+      request?.params.chainId === 'monoid:ssh' ||
+      request?.params.request.method === 'monoid_sshSign'
+    );
+  });
+  return ssh ? (
+    <WalletConnectSSHRequest {...props} />
+  ) : (
+    <WalletConnectWalletRequestView {...props} />
+  );
+});
+
+const WalletConnectWalletRequestView = observer(
   ({view}: RouteComponentProps<Router['sessions']['request']>): ReactNode => {
     const {
       router,

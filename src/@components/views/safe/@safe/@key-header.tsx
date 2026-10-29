@@ -4,9 +4,8 @@ import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../../../@entrances.js';
-import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
+import {setItemAlias} from '../../../../@lib/monoid/index.js';
 import type {WalletKeyData} from '../../../../@services/index.js';
-import {hexToUint8Array} from '../../../../@utils/index.js';
 import {KeyAliasTag} from '../../../@key/key-tags.js';
 import {KeyType} from '../../../@key/key-type.js';
 import {useMonoidScanPrompt} from '../../../@monoid/monoid-scan-prompt.js';
@@ -57,18 +56,12 @@ export const KeyHeader = observer(
         async (applet, setStateContent) => {
           setStateContent('Saving alias, hold tight...');
 
-          await applet
-            .set({index: hexToUint8Array(data.index), alias})
-            .catch(error => {
-              if (
-                error instanceof CBORAppletError &&
-                error.source.code === 'NOT_FOUND'
-              ) {
-                throw new Error('Key not found, wrong card?', {cause: error});
-              }
-
-              throw error;
-            });
+          await setItemAlias(
+            applet,
+            data.index,
+            alias,
+            cause => new Error('Key not found, wrong card?', {cause}),
+          );
 
           runInAction(() => {
             data.alias = alias;

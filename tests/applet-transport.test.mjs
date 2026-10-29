@@ -31,7 +31,7 @@ mock.module('../.bld/app/@lib/isodep.js', {
   },
 });
 
-const {Applet, AppletISOError, AppletNotFoundError} = await import(
+const {Applet, AppletISOError, AppletNotFoundError, probeApplet} = await import(
   '../.bld/app/@lib/applet.js'
 );
 
@@ -54,6 +54,45 @@ beforeEach(() => {
   exchanges = [];
   respond = () => [0x90, 0x00];
   scan = undefined;
+});
+
+test('useSession selects each applet on the same connection without binding either template', async () => {
+  const monoid = new TestApplet(Uint8Array.of(1, 2, 3));
+  const otp = new TestApplet(Uint8Array.of(4, 5, 6));
+  const connected = await monoid.openSession('shared-connection');
+  const client = await otp.useSession(connected);
+  const returned = await connected.useSession(client);
+  await returned.sendCommand(0x21, Uint8Array.of(0xa0));
+
+  assert.notEqual(client, otp);
+  assert.notEqual(returned, connected);
+  assert.deepEqual(
+    exchanges.map(item => item.sessionId),
+    Array(4).fill('shared-connection'),
+  );
+  assert.deepEqual(
+    exchanges.slice(0, 3).map(item => item.data.slice(5)),
+    [
+      [1, 2, 3],
+      [4, 5, 6],
+      [1, 2, 3],
+    ],
+  );
+  await assert.rejects(
+    monoid.sendCommand(0x21, Uint8Array.of(0xa0)),
+    /open NFC session/,
+  );
+  await assert.rejects(
+    otp.sendCommand(0x21, Uint8Array.of(0xa0)),
+    /open NFC session/,
+  );
+});
+
+test('useSession rejects an unbound source before sending any SELECT', async () => {
+  const monoid = new TestApplet(Uint8Array.of(1));
+  const otp = new TestApplet(Uint8Array.of(2));
+  await assert.rejects(otp.useSession(monoid), /open NFC session/);
+  assert.deepEqual(exchanges, []);
 });
 
 function standby({callback = async () => {}, onNotFound} = {}) {
@@ -124,6 +163,32 @@ test('standby awaits missing-SELECT preflight on the same open connection before
   assert.deepEqual(state.failures, []);
 });
 
+test('an unsupported SELECT instruction remains an ISO error', async () => {
+  respond = () => [0x6d, 0x00];
+  await assert.rejects(
+    openApplet(),
+    error =>
+      error instanceof AppletISOError &&
+      !(error instanceof AppletNotFoundError) &&
+      error.sw === 0x6d00,
+  );
+});
+
+test('a missing explicitly selected AID retains the SELECT target and response data', async () => {
+  const applet = await openApplet();
+  const aid = Uint8Array.of(4, 5, 6);
+  respond = () => [0x12, 0x34, 0x6a, 0x82];
+  await assert.rejects(applet.select(aid), error => {
+    assert.ok(error instanceof AppletNotFoundError);
+    assert.equal(error.name, 'AppletNotFoundError');
+    assert.equal(error.sw, 0x6a82);
+    assert.deepEqual(error.data, Uint8Array.of(0x12, 0x34));
+    assert.deepEqual(error.aid, aid);
+    assert.notDeepEqual(error.aid, applet.aid);
+    return true;
+  });
+});
+
 test('standby forwards a missing SELECT when no preflight handler was supplied', async () => {
   respond = () => [0x6a, 0x82];
   const state = standby({
@@ -132,6 +197,7 @@ test('standby forwards a missing SELECT when no preflight handler was supplied',
   await state.tap();
   assert.equal(state.failures.length, 1);
   assert.ok(state.failures[0] instanceof AppletNotFoundError);
+  assert.deepEqual(state.failures[0].aid, Uint8Array.of(1, 2, 3));
   assert.deepEqual(state.events, ['connected', 'disconnected', 'cleanup']);
 });
 
@@ -160,7 +226,10 @@ for (const kind of [
         return data[1] === 0xa4 ? [0x61, 1] : [0x6a, 0x82];
       return data[1] === 0xa4 ? [0x90, 0] : [0x6a, 0x82];
     };
-    const failure = new AppletNotFoundError(new Uint8Array());
+    const failure = new AppletNotFoundError(
+      new Uint8Array(),
+      Uint8Array.of(4, 5, 6),
+    );
     const state = standby({
       callback: async applet => {
         if (kind === 'business exception') throw failure;
@@ -332,4 +401,56 @@ test('an error retrieving a response never decodes a partial result', async () =
   );
   assert.equal(exchanges.length, 2);
   assert.deepEqual(applet.decoded, []);
+});
+
+test('probe selects once, follows response continuation and leaves the target selected', async () => {
+  const applet = new TestApplet(Uint8Array.of(1)).attachSession('probe');
+  respond = ({data}) => (data[1] === 0xa4 ? [1, 0x61, 1] : [2, 0x90, 0]);
+  assert.equal(
+    await probeApplet(applet, Uint8Array.of(2), response =>
+      assert.deepEqual(response, Uint8Array.of(1, 2)),
+    ),
+    true,
+  );
+  assert.deepEqual(
+    exchanges.map(({data}) => data),
+    [
+      [0, 0xa4, 4, 0, 1, 2],
+      [0, 0xc0, 0, 0, 1],
+    ],
+  );
+});
+
+for (const sw of [0x6a82, 0x6d00, 0x6982, 0x6999]) {
+  test(`probe handles SELECT status ${sw.toString(16)}`, async () => {
+    const applet = new TestApplet(Uint8Array.of(1)).attachSession('probe');
+    respond = () => [sw >> 8, sw & 255];
+    if (sw === 0x6a82)
+      assert.equal(await probeApplet(applet, applet.aid), false);
+    else
+      await assert.rejects(
+        probeApplet(applet, applet.aid),
+        error => error instanceof AppletISOError && error.sw === sw,
+      );
+    assert.equal(exchanges.length, 1);
+  });
+}
+
+test('probe never mistakes GET RESPONSE absence or transport failure for a missing applet', async () => {
+  const applet = new TestApplet(Uint8Array.of(1)).attachSession('probe');
+  respond = ({data}) => (data[1] === 0xa4 ? [0x61, 1] : [0x6a, 0x82]);
+  await assert.rejects(
+    probeApplet(applet, applet.aid),
+    error =>
+      error instanceof AppletISOError &&
+      !(error instanceof AppletNotFoundError),
+  );
+  const failure = new Error('Tag lost');
+  respond = () => {
+    throw failure;
+  };
+  await assert.rejects(
+    probeApplet(applet, applet.aid),
+    error => error === failure,
+  );
 });

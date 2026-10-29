@@ -23,11 +23,17 @@ final class SessionController {
     interface Reader {
         void start(TagCallback onTag);
         void waitForRemoval(Result<Void> result);
+        void tagRemoved(Transport transport);
+        void linger();
         void stop();
     }
 
     interface TagCallback {
         void accept(Transport transport);
+
+        default void acceptRetained(Transport transport, Runnable discard) {
+            accept(transport);
+        }
     }
 
     interface Transport {
@@ -89,12 +95,37 @@ final class SessionController {
         boolean stopped;
         boolean finishing;
         boolean closeFailed;
+        boolean fullStop;
         String endCode;
         String removedSessionId;
+        // Discovery callbacks reserve these under this scan's monitor.
+        Probe probe;
+        Transport freshTag;
 
         Scan(String id, int timeoutMs) {
             this.id = id;
             this.timeoutMs = timeoutMs;
+        }
+    }
+
+    /** A retained handle is not a session until its presence probe succeeds. */
+    private static final class Probe {
+        final Scan scan;
+        final Transport transport;
+        final Runnable discard;
+        // cancelled is shared with the I/O worker under the probe monitor.
+        boolean cancelled;
+        boolean working;
+        boolean closingTransport;
+        boolean started;
+        boolean present;
+        boolean timedOut;
+        Runnable cancelTimeout;
+
+        Probe(Scan scan, Transport transport, Runnable discard) {
+            this.scan = scan;
+            this.transport = transport;
+            this.discard = discard;
         }
     }
 
@@ -168,19 +199,161 @@ final class SessionController {
         Scan scan = new Scan(id, transceiveTimeoutMs);
         scanning = scan;
         try {
-            reader.start(transport -> {
-                synchronized (scan) {
-                    if (!scan.acceptingTags) {
-                        return;
+            reader.start(new TagCallback() {
+                @Override
+                public void accept(Transport transport) {
+                    synchronized (scan) {
+                        if (!scan.acceptingTags) {
+                            return;
+                        }
+                        scan.acceptingTags = false;
+                        scan.freshTag = transport;
                     }
-                    scan.acceptingTags = false;
+                    control.execute(() -> advanceDiscovery(scan));
                 }
-                control.execute(() -> discovered(scan, transport));
+
+                @Override
+                public void acceptRetained(Transport transport, Runnable discard) {
+                    synchronized (scan) {
+                        if (!scan.acceptingTags || scan.probe != null) {
+                            return;
+                        }
+                        scan.probe = new Probe(scan, transport, discard);
+                    }
+                    control.execute(() -> advanceDiscovery(scan));
+                }
             });
             result.resolve(null);
         } catch (RuntimeException error) {
             endScan(scan, "io-error", "IO_ERROR");
             result.reject(failure("IO_ERROR", "Unable to start NFC scanning.", "startScan", null));
+        }
+    }
+
+    private void advanceDiscovery(Scan scan) {
+        Probe probe;
+        Transport freshTag;
+        synchronized (scan) {
+            if (scanning != scan || scan.stopped) {
+                return;
+            }
+            probe = scan.probe;
+            freshTag = scan.freshTag;
+            if (probe == null) {
+                scan.freshTag = null;
+            }
+        }
+        if (probe != null) {
+            if (freshTag != null) {
+                // A real discovery wins, but must wait for the probe's RF work.
+                cancelProbe(probe);
+            } else if (!probe.started) {
+                startProbe(probe);
+            }
+        } else if (freshTag != null) {
+            discovered(scan, freshTag);
+        }
+    }
+
+    private void startProbe(Probe probe) {
+        probe.started = true;
+        probe.working = true;
+        probe.cancelTimeout = scheduler.schedule(CONNECT_TIMEOUT_MS, () -> {
+            synchronized (probe.scan) {
+                if (probe.scan.probe != probe) {
+                    return;
+                }
+            }
+            if (probe.cancelled) {
+                return;
+            }
+            probe.timedOut = true;
+            cancelProbe(probe);
+        });
+        io.execute(() -> {
+            boolean present = false;
+            try {
+                boolean cancelled;
+                synchronized (probe) {
+                    cancelled = probe.cancelled;
+                }
+                if (!cancelled) {
+                    probe.transport.connect();
+                    present = true;
+                }
+            } catch (TransportException | RuntimeException exception) {
+                // A stale native tag is not a failed JS connection attempt.
+            }
+            // Also close after cancellation: connect can complete after the
+            // independent close worker has already tried to interrupt it.
+            boolean closed = !closeTransport(probe.transport);
+            boolean available = present && closed;
+            control.execute(() -> {
+                probe.working = false;
+                probe.present = available;
+                probe.cancelTimeout.run();
+                finishProbe(probe);
+            });
+        });
+    }
+
+    private void cancelProbe(Probe probe) {
+        synchronized (probe.scan) {
+            if (probe.scan.probe != probe) {
+                return;
+            }
+        }
+        synchronized (probe) {
+            if (probe.cancelled) {
+                return;
+            }
+            probe.cancelled = true;
+        }
+        if (!probe.started) {
+            finishProbe(probe);
+            return;
+        }
+        probe.cancelTimeout.run();
+        probe.closingTransport = true;
+        closer.execute(() -> {
+            closeTransport(probe.transport);
+            control.execute(() -> {
+                probe.closingTransport = false;
+                finishProbe(probe);
+            });
+        });
+    }
+
+    private void finishProbe(Probe probe) {
+        if (probe.working || probe.closingTransport) {
+            return;
+        }
+        Scan scan = probe.scan;
+        Transport next;
+        synchronized (scan) {
+            if (scan.probe != probe) {
+                return;
+            }
+            scan.probe = null;
+            next = scan.freshTag;
+            scan.freshTag = null;
+            if (next == null && probe.present && !probe.cancelled) {
+                next = probe.transport;
+            }
+            if (next != null) {
+                scan.acceptingTags = false;
+            }
+        }
+        // Caller/lifecycle cancellation says nothing about presence. Keep the
+        // handle for the next scan (or full-stop ignore); only an actual failed
+        // or timed-out probe proves that this retained candidate is unusable.
+        if ((!probe.cancelled && !probe.present) || probe.timedOut) {
+            probe.discard.run();
+        }
+        if (scan.stopped) {
+            finishStopping(scan);
+        } else if (next != null) {
+            discovered(scan, next);
         }
     }
 
@@ -355,7 +528,16 @@ final class SessionController {
 
     void terminate(String reason, String code) {
         if (scanning != null) {
+            // Lifecycle termination can overtake an ordinary stop's cleanup.
+            scanning.fullStop = true;
             endScan(scanning, reason, code);
+        } else {
+            try {
+                reader.stop();
+            } catch (RuntimeException exception) {
+                // There is no live call to reject. Reader.stop clears its
+                // state even if Android's lifecycle cleanup throws.
+            }
         }
     }
 
@@ -367,12 +549,16 @@ final class SessionController {
             scan.acceptingTags = false;
             scan.stopped = true;
         }
+        scan.fullStop |= !reason.equals("stopped");
         scan.endCode = code;
         retiredScanIds.add(scan.id);
         if (active != null) {
             end(active, reason.equals("stopped") ? "scan-stopped" : reason, code);
         }
         listener.scanEnded(scan.id, reason, code.equals("CANCELLED") ? null : code);
+        if (scan.probe != null) {
+            cancelProbe(scan.probe);
+        }
         if (active != null) {
             finishClosing(active);
         }
@@ -388,6 +574,9 @@ final class SessionController {
             session.ended = true;
             session.removed = code.equals("TAG_LOST");
             outcome = session.exchange != null && session.exchange.sent ? "unknown" : "not-sent";
+        }
+        if (session.removed) {
+            reader.tagRemoved(session.transport);
         }
         session.closingTransport = true;
         session.cancelConnectTimeout.run();
@@ -499,17 +688,25 @@ final class SessionController {
     }
 
     private void finishStopping(Scan scan) {
-        if (!scan.stopped || scan.finishing || (active != null && active.scan == scan)) {
+        if (!scan.stopped || scan.finishing || scan.probe != null || (active != null && active.scan == scan)) {
             return;
         }
         scan.finishing = true;
-        // The reader retains the latest native tag after a session closes. Let
-        // all transport cleanup finish before it suppresses that tag and gives
-        // discovery back to Android. No I/O worker can reconnect it afterwards.
+        // Ordinary stops retain reader ownership only after all transport and
+        // probe work has exited. Lifecycle stops and cleanup failures release it.
         try {
-            reader.stop();
+            if (scan.fullStop || scan.closeFailed) {
+                reader.stop();
+            } else {
+                reader.linger();
+            }
         } catch (RuntimeException exception) {
             scan.closeFailed = true;
+            try {
+                reader.stop();
+            } catch (RuntimeException ignored) {
+                // Preserve the original cleanup failure after clearing ownership.
+            }
         }
         if (scanning == scan) {
             scanning = null;

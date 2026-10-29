@@ -16,6 +16,7 @@ function hello(number) {
     id: Uint8Array.of(0, 0, 0, number),
     publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(number)),
     bundle: false,
+    authority: false,
     pins: {access: 5, secret: 5},
   };
 }

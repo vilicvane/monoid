@@ -23,7 +23,7 @@ http://ionicframework.com/docs/theming/ */
 
   --color-text-secondary: #666666;
   --color-text-dim: #999999;
-  --color-text-warning: #b58a08;
+  --color-text-warning: var(--ion-color-warning-shade);
   --color-text-caution: #c8751a;
   --color-text-danger: #ef4b32;
 
@@ -33,6 +33,14 @@ http://ionicframework.com/docs/theming/ */
   --color-seed-light: #dcead4;
   --color-seed-light-shade: #b9e0a6;
   --color-seed-light-contrast: #233719;
+
+  --color-primary-light: #d4dcea;
+  --color-primary-light-shade: #a6b9e0;
+  --color-primary-light-contrast: #192337;
+
+  --color-warning-light: #eae5d4;
+  --color-warning-light-shade: #e0d2a6;
+  --color-warning-light-contrast: #373019;
 
   --color-derivations-badge: #ffbb29;
   --color-derivations-badge-contrast: #ffffff;

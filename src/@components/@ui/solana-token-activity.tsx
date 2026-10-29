@@ -44,7 +44,7 @@ import {
   SolanaTokenDetailsContent,
   SolanaTokenTag,
 } from './solana-token.js';
-import {BlackTag} from './tag.js';
+import {DarkTag} from './tag.js';
 import {
   TokenActivity,
   TokenActivityAddress,
@@ -260,7 +260,7 @@ export const SolanaTokenActivity = observer(function SolanaTokenActivity({
     <>
       <InfoTableSection>
         <InfoSectionHeader>
-          <BlackTag>Token changes</BlackTag>
+          <DarkTag>Token changes</DarkTag>
           {balances === undefined ? (
             <InfoSectionLoadingSpinner aria-label="Loading balance changes" />
           ) : changes.length > 0 ? (
@@ -275,7 +275,7 @@ export const SolanaTokenActivity = observer(function SolanaTokenActivity({
         </InfoSectionHeader>
         {balances !== undefined && (
           <>
-            {!!accountChanges.length && (
+            {(!!accountChanges.length || !incomplete) && (
               <TokenChangesTable aria-label="Your net balance changes">
                 <tbody>
                   {accountChanges.map(change => (
@@ -295,18 +295,23 @@ export const SolanaTokenActivity = observer(function SolanaTokenActivity({
                       </td>
                     </tr>
                   ))}
+                  {!accountChanges.length && (
+                    <tr>
+                      <td>
+                        <TokenChange>No change to this account</TokenChange>
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </TokenChangesTable>
             )}
-            {incomplete ? (
+            {incomplete && (
               <InfoMessage>
                 {unavailable
                   ? 'Balance changes unavailable.'
                   : 'Balance data is incomplete.'}
               </InfoMessage>
-            ) : !accountChanges.length ? (
-              <InfoMessage>No change to this account.</InfoMessage>
-            ) : null}
+            )}
           </>
         )}
       </InfoTableSection>

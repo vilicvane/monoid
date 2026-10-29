@@ -4,16 +4,35 @@ import {setImmediate} from 'node:timers/promises';
 
 import {observable, runInAction} from 'mobx';
 
+import {CardSecretPINSession} from '../.bld/app/@components/views/safe/@card/card-secret-pin-session.js';
+import {SyncCardsState} from '../.bld/app/@components/views/safe/@card/sync-cards-state.js';
+import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {HeldPINs} from '../.bld/app/@lib/held-pins.js';
 import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
+import {
+  assertSameCard,
+  readCardIdentity,
+} from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
+import {assertCardPINsNotBlocked} from '../.bld/app/@lib/monoid/card-pins.js';
+import * as monoid from '../.bld/app/@lib/monoid/index.js';
+import {SyncCardsStore} from '../.bld/app/@services/sync-cards-store.js';
+
+import {pinClock} from './helpers/held-pins.mjs';
 
 let fixture;
 let rendering;
 const owners = [];
 const PIN = 'Secret-42';
 const AID = 'f06d6f6e6f69640201';
+const SECURITY_KEY = {
+  stage: 'security-key',
+  optional: true,
+  dependencies: ['library', 'monoid'],
+};
 
 mock.module('react', {
   namedExports: {
@@ -44,7 +63,7 @@ mock.module('mobx-react-lite', {
   namedExports: {observer: component => component},
 });
 mock.module('lucide-react', {
-  namedExports: {Ellipsis: 'ellipsis', Info: 'info'},
+  namedExports: {ArrowLeft: 'arrow-left', Ellipsis: 'ellipsis', Info: 'info'},
 });
 mock.module('styled-components', {
   namedExports: {
@@ -53,13 +72,15 @@ mock.module('styled-components', {
     }),
   },
 });
+mock.module('../.bld/app/@components/@animations.js', {
+  namedExports: {popOutAnimationCSS: ''},
+});
 mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => fixture.entrances},
 });
 mock.module('../.bld/app/@services/index.js', {
   namedExports: {
     cardFingerprint: info => info.cplc.icSerialNumber,
-    isCredentialRequestCancelled: error => error?.code === 'CANCELLED',
   },
 });
 class CardManagerNotFoundError extends Error {}
@@ -80,9 +101,29 @@ mock.module('../.bld/app/@lib/global-platform/installation-support.js', {
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    assertSameCard,
+    readCardIdentity,
+    assertCardPINsNotBlocked,
+    ...monoid,
     MonoidCardError,
     MonoidWrongCardError,
     hasAppletBundle: true,
+    APPLET_NAMES: {
+      identity: 'Monoid Identity Applet',
+      library: 'Monoid Library',
+      monoid: 'Monoid Applet',
+      'security-key': 'Monoid Security Key Applet',
+    },
+    getAppletCatalog: () => [
+      {stage: 'identity'},
+      {stage: 'library'},
+      {stage: 'monoid'},
+      SECURITY_KEY,
+    ],
+    getAppletDependents: stages =>
+      stages.some(stage => ['identity', 'library', 'monoid'].includes(stage))
+        ? [SECURITY_KEY]
+        : [],
     readMonoidAppletInstallation: async () => {
       fixture.installationReads = (fixture.installationReads ?? 0) + 1;
       return fixture.installation;
@@ -107,17 +148,34 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
         return fixture.applet;
       },
     }),
-    installMonoidApplets: async () => {
-      fixture.events.push({type: 'install'});
+    installMonoidApplets: async (
+      _session,
+      _progress,
+      _signal,
+      selectedOptionalStages,
+      identityOptions,
+    ) => {
+      fixture.events.push({
+        type: 'install',
+        selectedOptionalStages,
+        identityOptions,
+      });
       if (fixture.installError) throw fixture.installError;
-      fixture.installation = installed(fixture.uninitialized);
+      fixture.installation = installed(
+        fixture.uninitialized,
+        selectedOptionalStages,
+      );
       return fixture.uninitialized;
     },
-    initializeMonoidCard: async (_applet, hello, pin) => {
+    initializeMonoidCard: async (_applet, hello, pin, _signal, access) => {
+      fixture.initializedAccessPIN = access;
       fixture.events.push({type: 'initialize', pin});
       assert.equal(hello.id, fixture.uninitialized.id);
       if (fixture.initializeError) throw fixture.initializeError;
-      fixture.installation = installed(fixture.initialized);
+      fixture.installation = {
+        ...fixture.installation,
+        hello: fixture.initialized,
+      };
       return fixture.initialized;
     },
   },
@@ -166,19 +224,28 @@ for (const [path, names] of [
   ['@monoid/applet-install-progress', ['AppletInstallProgressContent']],
   ['@monoid/monoid-scan-prompt', ['MonoidScanStatePromptProgress']],
   ['@ui/app-icon', ['AppIcon']],
-  ['@ui/button', ['Button']],
-  ['@ui/confirm-popup', ['ConfirmPopup']],
+  ['@ui/button', ['Button', 'Buttons']],
+  ['@ui/confirm-popup', ['ConfirmNotices', 'ConfirmPopup']],
   [
     '@ui/details-popup',
     ['DetailsPopup', 'DetailsPopupDivider', 'DetailsPopupTitle'],
   ],
-  ['@ui/message-content', ['InfoMessage']],
+  ['@ui/message-content', ['InfoMessage', 'WarningMessage']],
   ['@ui/operation-complete', ['OperationComplete']],
   ['views/safe/index', ['CardInformationPopup']],
   [
     'views/card/card-management-content',
-    ['CardAppletsContent', 'CardInformationContent', 'CardScanPlaceholder'],
+    [
+      'CardAppletsContent',
+      'CardInformationContent',
+      'CardScanPlaceholder',
+      'CardMaintenanceBatchContent',
+      'CardMaintenanceCards',
+      'CardMaintenanceContent',
+      'CardSupersededMaintenanceNotice',
+    ],
   ],
+  ['views/card/applet-selection-popup', ['AppletSelectionPopup']],
   [
     '@view/index',
     [
@@ -193,7 +260,12 @@ for (const [path, names] of [
   mock.module(`../.bld/app/@components/${path}.js`, {
     namedExports: {
       ...Object.fromEntries(names.map(name => [name, name])),
+      ...(path === '@monoid/monoid-scan-prompt' && {
+        scanCardPrompt: (card, action) =>
+          `Scan card ${cardNameWithId(card)}${action ? ` ${action}` : ''}`,
+      }),
       ...(path === '@view/index' && {useViewActive}),
+      ...(path === 'views/safe/index' && {SyncCardsState}),
     },
   });
 }
@@ -222,6 +294,11 @@ function find(node, predicate) {
 function text(node) {
   if (typeof node === 'string' || typeof node === 'number') return String(node);
   if (!node) return '';
+  if (node.type === 'ConfirmNotices')
+    return node.props.notices
+      .filter(notice => notice !== false && notice !== undefined)
+      .map(text)
+      .join(' ');
   return (Array.isArray(node) ? node : [node.props?.children])
     .map(text)
     .join('');
@@ -232,13 +309,23 @@ function hello(initialized = true, bundle = false) {
     publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(9)),
     version: 1,
     bundle,
+    authority: false,
+    alias: false,
+    allowPeerExtension: false,
     pins: {access: initialized ? 5 : false, secret: initialized ? 5 : false},
   };
 }
-function installed(hello) {
+function installed(hello, optional = []) {
   return {
-    identity: {installed: true, aid: 'f06d6f6e6f69640001'},
-    monoid: {installed: true, aid: AID, version: hello.version},
+    identity: {installed: true, loaded: true, aid: 'f06d6f6e6f69640001'},
+    library: {installed: true, loaded: true},
+    monoid: {installed: true, loaded: true, aid: AID, version: hello.version},
+    optional: {
+      'security-key': {
+        installed: optional.includes('security-key'),
+        loaded: optional.includes('security-key'),
+      },
+    },
     hello,
   };
 }
@@ -249,6 +336,8 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     inputs: [],
     scans: [],
     events: [],
+    recordedInstallations: [],
+    heldPINs: new HeldPINs(),
     errors: [],
     toasts: [],
     progress: [],
@@ -259,7 +348,12 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
       cardManagerAid: 'a000000151000000',
       cplc: {icSerialNumber: '1234'},
     },
-    installation: {identity: {installed: false}, monoid: {installed: false}},
+    installation: {
+      identity: {installed: false, loaded: false},
+      library: {installed: false, loaded: false},
+      monoid: {installed: false, loaded: false},
+      optional: {'security-key': {installed: false, loaded: false}},
+    },
     uninitialized: hello(false, bundle),
     initialized: hello(true, bundle),
     slot: create => (state.slots[state.index++] ??= create()),
@@ -278,6 +372,12 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     node(type) {
       return find(state.render(), node => node.type === type);
     },
+    process() {
+      return find(
+        state.render(),
+        node => node.props?.onAnimationEnd && '$exiting' in node.props,
+      );
+    },
     click(label) {
       const button = find(
         state.render(),
@@ -290,8 +390,19 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
       button.props.onClick();
     },
     async answer(value = PIN) {
-      state.inputs.at(-1).finished.resolve(value);
       await state.flush();
+      for (let step = 0; step < 4; step++) {
+        const input = state.inputs.at(-1);
+        input.finished.resolve(value);
+        await state.flush();
+        const next = state.inputs.at(-1);
+        if (
+          next === input ||
+          value === undefined ||
+          !/^(Confirm|Set Access)/.test(next.options.placeholder)
+        )
+          break;
+      }
     },
     async tap({finish = true} = {}) {
       const scan = state.scans.at(-1);
@@ -317,89 +428,207 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     $match: {$exact: {$active: true}},
     returnTo,
     copyId: returnTo === 'copy' ? 'copy' : undefined,
+    bundleId: returnTo === 'bundle' ? 'bundle-flow' : undefined,
     cardInformation: cardInformation ? state.information : undefined,
   });
   state.view.$match.$view = () => ({$entries: [state.view]});
   state.applet = {
+    setAlias: async ({alias}) => {
+      state.events.push({type: 'set-card-alias', alias});
+      if (state.aliasError) throw state.aliasError;
+      state.initialized = {...state.initialized, alias: alias || false};
+      state.installation = {...state.installation, hello: state.initialized};
+    },
+    hello: async () => state.initialized,
     authenticate: async request =>
       state.events.push({type: 'auth', ...request}),
+    list: async () => {
+      state.events.push({type: 'list'});
+      return {items: []};
+    },
   };
   state.pinSession = {
     authenticate: async () => state.events.push({type: 'vault'}),
+    removePIN: async (id, expectedPIN, signal) => {
+      state.events.push({type: 'remove-access', id, expectedPIN, signal});
+      if (state.removePINError) throw state.removePINError;
+    },
+    getPINs: async signal => {
+      await state.pinSession.authenticate(signal);
+      return state.savedPINs ?? {};
+    },
     setPIN: async (id, pin) =>
       state.events.push({type: 'save-access', id, pin}),
     clear: () => state.events.push({type: 'clear'}),
   };
   state.maintenance = {
+    finishFreshAlias: async (id, hello) => {
+      assert.equal(hello.alias, state.pending.card.alias || false);
+      state.events.push({type: 'finish-fresh-alias', id});
+      state.pending = undefined;
+    },
+    secretPINWriter: () => {
+      const owner = state.heldPINs.signal;
+      return (card, pin) => state.heldPINs.set(card.publicKey, pin, owner);
+    },
+    secretPIN: card => state.heldPINs.get(card.publicKey),
+    holdSecretPIN: (card, pin, owner) =>
+      state.heldPINs.set(card.publicKey, pin, owner),
+    dropSecretPIN: card => state.heldPINs.delete(card.publicKey),
     matchOperation: () => state.pending,
+    findSupersededOperation: () => state.superseded?.[0],
+    discardSuperseded: async (id, snapshot) => {
+      state.events.push({type: 'discard-superseded', id, snapshot});
+      if (state.discardError) throw state.discardError;
+      await state.discardGate?.promise;
+      state.superseded = state.superseded.filter(
+        operation => operation.id !== id,
+      );
+    },
     get: () => state.pending,
+    discardPrepared: async id => {
+      state.events.push({type: 'discard-prepared', id});
+      if (state.discardError) throw state.discardError;
+      await state.discardGate?.promise;
+      if (state.pending?.id !== id) return;
+      if (
+        state.pending.phase !== 'ready' ||
+        state.pending.checkpoint !== undefined ||
+        state.pending.restarted
+      ) {
+        throw new MonoidCardError('Card maintenance has already started');
+      }
+      state.pending = undefined;
+    },
+    restart: async id => {
+      state.events.push({type: 'restart', id});
+      if (state.restartError) throw state.restartError;
+      await state.restartGate?.promise;
+      assert.equal(state.pending.id, id);
+      assert.equal(state.pending.batchId, undefined);
+      if (state.pending.mode === 'fresh')
+        state.maintenance.dropSecretPIN(state.pending.card);
+      state.pending = {
+        ...state.pending,
+        phase: 'ready',
+        restarted: true,
+        checkpoint: undefined,
+        rejectedItems: undefined,
+      };
+      return state.pending;
+    },
     isUpdateAvailable: () => false,
-    recordInstallation: async () => {},
+    isAppletUpdateAvailable: () => false,
+    recordInstallation: async (hello, options) => {
+      state.recordedInstallations.push({hello, options});
+    },
     prepare: async (_applet, options) => {
+      state.prepareOptions = options;
       state.events.push({
         type: 'prepare',
         mode: options.mode,
         appletAid: options.appletAid,
       });
-      state.pending = {
+      const prepared = {
         id: 'maintenance',
         mode: options.mode,
         phase: 'ready',
-        card: {appletAid: AID, bundle},
+        card: {
+          id: Buffer.from(state.initialized.id).toString('hex'),
+          publicKey: Buffer.from(state.initialized.publicKey).toString('hex'),
+          appletAid: AID,
+          bundle: bundle ? Buffer.from(bundle).toString('hex') : false,
+        },
       };
-      return state.pending;
+      if (
+        !bundle ||
+        options.replaceStages?.every(stage => stage === 'security-key')
+      )
+        state.pending = prepared;
+      state.prepared = prepared;
+      return prepared;
     },
-    prepareFresh: async () => {
-      state.events.push({type: 'prepare-fresh'});
+    prepareFresh: async (
+      _information,
+      _hello,
+      _signal,
+      selectedOptionalStages,
+      identityOptions,
+    ) => {
+      state.events.push({
+        type: 'prepare-fresh',
+        selectedOptionalStages,
+        identityOptions,
+      });
       state.pending = {
         id: 'fresh',
         mode: 'fresh',
         phase: 'ready',
-        card: {appletAid: AID, bundle: false},
+        card: {
+          ...(_hello && readCardIdentity(_hello)),
+          alias: _hello?.alias,
+          appletAid: AID,
+          bundle: false,
+        },
       };
       return state.pending;
     },
-    replace: async () => {
-      state.events.push({type: 'replace'});
-      state.pending.phase =
-        state.pending.mode === 'fresh'
-          ? 'setup'
-          : bundle
-            ? 'manual-restore'
-            : 'restore';
+    replace: async (_session, id) => {
+      state.events.push({type: 'replace', id});
+      if (!['ready', 'replacing'].includes(state.pending.phase)) {
+        return state.installation.hello;
+      }
+      if (state.pending.mode === 'fresh') {
+        if (state.pending.checkpoint === 'verify')
+          return state.installation.hello;
+        state.pending.phase = 'replacing';
+        state.pending.checkpoint = 'verify';
+      } else state.pending.phase = 'restore';
       state.installation = installed(state.uninitialized);
       return state.uninitialized;
     },
     restore: async () => {
       state.events.push({type: 'restore'});
       state.pending = undefined;
-    },
-    complete: async () => {
-      state.events.push({type: 'complete'});
-      state.pending = undefined;
+      return {complete: true, issues: [], droppedGrants: []};
     },
   };
   const safe = {
     $exact: 'safe',
     copyItems: {$exact: 'copy'},
     setupCard: {$exact: 'bundle'},
+    syncCards: options => ({
+      $push: () => state.events.push({type: 'open-sync', options}),
+    }),
   };
   state.entrances = {
     router: {
       safe,
+      securityKey: Object.assign(
+        options => ({
+          $push: () => state.events.push({type: 'open-security-key', options}),
+        }),
+        {$exact: 'securityKey'},
+      ),
+      $back: () => state.backs.push('previous'),
       $backTo: route =>
         returnTo === route ? () => state.backs.push(route) : undefined,
     },
     monoidApplet: {openSession: async () => state.applet},
     monoidCredentialsStore: {createPINSession: () => state.pinSession},
     cardMaintenanceService: state.maintenance,
+    syncCardsStore: new SyncCardsStore(),
     copyItemsStore: {
       get: () => ({
         session: {addTarget: async target => state.targets.push(target)},
       }),
     },
-    cardBundleStore: {acceptInstalledCard: async () => {}},
+    cardBundleStore: {
+      get: () => undefined,
+      acceptInstalledCard: async () => {},
+    },
     cardStore: {
+      observeApplet: applet => applet,
       get: () => undefined,
       forget: identity => state.events.push({type: 'forget', identity}),
     },
@@ -413,20 +642,346 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
 }
 afterEach(() => owners.splice(0).forEach(owner => owner.unmount()));
 
-test('installation asks for Secret PIN before scanning, completes PIN setup, then returns the new card to Copy', async () => {
+function oldMaintenance({
+  id = 'old-recovery',
+  alias = false,
+  archive = true,
+} = {}) {
+  return {
+    id,
+    mode: 'reinstall',
+    phase: 'restore',
+    checkpoint: 'verify',
+    card: {
+      id: 'd33490cd',
+      alias,
+      publicKey: 'old-public-key',
+      fingerprint: '1234',
+      bundle: false,
+      appletAid: AID,
+    },
+    archive: archive
+      ? {items: [{index: '01', alias: 'dev', secret: true}, {index: '02'}]}
+      : undefined,
+  };
+}
+
+for (const update of [false, true]) {
+  test(`superseded recovery disables ${update ? 'update' : 'reinstall'}, install and fresh actions while ordinary applet use remains available`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized, ['security-key']);
+    state.installation.optional['security-key'].installed = false;
+    state.maintenance.isUpdateAvailable = () => update;
+    state.superseded = [oldMaintenance()];
+    state.click('Scan a card');
+    await state.tap();
+    assert.equal(
+      state.node('CardSupersededMaintenanceNotice').props.operation,
+      state.superseded[0],
+    );
+    assert.equal(state.node('CardMaintenanceContent'), undefined);
+    if (update)
+      assert.equal(
+        find(
+          state.render(),
+          node => node.type === 'Button' && text(node) === 'Update applets',
+        ).props.disabled,
+        true,
+      );
+    state.click('Card menu');
+    const stack = find(
+      state.node('DetailsPopup'),
+      node => node.type === 'Buttons',
+    );
+    assert.equal(stack.props['data-popup-animation-group'], true);
+    assert.ok(
+      find(
+        stack,
+        node => node.type === 'Button' && text(node) === 'Discard old recovery',
+      ),
+    );
+    for (const label of [
+      'Install applets',
+      'Fresh install',
+      ...(!update ? ['Reinstall Monoid Applet'] : []),
+    ])
+      assert.equal(
+        find(stack, node => node.type === 'Button' && text(node) === label)
+          .props.disabled,
+        true,
+      );
+    state.node('DetailsPopup').props.onDismiss();
+    state.node('CardAppletsContent').props.onSelectApplet('security-key');
+    const ordinary = find(
+      state.node('DetailsPopup'),
+      node => node.type === 'Button' && text(node) === 'Open Security Key',
+    );
+    assert.ok(!ordinary.props.disabled);
+    assert.equal(
+      find(
+        state.node('DetailsPopup'),
+        node => node.type === 'Button' && text(node) === 'Reinstall applet',
+      ).props.disabled,
+      true,
+    );
+  });
+}
+
+test('discard confirms the old aliases and unnamed count, removes one recovery without NFC, then exposes the next', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  const older = oldMaintenance({id: 'older', alias: 'Older'});
+  const newest = oldMaintenance({alias: 'Old card'});
+  state.superseded = [newest, older];
+  state.pending = {
+    ...oldMaintenance({id: 'current'}),
+    card: {...readCardIdentity(state.initialized), appletAid: AID},
+  };
+  const ownOperation = state.pending;
+  const scans = state.scans.length;
+  const inputs = state.inputs.length;
+  state.click('Card menu');
+  state.click('Discard old recovery');
+  let confirmation = state.node('ConfirmPopup');
+  assert.equal(confirmation.props.title, 'Discard recovery of Old card?');
+  assert.equal(confirmation.props.confirmColor, 'danger');
+  assert.equal(confirmation.props.confirmText, 'Discard old recovery');
+  assert.equal(
+    text(confirmation),
+    'dev and 1 unnamed item will be lost. This cannot be undone.',
+  );
+  confirmation.props.onCancel();
+  assert.deepEqual(state.superseded, [newest, older]);
+  state.click('Card menu');
+  state.click('Discard old recovery');
+  state.discardGate = deferred();
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.flush();
+  assert.deepEqual(state.superseded, [newest, older]);
+  assert.equal(
+    find(state.render(), node => node.props?.['aria-label'] === 'Card menu')
+      .props.disabled,
+    true,
+  );
+  state.discardGate.resolve();
+  await state.flush();
+  assert.deepEqual(state.superseded, [older]);
+  assert.equal(state.pending, ownOperation);
+  assert.equal(
+    state.node('CardSupersededMaintenanceNotice').props.operation,
+    older,
+  );
+  assert.equal(
+    state.node('CardMaintenanceContent').props.operation,
+    ownOperation,
+  );
+  assert.equal(state.scans.length, scans);
+  assert.equal(state.inputs.length, inputs);
+  assert.deepEqual(
+    state.events.filter(event => event.type === 'discard-superseded'),
+    [
+      {
+        type: 'discard-superseded',
+        id: newest.id,
+        snapshot: {
+          hello: state.initialized,
+          cardInformation: state.information,
+        },
+      },
+    ],
+  );
+  state.click('Card menu');
+  state.click('Discard old recovery');
+  confirmation = state.node('ConfirmPopup');
+  assert.equal(confirmation.props.title, 'Discard recovery of Older?');
+  confirmation.props.onConfirm();
+  await state.flush();
+  assert.deepEqual(state.superseded, []);
+  assert.equal(state.node('CardSupersededMaintenanceNotice'), undefined);
+  state.click('Card menu');
+  assert.equal(
+    find(
+      state.node('DetailsPopup'),
+      node => node.type === 'Button' && text(node) === 'Discard old recovery',
+    ),
+    undefined,
+  );
+  assert.equal(state.pending, ownOperation);
+  assert.deepEqual(state.errors, []);
+});
+
+test('a Monoid-absent card exposes old maintenance without an archive and disables installation until discard', async () => {
+  const state = mount({cardInformation: false});
+  state.superseded = [oldMaintenance({archive: false})];
+  state.click('Scan a card');
+  await state.tap();
+  assert.ok(state.node('CardSupersededMaintenanceNotice'));
+  assert.equal(
+    find(
+      state.render(),
+      node => node.type === 'Button' && text(node) === 'Install applets',
+    ).props.disabled,
+    true,
+  );
+  state.click('Card menu');
+  state.click('Discard old maintenance');
+  const confirmation = state.node('ConfirmPopup');
+  assert.equal(confirmation.props.title, 'Discard maintenance of d33490cd?');
+  assert.equal(confirmation.props.confirmText, 'Discard old maintenance');
+  assert.equal(
+    text(confirmation),
+    'The saved maintenance progress will be discarded. This cannot be undone.',
+  );
+  confirmation.props.onConfirm();
+  await state.flush();
+  assert.deepEqual(state.superseded, []);
+  assert.equal(
+    state.events.find(event => event.type === 'discard-superseded').snapshot
+      .hello,
+    undefined,
+  );
+  assert.equal(state.scans.length, 1);
+  assert.equal(
+    find(
+      state.render(),
+      node => node.type === 'Button' && text(node) === 'Install applets',
+    ).props.disabled,
+    false,
+  );
+});
+
+test('a refused stale discard keeps recovery visible and surfaces the service error', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.superseded = [oldMaintenance()];
+  state.click('Scan a card');
+  await state.tap();
+  state.click('Card menu');
+  state.click('Discard old recovery');
+  state.discardError = new MonoidCardError(
+    'This card maintenance is not superseded',
+  );
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.flush();
+  assert.equal(state.superseded.length, 1);
+  assert.ok(state.node('CardSupersededMaintenanceNotice'));
+  assert.deepEqual(state.errors, [state.discardError]);
+  assert.equal(state.scans.length, 1);
+});
+
+test('superseded lookup waits for a scanned identity or confirmed Monoid absence', async () => {
+  const state = mount();
+  let lookups = 0;
+  state.maintenance.findSupersededOperation = () => {
+    lookups++;
+    return oldMaintenance();
+  };
+  state.render();
+  assert.equal(lookups, 0);
+  assert.equal(state.node('CardSupersededMaintenanceNotice'), undefined);
+
+  const unreadable = mount({cardInformation: false});
+  unreadable.installation = {
+    ...installed(unreadable.initialized),
+    hello: undefined,
+    helloError: new Error('Read failed'),
+  };
+  unreadable.maintenance.findSupersededOperation = () => {
+    lookups++;
+    return oldMaintenance();
+  };
+  unreadable.click('Scan a card');
+  await unreadable.tap();
+  assert.equal(lookups, 0);
+  assert.equal(unreadable.node('CardSupersededMaintenanceNotice'), undefined);
+});
+
+test('Authority install returns the verified card and holds its newly set Secret PIN for joining', async () => {
+  const state = mount({returnTo: 'bundle'});
+  const secretPINs = new CardSecretPINSession();
+  state.entrances.cardBundleStore = {
+    get: id => {
+      assert.equal(id, 'bundle-flow');
+      return {authority: {secretPINs}};
+    },
+    acceptInstalledCard: async (id, card) => {
+      assert.equal(id, 'bundle-flow');
+      state.targets.push(card);
+    },
+  };
+  state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.targets, [state.initialized]);
+  const identity = monoid.readBackupCardIdentity(state.initialized);
+  await secretPINs.run(
+    [identity],
+    () => assert.fail('Secret PIN asked again'),
+    async credentials => {
+      assert.equal(credentials(identity).pin, PIN);
+    },
+  );
+  secretPINs.clear();
+});
+
+function finishProcessExit(state) {
+  const process = state.process();
+  assert.equal(process.props.$exiting, true);
+  assert.equal(state.node('OperationComplete'), undefined);
+  assert.ok(
+    state.node('CardMaintenanceContent') ||
+      state.node('CardMaintenanceBatchContent'),
+  );
+  const element = {};
+  process.props.onAnimationEnd({target: {}, currentTarget: element});
+  assert.ok(state.process(), 'ignore a child animation ending');
+  assert.equal(state.node('OperationComplete'), undefined);
+  process.props.onAnimationEnd({target: element, currentTarget: element});
+  assert.ok(state.node('OperationComplete'));
+  assert.equal(state.process(), undefined);
+  assert.equal(state.node('CardMaintenanceContent'), undefined);
+  assert.equal(state.node('CardMaintenanceBatchContent'), undefined);
+  assert.equal(state.node('CardAppletsContent'), undefined);
+  assert.equal(state.node('ViewContent').props.footer.props.color, 'neutral');
+}
+
+test('installation chooses applets before Secret PIN, completes PIN setup, then returns the new card to Copy', async () => {
   const state = mount({returnTo: 'copy'});
   state.click('Install applets');
+  assert.ok(state.node('AppletSelectionPopup'));
+  assert.equal(state.inputs.length, 0);
+  assert.equal(state.scans.length, 0);
+  const identityOptions = {
+    authorityUrl: 'https://authority.example',
+    authorityPublicKey: new Uint8Array(65).fill(4),
+  };
+  state.node('AppletSelectionPopup').props.onInstall(identityOptions);
+  await state.flush();
   assert.equal(state.inputs.length, 1);
   assert.match(state.inputs[0].options.placeholder, /Secret PIN/);
   assert.equal(state.scans.length, 0);
   await state.answer();
   assert.deepEqual(
-    state.events.slice(0, 3).map(event => event.type),
-    ['input', 'vault', 'scan'],
+    state.events.slice(0, 6).map(event => event.type),
+    ['vault', 'input', 'input', 'input', 'input', 'scan'],
   );
   await state.tap({finish: false});
+  assert.deepEqual(
+    state.events.find(event => event.type === 'install').identityOptions,
+    identityOptions,
+  );
   assert.equal(state.informationReads, 1);
   assert.equal(state.installationReads, 2, 'refresh installed applets only');
+  assert.deepEqual(state.recordedInstallations, [
+    {
+      hello: state.uninitialized,
+      options: {identity: true, library: true, monoid: true, optional: []},
+    },
+  ]);
   assert.equal(
     state.targets.length,
     0,
@@ -454,6 +1009,7 @@ test('installation asks for Secret PIN before scanning, completes PIN setup, the
 
 test('installation keeps the current page during deferred PIN saving and Copy handoff, then shows Complete directly', async () => {
   const state = mount({returnTo: 'copy'});
+  state.installation.library = {installed: true, loaded: true};
   const savePIN = deferred();
   const handoff = deferred();
   state.pinSession.setPIN = async () => savePIN.promise;
@@ -466,8 +1022,15 @@ test('installation keeps the current page during deferred PIN saving and Copy ha
     },
   });
   state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
   await state.answer();
   await state.tap();
+  assert.deepEqual(state.recordedInstallations, [
+    {
+      hello: state.uninitialized,
+      options: {identity: true, library: false, monoid: true, optional: []},
+    },
+  ]);
   assert.ok(state.node('CardInformationContent'));
   assert.equal(state.node('CardAppletsContent'), undefined);
   assert.equal(state.node('OperationComplete'), undefined);
@@ -487,6 +1050,7 @@ test('installation keeps the current page during deferred PIN saving and Copy ha
 test('the refreshed applet list is shown only after leaving Complete', async () => {
   const state = mount();
   state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
   await state.answer();
   await state.tap();
   assert.ok(state.node('OperationComplete'));
@@ -508,11 +1072,13 @@ test('setting PINs reuses the current applet inventory and updated Hello', async
 
   state.click('Set Secret PIN');
   await state.answer();
+  assert.equal(state.scans.at(-1).label, 'Scan card 01020304');
   await state.tap();
 
   assert.deepEqual(state.errors, []);
   assert.equal(state.informationReads, 1);
   assert.equal(state.installationReads, 1);
+  assert.deepEqual(state.recordedInstallations, []);
   assert.ok(state.node('OperationComplete'));
   state.click('Back to Card Applets');
   assert.equal(state.node('CardAppletsContent').props.id, '01020304');
@@ -528,6 +1094,7 @@ test('failed installation reports the error and stays on Card information withou
   const state = mount();
   state.installError = new Error('Installing the applet failed (6a80)');
   state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
   await state.answer();
   await state.tap();
   assert.deepEqual(state.errors, [state.installError]);
@@ -540,12 +1107,15 @@ test('failed installation reports the error and stays on Card information withou
     false,
   );
   state.click('Install applets');
-  assert.equal(state.inputs.length, 2);
+  state.node('AppletSelectionPopup').props.onInstall();
+  await state.flush();
+  assert.equal(state.inputs.length, 5);
 });
 
 test('a verified destination is added to the retained Copy flow even when navigation changes while the scanner closes', async () => {
   const state = mount({returnTo: 'copy'});
   state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
   await state.answer();
   await state.tap({finish: false});
   runInAction(() => {
@@ -562,6 +1132,7 @@ test('failed PIN setup never marks an installed card complete or adds it to Copy
   const state = mount({returnTo: 'copy'});
   state.initializeError = new Error('PIN response lost');
   state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
   await state.answer();
   await state.tap();
   assert.deepEqual(state.errors, [state.initializeError]);
@@ -588,6 +1159,7 @@ for (const [kind, label] of [
       pins: {...state.initialized.pins, [kind]: 0},
     };
     state.click('Install applets');
+    state.node('AppletSelectionPopup').props.onInstall();
     await state.answer();
     await state.tap();
     assert.equal(state.errors.length, 1);
@@ -603,27 +1175,50 @@ for (const [kind, label] of [
   });
 }
 
-test('a different physical card is rejected before installation or any PIN command', async () => {
-  const state = mount();
-  state.click('Install applets');
-  await state.answer();
-  state.information = {
-    ...state.information,
-    cplc: {icSerialNumber: 'different'},
-  };
-  await state.tap();
-  assert.match(state.errors[0].message, /same card/);
-  assert.equal(
-    state.events.some(event =>
-      ['install', 'auth', 'initialize'].includes(event.type),
-    ),
-    false,
-  );
-});
+for (const known of [false, true]) {
+  test(`a different physical card is rejected before any writes with ${known ? 'a known ID' : 'no Identity installed'}`, async () => {
+    const state = mount({cardInformation: !known});
+    if (known) {
+      state.installation = installed({
+        ...state.uninitialized,
+        alias: 'Daily wallet',
+      });
+      state.click('Scan a card');
+      assert.equal(state.scans[0].label, 'Scan a card');
+      await state.tap();
+      state.click('Set Secret PIN');
+    } else {
+      state.click('Install applets');
+      state.node('AppletSelectionPopup').props.onInstall();
+    }
+    await state.answer();
+    assert.equal(
+      state.scans.at(-1).label,
+      known ? 'Scan card Daily wallet (01020304)' : 'Scan the card',
+    );
+    state.information = {
+      ...state.information,
+      cplc: {icSerialNumber: 'different'},
+    };
+    await state.tap();
+    assert.equal(
+      state.errors[0].message,
+      known ? 'Scan card Daily wallet (01020304)' : 'Scan the same card',
+    );
+    assert.equal(
+      state.events.some(event =>
+        ['install', 'auth', 'initialize'].includes(event.type),
+      ),
+      false,
+    );
+  });
+}
 
 test('leaving while entering Secret PIN cancels the flow before opening the scanner', async () => {
   const state = mount();
   state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
+  await state.flush();
   runInAction(() => {
     state.view.$leaving = true;
   });
@@ -633,7 +1228,65 @@ test('leaving while entering Secret PIN cancels the flow before opening the scan
   assert.deepEqual(state.errors, []);
 });
 
-test('bundle replacement requires explicit confirmation and leaves a manual recovery reminder', async () => {
+test('applet maintenance waits for PIN vault unlock before input and clears access when input is cancelled', async () => {
+  const state = mount();
+  const unlock = deferred();
+  state.pinSession.authenticate = async () => {
+    state.events.push({type: 'vault'});
+    await unlock.promise;
+  };
+  state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall();
+  await state.flush();
+  assert.equal(state.inputs.length, 0);
+  assert.equal(state.scans.length, 0);
+  unlock.resolve();
+  await state.flush();
+  assert.equal(state.inputs.length, 1);
+  assert.deepEqual(
+    state.events.map(event => event.type),
+    ['vault', 'input'],
+  );
+  state.inputs[0].finished.resolve(undefined);
+  await state.flush();
+  assert.deepEqual(
+    state.events.map(event => event.type),
+    ['vault', 'input', 'clear'],
+  );
+  assert.equal(state.scans.length, 0);
+  assert.deepEqual(state.errors, []);
+});
+
+for (const interruption of ['cancel', 'leave', 'unmount']) {
+  test(`${interruption} during vault unlock prevents PIN input and NFC`, async () => {
+    const state = mount();
+    const unlock = deferred();
+    let unlockSignal;
+    state.pinSession.authenticate = async signal => {
+      unlockSignal = signal;
+      await unlock.promise;
+    };
+    state.click('Install applets');
+    state.node('AppletSelectionPopup').props.onInstall();
+    await state.flush();
+    assert.equal(state.inputs.length, 0);
+    if (interruption === 'cancel') {
+      unlock.reject(Object.assign(new Error('Cancelled'), {code: 'CANCELLED'}));
+    } else {
+      if (interruption === 'unmount') state.unmount();
+      else runInAction(() => (state.view.$leaving = true));
+      assert.equal(unlockSignal.aborted, true);
+      unlock.resolve();
+    }
+    await state.flush();
+    assert.equal(state.inputs.length, 0);
+    assert.equal(state.scans.length, 0);
+    assert.deepEqual(state.errors, []);
+    assert.ok(state.events.some(event => event.type === 'clear'));
+  });
+}
+
+test('bundle replacement collects its target and opens Sync only after NFC closes, before any replacement', async () => {
   const state = mount({
     cardInformation: false,
     bundle: new Uint8Array(32).fill(1),
@@ -646,15 +1299,146 @@ test('bundle replacement requires explicit confirmation and leaves a manual reco
   const confirm = state.node('ConfirmPopup');
   assert.ok(confirm);
   assert.equal(confirm.props.confirmColor, 'warning');
-  assert.match(text(confirm), /another bundle card/);
+  assert.match(text(confirm), /cannot be used until its items are restored/);
+  // Other bundle cards still hold the items, so the app is not the only copy.
+  assert.doesNotMatch(text(confirm), /only copy/);
   assert.equal(state.inputs.length, 0);
   confirm.props.onConfirm();
   await state.answer();
-  await state.tap();
-  assert.ok(state.node('OperationComplete'));
-  assert.match(text(state.node('InfoMessage')), /another bundle card/);
+  await state.tap({finish: false});
+  assert.deepEqual(state.errors, []);
   assert.equal(
-    state.events.some(event => event.type === 'restore'),
+    state.pending,
+    undefined,
+    'the draft is not a recoverable archive',
+  );
+  assert.equal(state.node('OperationComplete'), undefined);
+  assert.equal(
+    state.events.some(event => event.type === 'open-sync'),
+    false,
+  );
+  assert.equal(
+    state.events.some(event =>
+      ['replace', 'restore', 'initialize'].includes(event.type),
+    ),
+    false,
+  );
+  state.scans.at(-1).finished.resolve();
+  await state.flush();
+  const handoff = state.events.find(event => event.type === 'open-sync');
+  assert.ok(handoff);
+  const flow = state.entrances.syncCardsStore.getOrCreate(
+    handoff.options.syncId,
+    () => assert.fail('The target must be collected before navigation'),
+  );
+  assert.ok(flow instanceof SyncCardsState);
+  assert.equal(flow.maintenance, state.prepared);
+  assert.equal(flow.session.cards.length, 1);
+  assert.equal(flow.session.cards[0].publicKey, state.prepared.card.publicKey);
+  assert.equal(flow.session.phase, 'collect');
+  assert.equal(state.view.maintenanceSyncId, handoff.options.syncId);
+  assert.equal(flow.maintenanceCardSnapshot.information, state.information);
+  assert.deepEqual(
+    flow.maintenanceCardSnapshot.installation.hello,
+    state.initialized,
+  );
+  assert.equal(
+    state.events.some(event => ['replace', 'restore'].includes(event.type)),
+    false,
+  );
+
+  // Routra may remount the parent after Sync. Matching must use the retained
+  // card snapshot rather than a mock which returns pending on a blank page.
+  state.pending = {
+    ...state.prepared,
+    archive: {source: {publicKey: 'peer'}, items: []},
+  };
+  state.maintenance.matchOperation = ({hello}) =>
+    hello &&
+    Buffer.from(hello.publicKey).toString('hex') ===
+      state.pending?.card.publicKey
+      ? state.pending
+      : undefined;
+  flow.finishMaintenance();
+  const scans = state.scans.length;
+  runInAction(() => {
+    state.view.$match.$exact.$active = false;
+  });
+  state.unmount();
+  state.render();
+  assert.ok(state.node('CardMaintenanceContent'));
+  assert.equal(state.node('CardAppletsContent'), undefined);
+  assert.equal(state.view.maintenanceSyncId, handoff.options.syncId);
+  assert.equal(
+    state.entrances.syncCardsStore.get(handoff.options.syncId),
+    flow,
+  );
+  // Cancelling a swipe back must leave the handoff available for the real return.
+  state.unmount();
+  assert.equal(state.view.maintenanceSyncId, handoff.options.syncId);
+  assert.equal(
+    state.entrances.syncCardsStore.get(handoff.options.syncId),
+    flow,
+  );
+  runInAction(() => {
+    state.view.$match.$exact.$active = true;
+  });
+  state.render();
+  assert.ok(state.node('CardMaintenanceContent'));
+  assert.equal(state.node('CardAppletsContent'), undefined);
+  assert.equal(state.node('CardScanPlaceholder'), undefined);
+  assert.equal(
+    state.node('CardMaintenanceContent').props.operation.archive,
+    state.pending.archive,
+  );
+  assert.equal(
+    text(state.node('ViewContent').props.footer),
+    'Continue installation',
+  );
+  assert.equal(state.scans.length, scans);
+  assert.equal(state.view.maintenanceSyncId, undefined);
+  assert.equal(
+    state.entrances.syncCardsStore.get(handoff.options.syncId),
+    undefined,
+  );
+
+  // A second collection round must carry its own snapshot after Start over.
+  state.click('Card menu');
+  state.click('Start over');
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.flush();
+  state.click('Card menu');
+  state.click('Reinstall Monoid Applet');
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.answer();
+  await state.tap();
+  const nextHandoff = state.events.findLast(
+    event => event.type === 'open-sync',
+  );
+  assert.notEqual(nextHandoff.options.syncId, handoff.options.syncId);
+  const nextFlow = state.entrances.syncCardsStore.get(
+    nextHandoff.options.syncId,
+  );
+  assert.deepEqual(
+    nextFlow.maintenanceCardSnapshot.installation.hello,
+    state.initialized,
+  );
+  state.pending = {
+    ...state.prepared,
+    archive: {source: {publicKey: 'peer'}, items: []},
+  };
+  nextFlow.finishMaintenance();
+  state.unmount();
+  state.render();
+  assert.ok(state.node('CardMaintenanceContent'));
+  assert.equal(state.node('CardAppletsContent'), undefined);
+  assert.equal(state.node('CardScanPlaceholder'), undefined);
+  assert.equal(
+    text(state.node('ViewContent').props.footer),
+    'Continue installation',
+  );
+  assert.equal(
+    state.events.some(event => ['replace', 'restore'].includes(event.type)),
     false,
   );
 });
@@ -679,8 +1463,10 @@ for (const mode of ['update', 'reinstall']) {
     );
     if (mode === 'reinstall') state.click('Card menu');
     state.click(
-      mode === 'update' ? 'Update Monoid Applet' : 'Reinstall Monoid Applet',
+      mode === 'update' ? 'Update applets' : 'Reinstall Monoid Applet',
     );
+    assert.equal(state.inputs.length, 0);
+    state.node('ConfirmPopup').props.onConfirm();
     await state.answer();
     await state.tap();
 
@@ -721,7 +1507,7 @@ for (const mode of ['update', 'reinstall']) {
         appletAid: AID,
       },
     );
-    assert.ok(state.node('OperationComplete'));
+    finishProcessExit(state);
   });
 }
 
@@ -738,6 +1524,7 @@ test('a failed maintenance AID resolution stops before backup or replacement and
   await state.tap();
   state.click('Card menu');
   state.click('Reinstall Monoid Applet');
+  state.node('ConfirmPopup').props.onConfirm();
   await state.answer();
   await state.tap();
 
@@ -771,6 +1558,7 @@ test('maintenance rejects a changed card identity before authenticating its prot
   await state.tap();
   state.click('Card menu');
   state.click('Reinstall Monoid Applet');
+  state.node('ConfirmPopup').props.onConfirm();
   await state.answer();
   state.installation = {
     ...state.installation,
@@ -794,28 +1582,460 @@ test('fresh installation uses danger confirmation with two explicit actions befo
   await state.tap();
   state.click('Card menu');
   state.click('Fresh install');
+  assert.equal(state.node('AppletSelectionPopup').props.fresh, true);
+  assert.equal(state.node('ConfirmPopup'), undefined);
+  assert.equal(state.inputs.length, 0);
+  state.node('AppletSelectionPopup').props.onChange(['security-key']);
+  const identityOptions = {
+    authorityUrl: 'https://authority.example',
+    authorityPublicKey: new Uint8Array(65).fill(4),
+  };
+  state.node('AppletSelectionPopup').props.onInstall(identityOptions);
   const confirm = state.node('ConfirmPopup');
   assert.equal(confirm.props.confirmColor, 'danger');
   assert.deepEqual(confirm.props.confirmText, ['Continue', 'Confirm']);
-  assert.match(text(confirm), /new identity/);
+  assert.match(text(confirm), /Card keys will be regenerated/);
   assert.equal(state.inputs.length, 0);
   assert.equal(
     state.events.some(event => event.type === 'prepare-fresh'),
     false,
   );
   confirm.props.onConfirm();
+  await state.flush();
   assert.equal(state.inputs[0].options.placeholder, 'Set Secret PIN');
   await state.answer();
   await state.tap();
   const types = state.events.map(event => event.type);
-  assert.ok(types.indexOf('initialize') < types.indexOf('complete'));
+  assert.deepEqual(
+    state.events.find(event => event.type === 'prepare-fresh')
+      .selectedOptionalStages,
+    ['security-key'],
+  );
+  assert.ok(types.indexOf('replace') < types.indexOf('initialize'));
+  assert.deepEqual(
+    state.events.find(event => event.type === 'prepare-fresh').identityOptions,
+    identityOptions,
+  );
+  assert.equal(state.pending, undefined);
+  finishProcessExit(state);
+});
+
+async function startFreshInstall(state) {
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.click('Card menu');
+  state.click('Fresh install');
+  state.node('AppletSelectionPopup').props.onInstall();
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.answer();
+}
+
+function vaultWrites(state) {
+  return state.events.filter(event =>
+    ['save-access', 'remove-access'].includes(event.type),
+  );
+}
+
+test('a slow fresh replacement waits for NFC cleanup and overwrites the stale Access PIN without removing it', async t => {
+  const clock = pinClock(t);
+  const state = mount({cardInformation: false});
+  const replacing = deferred();
+  const replace = state.maintenance.replace;
+  t.mock.method(state.maintenance, 'replace', async (...args) => {
+    await replacing.promise;
+    clock.elapse(61_000);
+    return replace(...args);
+  });
+  state.removePINError = Object.assign(new Error('Authorization expired'), {
+    code: 'AUTHORIZATION_EXPIRED',
+  });
+  await startFreshInstall(state);
+  const tapping = state.tap({finish: false});
+  await state.flush();
+  assert.deepEqual(vaultWrites(state), []);
+  replacing.resolve();
+  await tapping;
+  assert.equal(state.scans.at(-1).error, undefined);
+  assert.ok(state.events.some(event => event.type === 'initialize'));
+  assert.deepEqual(
+    vaultWrites(state),
+    [],
+    'wait for native and presentation exit',
+  );
+  state.scans.at(-1).finished.resolve();
+  await state.flush();
+  assert.deepEqual(vaultWrites(state), [
+    {type: 'save-access', id: '01020304', pin: PIN},
+  ]);
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.toasts, []);
+  finishProcessExit(state);
+});
+
+for (const removalError of [undefined, 'AUTHORIZATION_EXPIRED', 'IO_ERROR']) {
+  test(`fresh replacement without a new Access PIN removes the stale entry after NFC (${removalError ?? 'success'})`, async t => {
+    const state = mount({cardInformation: false});
+    const replace = state.maintenance.replace;
+    t.mock.method(state.maintenance, 'replace', async (...args) => {
+      await replace(...args);
+      // PINs may already be set when resuming a completed fresh replacement.
+      state.installation = installed(state.initialized);
+      return state.initialized;
+    });
+    if (removalError) {
+      state.removePINError = Object.assign(new Error(removalError), {
+        code: removalError,
+      });
+    }
+    await startFreshInstall(state);
+    await state.tap({finish: false});
+    assert.equal(state.scans.at(-1).error, undefined);
+    assert.deepEqual(vaultWrites(state), []);
+    state.scans.at(-1).finished.resolve();
+    await state.flush();
+    const writes = vaultWrites(state);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].type, 'remove-access');
+    assert.equal(writes[0].id, '01020304');
+    assert.equal(writes[0].expectedPIN, undefined);
+    assert.equal(writes[0].signal, state.inputs[0].signal);
+    assert.equal(writes[0].signal.aborted, false);
+    assert.deepEqual(state.errors, []);
+    assert.deepEqual(
+      state.toasts,
+      removalError
+        ? [
+            {
+              message: 'Old Access PIN is still saved on this device',
+              color: 'warning',
+            },
+          ]
+        : [],
+    );
+    finishProcessExit(state);
+  });
+}
+
+for (const failureStage of [
+  'PIN setup',
+  'alias restoration',
+  'scan cleanup',
+  'scan cancellation',
+]) {
+  test(`fresh replacement still cleans the stale PIN after ${failureStage} fails`, async t => {
+    const state = mount({cardInformation: false});
+    const failure = Object.assign(
+      new Error(failureStage),
+      failureStage === 'scan cancellation' ? {code: 'CANCELLED'} : {},
+    );
+    if (failureStage === 'PIN setup') state.initializeError = failure;
+    if (failureStage === 'alias restoration') {
+      state.aliasError = failure;
+      const prepareFresh = state.maintenance.prepareFresh;
+      t.mock.method(state.maintenance, 'prepareFresh', async (...args) => {
+        const saved = await prepareFresh(...args);
+        saved.card.alias = 'Daily';
+        return saved;
+      });
+    }
+    await startFreshInstall(state);
+    const scan = state.scans.at(-1);
+    const callback = scan.callback(
+      'session',
+      value => state.progress.push(value),
+      new AbortController().signal,
+    );
+    if (['PIN setup', 'alias restoration'].includes(failureStage)) {
+      await assert.rejects(callback, error => error === failure);
+    } else {
+      await callback;
+    }
+    assert.ok(state.events.some(event => event.type === 'replace'));
+    assert.deepEqual(vaultWrites(state), []);
+    scan.finished.reject(failure);
+    await state.flush();
+    const writes = vaultWrites(state);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].type, 'remove-access');
+    assert.equal(writes[0].id, '01020304');
+    assert.deepEqual(
+      state.errors,
+      failureStage === 'scan cancellation' ? [] : [failure],
+    );
+    assert.deepEqual(state.toasts, []);
+  });
+}
+
+test('a failed fresh replacement never removes the saved Access PIN', async t => {
+  const state = mount({cardInformation: false});
+  const failure = new Error('Replacement failed');
+  t.mock.method(state.maintenance, 'replace', async () => {
+    throw failure;
+  });
+  await startFreshInstall(state);
+  await state.tap();
+  assert.deepEqual(vaultWrites(state), []);
+  assert.deepEqual(state.errors, [failure]);
+  assert.deepEqual(state.toasts, []);
+});
+
+test('a failed Access PIN overwrite still cleans the stale entry without failing the fresh install', async t => {
+  const state = mount({cardInformation: false});
+  t.mock.method(state.pinSession, 'setPIN', async () => {
+    throw new Error('Save failed');
+  });
+  await startFreshInstall(state);
+  await state.tap();
+  assert.equal(vaultWrites(state).length, 1);
+  assert.equal(vaultWrites(state)[0].type, 'remove-access');
+  assert.equal(vaultWrites(state)[0].id, '01020304');
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.toasts, [
+    {message: 'Access PIN was not saved on this device', color: 'warning'},
+  ]);
+  finishProcessExit(state);
+});
+
+for (const leavingAt of ['replacement', 'scan cleanup']) {
+  test(`page exit during ${leavingAt} skips all fresh-install vault writes`, async t => {
+    const state = mount({cardInformation: false});
+    if (leavingAt === 'replacement') {
+      const replace = state.maintenance.replace;
+      t.mock.method(state.maintenance, 'replace', async (...args) => {
+        const hello = await replace(...args);
+        runInAction(() => {
+          state.view.$leaving = true;
+        });
+        return hello;
+      });
+    }
+    await startFreshInstall(state);
+    await state.tap({finish: false});
+    runInAction(() => {
+      state.view.$leaving = true;
+    });
+    state.scans.at(-1).finished.resolve();
+    await state.flush();
+    assert.equal(state.inputs[0].signal.aborted, true);
+    assert.deepEqual(vaultWrites(state), []);
+    assert.deepEqual(state.errors, []);
+    assert.deepEqual(state.toasts, []);
+  });
+}
+
+test('dismissing applet selection performs no PIN prompt, scan or installation', () => {
+  const state = mount();
+  state.click('Install applets');
+  const selection = state.node('AppletSelectionPopup');
+  assert.deepEqual(selection.props.selected, []);
+  selection.props.onChange(['security-key']);
+  state.node('AppletSelectionPopup').props.onDismiss();
+  assert.equal(state.node('AppletSelectionPopup'), undefined);
+  assert.deepEqual(state.inputs, []);
+  assert.deepEqual(state.scans, []);
+  assert.equal(
+    state.events.some(event => event.type === 'install'),
+    false,
+  );
+});
+
+test('explicit Security Key selection reaches installation and returns to Security Key only on Back', async () => {
+  const state = mount({returnTo: 'securityKey'});
+  state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onChange(['security-key']);
+  assert.equal(state.inputs.length, 0);
+  state.node('AppletSelectionPopup').props.onInstall();
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(
+    state.events.find(event => event.type === 'install').selectedOptionalStages,
+    ['security-key'],
+  );
+  assert.deepEqual(state.recordedInstallations[0].options.optional, [
+    'security-key',
+  ]);
   assert.ok(state.node('OperationComplete'));
+  assert.deepEqual(state.backs, []);
+  state.click('Back to Security Key');
+  assert.deepEqual(state.backs, ['securityKey']);
+});
+
+for (const mode of ['update', 'reinstall']) {
+  test(`${mode} warns about the dependent Security Key and does nothing until confirmed`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized, ['security-key']);
+    state.maintenance.isUpdateAvailable = () => mode === 'update';
+    state.click('Scan a card');
+    await state.tap();
+    if (mode === 'reinstall') state.click('Card menu');
+    state.click(
+      mode === 'update' ? 'Update applets' : 'Reinstall Monoid Applet',
+    );
+    const confirmation = state.node('ConfirmPopup');
+    assert.equal(confirmation.props.confirmColor, 'warning');
+    assert.deepEqual(confirmation.props.confirmText, ['Continue', 'Confirm']);
+    assert.match(text(confirmation), /only copy of its items/);
+    assert.match(text(confirmation), /FIDO PIN/);
+    assert.match(text(confirmation), /FIDO PIN will be reset/);
+    assert.equal(state.inputs.length, 0);
+    assert.equal(
+      state.events.some(event => event.type === 'prepare'),
+      false,
+    );
+    confirmation.props.onCancel();
+    assert.equal(state.node('ConfirmPopup'), undefined);
+    assert.equal(state.inputs.length, 0);
+    if (mode === 'reinstall') state.click('Card menu');
+    state.click(
+      mode === 'update' ? 'Update applets' : 'Reinstall Monoid Applet',
+    );
+    state.node('ConfirmPopup').props.onConfirm();
+    await state.answer();
+    await state.tap();
+    assert.deepEqual(state.errors, []);
+    assert.equal(state.prepareOptions.mode, mode);
+    assert.deepEqual(state.prepareOptions.selectedOptionalStages, [
+      'security-key',
+    ]);
+    assert.deepEqual(
+      state.prepareOptions.replaceStages,
+      mode === 'update' ? ['library', 'monoid'] : undefined,
+    );
+  });
+}
+
+test('a Security Key-only update preserves Monoid items and selects only its own replacement stage', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized, ['security-key']);
+  state.maintenance.isAppletUpdateAvailable = (_hello, stage) =>
+    stage === 'security-key';
+  state.click('Scan a card');
+  await state.tap();
+  state.click('Update applets');
+  const confirmation = state.node('ConfirmPopup');
+  assert.doesNotMatch(text(confirmation), /cannot be used|only copy/);
+  assert.match(text(confirmation), /FIDO PIN will be reset/);
+  assert.equal(state.inputs.length, 0);
+  confirmation.props.onConfirm();
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.prepareOptions.replaceStages, ['security-key']);
+});
+
+test('an unresolved Bundle recovery without grants still blocks a new installation', async () => {
+  const state = mount({cardInformation: false, bundle: true});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.pending = {
+    id: 'earlier',
+    mode: 'update',
+    phase: 'restore',
+    card: {appletAid: AID, bundle: true},
+    archive: {items: []},
+    grants: [],
+  };
+  assert.ok(
+    find(
+      state.render(),
+      node => node.type === 'Button' && text(node) === 'Restore items',
+    ),
+  );
+  state.click('Card menu');
+  const install = find(
+    state.render(),
+    node => node.type === 'Button' && text(node) === 'Install applets',
+  );
+  assert.equal(install.props.disabled, true);
+  assert.equal(
+    state.events.some(
+      event =>
+        event.type === 'replace' ||
+        event.type === 'restore' ||
+        event.type === 'install',
+    ),
+    false,
+  );
+  assert.equal(state.pending.id, 'earlier');
+  assert.equal(state.node('OperationComplete'), undefined);
+});
+
+test('optional installation updates known outdated dependencies after confirmation', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.maintenance.isUpdateAvailable = () => true;
+  state.click('Scan a card');
+  await state.tap();
+  state.click('Card menu');
+  state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onChange(['security-key']);
+  state.node('AppletSelectionPopup').props.onInstall();
+  const confirmation = state.node('ConfirmPopup');
+  assert.equal(confirmation.props.title, 'Update applets');
+  assert.match(text(confirmation), /only copy of its items/);
+  assert.equal(state.inputs.length, 0);
+  confirmation.props.onConfirm();
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.prepareOptions.replaceStages, ['library', 'monoid']);
+  assert.deepEqual(state.prepareOptions.selectedOptionalStages, [
+    'security-key',
+  ]);
+});
+
+test('Security Key maintenance includes known outdated required applets', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized, ['security-key']);
+  state.maintenance.isUpdateAvailable = () => true;
+  state.click('Scan a card');
+  await state.tap();
+  state.node('CardAppletsContent').props.onSelectApplet('security-key');
+  state.click('Reinstall applet');
+  const confirmation = state.node('ConfirmPopup');
+  assert.match(text(confirmation), /only copy of its items/);
+  assert.match(text(confirmation), /FIDO PIN will be reset/);
+  confirmation.props.onConfirm();
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.prepareOptions.replaceStages, [
+    'library',
+    'monoid',
+    'security-key',
+  ]);
+  assert.deepEqual(state.prepareOptions.selectedOptionalStages, [
+    'security-key',
+  ]);
+});
+
+test('the installed Security Key applet opens its Home page with the scanned card identity', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized, ['security-key']);
+  state.click('Scan a card');
+  await state.tap();
+  state.node('CardAppletsContent').props.onSelectApplet('security-key');
+  state.click('Open Security Key');
+  assert.deepEqual(state.events.at(-1), {
+    type: 'open-security-key',
+    options: {
+      card: {
+        id: '01020304',
+        publicKey: Buffer.from(state.initialized.publicKey).toString('hex'),
+      },
+    },
+  });
+  assert.equal(state.inputs.length, 0);
 });
 
 test('a known installed applet remains visible when card-manager information is unavailable', async () => {
   const state = mount({cardInformation: false});
   state.installation = {
     identity: {installed: true},
+    library: {installed: undefined},
     monoid: {installed: true},
     helloError: new Error('Could not read Monoid'),
     registryError: new Error('GP unavailable'),
@@ -844,6 +2064,7 @@ test('a known Identity Applet is not classified as an unsupported card when Mono
   const state = mount({cardInformation: false});
   state.installation = {
     identity: {installed: true},
+    library: {installed: undefined},
     monoid: {installed: undefined},
     helloError: new Error('Monoid SELECT failed (6985)'),
     registryError: new Error('GP unavailable'),
@@ -857,3 +2078,1613 @@ test('a known Identity Applet is not classified as an unsupported card when Mono
   assert.equal(content.props.applets[1].unknown, true);
   assert.equal(state.node('CardScanPlaceholder'), undefined);
 });
+
+for (const [mode, label] of [
+  ['reinstall', 'Resume reinstall'],
+  ['update', 'Resume update'],
+  ['fresh', 'Resume fresh install'],
+]) {
+  test(`interrupted ${mode} requires explicit confirmation and resumes its saved plan`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    state.pending = {
+      id: 'interrupted',
+      mode,
+      phase: 'replacing',
+      checkpoint: 'remove-monoid-package',
+      selectedOptionalStages: ['security-key'],
+      replaceStages: ['library', 'monoid', 'security-key'],
+      archive: mode === 'fresh' ? undefined : {items: []},
+      card: {appletAid: AID, bundle: false},
+    };
+    const saved = state.pending;
+    const footer = state.node('ViewContent').props.footer;
+    assert.equal(text(footer), label);
+    state.click(label);
+    const confirmation = state.node('ConfirmPopup');
+    assert.equal(
+      confirmation.props.confirmColor,
+      mode === 'fresh' ? 'danger' : 'warning',
+    );
+    assert.match(text(confirmation), /FIDO PIN/);
+    assert.equal(state.inputs.length, 0);
+    assert.equal(state.scans.length, 1);
+    confirmation.props.onCancel();
+    assert.equal(state.node('ConfirmPopup'), undefined);
+    assert.equal(state.pending, saved);
+    assert.equal(state.inputs.length, 0);
+    state.click(label);
+    state.node('ConfirmPopup').props.onConfirm();
+    await state.flush();
+    assert.equal(
+      state.inputs[0].options.placeholder,
+      mode === 'fresh' ? 'Set Secret PIN' : 'Enter Secret PIN',
+    );
+    await state.answer();
+    await state.tap();
+    assert.deepEqual(state.errors, []);
+    assert.deepEqual(
+      state.events.filter(event => event.type === 'replace'),
+      [{type: 'replace', id: 'interrupted'}],
+    );
+    assert.equal(
+      state.events.some(event =>
+        ['prepare', 'prepare-fresh', 'install'].includes(event.type),
+      ),
+      false,
+    );
+    assert.deepEqual(saved.selectedOptionalStages, ['security-key']);
+    assert.deepEqual(saved.replaceStages, [
+      'library',
+      'monoid',
+      'security-key',
+    ]);
+  });
+}
+
+test('resume confirmation cannot authorize a different saved maintenance operation', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.pending = {
+    id: 'confirmed',
+    mode: 'reinstall',
+    phase: 'replacing',
+    card: {appletAid: AID, bundle: false},
+  };
+  state.click('Resume reinstall');
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.answer();
+  state.pending = {...state.pending, id: 'different'};
+  await state.tap();
+  assert.equal(state.errors.length, 1);
+  assert.equal(
+    state.events.some(event =>
+      ['prepare', 'replace', 'install'].includes(event.type),
+    ),
+    false,
+  );
+});
+
+test('an interrupted replacement disables new installation instead of borrowing its saved operation', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.pending = {
+    id: 'interrupted',
+    mode: 'fresh',
+    phase: 'replacing',
+    card: {appletAid: AID, bundle: false},
+  };
+  state.click('Card menu');
+  for (const label of ['Install applets', 'Fresh install']) {
+    const button = find(
+      state.render(),
+      node => node.type === 'Button' && text(node) === label,
+    );
+    assert.equal(button.props.disabled, true);
+  }
+});
+
+test('a new Install action cannot resume an operation discovered during its scan', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.click('Card menu');
+  state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onChange(['security-key']);
+  state.node('AppletSelectionPopup').props.onInstall();
+  await state.answer();
+  state.pending = {
+    id: 'interrupted',
+    mode: 'reinstall',
+    phase: 'replacing',
+    card: {appletAid: AID, bundle: false},
+  };
+  await state.tap();
+  assert.equal(state.errors.length, 1);
+  assert.match(state.errors[0].message, /Resume card maintenance first/);
+  assert.equal(
+    state.events.some(event =>
+      ['prepare', 'replace', 'install'].includes(event.type),
+    ),
+    false,
+  );
+});
+
+for (const [phase, label, mode, archive, grants] of [
+  ['restore', 'Restore items', 'reinstall', {items: []}, []],
+  ['restore', 'Restore applet access', 'reinstall', undefined, ['grant']],
+]) {
+  test(`${phase} offers only its remaining ${label} action`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    state.pending = {
+      id: 'remaining',
+      mode,
+      phase,
+      archive,
+      grants,
+      card: {appletAid: AID, bundle: false},
+    };
+    assert.equal(text(state.node('ViewContent').props.footer), label);
+    state.click(label);
+    assert.equal(state.node('ConfirmPopup'), undefined);
+    await state.answer();
+    await state.tap();
+    assert.deepEqual(state.errors, []);
+    assert.equal(
+      state.events.some(event =>
+        ['prepare', 'prepare-fresh', 'install'].includes(event.type),
+      ),
+      false,
+    );
+    assert.ok(state.events.some(event => event.type === 'restore'));
+    assert.equal(
+      state.events.some(event => event.type === 'initialize'),
+      false,
+    );
+    finishProcessExit(state);
+  });
+}
+
+for (const cached of [false, true]) {
+  test(`restoration ${cached ? 'reuses saved' : 'confirms new'} Access PIN while authenticating existing Secret PIN once`, async () => {
+    const state = mount({cardInformation: false});
+    state.uninitialized.pins = {secret: 5, access: false};
+    state.installation = installed(state.uninitialized);
+    if (cached)
+      state.savedPINs = {
+        [Buffer.from(state.uninitialized.id).toString('hex')]: 'Saved-42',
+      };
+    state.click('Scan a card');
+    await state.tap();
+    state.pending = {
+      id: 'restore-pins',
+      mode: 'reinstall',
+      phase: 'restore',
+      archive: {items: []},
+      grants: [],
+      card: {appletAid: AID, bundle: false},
+    };
+    state.click('Restore items');
+    await state.answer();
+    assert.deepEqual(
+      state.inputs.map(i => i.options.placeholder),
+      cached
+        ? ['Enter Secret PIN']
+        : ['Enter Secret PIN', 'Set Access PIN', 'Confirm Access PIN'],
+    );
+    await state.tap();
+    assert.deepEqual(state.errors, []);
+    assert.equal(state.initializedAccessPIN, cached ? 'Saved-42' : PIN);
+    assert.equal(
+      state.events.find(e => e.type === 'save-access').pin,
+      cached ? 'Saved-42' : PIN,
+    );
+  });
+}
+
+for (const leavingAt of ['PIN', 'target read', 'NFC cleanup']) {
+  test(`Bundle backup does not hand off or replace after leaving during ${leavingAt}`, async () => {
+    const state = mount({
+      cardInformation: false,
+      bundle: new Uint8Array(32).fill(1),
+    });
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    state.click('Card menu');
+    state.click('Reinstall Monoid Applet');
+    state.node('ConfirmPopup').props.onConfirm();
+    await state.flush();
+    const read = deferred();
+    if (leavingAt === 'target read') {
+      state.applet.list = async () => read.promise;
+    }
+    if (leavingAt !== 'PIN') {
+      await state.answer();
+      if (leavingAt === 'target read') {
+        const tapping = state.tap({finish: false});
+        await state.flush();
+        runInAction(() => {
+          state.view.$leaving = true;
+        });
+        read.resolve({items: []});
+        await tapping;
+      } else {
+        await state.tap({finish: false});
+      }
+    }
+    runInAction(() => {
+      state.view.$leaving = true;
+    });
+    if (leavingAt === 'PIN') await state.answer();
+    else {
+      state.scans.at(-1).finished.resolve();
+      await state.flush();
+    }
+    assert.equal(
+      state.events.some(event =>
+        ['replace', 'restore', 'open-sync'].includes(event.type),
+      ),
+      false,
+    );
+    assert.equal(state.pending, undefined);
+    assert.deepEqual(state.errors, []);
+  });
+}
+
+test('a held maintenance Secret PIN spans installation and a later restore attempt', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  const card = {...readCardIdentity(state.initialized), appletAid: AID};
+  state.savedPINs = {[card.id]: 'Access-43'};
+  state.maintenance.holdSecretPIN(card, PIN);
+  state.pending = {
+    id: 'held',
+    mode: 'reinstall',
+    phase: 'ready',
+    card,
+    archive: {items: []},
+  };
+  let restores = 0;
+  state.maintenance.restore = async () => {
+    restores++;
+    return {complete: false, issues: [], droppedGrants: []};
+  };
+  state.click('Continue installation');
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.flush();
+  assert.equal(state.inputs.length, 0);
+  await state.tap();
+  assert.deepEqual(state.errors, []);
+  assert.equal(state.pending.phase, 'restore');
+  assert.equal(restores, 1);
+  state.click('Restore items');
+  await state.flush();
+  assert.equal(state.inputs.length, 0);
+  await state.tap();
+  assert.equal(restores, 2);
+  assert.deepEqual(state.errors, []);
+  assert.ok(
+    state.events
+      .filter(event => event.type === 'auth' && event.secret)
+      .every(event => event.pin === PIN),
+  );
+});
+
+for (const phase of ['ready', 'restore']) {
+  test(`maintenance in ${phase} re-prompts after idle expiry and keeps its recovery plan`, async t => {
+    const clock = pinClock(t);
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    const card = {...readCardIdentity(state.initialized), appletAid: AID};
+    state.savedPINs = {[card.id]: 'Access-43'};
+    state.maintenance.holdSecretPIN(card, PIN);
+    state.pending = {
+      id: 'expired',
+      mode: 'reinstall',
+      phase,
+      card,
+      archive: {items: []},
+    };
+    const operation = state.pending;
+    clock.elapse(5 * 60_000);
+    state.click(phase === 'ready' ? 'Continue installation' : 'Restore items');
+    if (phase === 'ready') state.node('ConfirmPopup').props.onConfirm();
+    await state.flush();
+    assert.equal(state.inputs.length, 1);
+    assert.equal(state.inputs[0].options.placeholder, 'Enter Secret PIN');
+    assert.equal(state.pending, operation);
+    await state.answer();
+    await state.tap();
+    assert.deepEqual(state.errors, []);
+    assert.ok(state.events.some(event => event.type === 'restore'));
+    state.heldPINs.clear();
+  });
+
+  test(`a rejected held Secret during ${phase} is dropped; only authentication before writes re-prompts`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    const card = {...readCardIdentity(state.initialized), appletAid: AID};
+    state.savedPINs = {[card.id]: 'Access-43'};
+    state.pending = {
+      id: 'held',
+      mode: 'reinstall',
+      phase,
+      card,
+      archive: {items: []},
+    };
+    state.maintenance.holdSecretPIN(card, PIN);
+    const failure = new CBORAppletError({code: 'INVALID_PIN', tries: 4});
+    if (phase === 'ready')
+      state.initializeError = new monoid.CardPINError(
+        'Secret',
+        4,
+        true,
+        failure,
+      );
+    else
+      state.applet.authenticate = async () => {
+        throw failure;
+      };
+    const start = () => {
+      state.click(
+        phase === 'ready' ? 'Continue installation' : 'Restore items',
+      );
+      if (phase === 'ready') state.node('ConfirmPopup').props.onConfirm();
+    };
+    start();
+    await state.flush();
+    assert.equal(state.inputs.length, 0);
+    await state.tap();
+    assert.equal(state.scans.length, 2, 'one read and one failed attempt');
+    assert.equal(state.maintenance.secretPIN(card), undefined);
+    if (phase === 'ready') {
+      assert.equal(state.errors[0].cause, failure);
+      state.installation = installed(state.initialized);
+      state.click('Restore items');
+    } else {
+      assert.deepEqual(state.errors, []);
+      assert.equal(
+        state.inputs.at(-1).options.description,
+        'Incorrect PIN, tries remaining: 4',
+      );
+    }
+    await state.flush();
+    assert.equal(state.inputs.length, 1);
+    assert.equal(state.inputs[0].options.placeholder, 'Enter Secret PIN');
+    await state.answer(undefined);
+  });
+}
+
+test('a saved Bundle archive still requires explicit Reinstall confirmation before replacement', async () => {
+  const state = mount({
+    cardInformation: false,
+    bundle: new Uint8Array(32).fill(1),
+  });
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.pending = {
+    id: 'saved-bundle',
+    mode: 'reinstall',
+    phase: 'ready',
+    card: {appletAid: AID, bundle: '01'.repeat(32)},
+    archive: {source: {publicKey: 'peer'}, items: []},
+  };
+  assert.equal(
+    text(state.node('ViewContent').props.footer),
+    'Continue installation',
+  );
+  assert.equal(
+    state.events.some(event => event.type === 'replace'),
+    false,
+  );
+  state.click('Continue installation');
+  assert.ok(state.node('ConfirmPopup'));
+  assert.equal(state.inputs.length, 0);
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(
+    state.events
+      .filter(event => ['replace', 'restore'].includes(event.type))
+      .map(event => event.type),
+    ['replace', 'restore'],
+  );
+  assert.equal(
+    state.events.some(event => event.type === 'open-sync'),
+    false,
+  );
+  finishProcessExit(state);
+});
+
+for (const failureStage of [
+  'authentication',
+  'before import',
+  'scan cancellation',
+]) {
+  test(`item recovery retains its card and Restore action after ${failureStage} failure`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    const archive = {
+      items: [{index: '02400000000000000001', secret: true, data: '01'}],
+    };
+    const pending = (state.pending = {
+      id: 'remaining',
+      mode: 'reinstall',
+      phase: 'restore',
+      archive,
+      grants: [],
+      card: {appletAid: AID, bundle: false},
+    });
+    // Ordinary recovery matches the retained card identity, not a blank page.
+    state.maintenance.matchOperation = ({hello}) =>
+      hello ? state.pending : undefined;
+    const failure = Object.assign(
+      new Error(failureStage),
+      failureStage === 'scan cancellation' ? {code: 'CANCELLED'} : {},
+    );
+    const authenticate = state.applet.authenticate;
+    const restore = state.maintenance.restore;
+    if (failureStage === 'authentication') {
+      state.applet.authenticate = async request => {
+        await authenticate(request);
+        throw failure;
+      };
+    } else {
+      state.maintenance.restore = async (_applet, _id, onProgress) => {
+        state.events.push({type: 'restore'});
+        onProgress({
+          stage: 'restore',
+          completed: 0,
+          total: archive.items.length,
+        });
+        throw failure;
+      };
+    }
+
+    state.click('Restore items');
+    await state.answer();
+    await state.tap();
+
+    assert.equal(state.pending, pending);
+    assert.equal(state.pending.archive, archive);
+    assert.equal(state.node('OperationComplete'), undefined);
+    assert.equal(state.node('CardScanPlaceholder'), undefined);
+    assert.equal(
+      state.node('CardMaintenanceContent').props.operation.archive,
+      archive,
+    );
+    assert.equal(state.node('CardAppletsContent'), undefined);
+    assert.equal(text(state.node('ViewContent').props.footer), 'Restore items');
+    assert.equal(state.node('ViewContent').props.footer.props.disabled, false);
+    assert.deepEqual(
+      state.errors,
+      failureStage === 'scan cancellation' ? [] : [failure],
+    );
+    assert.equal(
+      state.events.some(event => event.type === 'restore'),
+      failureStage !== 'authentication',
+    );
+    assert.equal(
+      state.events.some(event =>
+        ['prepare', 'prepare-fresh', 'install', 'initialize'].includes(
+          event.type,
+        ),
+      ),
+      false,
+    );
+
+    // An explicit retry uses the same retained recovery without a fresh scan.
+    state.applet.authenticate = authenticate;
+    state.maintenance.restore = restore;
+    state.click('Restore items');
+    await state.answer();
+    await state.tap();
+    assert.equal(state.pending, undefined);
+    finishProcessExit(state);
+  });
+}
+
+test('recovery failure after a real replacement still discards the old card snapshot', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  const archive = {
+    items: [{index: '02400000000000000001', secret: true, data: '01'}],
+  };
+  const prepare = state.maintenance.prepare;
+  state.maintenance.prepare = async (...args) => {
+    const pending = await prepare(...args);
+    pending.archive = archive;
+    return pending;
+  };
+  state.maintenance.matchOperation = ({hello}) =>
+    hello ? state.pending : undefined;
+  const failure = new Error('Import interrupted');
+  state.maintenance.restore = async () => {
+    state.events.push({type: 'restore'});
+    throw failure;
+  };
+
+  state.click('Card menu');
+  state.click('Reinstall Monoid Applet');
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.answer();
+  await state.tap();
+
+  assert.equal(state.pending.phase, 'restore');
+  assert.equal(state.pending.archive, archive);
+  assert.deepEqual(state.errors, [failure]);
+  assert.equal(state.node('OperationComplete'), undefined);
+  assert.ok(state.node('CardScanPlaceholder'));
+  assert.equal(state.node('CardAppletsContent'), undefined);
+  assert.equal(text(state.node('ViewContent').props.footer), 'Scan a card');
+  assert.ok(state.events.some(event => event.type === 'initialize'));
+  assert.ok(state.events.some(event => event.type === 'restore'));
+
+  state.click('Scan a card');
+  await state.tap();
+  assert.equal(text(state.node('ViewContent').props.footer), 'Restore items');
+  assert.equal(
+    state.node('CardMaintenanceContent').props.operation.archive,
+    archive,
+  );
+  assert.equal(state.node('CardAppletsContent'), undefined);
+});
+
+test('fresh installation interrupted during PIN setup retains its restartable operation until setup finishes', async () => {
+  const state = mount({cardInformation: false});
+  state.maintenance.matchOperation = ({hello, cardInformation}) =>
+    hello || cardInformation ? state.pending : undefined;
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.click('Card menu');
+  state.click('Fresh install');
+  state.node('AppletSelectionPopup').props.onInstall();
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.answer();
+  state.initializeError = new Error('Card removed');
+  await state.tap();
+  assert.equal(state.pending.mode, 'fresh');
+  assert.equal(state.pending.checkpoint, 'verify');
+  assert.equal(text(state.node('ViewContent').props.footer), 'Scan a card');
+  assert.equal(state.node('OperationComplete'), undefined);
+  state.initializeError = undefined;
+  state.click('Scan a card');
+  await state.tap();
+  assert.equal(
+    text(state.node('ViewContent').props.footer),
+    'Resume fresh install',
+  );
+  const replacements = state.events.filter(
+    event => event.type === 'replace',
+  ).length;
+  state.click('Resume fresh install');
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.answer();
+  await state.tap();
+  assert.equal(
+    state.events.filter(event => event.type === 'replace').length,
+    replacements + 1,
+  );
+  assert.equal(state.pending, undefined);
+  finishProcessExit(state);
+  assert.ok(state.node('OperationComplete'));
+});
+
+for (const [mode, label] of [
+  ['reinstall', 'Continue installation'],
+  ['update', 'Continue update'],
+  ['fresh', 'Fresh install'],
+]) {
+  test(`a prepared ${mode} offers the next action and still requires confirmation`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    state.pending = {
+      id: 'prepared',
+      mode,
+      phase: 'ready',
+      card: {appletAid: AID, bundle: false},
+      archive: mode === 'fresh' ? undefined : {items: []},
+    };
+    assert.equal(text(state.node('ViewContent').props.footer), label);
+    state.click(label);
+    assert.ok(state.node('ConfirmPopup'));
+    assert.equal(state.inputs.length, 0);
+    assert.equal(state.scans.length, 1);
+  });
+}
+
+for (const mode of ['fresh', 'update', 'reinstall']) {
+  test(`Start over confirms and discards an untouched ${mode} without opening NFC`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    state.pending = {
+      id: 'prepared',
+      mode,
+      phase: 'ready',
+      card: {appletAid: AID, bundle: false},
+      archive: {items: []},
+    };
+    const saved = state.pending;
+    const scans = state.scans.length;
+    const inputs = state.inputs.length;
+    state.click('Card menu');
+    state.click('Start over');
+    const confirmation = state.node('ConfirmPopup');
+    assert.equal(confirmation.props.title, 'Start over?');
+    assert.equal(confirmation.props.confirmText, 'Start over');
+    assert.equal(
+      text(confirmation),
+      'Discard this preparation. Changes already written to cards will remain.',
+    );
+    assert.equal(state.pending, saved);
+    confirmation.props.onCancel();
+    assert.equal(state.node('ConfirmPopup'), undefined);
+    assert.equal(state.pending, saved);
+    assert.equal(
+      state.events.some(event => event.type === 'discard-prepared'),
+      false,
+    );
+    state.click('Card menu');
+    state.click('Start over');
+    state.discardGate = deferred();
+    state.node('ConfirmPopup').props.onConfirm();
+    await state.flush();
+    assert.equal(state.pending, saved);
+    assert.ok(state.node('CardMaintenanceContent'));
+    assert.equal(state.node('CardAppletsContent'), undefined);
+    assert.equal(state.node('ViewContent').props.footer.props.disabled, true);
+    assert.deepEqual(
+      state.events.filter(event => event.type === 'discard-prepared'),
+      [{type: 'discard-prepared', id: 'prepared'}],
+    );
+    assert.equal(state.scans.length, scans);
+    assert.equal(state.inputs.length, inputs);
+    state.discardGate.resolve();
+    await state.flush();
+    assert.equal(state.pending, undefined);
+    assert.ok(state.node('CardAppletsContent'));
+    assert.equal(state.node('CardScanPlaceholder'), undefined);
+    assert.equal(state.node('ConfirmPopup'), undefined);
+    assert.equal(state.scans.length, scans);
+    assert.equal(state.inputs.length, inputs);
+    assert.deepEqual(state.errors, []);
+    assert.equal(
+      state.events.some(event =>
+        ['replace', 'restore', 'prepare', 'install'].includes(event.type),
+      ),
+      false,
+    );
+    state.click('Card menu');
+    const reinstall = find(
+      state.render(),
+      node =>
+        node.type === 'Button' && text(node) === 'Reinstall Monoid Applet',
+    );
+    assert.equal(reinstall.props.disabled, false);
+  });
+}
+
+for (const mode of ['update', 'reinstall']) {
+  for (const [phase, checkpoint, restarted] of [
+    ['ready', 'remove-monoid-instance'],
+    ['replacing', undefined],
+    ['replacing', 'verify'],
+    ['restore', 'verify'],
+    ['setup', undefined],
+    ['ready', undefined, true],
+  ]) {
+    test(`Start over restarts ${mode} ${phase}/${checkpoint} without losing recovery, then installs and restores`, async () => {
+      const state = mount({cardInformation: false});
+      state.installation = installed(state.initialized);
+      state.uninitialized.pins = {secret: 5, access: false};
+      state.click('Scan a card');
+      await state.tap();
+      state.pending = {
+        id: 'started',
+        mode,
+        phase,
+        checkpoint,
+        restarted,
+        card: {
+          ...readCardIdentity(state.initialized),
+          appletAid: AID,
+          bundle: false,
+        },
+        archive: {
+          items: [{index: '01', data: 'saved-envelope'}],
+          checksum: 'saved-checksum',
+        },
+        grants: [],
+        rejectedItems: [{index: '01', reason: 'Old rejection'}],
+      };
+      const original = structuredClone(state.pending);
+      const archive = JSON.stringify(original.archive);
+      state.savedPINs = {'01020304': 'Saved-Access-42'};
+      state.maintenance.holdSecretPIN(original.card, PIN);
+      const clears = state.events.filter(
+        event => event.type === 'clear',
+      ).length;
+      state.click('Card menu');
+      state.click('Start over');
+      const confirmation = state.node('ConfirmPopup');
+      assert.equal(
+        text(confirmation),
+        "The applets will be installed again from scratch, then the card's items are restored from the saved recovery.",
+      );
+      confirmation.props.onCancel();
+      assert.deepEqual(state.pending, original);
+      state.click('Card menu');
+      state.click('Start over');
+      state.restartGate = deferred();
+      state.node('ConfirmPopup').props.onConfirm();
+      await state.flush();
+      assert.deepEqual(state.pending, original);
+      assert.equal(state.node('ViewContent').props.footer.props.disabled, true);
+      state.restartGate.resolve();
+      await state.flush();
+      assert.equal(state.pending.phase, 'ready');
+      assert.equal(state.pending.restarted, true);
+      assert.equal(state.pending.checkpoint, undefined);
+      assert.equal(state.pending.rejectedItems, undefined);
+      assert.deepEqual(state.pending.card, original.card);
+      assert.equal(JSON.stringify(state.pending.archive), archive);
+      assert.equal(state.maintenance.secretPIN(original.card), PIN);
+      assert.equal(
+        state.events.filter(event => event.type === 'clear').length,
+        clears,
+      );
+      assert.equal(state.inputs.length, 0);
+      assert.equal(state.scans.length, 1);
+      // Repeating Start over at ready must still restart, never discard recovery.
+      state.click('Card menu');
+      state.click('Start over');
+      assert.match(text(state.node('ConfirmPopup')), /saved recovery/);
+      state.node('ConfirmPopup').props.onConfirm();
+      await state.flush();
+      assert.equal(JSON.stringify(state.pending.archive), archive);
+      assert.equal(
+        state.events.some(event => event.type === 'discard-prepared'),
+        false,
+      );
+      const label =
+        mode === 'update' ? 'Continue update' : 'Continue installation';
+      assert.equal(text(state.node('ViewContent').props.footer), label);
+      const replace = state.maintenance.replace;
+      state.maintenance.replace = async (...args) => {
+        assert.equal(state.pending.phase, 'ready');
+        assert.equal(state.pending.checkpoint, undefined);
+        assert.equal(JSON.stringify(state.pending.archive), archive);
+        return replace(...args);
+      };
+      const restore = state.maintenance.restore;
+      state.maintenance.restore = async (...args) => {
+        assert.equal(state.pending.phase, 'restore');
+        assert.equal(JSON.stringify(state.pending.archive), archive);
+        return restore(...args);
+      };
+      state.click(label);
+      state.node('ConfirmPopup').props.onConfirm();
+      await state.flush();
+      assert.equal(
+        state.inputs.length,
+        0,
+        'the retained Secret and saved Access PIN are reused',
+      );
+      await state.tap();
+      assert.deepEqual(state.errors, []);
+      assert.deepEqual(
+        state.events.filter(event =>
+          ['replace', 'restore'].includes(event.type),
+        ),
+        [{type: 'replace', id: original.id}, {type: 'restore'}],
+      );
+      assert.equal(state.pending, undefined);
+      assert.equal(
+        state.events.some(event =>
+          ['prepare', 'prepare-fresh', 'install'].includes(event.type),
+        ),
+        false,
+      );
+    });
+  }
+}
+
+for (const [checkpoint, pins] of [
+  [undefined, {secret: 5, access: 5}],
+  ['remove-monoid-package', {secret: 5, access: 5}],
+  ['install', {secret: false, access: false}],
+  ['verify', {secret: false, access: false}],
+  ['verify', {secret: 5, access: false}],
+  ['verify', {secret: 5, access: 5}],
+]) {
+  test(`fresh Start over at ${checkpoint ?? 'preparation'} with ${JSON.stringify(pins)} resets before reinstalling and setting new PINs and the retained alias`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed({...state.initialized, pins});
+    state.click('Scan a card');
+    await state.tap();
+    state.pending = {
+      id: 'fresh-attempt',
+      mode: 'fresh',
+      phase: checkpoint ? 'replacing' : 'ready',
+      checkpoint,
+      restarted: checkpoint ? undefined : true,
+      selectedOptionalStages: ['security-key'],
+      authority: {url: 'https://authority.example', publicKey: '04aa'},
+      card: {
+        ...readCardIdentity(state.initialized),
+        publicKey: `04${'22'.repeat(64)}`,
+        alias: ' 旅行卡 😀 ',
+        appletAid: AID,
+        bundle: false,
+      },
+    };
+    const saved = structuredClone(state.pending);
+    state.savedPINs = {'01020304': 'Old-Access-42'};
+    state.maintenance.holdSecretPIN(saved.card, 'Old-Secret-42');
+    state.click('Card menu');
+    state.click('Start over');
+    const confirmation = state.node('ConfirmPopup');
+    assert.equal(confirmation.props.title, 'Start over?');
+    assert.equal(confirmation.props.confirmText, 'Start over');
+    assert.match(text(confirmation), /installed again from scratch/);
+    assert.match(text(confirmation), /keeps its Card ID and alias/);
+    confirmation.props.onCancel();
+    assert.deepEqual(state.pending, saved);
+    assert.equal(
+      state.events.some(event => event.type === 'restart'),
+      false,
+    );
+
+    state.click('Card menu');
+    state.click('Start over');
+    state.restartGate = deferred();
+    state.node('ConfirmPopup').props.onConfirm();
+    await state.flush();
+    assert.deepEqual(state.pending, saved);
+    assert.equal(state.node('ViewContent').props.footer.props.disabled, true);
+    assert.equal(state.scans.length, 1);
+    assert.equal(state.inputs.length, 0);
+    state.restartGate.resolve();
+    await state.flush();
+    assert.equal(state.pending.id, saved.id);
+    assert.equal(state.pending.phase, 'ready');
+    assert.equal(state.pending.checkpoint, undefined);
+    assert.deepEqual(state.pending.card, saved.card);
+    assert.deepEqual(
+      state.pending.selectedOptionalStages,
+      saved.selectedOptionalStages,
+    );
+    assert.deepEqual(state.pending.authority, saved.authority);
+    assert.equal(state.maintenance.secretPIN(saved.card), undefined);
+    assert.ok(state.events.some(event => event.type === 'clear'));
+    assert.equal(text(state.node('ViewContent').props.footer), 'Fresh install');
+    const process = state.node('CardMaintenanceContent').props.operation;
+    assert.equal(process.mode, 'fresh');
+    assert.equal(process.phase, 'ready');
+    assert.equal(
+      state.events.some(event => event.type === 'discard-prepared'),
+      false,
+    );
+    assert.equal(state.scans.length, 1);
+
+    const replace = state.maintenance.replace;
+    state.maintenance.replace = async (...args) => {
+      assert.equal(state.pending.phase, 'ready');
+      assert.equal(state.pending.checkpoint, undefined);
+      assert.deepEqual(state.pending.card, saved.card);
+      return replace(...args);
+    };
+    state.click('Fresh install');
+    state.node('ConfirmPopup').props.onConfirm();
+    await state.flush();
+    assert.equal(state.inputs[0].options.placeholder, 'Set Secret PIN');
+    await state.answer('Fresh-42');
+    assert.deepEqual(
+      state.inputs.map(input => input.options.placeholder),
+      [
+        'Set Secret PIN',
+        'Confirm Secret PIN',
+        'Set Access PIN',
+        'Confirm Access PIN',
+      ],
+    );
+    await state.tap({finish: false});
+    assert.deepEqual(vaultWrites(state), []);
+    state.scans.at(-1).finished.resolve();
+    await state.flush();
+    assert.deepEqual(state.errors, []);
+    assert.equal(state.pending, undefined);
+    assert.equal(state.initialized.alias, saved.card.alias);
+    assert.equal(state.initializedAccessPIN, 'Fresh-42');
+    assert.deepEqual(vaultWrites(state), [
+      {type: 'save-access', id: '01020304', pin: 'Fresh-42'},
+    ]);
+    assert.equal(
+      state.events.some(event =>
+        ['prepare', 'prepare-fresh', 'install'].includes(event.type),
+      ),
+      false,
+    );
+    assert.ok(state.node('CardMaintenanceContent'));
+    finishProcessExit(state);
+  });
+}
+
+test('a failed fresh Start over keeps its saved identity and Resume action', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.pending = {
+    id: 'fresh-attempt',
+    mode: 'fresh',
+    phase: 'replacing',
+    checkpoint: 'verify',
+    card: {
+      ...readCardIdentity(state.initialized),
+      appletAid: AID,
+      alias: 'Daily',
+      bundle: false,
+    },
+  };
+  const saved = state.pending;
+  state.restartError = new Error('Storage unavailable');
+  state.click('Card menu');
+  state.click('Start over');
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.flush();
+  assert.equal(state.pending, saved);
+  assert.equal(
+    text(state.node('ViewContent').props.footer),
+    'Resume fresh install',
+  );
+  assert.deepEqual(state.errors, [state.restartError]);
+  assert.equal(state.scans.length, 1);
+  assert.equal(state.inputs.length, 0);
+});
+
+for (const [mode, phase, checkpoint, batchId] of [
+  ['reinstall', 'ready', undefined, 'batch'],
+  ['reinstall', 'replacing', undefined, 'batch'],
+  ['reinstall', 'restore', 'verify', 'batch'],
+  ['update', 'ready', undefined, 'batch'],
+  ['update', 'replacing', 'verify', 'batch'],
+  ['update', 'restore', 'verify', 'batch'],
+  ['fresh', 'ready', undefined, 'batch'],
+  ['fresh', 'replacing', 'verify', 'batch'],
+]) {
+  test(`Start over is unavailable for ${mode} ${phase} with ${checkpoint ?? 'no'} checkpoint${batchId ? ' in a batch' : ''}`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    state.pending = {
+      id: 'started',
+      mode,
+      phase,
+      checkpoint,
+      batchId,
+      card: {appletAid: AID, bundle: false},
+      archive: {items: []},
+    };
+    state.click('Card menu');
+    assert.equal(
+      find(
+        state.render(),
+        node => node.type === 'Button' && text(node) === 'Start over',
+      ),
+      undefined,
+    );
+    assert.equal(
+      state.events.some(event => event.type === 'discard-prepared'),
+      false,
+    );
+  });
+}
+
+test('failed Start over keeps the recovery action and card visible', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.pending = {
+    id: 'prepared',
+    mode: 'reinstall',
+    phase: 'ready',
+    card: {appletAid: AID, bundle: false},
+    archive: {items: []},
+  };
+  const saved = state.pending;
+  state.discardError = new Error('Storage unavailable');
+  state.click('Card menu');
+  state.click('Start over');
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.flush();
+  assert.equal(state.pending, saved);
+  assert.ok(state.node('CardMaintenanceContent'));
+  assert.equal(state.node('CardAppletsContent'), undefined);
+  assert.equal(
+    text(state.node('ViewContent').props.footer),
+    'Continue installation',
+  );
+  assert.equal(state.node('ViewContent').props.footer.props.disabled, false);
+  assert.deepEqual(state.errors, [state.discardError]);
+  assert.equal(state.scans.length, 1);
+});
+
+test('Card Applets resumes the first unfinished batch target after navigation and shows completion for the batch', async () => {
+  const state = mount({cardInformation: false});
+  const card = {
+    id: '01020304',
+    alias: 'Travel',
+    publicKey: `04${'11'.repeat(64)}`,
+    bundle: 'ab'.repeat(32),
+    appletAid: AID,
+  };
+  const next = {
+    id: 'next',
+    batchId: 'batch',
+    mode: 'reinstall',
+    phase: 'restore',
+    card,
+    archive: {items: []},
+  };
+  const batch = {
+    id: 'batch',
+    targets: [
+      {operationId: 'done', card: {...card, id: '11111111'}, complete: true},
+      {operationId: 'next', card, complete: false},
+    ],
+  };
+  state.maintenance.batches = [batch];
+  state.maintenance.get = id => (id === 'next' ? next : undefined);
+  state.maintenance.matchOperation = () => undefined;
+  state.render();
+  assert.deepEqual(
+    state
+      .node('CardMaintenanceBatchContent')
+      .props.cards.map(card => card.complete),
+    [true, false],
+  );
+  assert.equal(state.node('OperationComplete'), undefined);
+  state.click('Restore items');
+  await state.answer();
+  assert.equal(
+    state.scans.length,
+    1,
+    'restore can start without scanning a different target first',
+  );
+  assert.equal(state.scans[0].label, 'Scan card Travel (01020304)');
+  state.scans[0].finished.reject(
+    Object.assign(new Error('cancelled'), {code: 'CANCELLED'}),
+  );
+  await state.flush();
+  state.unmount();
+  state.render();
+  assert.equal(
+    state.node('CardMaintenanceBatchContent').props.cards[1].status,
+    'scan to restore',
+  );
+  batch.targets[1].complete = true;
+  state.render();
+  assert.ok(
+    state
+      .node('CardMaintenanceBatchContent')
+      .props.cards.every(card => card.complete),
+  );
+  finishProcessExit(state);
+  state.unmount();
+  state.render();
+  assert.ok(state.node('OperationComplete'));
+  assert.equal(state.process(), undefined);
+  assert.equal(state.node('CardMaintenanceBatchContent'), undefined);
+});
+
+for (const [batchSize, description] of [
+  [1, 'clean restoration retains its process through NFC cleanup and exits'],
+  [
+    2,
+    'a batch with one complete card and one remaining shows only the grid, then exits after the last card',
+  ],
+]) {
+  test(description, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    const operations = Array.from({length: batchSize}, (_, index) => ({
+      id: `clean-${index}`,
+      batchId: batchSize > 1 ? 'clean-batch' : undefined,
+      mode: 'update',
+      phase: 'restore',
+      card: {
+        ...readCardIdentity(state.initialized),
+        appletAid: AID,
+        bundle: false,
+      },
+      archive: {items: [{index: 'f2010000000000000001', alias: 'Example OTP'}]},
+    }));
+    const batch = {
+      id: 'clean-batch',
+      targets: operations.map(operation => ({
+        operationId: operation.id,
+        card: operation.card,
+        complete: false,
+      })),
+    };
+    if (batchSize > 1) state.maintenance.batches = [batch];
+    state.maintenance.get = id =>
+      operations.find(operation => operation.id === id);
+    state.maintenance.dismissBatch = async () => {
+      state.maintenance.batches = [];
+    };
+    state.maintenance.restore = async (_applet, id) => {
+      batch.targets.find(target => target.operationId === id).complete = true;
+      state.pending = undefined;
+      return {complete: true, issues: [], droppedGrants: []};
+    };
+
+    for (let index = 0; index < operations.length; index++) {
+      const operation = (state.pending = operations[index]);
+      state.click('Restore items');
+      await state.answer();
+      assert.equal(state.scans.at(-1).label, `Scan card ${operation.card.id}`);
+      await state.tap({finish: false});
+      assert.equal(state.pending, undefined);
+      if (batchSize > 1) assert.ok(state.node('CardMaintenanceBatchContent'));
+      else
+        assert.equal(
+          state.node('CardMaintenanceContent').props.operation,
+          operation,
+        );
+      assert.equal(state.process().props.$exiting, false);
+      assert.equal(state.node('OperationComplete'), undefined);
+      assert.equal(state.node('CardAppletsContent'), undefined);
+
+      state.scans.at(-1).finished.resolve();
+      await state.flush();
+      const content = state.node(
+        batchSize > 1
+          ? 'CardMaintenanceBatchContent'
+          : 'CardMaintenanceContent',
+      );
+      if (index < operations.length - 1) {
+        // Between cards the batch shows its grid without the last card's report.
+        assert.equal(content.props.report, undefined);
+        assert.equal(content.props.complete, false);
+        assert.equal(state.process().props.$exiting, false);
+        assert.equal(state.node('OperationComplete'), undefined);
+        assert.equal(
+          text(state.node('ViewContent').props.footer),
+          'Restore items',
+        );
+        assert.deepEqual(
+          state
+            .node('CardMaintenanceBatchContent')
+            .props.cards.map(card => card.complete),
+          [true, false],
+        );
+      } else {
+        if (batchSize === 1) assert.equal(content.props.operation, operation);
+        assert.deepEqual(content.props.report, {
+          complete: true,
+          issues: [],
+          droppedGrants: [],
+        });
+        assert.equal(content.props.complete, true);
+      }
+    }
+
+    assert.deepEqual(state.errors, []);
+    finishProcessExit(state);
+    state.click('Back to Card Applets');
+    await state.flush();
+    assert.ok(state.node('CardAppletsContent'));
+    assert.equal(state.node('OperationComplete'), undefined);
+    assert.equal(state.node('CardMaintenanceContent'), undefined);
+    state.pending = {...operations[0], batchId: undefined};
+    assert.equal(state.process().props.$exiting, false);
+    assert.equal(state.node('CardMaintenanceContent').props.report, undefined);
+    state.click('Restore items');
+    await state.answer();
+    await state.tap();
+    assert.deepEqual(state.errors, []);
+    finishProcessExit(state);
+  });
+}
+
+async function mountRejectedRestore(batch = false) {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  const operation = {
+    id: 'rejected',
+    mode: 'update',
+    phase: 'restore',
+    card: {
+      ...readCardIdentity(state.initialized),
+      appletAid: AID,
+      bundle: false,
+    },
+    archive: {items: []},
+  };
+  state.pending = operation;
+  if (batch) {
+    operation.batchId = 'batch';
+    state.maintenance.batches = [
+      {
+        id: 'batch',
+        targets: [
+          {operationId: operation.id, card: operation.card, complete: false},
+          {
+            operationId: 'next',
+            card: {...operation.card, id: '11111111'},
+            complete: false,
+          },
+        ],
+      },
+    ];
+  }
+  const issues = [
+    {index: 'f2010000000000000001', reason: 'INVALID_PARAMETER'},
+    {index: '05140000000000000002', reason: 'Conflict'},
+  ];
+  operation.archive.items = [
+    {index: issues[0].index, alias: 'Example OTP'},
+    {index: issues[1].index, alias: 'Signing key'},
+  ];
+  state.maintenance.restore = async (
+    _applet,
+    id,
+    _progress,
+    _signal,
+    _aids,
+    skipped,
+  ) => {
+    assert.equal(id, operation.id);
+    state.finishWithout = skipped;
+    if (skipped) {
+      assert.deepEqual(
+        skipped,
+        issues.map(issue => issue.index),
+      );
+      state.pending = undefined;
+      if (batch) state.maintenance.batches[0].targets[0].complete = true;
+      return {complete: true, issues, droppedGrants: ['f06d6f6e6f69640501']};
+    }
+    operation.rejectedItems = issues;
+    return {complete: false, issues, droppedGrants: []};
+  };
+  state.click('Restore items');
+  await state.answer();
+  await state.tap();
+  return state;
+}
+
+for (const batch of [false, true]) {
+  test(`${batch ? 'batch' : 'single-card'} rejected recovery lists issues and requires explicit confirmation to finish`, async () => {
+    const state = await mountRejectedRestore(batch);
+    const process = state.node(
+      batch ? 'CardMaintenanceBatchContent' : 'CardMaintenanceContent',
+    );
+    assert.equal(state.node('CardAppletsContent'), undefined);
+    assert.equal(process.props.processing, false);
+    assert.deepEqual(
+      batch ? process.props.items : process.props.operation.archive.items,
+      [
+        {index: 'f2010000000000000001', alias: 'Example OTP'},
+        {index: '05140000000000000002', alias: 'Signing key'},
+      ],
+    );
+    assert.deepEqual(process.props.report.issues, [
+      {index: 'f2010000000000000001', reason: 'INVALID_PARAMETER'},
+      {index: '05140000000000000002', reason: 'Conflict'},
+    ]);
+    const footer = state.node('ViewContent').props.footer;
+    assert.equal(text(footer), 'Finish without 2 itemsRetry');
+    assert.equal(
+      find(footer, node => node.type === 'Button').props.color,
+      'warning',
+    );
+    assert.equal(state.node('OperationComplete'), undefined);
+    assert.equal(state.process().props.$exiting, false);
+    state.click('Finish without 2 items');
+    assert.match(text(state.node('ConfirmPopup')), /archive will be discarded/);
+    state.node('ConfirmPopup').props.onCancel();
+    assert.ok(state.pending);
+    assert.equal(state.finishWithout, undefined);
+    state.click('Finish without 2 items');
+    state.node('ConfirmPopup').props.onConfirm();
+    await state.answer();
+    await state.tap();
+    assert.deepEqual(state.errors, []);
+    assert.equal(state.pending, undefined);
+    const completedProcess = state.node('CardMaintenanceContent');
+    assert.equal(state.node('CardAppletsContent'), undefined);
+    if (batch) {
+      assert.equal(completedProcess, undefined);
+      assert.equal(
+        text(state.node('ViewContent').props.footer),
+        'Continue installation',
+      );
+      assert.deepEqual(
+        state
+          .node('CardMaintenanceBatchContent')
+          .props.cards.map(card => card.complete),
+        [true, false],
+      );
+      assert.equal(state.process().props.$exiting, false);
+      assert.equal(state.node('OperationComplete'), undefined);
+    } else {
+      assert.equal(completedProcess.props.report.complete, true);
+      assert.deepEqual(completedProcess.props.report.droppedGrants, [
+        'f06d6f6e6f69640501',
+      ]);
+      assert.equal(completedProcess.props.operation, process.props.operation);
+      finishProcessExit(state);
+      state.click('Back to Card Applets');
+      assert.ok(state.node('CardAppletsContent'));
+      assert.equal(state.node('CardMaintenanceContent'), undefined);
+      assert.equal(state.node('OperationComplete'), undefined);
+    }
+  });
+}
+
+test('finishing the last batch card with skipped items exits the grid and process together', async () => {
+  const state = await mountRejectedRestore(true);
+  state.maintenance.batches[0].targets[1].complete = true;
+  assert.equal(state.process().props.$exiting, false);
+  state.click('Finish without 2 items');
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.answer();
+  await state.tap({finish: false});
+  assert.equal(state.process().props.$exiting, false);
+  assert.equal(state.node('OperationComplete'), undefined);
+  state.scans.at(-1).finished.resolve();
+  await state.flush();
+  assert.deepEqual(state.errors, []);
+  const process = state.process();
+  const content = find(
+    process,
+    node => node.type === 'CardMaintenanceBatchContent',
+  );
+  assert.equal(content.props.report.complete, true);
+  assert.equal(content.props.report.issues.length, 2);
+  finishProcessExit(state);
+});
+
+test('leaving unfinished recovery keeps it and a fresh page can resume', async () => {
+  const state = await mountRejectedRestore();
+  const saved = state.pending;
+  state.unmount();
+  state.render();
+  assert.equal(text(state.node('ViewContent').props.footer), 'Restore items');
+  assert.equal(state.pending.archive, saved.archive);
+  state.click('Restore items');
+  await state.answer();
+  await state.tap();
+  assert.equal(
+    state.node('CardMaintenanceContent').props.report.issues.length,
+    2,
+  );
+});
+
+test('a transport failure removes a stale finish offer and keeps retry and exit available', async () => {
+  const state = await mountRejectedRestore();
+  const failure = new Error('Tag lost');
+  state.maintenance.restore = async () => {
+    throw failure;
+  };
+  state.click('Retry');
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, [failure]);
+  assert.equal(
+    find(
+      state.render(),
+      node => node.type === 'Button' && text(node).startsWith('Finish without'),
+    ),
+    undefined,
+  );
+  assert.equal(text(state.node('ViewContent').props.footer), 'Restore items');
+  assert.ok(state.pending.archive);
+});
+
+for (const phase of ['ready', 'replacing', 'restore']) {
+  test(`the scanned card uses the process layout in ${phase}`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized);
+    state.click('Scan a card');
+    await state.tap();
+    assert.ok(state.node('CardAppletsContent'));
+    state.pending = {
+      id: 'process',
+      mode: 'reinstall',
+      phase,
+      card: {
+        ...readCardIdentity(state.initialized),
+        bundle: false,
+        appletAid: AID,
+      },
+    };
+    const content = state.node('CardMaintenanceContent');
+    assert.equal(content.props.operation, state.pending);
+    assert.equal(content.props.processing, false);
+    assert.equal(state.node('CardAppletsContent'), undefined);
+    assert.equal(state.node('OperationComplete'), undefined);
+    assert.equal(state.node('CardScanPlaceholder'), undefined);
+    const process = state.process();
+    assert.equal(process.props.$exiting, false);
+    const element = {};
+    process.props.onAnimationEnd({target: element, currentTarget: element});
+    assert.equal(
+      state.node('CardMaintenanceContent').props.operation,
+      state.pending,
+    );
+    assert.equal(state.node('OperationComplete'), undefined);
+  });
+}
+
+test('first installation sets an optional alias with Secret authentication after PIN setup', async () => {
+  const state = mount({returnTo: 'copy'});
+  state.click('Install applets');
+  state.node('AppletSelectionPopup').props.onInstall({}, '旅行卡');
+  await state.answer();
+  await state.tap();
+  assert.deepEqual(state.errors, []);
+  const saved = state.events.findIndex(
+    event => event.type === 'set-card-alias',
+  );
+  assert.ok(
+    saved > state.events.findIndex(event => event.type === 'initialize'),
+  );
+  assert.deepEqual(state.events[saved - 1], {
+    type: 'auth',
+    secret: true,
+    pin: PIN,
+  });
+  assert.equal(state.initialized.alias, '旅行卡');
+  assert.equal(state.targets[0].alias, '旅行卡');
+});
+
+test('a failed fresh alias restoration keeps the record and an explicit retry restores it', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  state.pending = {
+    id: 'fresh-alias',
+    mode: 'fresh',
+    phase: 'replacing',
+    checkpoint: 'verify',
+    card: {
+      ...readCardIdentity(state.initialized),
+      publicKey: `04${'22'.repeat(64)}`,
+      appletAid: AID,
+      alias: '旅行卡',
+      bundle: false,
+    },
+  };
+  state.maintenance.replace = async () => state.initialized;
+  state.aliasError = new Error('Alias write interrupted');
+  state.click('Resume fresh install');
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.answer();
+  await state.tap();
+  assert.equal(state.pending.card.alias, '旅行卡');
+  assert.deepEqual(state.errors, [state.aliasError]);
+  state.aliasError = undefined;
+  state.click('Resume fresh install');
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.answer();
+  await state.tap();
+  assert.equal(state.initialized.alias, '旅行卡');
+  assert.equal(state.pending, undefined);
+  assert.equal(
+    state.events.filter(event => event.type === 'finish-fresh-alias').length,
+    1,
+  );
+});
+
+for (const stage of ['prepare', 'restore']) {
+  for (const outcome of ['correct', 'cancel', 'blocked']) {
+    test(`maintenance ${stage} rejected Secret PIN: ${outcome}, retaining the procedure`, async () => {
+      const state = mount({cardInformation: false});
+      state.installation = installed(state.initialized);
+      state.click('Scan a card');
+      await state.tap();
+      if (stage === 'restore')
+        state.pending = {
+          id: 'retry-restore',
+          mode: 'reinstall',
+          phase: 'restore',
+          card: {...readCardIdentity(state.initialized), appletAid: AID},
+          archive: {items: []},
+        };
+      const plan = state.pending;
+      const original = state.applet.authenticate;
+      let attempts = 0;
+      state.applet.authenticate = async request => {
+        if (++attempts === 1)
+          throw new CBORAppletError({
+            code: 'INVALID_PIN',
+            tries: outcome === 'blocked' ? 0 : 4,
+          });
+        return original(request);
+      };
+      if (stage === 'prepare') {
+        state.click('Card menu');
+        state.click('Reinstall Monoid Applet');
+        state.node('ConfirmPopup').props.onConfirm();
+      } else state.click('Restore items');
+      await state.answer();
+      const inputs = state.inputs.length;
+      await state.tap();
+      assert.equal(attempts, 1);
+      assert.equal(state.scans.length, 2);
+      assert.equal(
+        state.events.some(event =>
+          (stage === 'prepare'
+            ? ['prepare', 'replace', 'restore']
+            : ['restore']
+          ).includes(event.type),
+        ),
+        false,
+      );
+      assert.equal(state.pending, plan);
+      if (outcome === 'blocked') {
+        assert.equal(state.errors[0].message, 'Secret PIN blocked');
+        assert.equal(state.inputs.length, inputs);
+        return;
+      }
+      assert.equal(state.inputs.length, inputs + 1);
+      assert.equal(
+        state.inputs.at(-1).options.description,
+        'Incorrect PIN, tries remaining: 4',
+      );
+      state.inputs
+        .at(-1)
+        .finished.resolve(outcome === 'cancel' ? undefined : 'Correct-42');
+      await state.flush();
+      if (outcome === 'correct') {
+        await state.tap();
+        assert.ok(state.events.some(event => event.type === stage));
+        assert.ok(
+          state.events
+            .filter(event => event.type === 'auth' && event.secret)
+            .every(event => event.pin === 'Correct-42'),
+        );
+      } else assert.equal(state.scans.length, 2);
+      assert.deepEqual(state.errors, []);
+    });
+  }
+}

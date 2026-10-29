@@ -2,21 +2,37 @@ import assert from 'node:assert/strict';
 import {afterEach, mock, test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
 
+import {observable, runInAction} from 'mobx';
+
 import {
   CardBackupSession,
   assertBackupBundle,
   assertBackupCard,
   getBackupCardIdentity,
-  readBackupCardIdentity,
 } from '../.bld/app/@components/views/safe/@card/card-backup-session.js';
 import {
   encodeCardDerivationRecord,
   getCardDerivationItemIndex,
 } from '../.bld/app/@components/views/safe/card-derivations.js';
 import {
+  CBORAppletError,
+  CardItemNotFoundError,
+} from '../.bld/app/@lib/cbor-applet.js';
+import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
+import {
+  assertSameCardWithBundle,
+  readBackupCardIdentity,
+} from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
+import {
+  CardPINError,
+  assertCardPINsNotBlocked,
+  authenticateCardPIN,
+} from '../.bld/app/@lib/monoid/card-pins.js';
+import {MonoidAppletInvalidPINError} from '../.bld/app/@lib/monoid/monoid-applet.js';
 
 let fixture;
 let rendering;
@@ -74,12 +90,21 @@ mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => fixture.entrances},
 });
 mock.module('../.bld/app/@services/index.js', {
-  namedExports: {
-    isCredentialRequestCancelled: error => error?.code === 'CANCELLED',
-  },
+  namedExports: {},
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
-  namedExports: {MonoidCardError, MonoidWrongCardError},
+  namedExports: {
+    CardPINError,
+    authenticateCardPIN,
+    cardName,
+    cardNameWithId,
+    assertSameCardWithBundle,
+    readBackupCardIdentity,
+    assertCardPINsNotBlocked,
+    MonoidAppletInvalidPINError,
+    MonoidCardError,
+    MonoidWrongCardError,
+  },
 });
 mock.module('../.bld/app/@components/@animations.js', {
   namedExports: {
@@ -90,6 +115,8 @@ mock.module('../.bld/app/@components/@animations.js', {
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
+    scanCardPrompt: (card, action) =>
+      `Scan card ${cardNameWithId(card)}${action ? ` ${action}` : ''}`,
     MonoidScanStatePromptContentHighlight: 'highlight',
     useMonoidScanPrompt: options => [
       null,
@@ -145,9 +172,15 @@ mock.module('../.bld/app/@components/views/safe/@card/card-backup-session.js', {
     assertBackupCard,
     assertBackupBundle,
     getBackupCardIdentity,
-    readBackupCardIdentity,
+
     initializeBackupTarget: async (...args) => {
       fixture.initializations.push(args);
+      if (fixture.initializationError) throw fixture.initializationError;
+      if (fixture.initializationPending) {
+        await fixture.initializationPending.promise;
+      }
+      args[5]?.();
+      args[4].throwIfAborted();
       return fixture.initializedHello;
     },
   },
@@ -156,8 +189,8 @@ mock.module('../.bld/app/@components/@ui/use-input-modal.js', {
   namedExports: {
     useInputModal: () => [
       null,
-      options => {
-        const input = {options, finished: deferred()};
+      (options, signal) => {
+        const input = {options, signal, finished: deferred()};
         fixture.inputs.push(input);
         return input.finished.promise;
       },
@@ -191,7 +224,7 @@ for (const [path, names] of [
       'ListItemName',
     ],
   ],
-  ['@ui/step', ['Step', 'Steps']],
+  ['@ui/step', ['Step', 'OperationSteps']],
   ['@ui/operation-complete', ['OperationComplete']],
   [
     '@view/index',
@@ -247,6 +280,7 @@ function hello(number, initialized = true, bundle = false) {
     id: Uint8Array.of(0, 0, 0, number),
     publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(number)),
     bundle,
+    authority: false,
     pins: {access: initialized ? 5 : false, secret: initialized ? 5 : false},
   };
 }
@@ -336,6 +370,7 @@ function mount({
       state.slots.splice(0).forEach(slot => slot.cleanup?.());
     },
   };
+  state.view.$match.$exact = observable(state.view.$match.$exact);
   state.view.$match.$view = () => ({$entries: [state.view]});
   state.entrances = {
     router: {
@@ -355,7 +390,7 @@ function mount({
       cardApplets: data => ({
         $push() {
           state.routes.push({type: 'setup', ...data});
-          state.view.$match.$exact.$active = false;
+          runInAction(() => (state.view.$match.$exact.$active = false));
         },
       }),
     },
@@ -363,7 +398,11 @@ function mount({
     monoidApplet: {},
     monoidCredentialsStore: {
       createPINSession() {
-        const session = {clear: mock.fn()};
+        const session = {
+          clear: mock.fn(),
+          getPINs: async () => ({}),
+          setPIN: async () => {},
+        };
         state.pinSessions.push(session);
         return session;
       },
@@ -457,7 +496,7 @@ test('an uninstalled destination opens Setup only after scan cleanup and preserv
   assert.equal(flow.session.backup, backup);
   await flow.session.addTarget(state.initializedHello);
 
-  state.view.$match.$exact.$active = true;
+  runInAction(() => (state.view.$match.$exact.$active = true));
   state.render();
   assert.equal(state.sessions.length, 1);
   assert.equal(state.pinSessions.length, 2);
@@ -563,7 +602,9 @@ for (const destination of ['leaving', 'inactive', 'unmounted']) {
     state.click('Scan destination card');
     await state.tapRaw();
     if (destination === 'leaving') state.view.$leaving = true;
-    if (destination === 'inactive') state.view.$match.$exact.$active = false;
+    if (destination === 'inactive') {
+      runInAction(() => (state.view.$match.$exact.$active = false));
+    }
     if (destination === 'unmounted') state.unmount();
     state.rawScans[0].finished.resolve();
     await setImmediate();
@@ -572,7 +613,7 @@ for (const destination of ['leaving', 'inactive', 'unmounted']) {
     assert.deepEqual(state.inputs, []);
     assert.equal(state.sessions[0].backup.targets.length, 0);
     state.view.$leaving = false;
-    state.view.$match.$exact.$active = true;
+    runInAction(() => (state.view.$match.$exact.$active = true));
     state.render();
     assert.equal(
       find(
@@ -616,6 +657,20 @@ test('remounting while scan cleanup is pending ignores the old redirect and rese
   assert.deepEqual(state.errors, []);
 });
 
+async function enterSetupPINs(state) {
+  for (let i = 0; i < 4; i++) {
+    const input = state.inputs.at(-1);
+    input.finished.resolve(PIN);
+    await state.flush();
+    const next = state.inputs.at(-1);
+    if (
+      next === input ||
+      !/^(Confirm|Set Access)/.test(next.options.placeholder)
+    )
+      break;
+  }
+}
+
 test('an installed destination continues its PIN initialization on the same Copy page', async () => {
   const state = mount({initialized: false});
   state.click('Scan destination card');
@@ -626,13 +681,17 @@ test('an installed destination continues its PIN initialization on the same Copy
 
   assert.equal(state.inputs.length, 1);
   assert.equal(state.sessions[0].backup.targets.length, 0);
-  state.inputs[0].finished.resolve(PIN);
-  await state.flush();
+  await enterSetupPINs(state);
 
   const scan = state.monoidScans[0];
   assert.equal(scan.options.ensureSetup, false);
   scan.validate(state.hello);
-  await scan.callback({}, () => {}, state.hello, new AbortController().signal);
+  await scan.callback(
+    {authenticate: async () => {}},
+    () => {},
+    state.hello,
+    new AbortController().signal,
+  );
   scan.finished.resolve();
   await state.flush();
 
@@ -642,7 +701,117 @@ test('an installed destination continues its PIN initialization on the same Copy
   assert.equal(state.initializations[0][3], PIN);
   assert.equal(state.rawScans.length, 1);
   assert.deepEqual(state.errors, []);
+
+  const session = state.sessions[0];
+  await session.confirmTargets();
+  await session.exportItems(
+    {
+      authenticate: async () => {},
+      get: async () => ({data: Uint8Array.of(1)}),
+      exportItem: async () => ({data: Uint8Array.of(1)}),
+    },
+    hello(1),
+    PIN,
+    new AbortController().signal,
+    () => {},
+  );
+  state.click('Scan a destination card');
+  await state.flush();
+  assert.equal(
+    state.inputs.length,
+    4,
+    'the initialized Secret PIN is reused for import',
+  );
+  const importing = state.monoidScans.at(-1);
+  importing.validate(state.initializedHello);
+  const authentication = [];
+  await importing.callback(
+    {
+      authenticate: async request => authentication.push(request),
+      view: async () => {
+        throw new CardItemNotFoundError({code: 'NOT_FOUND'});
+      },
+      importItem: async () => {},
+      list: async () => ({
+        items: [
+          {index: Uint8Array.from(Buffer.from('02400000000000000001', 'hex'))},
+        ],
+      }),
+    },
+    () => {},
+    state.initializedHello,
+    new AbortController().signal,
+  );
+  importing.finished.resolve();
+  await state.flush();
+  assert.deepEqual(authentication, [{secret: true, pin: PIN}]);
+  assert.equal(session.backup.complete, true);
 });
+
+for (const phase of ['PIN input', 'initialization']) {
+  test(`leaving and returning to Copy ignores a late destination ${phase} result and does not restore its PIN`, async () => {
+    const state = mount({initialized: false});
+    state.click('Scan destination card');
+    await state.tapRaw();
+    state.rawScans[0].finished.resolve();
+    await state.flush();
+
+    const input = state.inputs[0];
+    let initializing;
+    let scan;
+    if (phase === 'initialization') {
+      state.initializationPending = deferred();
+      await enterSetupPINs(state);
+      scan = state.monoidScans[0];
+      initializing = scan
+        .callback({}, () => {}, state.hello, new AbortController().signal)
+        .catch(error => error);
+    }
+
+    runInAction(() => (state.view.$match.$exact.$active = false));
+    assert.equal(input.signal.aborted, true);
+    runInAction(() => (state.view.$match.$exact.$active = true));
+    if (phase === 'PIN input') {
+      input.finished.resolve(PIN);
+    } else {
+      assert.equal(state.initializations[0][4].aborted, true);
+      state.initializationPending.resolve();
+      const error = await initializing;
+      assert.equal(error.name, 'AbortError');
+      scan.finished.reject(error);
+    }
+    await state.flush();
+
+    assert.equal(state.monoidScans.length, phase === 'PIN input' ? 0 : 1);
+    assert.equal(state.sessions[0].backup.targets.length, 0);
+    assert.deepEqual(state.errors, []);
+
+    const session = state.sessions[0];
+    await session.addTarget(state.initializedHello);
+    await session.confirmTargets();
+    await session.exportItems(
+      {
+        authenticate: async () => {},
+        get: async () => ({data: Uint8Array.of(1)}),
+        exportItem: async () => ({data: Uint8Array.of(1)}),
+      },
+      hello(1),
+      PIN,
+      new AbortController().signal,
+      () => {},
+    );
+    state.click('Scan a destination card');
+    await state.flush();
+    assert.equal(
+      state.inputs.length,
+      phase === 'initialization' ? 5 : 2,
+      'returning requires a fresh PIN',
+    );
+    state.inputs.at(-1).finished.resolve(undefined);
+    await state.flush();
+    assert.deepEqual(state.errors, []);
+  });
+}
 
 test('a failed destination read preserves previously added cards and the source selection', async () => {
   const state = mount();
@@ -690,7 +859,9 @@ for (const destination of ['leaving', 'inactive', 'unmounted']) {
     state.click('Scan destination card');
     await state.tapRaw();
     if (destination === 'leaving') state.view.$leaving = true;
-    if (destination === 'inactive') state.view.$match.$exact.$active = false;
+    if (destination === 'inactive') {
+      runInAction(() => (state.view.$match.$exact.$active = false));
+    }
     if (destination === 'unmounted') state.unmount();
     state.rawScans[0].finished.resolve();
     await setImmediate();
@@ -754,7 +925,7 @@ test('multi-card export advances for every transferred item and keeps the source
       {
         index: getCardDerivationItemIndex(index),
         type: 0x0f01,
-        key: index,
+        metadata: index,
         derivationRecord: {index, wallets: []},
         secret: false,
       },
@@ -774,6 +945,7 @@ test('multi-card export advances for every transferred item and keeps the source
   await scan.callback(
     {
       authenticate: async () => {},
+      get: async () => ({data: Uint8Array.of(1)}),
       exportItem: async () => ({data: Uint8Array.of(1)}),
     },
     content => {
@@ -823,6 +995,58 @@ test('multi-card export advances for every transferred item and keeps the source
   assert.deepEqual(state.errors, []);
 });
 
+test('retrying a source export reuses its verified Secret PIN without automatically replaying the failed export', async () => {
+  const state = mount();
+  const session = state.sessions[0];
+  await session.addTarget(hello(2));
+  await session.confirmTargets();
+  state.click('Scan source card');
+  state.inputs.at(-1).finished.resolve(PIN);
+  await state.flush();
+  const firstScan = state.monoidScans.at(-1);
+  const failure = new Error('Connection lost');
+  let exports = 0;
+  const applet = {
+    authenticate: async request =>
+      assert.deepEqual(request, {secret: true, pin: PIN}),
+    exportItem: async () => {
+      exports++;
+      if (exports === 1) throw failure;
+      return {data: Uint8Array.of(1)};
+    },
+  };
+  firstScan.validate(hello(1));
+  await assert.rejects(
+    firstScan.callback(
+      applet,
+      () => {},
+      hello(1),
+      new AbortController().signal,
+    ),
+    error => error === failure,
+  );
+  firstScan.finished.reject(failure);
+  await state.flush();
+  assert.equal(exports, 1);
+  assert.equal(state.monoidScans.length, 1);
+
+  state.click('Scan source card');
+  await state.flush();
+  assert.equal(state.inputs.length, 1);
+  const retry = state.monoidScans.at(-1);
+  retry.validate(hello(1));
+  await retry.callback(
+    applet,
+    () => {},
+    hello(1),
+    new AbortController().signal,
+  );
+  retry.finished.resolve();
+  await state.flush();
+  assert.equal(exports, 2);
+  assert.equal(state.monoidScans.length, 2);
+});
+
 for (const {canBackToCard, canBackToSafe, backLabel, backRoute} of [
   {
     canBackToCard: true,
@@ -851,6 +1075,7 @@ for (const {canBackToCard, canBackToSafe, backLabel, backRoute} of [
     await session.exportItems(
       {
         authenticate: async () => {},
+        get: async () => ({data: Uint8Array.of(1)}),
         exportItem: async () => ({data: Uint8Array.of(1)}),
       },
       hello(1),
@@ -870,6 +1095,9 @@ for (const {canBackToCard, canBackToSafe, backLabel, backRoute} of [
     await scan.callback(
       {
         authenticate: async request => authentication.push(request),
+        view: async () => {
+          throw new CardItemNotFoundError({code: 'NOT_FOUND'});
+        },
         importItem: async () => {},
         list: async () => {
           assert.equal(progress.at(-1), 'Checking card, hold tight...');
@@ -893,7 +1121,10 @@ for (const {canBackToCard, canBackToSafe, backLabel, backRoute} of [
       new AbortController().signal,
     );
     assert.equal(session.backup.complete, true);
-    const pendingSteps = find(state.render(), node => node.type === 'Steps');
+    const pendingSteps = find(
+      state.render(),
+      node => node.type === 'OperationSteps',
+    );
     assert.ok(pendingSteps);
     assert.equal(pendingSteps.props.$exiting, false);
     assert.equal(
@@ -909,7 +1140,10 @@ for (const {canBackToCard, canBackToSafe, backLabel, backRoute} of [
     scan.finished.resolve();
     await state.flush();
 
-    const exitingSteps = find(state.tree, node => node.type === 'Steps');
+    const exitingSteps = find(
+      state.tree,
+      node => node.type === 'OperationSteps',
+    );
     assert.ok(exitingSteps);
     assert.equal(exitingSteps.props.$exiting, true);
     assert.equal(
@@ -918,7 +1152,7 @@ for (const {canBackToCard, canBackToSafe, backLabel, backRoute} of [
     );
     // A child spinner finishing must not end the steps' own exit animation.
     exitingSteps.props.onAnimationEnd({target: {}, currentTarget: {}});
-    assert.ok(find(state.render(), node => node.type === 'Steps'));
+    assert.ok(find(state.render(), node => node.type === 'OperationSteps'));
     const element = {};
     exitingSteps.props.onAnimationEnd({
       target: element,
@@ -926,7 +1160,7 @@ for (const {canBackToCard, canBackToSafe, backLabel, backRoute} of [
     });
     state.render();
     assert.equal(
-      find(state.tree, node => node.type === 'Steps'),
+      find(state.tree, node => node.type === 'OperationSteps'),
       undefined,
     );
     assert.ok(find(state.tree, node => node.type === 'OperationComplete'));
@@ -959,7 +1193,7 @@ for (const {canBackToCard, canBackToSafe, backLabel, backRoute} of [
 }
 
 for (const hasRecord of [true, false]) {
-  test(`reading a Copy source ${hasRecord ? 'shows a single record count' : 'keeps the listing message without a count'}`, async () => {
+  test(`reading a Copy source ${hasRecord ? 'counts every opaque item' : 'counts opaque items without address records'}`, async () => {
     const state = mount({source: false});
     state.click('Scan source card');
     const scan = state.monoidScans[0];
@@ -976,7 +1210,7 @@ for (const hasRecord of [true, false]) {
               ? [
                   {
                     index: bytes(getCardDerivationItemIndex(index)),
-                    key: bytes(index),
+                    metadata: bytes(index),
                     type: 0x0f01,
                     secret: false,
                   },
@@ -1005,12 +1239,169 @@ for (const hasRecord of [true, false]) {
       hasRecord
         ? [
             'Reading items, hold tight...',
-            ['Reading address records', '0/1'],
-            ['Reading address records', '1/1'],
+            ['Reading items', '0/2'],
+            ['Reading items', '1/2'],
+            ['Reading items', '2/2'],
           ]
-        : ['Reading items, hold tight...'],
+        : [
+            'Reading items, hold tight...',
+            ['Reading items', '0/1'],
+            ['Reading items', '1/1'],
+          ],
     );
     assert.ok(state.sessions[0].backup);
+    assert.deepEqual(state.errors, []);
+  });
+}
+
+test('a rejected Copy item stays visible after the other items complete', async () => {
+  const state = mount(),
+    session = state.sessions[0];
+  await session.addTarget({...hello(2), alias: 'Backup'});
+  await session.confirmTargets();
+  await session.exportItems(
+    {
+      authenticate: async () => {},
+      exportItem: async () => ({data: Uint8Array.of(1)}),
+    },
+    hello(1),
+    PIN,
+    new AbortController().signal,
+    () => {},
+  );
+  state.click('Scan a destination card');
+  state.inputs.at(-1).finished.resolve(PIN);
+  await state.flush();
+  const scan = state.monoidScans[0];
+  scan.validate(hello(2));
+  await scan.callback(
+    {
+      authenticate: async () => {},
+      view: async () => {
+        throw new CardItemNotFoundError({code: 'NOT_FOUND'});
+      },
+      importItem: async () => {
+        throw new CBORAppletError({code: 'INVALID_PARAMETER'});
+      },
+    },
+    () => {},
+    hello(2),
+    new AbortController().signal,
+  );
+  scan.finished.resolve();
+  await state.flush();
+  assert.equal(session.backup.complete, true);
+  assert.equal(
+    find(state.tree, node => node.type === 'OperationComplete'),
+    undefined,
+  );
+  const steps = find(state.tree, node => node.type === 'OperationSteps');
+  assert.equal(steps.props.$exiting, false);
+  const tile = find(
+    state.tree,
+    node => node.props?.['aria-label'] === 'Destination card 00000002',
+  );
+  assert.ok(tile);
+  assert.equal(tile.props.disabled, false);
+  tile.props.onClick();
+  state.render();
+  const cards = find(
+    state.tree,
+    node =>
+      typeof node.type === 'function' && node.type.name === 'DestinationCards',
+  );
+  assert.ok(cards);
+  assert.equal(
+    find(cards.type(cards.props), node => node.type === 'ListItemName').props
+      .children,
+    'Backup',
+  );
+  assert.ok(
+    find(
+      cards.type(cards.props),
+      node => typeof node === 'string' && node === 'Skipped 1',
+    ),
+  );
+  assert.deepEqual(state.errors, []);
+});
+
+test('the editable Copy destination popup names the card by alias', async () => {
+  const state = mount();
+  await state.sessions[0].addTarget({...hello(2), alias: 'Backup'});
+  find(
+    state.render(),
+    node => node.props?.['aria-label'] === 'Destination card 00000002',
+  ).props.onClick();
+  assert.equal(
+    find(state.render(), node => node.type === 'DetailsPopupTitle').props
+      .children,
+    'Backup',
+  );
+});
+
+for (const outcome of ['correct', 'cancel', 'blocked', 'after-write']) {
+  test(`Copy destination setup retries only rejected authentication: ${outcome}`, async () => {
+    const state = mount({initialized: false});
+    state.hello.pins.secret = 5;
+    state.click('Scan destination card');
+    await state.tapRaw();
+    state.rawScans[0].finished.resolve();
+    await state.flush();
+    await enterSetupPINs(state);
+    const failure = new CardPINError(
+      'Secret',
+      outcome === 'blocked' ? 0 : 4,
+      outcome !== 'after-write',
+      new Error('rejected'),
+    );
+    state.initializationError = failure;
+    const attempt = async () => {
+      const scan = state.monoidScans.at(-1);
+      try {
+        await scan.callback(
+          {authenticate: async () => {}},
+          () => {},
+          state.hello,
+          new AbortController().signal,
+        );
+        scan.finished.resolve();
+      } catch (error) {
+        scan.finished.reject(error);
+      }
+      await state.flush();
+    };
+    await attempt();
+    assert.equal(state.monoidScans.length, 1);
+    assert.equal(state.sessions[0].backup.targets.length, 0);
+    if (outcome === 'blocked' || outcome === 'after-write') {
+      assert.deepEqual(
+        state.errors,
+        [],
+        'card errors are already displayed by the scan',
+      );
+      assert.equal(state.initializations.length, 1);
+      assert.equal(state.inputs.length, 3);
+      return;
+    }
+    assert.equal(
+      state.inputs.at(-1).options.description,
+      'Incorrect PIN, tries remaining: 4',
+    );
+    state.inputs
+      .at(-1)
+      .finished.resolve(outcome === 'correct' ? 'Correct-42' : undefined);
+    await state.flush();
+    if (outcome === 'correct') {
+      state.initializationError = undefined;
+      await attempt();
+      assert.equal(state.initializations[1][3], 'Correct-42');
+      assert.equal(
+        state.initializations[1][6],
+        PIN,
+        'chosen Access PIN is unchanged',
+      );
+      assert.equal(state.sessions[0].backup.targets.length, 1);
+    } else assert.equal(state.monoidScans.length, 1);
     assert.deepEqual(state.errors, []);
   });
 }

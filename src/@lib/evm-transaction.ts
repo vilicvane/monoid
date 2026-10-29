@@ -37,6 +37,7 @@ const TRANSACTION_FIELDS = new Set([
   'value',
   'nonce',
   'gas',
+  'gasLimit',
   'gasPrice',
   'maxFeePerGas',
   'maxPriorityFeePerGas',
@@ -92,7 +93,11 @@ export function parseEvmTransaction(
   if (input.nonce !== undefined) {
     transaction.nonce = getNumber(quantity(input.nonce));
   }
-  if (input.gas !== undefined) transaction.gasLimit = quantity(input.gas);
+  if (input.gas !== undefined || input.gasLimit !== undefined) {
+    transaction.gasLimit = quantity(
+      input.gas !== undefined ? input.gas : input.gasLimit,
+    );
+  }
 
   const gasPrice =
     input.gasPrice === undefined ? undefined : quantity(input.gasPrice);

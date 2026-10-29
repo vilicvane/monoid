@@ -1,3 +1,9 @@
+import {
+  SSH_CHAIN_ID,
+  SSH_EVENTS,
+  SSH_METHODS,
+  parseSSHAccount,
+} from '@monoid/ssh-protocol';
 import type {WalletKitTypes} from '@reown/walletkit';
 import {base58} from '@scure/base';
 import {
@@ -9,6 +15,8 @@ import {normalizeWalletAddress} from './wallet-address.js';
 
 const HEX_32_BYTES = /^[0-9a-f]{64}$/i;
 const EIP155_CHAIN = /^eip155:[1-9]\d*$/;
+// The app owns approval ordering and SSH Busy responses across all sessions.
+export const WALLET_CONNECT_SIGN_CONFIG = {disableRequestQueue: true};
 export const WALLET_CONNECT_SOLANA_CHAINS = new Set([
   'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
   'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
@@ -93,6 +101,20 @@ export function buildWalletConnectNamespaces(
     typeof buildApprovedNamespaces
   >[0]['supportedNamespaces'] = {};
 
+  if (requestsSSHAccounts(proposal)) {
+    const sshAccounts = accounts.filter(account =>
+      account.startsWith(`${SSH_CHAIN_ID}:`),
+    );
+    if (sshAccounts.length) {
+      supportedNamespaces.monoid = {
+        chains: [SSH_CHAIN_ID],
+        accounts: sshAccounts.map(account => parseSSHAccount(account).account),
+        methods: [...SSH_METHODS],
+        events: [...SSH_EVENTS],
+      };
+    }
+  }
+
   for (const [namespace, addressType] of Object.entries(
     WALLET_CONNECT_ADDRESS_TYPES,
   )) {
@@ -132,6 +154,17 @@ export function buildWalletConnectNamespaces(
   } catch (cause) {
     throw new Error(UNSUPPORTED_FEATURES, {cause});
   }
+}
+
+export function requestsSSHAccounts(
+  proposal: WalletKitTypes.SessionProposal,
+): boolean {
+  return [
+    proposal.params.requiredNamespaces,
+    proposal.params.optionalNamespaces ?? {},
+  ].some(namespaces =>
+    normalizeNamespaces(namespaces).monoid?.chains?.includes(SSH_CHAIN_ID),
+  );
 }
 
 export function parseWalletConnectUri(value: string): string | undefined {

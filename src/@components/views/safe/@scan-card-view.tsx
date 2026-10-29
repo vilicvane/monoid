@@ -2,8 +2,8 @@ import {type ReactNode, useEffect} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
 import {useEntrances} from '../../../@entrances.js';
+import {isOperationCancelled} from '../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../@routes.js';
-import {isCredentialRequestCancelled} from '../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../@utils/index.js';
 import {
   MonoidScanRedirectError,
@@ -70,6 +70,9 @@ export const ScanCardView = ({
                 id: uint8ArrayToHex(hello.id),
                 publicKey: uint8ArrayToHex(hello.publicKey),
                 bundle: hello.bundle && uint8ArrayToHex(hello.bundle),
+                alias: hello.alias,
+                allowPeerExtension: hello.allowPeerExtension,
+                authority: hello.authority,
                 items,
               };
             },
@@ -91,7 +94,7 @@ export const ScanCardView = ({
 
           router.safe.$replace();
 
-          if (!isCredentialRequestCancelled(error)) {
+          if (!isOperationCancelled(error)) {
             throw error;
           }
         }

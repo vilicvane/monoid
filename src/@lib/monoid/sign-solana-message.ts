@@ -1,6 +1,6 @@
 import {base58} from '@scure/base';
 
-import {CBORAppletError} from '../cbor-applet.js';
+import {CardItemNotFoundError} from '../cbor-applet.js';
 import {verifySolanaSignature} from '../solana-signature.js';
 
 import {MonoidCardError} from './card-error.js';
@@ -37,7 +37,7 @@ export async function signSolanaMessage(
   assertActive?.();
 
   if (signature.length !== 64) {
-    throw new Error('Invalid Ed25519 signature length.');
+    throw new Error('Invalid ed25519 signature length.');
   }
 
   const result = base58.encode(signature);
@@ -50,7 +50,7 @@ export async function signSolanaMessage(
 }
 
 function handleSigningError(error: unknown): never {
-  if (error instanceof CBORAppletError && error.source.code === 'NOT_FOUND') {
+  if (error instanceof CardItemNotFoundError) {
     throw new MonoidCardError(ACCOUNT_NOT_FOUND_MESSAGE, {cause: error});
   }
 

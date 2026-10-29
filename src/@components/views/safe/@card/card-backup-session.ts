@@ -1,42 +1,67 @@
 import {observable, runInAction} from 'mobx';
 
-import {MonoidPIN, PublicKey, SafeIndex} from '../../../../@atomics.js';
-import {AppletISOError} from '../../../../@lib/applet.js';
-import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
+  MonoidIdHex,
+  MonoidPIN,
+  PublicKey,
+  PublicKeyHex,
+  SafeIndex,
+} from '../../../../@atomics.js';
+import {CardItemNotFoundError} from '../../../../@lib/cbor-applet.js';
+import {
+  type CardBackupIdentity,
+  CardItemConflictError,
+  type CardItemIssue,
   type MonoidApplet,
   type MonoidAppletHello,
-  MonoidAppletInvalidPINError,
   MonoidCardError,
-  MonoidWrongCardError,
+  MultiCardSeries,
+  acceptMatchingItem,
+  assertCardPINsNotBlocked,
+  assertSameCardWithBundle,
+  authenticateCardPIN,
+  cardItemIssue,
+  cardNameWithId,
   initializeMonoidCard,
+  readBackupCardIdentity,
+  readCardContents,
 } from '../../../../@lib/monoid/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 import {
-  isCardDerivationItem,
-  readCardDerivationRecord,
-} from '../card-derivations.js';
+  readOpaqueCardItem,
+  withCardDerivationRecord,
+} from '../card-contents.js';
+import {mergeCardItemData} from '../card-item-merge.js';
 import {getCardResourceGroups} from '../card-resource-groups.js';
 import type {ScannedCardData, ScannedCardItemData} from '../common.js';
 
-export type CardBackupIdentity = {
-  id: string;
-  publicKey: string;
-  bundle: string | false;
-};
-
 export type CardBackupItem = Pick<
   ScannedCardItemData,
-  'index' | 'type' | 'alias' | 'secret' | 'key' | 'derivationRecord'
+  | 'index'
+  | 'type'
+  | 'alias'
+  | 'secret'
+  | 'metadata'
+  | 'derivationRecord'
+  | 'keyDerivationRecord'
 > & {
   selected: boolean;
+  issue?: CardItemIssue;
 };
 
 export type CardBackupTransfer = {
   index: string;
-  exported?: {key?: string; alias?: string; data: string};
+  exported?: {
+    metadata?: string;
+    alias?: string;
+    data: string;
+    /** Readable plaintext is retained for generic destination comparison. */
+    plaintext?: string;
+  };
   imported: boolean;
-  conflict?: boolean;
+  issue?: CardItemIssue;
 };
 
 export type CardBackupTarget = CardBackupIdentity & {
@@ -69,7 +94,16 @@ function createBackup(
   const selectedIndexes =
     sourceIndexes === undefined ? undefined : new Set(sourceIndexes);
   const backupItems = items.map(
-    ({index, type, alias, secret, key, derivationRecord}) => {
+    ({
+      index,
+      type,
+      alias,
+      secret,
+      metadata,
+      derivationRecord,
+      keyDerivationRecord,
+      issue,
+    }) => {
       if (!/^[0-9a-f]{20}$/i.test(index)) {
         throw new MonoidCardError('The card returned an invalid item index.');
       }
@@ -78,14 +112,23 @@ function createBackup(
         index,
         ...(type !== undefined && {type}),
         ...(alias !== undefined && {alias}),
-        ...(key !== undefined && {key}),
+        ...(metadata !== undefined && {metadata}),
         ...(derivationRecord !== undefined && {
           derivationRecord: {
             index: derivationRecord.index,
             wallets: derivationRecord.wallets.map(wallet => ({...wallet})),
           },
         }),
+        ...(keyDerivationRecord !== undefined && {
+          keyDerivationRecord: {
+            index: keyDerivationRecord.index,
+            derivations: keyDerivationRecord.derivations.map(value => ({
+              ...value,
+            })),
+          },
+        }),
         secret,
+        ...(issue && {issue}),
         selected: selectedIndexes?.has(index) ?? true,
       };
     },
@@ -98,7 +141,7 @@ function createBackup(
 
     if ([...selectedIndexes].some(index => !availableIndexes.has(index))) {
       throw new MonoidCardError(
-        'Some selected items were not found on the source card. Return to Card and scan it again.',
+        `Some selected items were not found on the source card. Return to Card and scan card ${cardNameWithId(source)} again.`,
       );
     }
   }
@@ -111,9 +154,12 @@ function createBackup(
 
   return {
     source: {
-      id: source.id.toLowerCase(),
-      publicKey: source.publicKey.toLowerCase(),
+      id: MonoidIdHex.satisfies(source.id.toLowerCase()),
+      publicKey: PublicKeyHex.satisfies(source.publicKey.toLowerCase()),
       bundle: source.bundle === false ? false : source.bundle.toLowerCase(),
+      alias: source.alias,
+      allowPeerExtension: source.allowPeerExtension,
+      authority: source.authority,
     },
     items: groupedItems,
     targets: [],
@@ -123,33 +169,12 @@ function createBackup(
   };
 }
 
-export function readBackupCardIdentity(
-  hello: MonoidAppletHello,
-): CardBackupIdentity {
-  const {id, publicKey, bundle} = hello;
-
-  if (
-    id.length !== 4 ||
-    publicKey.length !== 65 ||
-    publicKey[0] !== 0x04 ||
-    (bundle !== false && bundle.length !== 32)
-  ) {
-    throw new MonoidCardError('This card did not provide a valid identity.');
-  }
-
-  return {
-    id: uint8ArrayToHex(id),
-    publicKey: uint8ArrayToHex(publicKey),
-    bundle: bundle === false ? false : uint8ArrayToHex(bundle),
-  };
-}
-
 export function getBackupCardIdentity(
   hello: MonoidAppletHello,
 ): CardBackupIdentity {
   const identity = readBackupCardIdentity(hello);
 
-  assertBackupPINsNotBlocked(hello);
+  assertCardPINsNotBlocked(hello);
 
   if (hello.pins.access === false || hello.pins.secret === false) {
     throw new MonoidCardError('Initialize card from Safe');
@@ -167,23 +192,12 @@ export function assertBackupBundle(
   }
 }
 
-function assertBackupPINsNotBlocked(hello: MonoidAppletHello): void {
-  if (hello.pins.secret === 0) {
-    throw new MonoidCardError('Secret PIN blocked');
-  }
-
-  if (hello.pins.access === 0) {
-    throw new MonoidCardError('Access PIN blocked');
-  }
-}
-
 export function assertBackupCard(
   hello: MonoidAppletHello,
   expected: CardBackupIdentity,
+  bundleChangedMessage = `Card bundle changed, scan card ${cardNameWithId(expected)} again`,
 ): void {
-  if (readBackupCardIdentity(hello).publicKey !== expected.publicKey) {
-    throw new MonoidWrongCardError(expected.id);
-  }
+  assertSameCardWithBundle(hello, expected, bundleChangedMessage);
 
   getBackupCardIdentity(hello);
 }
@@ -200,31 +214,20 @@ async function authenticateSecretPIN(
   applet: MonoidApplet,
   pin: string,
   signal: AbortSignal,
+  onAuthenticated?: () => void,
 ): Promise<void> {
   if (!MonoidPIN.is(pin)) {
-    throw new MonoidCardError('Secret PIN must contain 6 to 16 characters');
+    throw new MonoidCardError(
+      `Secret PIN must contain ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} characters`,
+    );
   }
 
   throwIfCancelled(signal);
 
-  try {
-    await applet.authenticate({secret: true, pin});
-  } catch (error) {
-    if (
-      error instanceof CBORAppletError &&
-      MonoidAppletInvalidPINError.is(error.source)
-    ) {
-      throw new MonoidCardError(
-        error.source.tries === 0
-          ? 'Secret PIN blocked'
-          : `Incorrect Secret PIN, ${error.source.tries} ${error.source.tries === 1 ? 'try' : 'tries'} left`,
-      );
-    }
-
-    throw error;
-  }
+  await authenticateCardPIN(applet, pin);
 
   throwIfCancelled(signal);
+  onAuthenticated?.();
 }
 
 export async function initializeBackupTarget(
@@ -233,15 +236,14 @@ export async function initializeBackupTarget(
   expected: MonoidAppletHello,
   pin: string,
   signal: AbortSignal,
+  onAuthenticated?: () => void,
+  accessPIN?: MonoidPIN,
 ): Promise<MonoidAppletHello> {
-  const identity = readBackupCardIdentity(hello);
   const expectedIdentity = readBackupCardIdentity(expected);
 
-  if (identity.publicKey !== expectedIdentity.publicKey) {
-    throw new MonoidWrongCardError(expectedIdentity.id);
-  }
+  assertSameCardWithBundle(hello, expectedIdentity);
 
-  assertBackupPINsNotBlocked(hello);
+  assertCardPINsNotBlocked(hello);
   throwIfCancelled(signal);
 
   if (hello.pins.access !== false && hello.pins.secret !== false) {
@@ -255,27 +257,21 @@ export async function initializeBackupTarget(
   }
 
   if (!MonoidPIN.is(pin)) {
-    throw new MonoidCardError('Secret PIN must contain 6 to 16 characters.');
+    throw new MonoidCardError(
+      `Secret PIN must contain ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} characters.`,
+    );
   }
 
-  try {
-    const initialized = await initializeMonoidCard(applet, hello, pin, signal);
-    assertBackupCard(initialized, expectedIdentity);
-    return initialized;
-  } catch (error) {
-    if (
-      error instanceof CBORAppletError &&
-      MonoidAppletInvalidPINError.is(error.source)
-    ) {
-      throw new MonoidCardError(
-        error.source.tries === 0
-          ? 'Secret PIN blocked'
-          : `Incorrect Secret PIN, ${error.source.tries} ${error.source.tries === 1 ? 'try' : 'tries'} left`,
-      );
-    }
-
-    throw error;
-  }
+  const initialized = await initializeMonoidCard(
+    applet,
+    hello,
+    pin,
+    signal,
+    accessPIN,
+  );
+  assertBackupCard(initialized, expectedIdentity);
+  onAuthenticated?.();
+  return initialized;
 }
 
 export class CardBackupSession {
@@ -292,6 +288,10 @@ export class CardBackupSession {
 
   get backup(): CardBackup | undefined {
     return this.current.get();
+  }
+
+  get series(): MultiCardSeries {
+    return MultiCardSeries.from(this.backup?.targets ?? []);
   }
 
   get busy(): boolean {
@@ -366,7 +366,7 @@ export class CardBackupSession {
       complete:
         backup.targetsConfirmed &&
         targets.length > 0 &&
-        targets.every(current => current.complete),
+        MultiCardSeries.from(targets).completedCount === targets.length,
     });
   }
 
@@ -383,7 +383,8 @@ export class CardBackupSession {
     this.updateTarget({
       ...target,
       items,
-      complete: items.length > 0 && items.every(item => item.imported),
+      complete:
+        items.length > 0 && items.every(item => item.imported || item.issue),
     });
   }
 
@@ -401,33 +402,20 @@ export class CardBackupSession {
 
       const source = getBackupCardIdentity(hello);
       const indexes = sourceIndexes && [...sourceIndexes];
-      throwIfCancelled(signal);
-      const {items} = await applet.list({});
-      throwIfCancelled(signal);
-      const scannedItems: ScannedCardItemData[] = items.map(
-        ({index, type, alias, secret, key}) => ({
-          index: uint8ArrayToHex(index),
-          ...(type !== undefined && {type}),
-          ...(alias !== undefined && {alias}),
-          ...(key !== undefined && {key: uint8ArrayToHex(key)}),
-          secret,
-        }),
+      const {items} = await readCardContents(
+        applet,
+        item => readOpaqueCardItem(applet, item),
+        {
+          check: () => throwIfCancelled(signal),
+          onProgress,
+          onItemError: (item, error) => {
+            const issue = cardItemIssue(item.index, error);
+            if (!issue) throw error;
+            return {...item, issue};
+          },
+        },
       );
-      const records = scannedItems.filter(isCardDerivationItem);
-
-      if (records.length > 0) {
-        onProgress?.(0, records.length);
-      }
-
-      for (const [index, item] of records.entries()) {
-        throwIfCancelled(signal);
-        item.derivationRecord = await readCardDerivationRecord(applet, item);
-        throwIfCancelled(signal);
-        onProgress?.(index + 1, records.length);
-      }
-
-      throwIfCancelled(signal);
-      this.setBackup(createBackup(source, scannedItems, indexes));
+      this.setBackup(createBackup(source, items, indexes));
     });
   }
 
@@ -495,7 +483,11 @@ export class CardBackupSession {
         ...backup,
         targets: backup.targets.map(target => ({
           ...target,
-          items: selected.map(({index}) => ({index, imported: false})),
+          items: selected.map(({index, issue}) => ({
+            index,
+            imported: false,
+            issue,
+          })),
           complete: false,
         })),
         targetsConfirmed: true,
@@ -510,19 +502,17 @@ export class CardBackupSession {
     pin: string,
     signal: AbortSignal,
     onProgress: (current: number, total: number) => void,
+    onAuthenticated?: () => void,
   ): Promise<void> {
     return this.exclusive(async () => {
       const backup = this.requireBackup();
       assertBackupCard(hello, backup.source);
-      if (readBackupCardIdentity(hello).bundle !== backup.source.bundle) {
-        throw new MonoidCardError('Card bundle changed, scan source again');
-      }
 
       if (!backup.targetsConfirmed) {
         throw new MonoidCardError('Confirm the destination cards first.');
       }
 
-      await authenticateSecretPIN(applet, pin, signal);
+      await authenticateSecretPIN(applet, pin, signal, onAuthenticated);
 
       const transfers = backup.targets.flatMap(target => target.items);
       const bundleExports =
@@ -533,7 +523,9 @@ export class CardBackupSession {
                 item.exported ? [[item.index, item.exported] as const] : [],
               ),
             );
-      let completed = transfers.filter(item => item.exported).length;
+      let completed = transfers.filter(
+        item => item.exported || item.issue,
+      ).length;
       throwIfCancelled(signal);
       onProgress(completed, transfers.length);
 
@@ -543,30 +535,42 @@ export class CardBackupSession {
         );
 
         for (const item of target.items) {
-          if (item.exported) {
+          if (item.exported || item.issue) {
             continue;
           }
 
           throwIfCancelled(signal);
-          let exported = bundleExports?.get(item.index);
-          if (!exported) {
-            const result = await applet.exportItem({
-              index: SafeIndex.satisfies(hexToUint8Array(item.index)),
-              ...(backup.source.bundle === false && {recipientPublicKey}),
-            });
-
-            // Bundle envelopes are shared by every other member; asymmetric
-            // envelopes remain specific to their recipient. Preserve metadata.
-            exported = {
-              ...(result.key !== undefined && {
-                key: uint8ArrayToHex(result.key),
-              }),
-              ...(result.alias !== undefined && {alias: result.alias}),
-              data: uint8ArrayToHex(result.data),
-            };
-            bundleExports?.set(item.index, exported);
+          try {
+            let exported = bundleExports?.get(item.index);
+            if (!exported) {
+              const source = backup.items.find(
+                source => source.index === item.index,
+              )!;
+              const index = SafeIndex.satisfies(hexToUint8Array(item.index));
+              const plaintext = source.secret
+                ? undefined
+                : uint8ArrayToHex((await applet.get({index})).data);
+              throwIfCancelled(signal);
+              const result = await applet.exportItem({
+                index,
+                ...(backup.source.bundle === false && {recipientPublicKey}),
+              });
+              exported = {
+                ...(result.metadata !== undefined && {
+                  metadata: uint8ArrayToHex(result.metadata),
+                }),
+                ...(result.alias !== undefined && {alias: result.alias}),
+                data: uint8ArrayToHex(result.data),
+                ...(plaintext !== undefined && {plaintext}),
+              };
+              bundleExports?.set(item.index, exported);
+            }
+            this.updateTransfer(target.publicKey, {...item, exported});
+          } catch (error) {
+            const issue = cardItemIssue(item.index, error);
+            if (!issue) throw error;
+            this.updateTransfer(target.publicKey, {...item, issue});
           }
-          this.updateTransfer(target.publicKey, {...item, exported});
           throwIfCancelled(signal);
           onProgress(++completed, transfers.length);
         }
@@ -582,6 +586,7 @@ export class CardBackupSession {
     pin: string,
     signal: AbortSignal,
     onProgress: (current: number, total: number) => void,
+    onAuthenticated?: () => void,
   ): Promise<void> {
     return this.exclusive(async () => {
       const backup = this.requireBackup();
@@ -601,11 +606,14 @@ export class CardBackupSession {
         );
       }
 
-      assertBackupCard(hello, target);
+      assertBackupCard(hello, target, 'Use a card in the same bundle');
       assertBackupBundle(backup.source, identity);
       const selected = target.items;
 
-      if (!selected.length || selected.some(item => !item.exported)) {
+      if (
+        !selected.length ||
+        selected.some(item => !item.exported && !item.issue)
+      ) {
         throw new MonoidCardError(
           'Export all selected items for this destination from the source first.',
         );
@@ -613,50 +621,111 @@ export class CardBackupSession {
 
       // Secret authorization is bound to this SELECT/session, never to the
       // retained copy state. Authenticate again before each import attempt.
-      await authenticateSecretPIN(applet, pin, signal);
+      await authenticateSecretPIN(applet, pin, signal, onAuthenticated);
 
       const senderPublicKey = PublicKey.satisfies(
         hexToUint8Array(backup.source.publicKey),
       );
-      let completed = selected.filter(item => item.imported).length;
+      let completed = selected.filter(
+        item => item.imported || item.issue,
+      ).length;
+      const total = selected.length;
       throwIfCancelled(signal);
-      onProgress(completed, selected.length);
+      onProgress(completed, total);
 
       for (const item of selected) {
-        if (item.imported) {
+        if (item.imported || item.issue) {
           continue;
         }
 
+        const sourceItem = backup.items.find(
+          source => source.index === item.index,
+        )!;
         const exported = item.exported!;
         throwIfCancelled(signal);
         const request = {
           index: SafeIndex.satisfies(hexToUint8Array(item.index)),
           ...(backup.source.bundle === false && {senderPublicKey}),
-          ...(exported.key !== undefined && {
-            key: hexToUint8Array(exported.key),
+          ...(exported.metadata !== undefined && {
+            metadata: hexToUint8Array(exported.metadata),
           }),
           ...(exported.alias !== undefined && {alias: exported.alias}),
           data: hexToUint8Array(exported.data),
         };
+        const expected = {
+          ...request,
+          secret: sourceItem.secret,
+          data:
+            exported.plaintext !== undefined
+              ? hexToUint8Array(exported.plaintext)
+              : undefined,
+        };
 
-        const current = this.requireBackup();
-
-        if (!current.importStarted) {
-          // A lost response may still mean the card committed the import.
-          this.setBackup({...current, importStarted: true});
-        }
-
+        // Read before every attempt, including an explicit continuation after
+        // a lost response. Never replay an import or merge without this check.
         try {
-          await applet.importItem(request);
-        } catch (error) {
-          if (error instanceof AppletISOError && error.sw === 0x6985) {
-            this.updateTransfer(target.publicKey, {...item, conflict: true});
-            throwIfCancelled(signal);
-            onProgress(completed, selected.length);
-            continue;
+          let existing: Awaited<ReturnType<MonoidApplet['view']>> | undefined;
+          try {
+            existing = await applet.view({index: request.index});
+          } catch (error) {
+            if (!(error instanceof CardItemNotFoundError)) throw error;
           }
-
-          throw error;
+          throwIfCancelled(signal);
+          if (existing) {
+            if (
+              existing.secret !== sourceItem.secret ||
+              (existing.metadata === undefined
+                ? undefined
+                : uint8ArrayToHex(existing.metadata)) !== exported.metadata
+            )
+              throw new CardItemConflictError(item.index);
+            const current = await readOpaqueCardItem(applet, {
+              index: sourceItem.index,
+              type: sourceItem.type,
+              secret: existing.secret,
+              alias: existing.alias,
+              metadata:
+                existing.metadata === undefined
+                  ? undefined
+                  : uint8ArrayToHex(existing.metadata),
+            });
+            throwIfCancelled(signal);
+            const incoming = withCardDerivationRecord({
+              index: sourceItem.index,
+              type: sourceItem.type,
+              secret: sourceItem.secret,
+              alias: exported.alias,
+              metadata: exported.metadata,
+              data: exported.plaintext,
+            });
+            const merged = mergeCardItemData(current, incoming);
+            if (merged.data !== current.data) {
+              this.setBackup({...this.requireBackup(), importStarted: true});
+              await applet.set({
+                index: request.index,
+                data: hexToUint8Array(merged.data!),
+              });
+            }
+          } else {
+            const current = this.requireBackup();
+            if (!current.importStarted)
+              this.setBackup({...current, importStarted: true});
+            try {
+              await applet.importItem(request);
+            } catch (error) {
+              await acceptMatchingItem(applet, expected, error, signal);
+            }
+          }
+        } catch (error) {
+          const issue = cardItemIssue(item.index, error);
+          if (!issue) throw error;
+          this.updateTransfer(target.publicKey, {
+            ...item,
+            issue,
+          });
+          throwIfCancelled(signal);
+          onProgress(++completed, total);
+          continue;
         }
 
         // Acknowledged writes remain committed when the user cancels. Record
@@ -664,11 +733,18 @@ export class CardBackupSession {
         this.updateTransfer(target.publicKey, {
           ...item,
           imported: true,
-          conflict: false,
+          issue: undefined,
         });
         throwIfCancelled(signal);
-        onProgress(++completed, selected.length);
+        onProgress(++completed, total);
       }
+      const finished = this.requireBackup().targets.find(
+        current => current.publicKey === target.publicKey,
+      )!;
+      this.updateTarget({
+        ...finished,
+        complete: finished.items.every(item => item.imported || item.issue),
+      });
     });
   }
 

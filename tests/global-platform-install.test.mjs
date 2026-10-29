@@ -43,6 +43,10 @@ const safe = {
   appletAid: bytes('f06d6f6e6f69640001'),
   code: bytes('010003decaff'),
 };
+const library = {
+  packageAid: bytes('f06d6f6e6f696403'),
+  code: bytes('010003decaff'),
+};
 
 // GP Card Specification v2.3, Tables 11-36/37. This includes the optional
 // package/parent fields seen in the real GPPro f2af9ef card registry captures.
@@ -51,6 +55,12 @@ const installedSafe = bytes(
 );
 const loadedSafe = bytes(
   'e327 4f08 f06d6f6e6f696400 9f700101 ce020100 8409f06d6f6e6f69640001 cc08a000000151000000',
+);
+const loadedLibrary = bytes(
+  'e31c 4f08f06d6f6e6f696403 9f700101 ce020100 cc08a000000151000000',
+);
+const libraryWithModule = bytes(
+  'e327 4f08f06d6f6e6f696403 9f700101 ce020100 8409f06d6f6e6f69640001 cc08a000000151000000',
 );
 const unrelatedPackage = bytes(
   'e31b 4f07a0000000620204 9f700101 ce020100 cc08a000000151000000',
@@ -92,12 +102,12 @@ function installCommand() {
   );
 }
 
-function prepareCommand(selectedDomain = domain) {
+function prepareCommand(selectedDomain = domain, applet = safe) {
   return command(
     0xe6,
     2,
     0,
-    join(lv(safe.packageAid), lv(selectedDomain), bytes('000000')),
+    join(lv(applet.packageAid), lv(selectedDomain), bytes('000000')),
   );
 }
 
@@ -166,6 +176,191 @@ test('an existing selectable Safe is preserved without loading or installing any
   assert.deepEqual(progress, [{phase: 'checking'}, {phase: 'complete'}]);
   assert.equal(channelOpens, 1);
 });
+
+test('installation uses the CAP module and the distinct instance AID in their respective fields', async () => {
+  const instanceAid = bytes('a0000006472f0001');
+  const instanceBody = join(
+    bytes('4f'),
+    lv(instanceAid),
+    bytes('9f700107c4'),
+    lv(safe.packageAid),
+  );
+  const instanceRecord = join(bytes('e3'), lv(instanceBody));
+  const card = cardScript([
+    {command: select()},
+    absent(0x40, instanceAid),
+    {command: status(0x10, safe.packageAid), response: response(loadedSafe)},
+    {
+      command: command(
+        0xe6,
+        0x0c,
+        0,
+        join(
+          lv(safe.packageAid),
+          lv(safe.appletAid),
+          lv(instanceAid),
+          bytes('010002c90000'),
+        ),
+      ),
+    },
+    {command: status(0x40, instanceAid), response: response(instanceRecord)},
+  ]);
+  const installer = await GlobalPlatformInstaller.open(card.transceive);
+  await installer.install({...safe, instanceAid}, () => {});
+  card.done();
+});
+
+test('a selectable distinct instance is preserved without querying the CAP module as an instance', async () => {
+  const instanceAid = bytes('a0000006472f0001');
+  const instanceRecord = join(
+    bytes('e3'),
+    lv(join(bytes('4f'), lv(instanceAid), bytes('9f700107'))),
+  );
+  const card = cardScript([
+    {command: select()},
+    {command: status(0x40, instanceAid), response: response(instanceRecord)},
+  ]);
+  const installer = await GlobalPlatformInstaller.open(card.transceive);
+  await installer.install({...safe, instanceAid}, () => {});
+  card.done();
+});
+
+test('application data is encoded inside C9 without altering privileges or the install token', async () => {
+  const applicationData = Uint8Array.from([2, 4, ...new Uint8Array(64)]);
+  const card = cardScript([
+    {command: select()},
+    absent(0x40, safe.appletAid),
+    {command: status(0x10, safe.packageAid), response: response(loadedSafe)},
+    {
+      command: command(
+        0xe6,
+        0x0c,
+        0,
+        join(
+          lv(safe.packageAid),
+          lv(safe.appletAid),
+          lv(safe.appletAid),
+          bytes('0100'),
+          lv(join(bytes('c9'), lv(applicationData))),
+          bytes('00'),
+        ),
+      ),
+    },
+    {command: status(0x40, safe.appletAid), response: response(installedSafe)},
+  ]);
+  const installer = await GlobalPlatformInstaller.open(card.transceive);
+  await installer.install({...safe, applicationData}, () => {});
+  card.done();
+});
+
+test('new installation parameters never alter an already installed applet', async () => {
+  const card = cardScript([
+    {command: select()},
+    {command: status(0x40, safe.appletAid), response: response(installedSafe)},
+  ]);
+  const installer = await GlobalPlatformInstaller.open(card.transceive);
+  await installer.install(
+    {...safe, applicationData: Uint8Array.of(2, 4)},
+    () => {},
+  );
+  card.done();
+});
+
+test('an already loaded library is preserved using only its package registry entry', async () => {
+  const card = cardScript([
+    {command: select()},
+    {
+      command: status(0x10, library.packageAid),
+      response: response(loadedLibrary),
+    },
+  ]);
+  const progress = [];
+  const installer = await GlobalPlatformInstaller.open(card.transceive);
+
+  await installer.install(library, update => progress.push(update));
+  card.done();
+  assert.deepEqual(progress, [{phase: 'checking'}, {phase: 'complete'}]);
+});
+
+test('a missing library is loaded and verified without creating an applet instance', async () => {
+  const card = cardScript([
+    {command: select()},
+    absent(0x10, library.packageAid),
+    {command: prepareCommand(domain, library)},
+    {command: command(0xe8, 0x80, 0, join(bytes('c406'), library.code))},
+    {
+      command: status(0x10, library.packageAid),
+      response: response(loadedLibrary),
+    },
+  ]);
+  const progress = [];
+  const installer = await GlobalPlatformInstaller.open(card.transceive);
+
+  await installer.install(library, update => progress.push(update));
+  card.done();
+  assert.deepEqual(progress, [
+    {phase: 'checking'},
+    {phase: 'uploading', progress: 0},
+    {phase: 'uploading', progress: 1},
+    {phase: 'complete'},
+  ]);
+});
+
+for (const [name, record] of [
+  ['a non-loaded lifecycle', replacingLifecycle(loadedLibrary, 0x00)],
+  ['an applet module', libraryWithModule],
+]) {
+  test(`an existing library package with ${name} is left unchanged`, async () => {
+    const card = cardScript([
+      {command: select()},
+      {
+        command: status(0x10, library.packageAid),
+        response: response(record),
+      },
+    ]);
+    const progress = [];
+    const installer = await GlobalPlatformInstaller.open(card.transceive);
+
+    await assert.rejects(
+      installer.install(library, update => progress.push(update)),
+      /incomplete or different applet package/,
+    );
+    card.done();
+    assert.deepEqual(progress, [{phase: 'checking'}]);
+  });
+}
+
+for (const [name, record] of [
+  ['no entry', undefined],
+  ['a non-loaded lifecycle', replacingLifecycle(loadedLibrary, 0x00)],
+  ['an applet module', libraryWithModule],
+]) {
+  test(`a library LOAD followed by ${name} does not report completion or retry`, async () => {
+    const card = cardScript([
+      {command: select()},
+      absent(0x10, library.packageAid),
+      {command: prepareCommand(domain, library)},
+      {command: command(0xe8, 0x80, 0, join(bytes('c406'), library.code))},
+      {
+        command: status(0x10, library.packageAid),
+        response: response(record, record ? 0x9000 : 0x6a88),
+      },
+    ]);
+    const progress = [];
+    const installer = await GlobalPlatformInstaller.open(card.transceive);
+
+    await assert.rejects(
+      installer.install(library, update => progress.push(update)),
+      /did not confirm a loaded library package/,
+    );
+    card.done();
+    assert.deepEqual(progress, [
+      {phase: 'checking'},
+      {phase: 'uploading', progress: 0},
+      {phase: 'uploading', progress: 1},
+    ]);
+  });
+}
 
 test('application-specific selectable lifecycle states preserve existing data', async () => {
   // GP Table 11-4 reserves bits 4-7 for application use; 17 remains selectable.
@@ -695,6 +890,47 @@ test('missing optional registry metadata remains unknown', async () => {
   card.done();
 });
 
+test('registry enumeration preserves every package across continuation pages', async () => {
+  const all = new Uint8Array();
+  const card = cardScript([
+    {command: select()},
+    {
+      command: status(0x10, all),
+      response: response(join(loadedSafe, loadedLibrary), 0x6310),
+    },
+    {command: status(0x10, all, true), response: response(unrelatedPackage)},
+  ]);
+  const reader = await GlobalPlatformInstaller.inspect(card.transceive);
+  const entries = await reader.getEntries(0x10);
+  assert.deepEqual(
+    entries.map(entry => hex(entry.aid)),
+    [hex(safe.packageAid), hex(library.packageAid), 'a0000000620204'],
+  );
+  assert.deepEqual(
+    entries.map(entry => entry.modules.map(hex)),
+    [[hex(safe.appletAid)], [], []],
+  );
+  assert.equal(channelOpens, 0);
+  card.done();
+});
+
+test('an absent registry enumeration is empty but authentication failure is not', async () => {
+  for (const sw of [0x6a88, 0x6982]) {
+    const card = cardScript([
+      {command: select()},
+      {
+        command: status(0x10, new Uint8Array()),
+        response: response(undefined, sw),
+      },
+    ]);
+    const reader = await GlobalPlatformInstaller.inspect(card.transceive);
+    if (sw === 0x6a88) assert.deepEqual(await reader.getEntries(0x10), []);
+    else
+      await assert.rejects(reader.getEntries(0x10), error => error.sw === sw);
+    card.done();
+  }
+});
+
 test('inspection selects the card manager and reads metadata without authenticating or exposing write methods', async () => {
   const card = cardScript([
     {command: select(), response: response(undefined, 0x6a82)},
@@ -703,7 +939,7 @@ test('inspection selects the card manager and reads metadata without authenticat
   ]);
   const reader = await GlobalPlatformInstaller.inspect(card.transceive);
 
-  assert.deepEqual(Object.keys(reader), ['getEntry']);
+  assert.deepEqual(Object.keys(reader), ['getEntry', 'getEntries']);
   assert.equal((await reader.getEntry(0x40, safe.appletAid)).lifecycle, 0x07);
   assert.equal(channelOpens, 0);
   card.done();

@@ -7,7 +7,7 @@ import {
   recoverAddress,
 } from 'ethers';
 
-import {CBORAppletError} from '../cbor-applet.js';
+import {CardItemNotFoundError} from '../cbor-applet.js';
 
 import {MonoidCardError} from './card-error.js';
 import type {MonoidApplet, MonoidAppletSECP256K1Key} from './monoid-applet.js';
@@ -68,7 +68,7 @@ export async function signEvmDigest(
 }
 
 function handleSigningError(error: unknown): never {
-  if (error instanceof CBORAppletError && error.source.code === 'NOT_FOUND') {
+  if (error instanceof CardItemNotFoundError) {
     throw new MonoidCardError(ACCOUNT_NOT_FOUND_MESSAGE, {cause: error});
   }
   throw error;

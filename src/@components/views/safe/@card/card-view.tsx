@@ -5,9 +5,22 @@ import {type ReactNode, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
-import {type SafeIndexHex, SafeKnownType} from '../../../../@atomics.js';
+import {
+  type PublicKeyHex,
+  type SafeIndexHex,
+  SafeKnownType,
+} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
-import type {MonoidApplet} from '../../../../@lib/monoid/index.js';
+import type {DerivedKeyPublicKeyData} from '../../../../@lib/key-derivation.js';
+import {
+  type MonoidApplet,
+  assertSameCard,
+  authenticateCardPIN,
+  removeItems,
+  setCardAlias,
+  validateCardAlias,
+} from '../../../../@lib/monoid/index.js';
+import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import {
   ADDRESS_TYPES,
   type AddressChain,
@@ -27,12 +40,20 @@ import {
 import {createFlowId} from '../../../../@utils/index.js';
 import {ADDRESS_CHAIN_OPTIONS} from '../../../@key/address-type-selector.js';
 import {KeyListPlaceholder} from '../../../@key/key-list.js';
-import {keyTypeColorsCSS} from '../../../@key/key-tags.js';
+import {KeyAliasTag, keyTypeColorsCSS} from '../../../@key/key-tags.js';
+import {getKeyTypeName} from '../../../@key/key-type.js';
 import {
+  type MonoidScanPromptSetStateContentCallback,
   MonoidScanStatePromptProgress,
+  scanCardPrompt,
   useMonoidScanPrompt,
 } from '../../../@monoid/monoid-scan-prompt.js';
 import {PINKind} from '../../../@monoid/pin-input-placeholder.js';
+import {
+  requestCardPINs,
+  retryCardPIN,
+} from '../../../@monoid/request-card-pins.js';
+import {scanNextCards} from '../../../@monoid/scan-next-cards.js';
 import {AppIcon} from '../../../@ui/app-icon.js';
 import {Button, Buttons} from '../../../@ui/button.js';
 import {
@@ -41,6 +62,7 @@ import {
   DetailsPopupTitle,
 } from '../../../@ui/details-popup.js';
 import {SegmentedControl} from '../../../@ui/segmented-control.js';
+import {useInputModal} from '../../../@ui/use-input-modal.js';
 import {
   View,
   ViewActionButton,
@@ -48,19 +70,22 @@ import {
   ViewHeader,
   ViewHeaderButton,
   ViewHeaderIdentifier,
+  ViewHeaderTags,
   ViewHeaderTitle,
   ViewPlaceholder,
   useViewActive,
+  viewHeaderTagCSS,
 } from '../../../@view/index.js';
 import {CardAddressProgress} from '../card-address-progress.js';
 import {
   getCardKeyAddressTypes,
   getLocalCardKeyAddress,
   getLocalCardWalletDerivation,
+  getLocalNativeKeyAddress,
   readCardKeyAddress,
   readCardWalletDerivations,
 } from '../card-address.js';
-import {assertCardForUpdate, writeCardAliases} from '../card-alias-update.js';
+import {writeCardAliases} from '../card-alias-update.js';
 import {writeCardDerivations} from '../card-derivations.js';
 import {
   CARD_KEY_TYPES,
@@ -73,13 +98,15 @@ import {
   isWalletKeyUpToDate,
 } from '../card-key-import.js';
 import type {CardPINKind} from '../card-pin-update.js';
-import {deleteCardResources} from '../card-resource-delete.js';
 import {getCardResourceGroups} from '../card-resource-groups.js';
 import {type ScannedCardKeyData, isCardKeyItem} from '../common.js';
 
 import {AddressTypePicker} from './@address-type-picker.js';
-import type {KeyItemState, KeySyncDirection} from './@key-item.js';
-import {KeyItem} from './@key-item.js';
+import {
+  KeyItem,
+  type KeyItemState,
+  type KeySyncDirection,
+} from './@key-item.js';
 import {CardResourceItem, CardResourceList} from './@resource-item.js';
 import {CardPINUpdate} from './card-pin-update.js';
 
@@ -88,6 +115,10 @@ const Description = styled.p`
   font-size: 14px;
   line-height: 21px;
   color: var(--color-text-secondary);
+`;
+
+const AliasTag = styled.button`
+  ${viewHeaderTagCSS}
 `;
 
 const CreateKeyButton = styled(Button)`
@@ -107,7 +138,29 @@ const CreateKeyButton = styled(Button)`
 export const CardView = observer(
   ({view}: RouteComponentProps<Router['safe']['card']>): ReactNode => {
     const {cardStore, router} = useEntrances();
-    const card = view.card && cardStore.get(view.card);
+    const isViewActive = useViewActive(view);
+    // Routra removes this view when it is left, before React unmounts the
+    // page, and the reaction below still runs then: read route state here.
+    const identity = view.card;
+    const [card, setCard] = useState(() => identity && cardStore.get(identity));
+
+    useEffect(
+      () =>
+        reaction(
+          () => ({
+            active: isViewActive(),
+            cached: identity && cardStore.get(identity),
+          }),
+          ({active, cached}) => {
+            // Keep the working copy while this page applies acknowledged writes.
+            // An invalidated snapshot must not survive leaving and returning.
+            if (cached || !active) setCard(cached);
+          },
+          // A same-route replacement changes the identity without remounting.
+          {fireImmediately: true},
+        ),
+      [cardStore, identity, isViewActive],
+    );
 
     return (
       <View>
@@ -142,8 +195,11 @@ export const CardView = observer(
 );
 
 type CardKeySelection = {
-  key: Pick<ScannedCardKeyData, 'type' | 'index' | 'alias'>;
-  addressType: AddressType;
+  key: Pick<ScannedCardKeyData, 'type' | 'index' | 'alias'> & {
+    publicKey?: PublicKeyHex;
+    derivedKeys?: DerivedKeyPublicKeyData[];
+  };
+  addressType: AddressType | undefined;
   refs: Partial<Record<AddressType, ScannedCardKeyData['ref']>>;
   derivations: WalletKeyPublicKeyData[];
 };
@@ -151,14 +207,23 @@ type CardKeySelection = {
 function getCardKeySelection(item: CardItem): CardKeySelection | undefined {
   if (typeof item.type !== 'string') return;
 
-  const addressType = item.addressType ?? getCardKeyAddressTypes(item.type)[0];
-  if (!addressType) return;
+  const addressType =
+    item.addressType ??
+    (item.type === 'ed25519'
+      ? undefined
+      : getCardKeyAddressTypes(item.type)[0]);
+  if (!addressType && item.type !== 'secp256r1' && item.type !== 'ed25519')
+    return;
 
   return {
     key: {
       type: SafeKnownType.satisfies(item.type),
       index: item.index,
       alias: item.alias,
+      ...(item.publicKey && {publicKey: item.publicKey}),
+      ...(item.derivedKeys !== undefined && {
+        derivedKeys: item.derivedKeys,
+      }),
     },
     addressType,
     refs: item.refs,
@@ -174,8 +239,13 @@ const CardContent = observer(
     card: CardState;
     view: RouteComponentProps<Router['safe']['card']>['view'];
   }): ReactNode => {
-    const {walletStorageService, monoidCredentialsStore, errorService, router} =
-      useEntrances();
+    const {
+      walletStorageService,
+      monoidCredentialsStore,
+      cardStore,
+      errorService,
+      router,
+    } = useEntrances();
     const isViewActive = useViewActive(view);
     const [pinSession] = useState(() =>
       monoidCredentialsStore.createPINSession(),
@@ -192,6 +262,14 @@ const CardContent = observer(
       retryOnError: false,
       pinSession,
     });
+    const [aliasInput, showAliasInput] = useInputModal();
+    const [aliasScanContent, aliasScan] = useMonoidScanPrompt({
+      auth: false,
+      ensureSetup: false,
+      retryOnError: false,
+    });
+    const [renaming, setRenaming] = useState(false);
+    const aliasOperation = useRef<AbortController | undefined>(undefined);
     const items = card.items.flatMap(item => {
       const selection = getCardKeySelection(item);
       return selection ? [selection] : [];
@@ -227,6 +305,7 @@ const CardContent = observer(
       importing ||
       deleting ||
       creating ||
+      renaming ||
       !!updatingPIN;
     const mounted = useRef(true);
 
@@ -237,6 +316,7 @@ const CardContent = observer(
         mounted.current = false;
         deletion.current?.abort();
         creation.current?.abort();
+        aliasOperation.current?.abort();
         pinSession.clear();
       };
     }, [pinSession]);
@@ -247,6 +327,7 @@ const CardContent = observer(
           () => !isViewActive(),
           leaving => {
             if (leaving) {
+              aliasOperation.current?.abort();
               pinSession.clear();
               setMenu(undefined);
             }
@@ -269,6 +350,75 @@ const CardContent = observer(
 
     const {indexToKeyMap} = walletStorageService;
 
+    const editAlias = (): void => {
+      if (busy || operationActive.current || !isViewActive()) return;
+      const operation = new AbortController();
+      const {signal} = operation;
+      aliasOperation.current = operation;
+      operationActive.current = true;
+      setMenu(undefined);
+      setRenaming(true);
+      errorService.catch(
+        (async () => {
+          try {
+            const alias = await showAliasInput(
+              {
+                placeholder: 'Enter card alias',
+                defaultValue: card.alias || '',
+                center: true,
+              },
+              signal,
+            );
+            signal.throwIfAborted();
+            if (alias === undefined || alias === (card.alias || '')) return;
+            validateCardAlias(alias);
+            const pins = await requestCardPINs(
+              showAliasInput,
+              {secretSet: true, accessSet: true},
+              signal,
+            );
+            if (!pins) return;
+            await retryCardPIN(
+              showAliasInput,
+              pins,
+              () =>
+                aliasScan(
+                  scanCardPrompt(card, 'to save alias'),
+                  async (applet, setState, hello, scanSignal) => {
+                    const activeSignal = AbortSignal.any([signal, scanSignal]);
+                    activeSignal.throwIfAborted();
+                    assertSameCard(hello, card);
+                    await authenticateCardPIN(applet, pins.secret);
+                    setState('Saving alias, hold tight...');
+                    const verified = await setCardAlias(
+                      applet,
+                      hello,
+                      alias,
+                      activeSignal,
+                    );
+                    runInAction(() => {
+                      card.alias = verified.alias;
+                      card.allowPeerExtension = verified.allowPeerExtension;
+                      card.authority = verified.authority;
+                      cardStore.set(card);
+                    });
+                  },
+                  hello => assertSameCard(hello, card),
+                  signal,
+                ),
+              signal,
+            );
+          } catch (error) {
+            if (!isOperationCancelled(error, signal)) throw error;
+          } finally {
+            aliasOperation.current = undefined;
+            operationActive.current = false;
+            if (mounted.current) setRenaming(false);
+          }
+        })(),
+      );
+    };
+
     const getSafeAddress = (
       key: CardKeySelection['key'],
       addressType: AddressType,
@@ -288,9 +438,10 @@ const CardContent = observer(
     };
 
     const keyItems = items.map(item => {
-      const ref =
-        item.refs[item.addressType] ??
-        getSafeAddress(item.key, item.addressType);
+      const ref = item.addressType
+        ? (item.refs[item.addressType] ??
+          getSafeAddress(item.key, item.addressType))
+        : undefined;
       const existingKey = indexToKeyMap.get(item.key.index);
       const cardDerivations = card.items.find(
         resource => resource.derivationRecord?.index === item.key.index,
@@ -332,10 +483,28 @@ const CardContent = observer(
       // A row represents its recorded list first. Only a later, separate
       // import can add an unrecorded address currently being previewed.
       const previewData =
-        !empty && ref ? getCardKeyData({...source, ref}) : undefined;
+        !empty && ref
+          ? getCardKeyData(
+              {...source, ref},
+              item.key.type === 'ed25519' && previewIndexes.has(item.key.index)
+                ? [
+                    {
+                      addressType: ref.addressType,
+                      seed: ref.seed,
+                      curve: ref.curve,
+                      path: ref.path,
+                      publicKey: ref.publicKey,
+                    },
+                  ]
+                : undefined,
+            )
+          : undefined;
       const incoming = needsRecordDownload
         ? recordData
-        : (previewData ?? (recorded ? recordData : undefined));
+        : (previewData ??
+          (recorded || item.key.publicKey || item.key.derivedKeys?.length
+            ? recordData
+            : undefined));
       const canDownload =
         needsRecordDownload ||
         (!!incoming &&
@@ -348,7 +517,11 @@ const CardContent = observer(
       const canWriteAlias =
         !!existingKey && (existingKey.alias ?? '') !== (item.key.alias ?? '');
       const canWriteDerivations =
+        item.key.type !== 'secp256r1' &&
         !!existingKey &&
+        (item.key.type !== 'ed25519' ||
+          cardDerivations !== undefined ||
+          existingKey.wallets.length > 0) &&
         (cardDerivations === undefined ||
           cardDerivations.length !== existingKey.wallets.length ||
           existingKey.wallets.some(
@@ -416,10 +589,20 @@ const CardContent = observer(
       resourceFilter === 'keys'
         ? selectedResources.filter(item => !isCardKeyItem(item)).length
         : 0;
-    const missingPreviews = keyItems.filter(({ref, empty}) => !ref && !empty);
+    const missingPreviews = keyItems.filter(
+      ({item, ref, empty}) =>
+        (item.addressType || item.key.type === 'ed25519') &&
+        !ref &&
+        (!empty || item.key.type === 'ed25519'),
+    );
     const missing = selectedKeys.filter(
-      ({ref, empty, needsRecordDownload, direction}) =>
-        !ref && !empty && !needsRecordDownload && direction !== 'upload',
+      ({item, ref, empty, needsRecordDownload, direction}) =>
+        !ref &&
+        !item.key.publicKey &&
+        !item.key.derivedKeys?.length &&
+        !empty &&
+        !needsRecordDownload &&
+        direction !== 'upload',
     );
     const writableKeys = selectedKeys.filter(({canWrite}) => canWrite);
     const downloadableKeys = selectedKeys.filter(
@@ -467,7 +650,7 @@ const CardContent = observer(
 
       try {
         await createScan(
-          'Scan card to create key',
+          scanCardPrompt(card, 'to create key'),
           async (applet, setStateContent, _hello, signal) => {
             const cancel = (): void => operation.abort();
             signal.addEventListener('abort', cancel, {once: true});
@@ -478,10 +661,12 @@ const CardContent = observer(
               // Retain the command even if the callback is entered again.
               writing ??= createCardKey(
                 applet,
+                card,
                 type,
                 operation.signal,
                 item => {
                   card.upsert(item);
+                  cardStore.set(card);
                   createdIndex = item.index;
                   if (!operation.signal.aborted)
                     setStateContent('Reading key, hold tight...');
@@ -497,7 +682,7 @@ const CardContent = observer(
               signal.removeEventListener('abort', cancel);
             }
           },
-          hello => assertCardForUpdate(hello, card),
+          hello => assertSameCard(hello, card),
         );
 
         if (createdIndex && mounted.current && !operation.signal.aborted) {
@@ -524,38 +709,57 @@ const CardContent = observer(
       const derivedRefs = new Map<SafeIndexHex, ScannedCardKeyData['ref']>();
 
       try {
-        await scanPrompt(
-          'Scan card to derive',
-          async (applet, setStateContent, _hello, signal) => {
-            const showProgress = (current: number): void => {
-              if (signal.aborted || !mounted.current || !isViewActive()) return;
-              setStateContent(
-                <MonoidScanStatePromptProgress
-                  current={current}
-                  total={missingPreviews.length}
-                >
-                  Deriving addresses
-                </MonoidScanStatePromptProgress>,
-              );
-            };
-            showProgress(0);
-            for (const [index, {item}] of missingPreviews.entries()) {
-              if (signal.aborted || !mounted.current || !isViewActive()) return;
-              derivedRefs.set(
-                item.key.index,
-                await readCardKeyAddress(applet, item.key, item.addressType),
-              );
-              showProgress(index + 1);
-            }
-          },
-          hello => assertCardForUpdate(hello, card),
-        );
+        const unread = missingPreviews.filter(({item}) => {
+          const ref = getLocalNativeKeyAddress(
+            item.key.type,
+            item.key.publicKey,
+            item.addressType ?? 'solana',
+          );
+          if (ref) derivedRefs.set(item.key.index, ref);
+          return !ref;
+        });
+        if (unread.length)
+          await scanPrompt(
+            scanCardPrompt(card, 'to derive'),
+            async (applet, setStateContent, _hello, signal) => {
+              const showProgress = (current: number): void => {
+                if (signal.aborted || !mounted.current || !isViewActive())
+                  return;
+                setStateContent(
+                  <MonoidScanStatePromptProgress
+                    current={current}
+                    total={unread.length}
+                  >
+                    Deriving addresses
+                  </MonoidScanStatePromptProgress>,
+                );
+              };
+              showProgress(0);
+              for (const [index, {item}] of unread.entries()) {
+                if (signal.aborted || !mounted.current || !isViewActive())
+                  return;
+                derivedRefs.set(
+                  item.key.index,
+                  await readCardKeyAddress(
+                    applet,
+                    item.key,
+                    item.addressType ?? 'solana',
+                  ),
+                );
+                showProgress(index + 1);
+              }
+            },
+            hello => assertSameCard(hello, card),
+          );
 
         if (mounted.current && isViewActive()) {
           runInAction(() => {
             for (const item of card.items) {
               const ref = derivedRefs.get(item.index);
-              if (ref) item.ref = ref;
+              if (ref) {
+                item.ref = ref;
+                previewIndexes.add(item.index);
+              }
             }
           });
         }
@@ -584,7 +788,7 @@ const CardContent = observer(
         index: SafeIndexHex,
         wallets: WalletKeyPublicKeyData[],
       ) => void,
-      prompt = 'Scan card to update',
+      prompt = 'to update',
       beforeWriting?: (
         applet: MonoidApplet,
         setStateContent: (content: ReactNode) => void,
@@ -603,7 +807,7 @@ const CardContent = observer(
       );
       try {
         await scanPrompt(
-          prompt,
+          scanCardPrompt(card, prompt),
           async (applet, setStateContent, _hello, signal) => {
             const cancel = (): void => operation.abort();
             signal.addEventListener('abort', cancel, {once: true});
@@ -668,6 +872,7 @@ const CardContent = observer(
                   runInAction(() => {
                     card.upsert(resource);
                     item.setRecordedWallets(derivations);
+                    cardStore.set(card);
                   });
                   onWritten?.(index, derivations);
                   showProgress();
@@ -680,6 +885,7 @@ const CardContent = observer(
                     runInAction(() => {
                       card.items.find(item => item.index === index)!.alias =
                         alias;
+                      cardStore.set(card);
                     });
 
                     showProgress();
@@ -691,7 +897,7 @@ const CardContent = observer(
               signal.removeEventListener('abort', cancel);
             }
           },
-          hello => assertCardForUpdate(hello, card),
+          hello => assertSameCard(hello, card),
         );
       } finally {
         operation.abort();
@@ -827,7 +1033,7 @@ const CardContent = observer(
                 setImported(true);
               }
             },
-            'Scan card to import',
+            'to import',
             unreadRecords.length
               ? async (applet, setStateContent, signal) => {
                   const total = unreadRecords.reduce(
@@ -932,7 +1138,8 @@ const CardContent = observer(
           [...group.items].reverse().map(item => item.index),
         ),
       );
-      const total = pending.size;
+      const indices = [...pending];
+      const total = indices.length;
       const operation = new AbortController();
       let deletingItems: Promise<void> | undefined;
       deletion.current = operation;
@@ -944,59 +1151,81 @@ const CardContent = observer(
         {fireImmediately: true},
       );
 
+      // Each card deletes the same indices; missing items are already done.
+      const deleteFromCard = async (
+        applet: MonoidApplet,
+        setStateContent: MonoidScanPromptSetStateContentCallback,
+        signal: AbortSignal,
+        remaining: Set<SafeIndexHex>,
+        onDeleted: (index: SafeIndexHex) => void = () => {},
+      ): Promise<void> => {
+        const cancel = (): void => operation.abort();
+        signal.addEventListener('abort', cancel, {once: true});
+        if (signal.aborted) cancel();
+
+        const showProgress = (): void => {
+          if (operation.signal.aborted) return;
+
+          setStateContent(
+            <MonoidScanStatePromptProgress
+              current={total - remaining.size}
+              total={total}
+            >
+              Deleting items
+            </MonoidScanStatePromptProgress>,
+          );
+        };
+
+        try {
+          showProgress();
+          deletingItems = removeItems(
+            applet,
+            remaining,
+            operation.signal,
+            index => {
+              onDeleted(index);
+              showProgress();
+            },
+          );
+          await deletingItems;
+        } finally {
+          signal.removeEventListener('abort', cancel);
+        }
+      };
+
       try {
         await scanPrompt(
-          'Scan card to delete',
-          async (applet, setStateContent, _hello, signal) => {
-            const cancel = (): void => operation.abort();
-            signal.addEventListener('abort', cancel, {once: true});
-            if (signal.aborted) cancel();
+          scanCardPrompt(card, 'to delete'),
+          (applet, setStateContent, _hello, signal) =>
+            deleteFromCard(applet, setStateContent, signal, pending, index => {
+              const removed = card.items.find(item => item.index === index);
+              const sourceIndex =
+                removed?.derivationRecord?.index ??
+                removed?.keyDerivationRecord?.index;
 
-            const showProgress = (): void => {
-              if (operation.signal.aborted) return;
-
-              setStateContent(
-                <MonoidScanStatePromptProgress
-                  current={total - pending.size}
-                  total={total}
-                >
-                  Deleting items
-                </MonoidScanStatePromptProgress>,
-              );
-            };
-
-            try {
-              showProgress();
-              deletingItems = deleteCardResources(
-                applet,
-                pending,
-                operation.signal,
-                index => {
-                  const sourceIndex = card.items.find(
-                    item => item.index === index,
-                  )?.derivationRecord?.index;
-
-                  runInAction(() => {
-                    card.items = card.items.filter(
-                      item => item.index !== index,
-                    );
-                    selectedIndexSet.delete(index);
-                    const source = card.items.find(
-                      item => item.index === sourceIndex,
-                    );
-                    if (source) source.derivations = [];
-                  });
-
-                  showProgress();
-                },
-              );
-              await deletingItems;
-            } finally {
-              signal.removeEventListener('abort', cancel);
-            }
-          },
-          hello => assertCardForUpdate(hello, card),
+              runInAction(() => {
+                card.items = card.items.filter(item => item.index !== index);
+                selectedIndexSet.delete(index);
+                const source = card.items.find(
+                  item => item.index === sourceIndex,
+                );
+                if (source) {
+                  if (removed?.keyDerivationRecord) source.derivedKeys = [];
+                  else source.derivations = [];
+                }
+                cardStore.set(card);
+              });
+            }),
+          hello => assertSameCard(hello, card),
         );
+        await scanNextCards({
+          scan: scanPrompt,
+          scanned: new Set([card.publicKey]),
+          content: 'Scan next card to delete',
+          callback: (applet, setStateContent, _hello, signal) =>
+            deleteFromCard(applet, setStateContent, signal, new Set(indices)),
+          signal: operation.signal,
+        });
       } finally {
         operation.abort();
         // Dismissing the prompt can finish before an in-flight command returns.
@@ -1012,7 +1241,29 @@ const CardContent = observer(
       <>
         <ViewHeader>
           <ViewHeaderTitle>Card</ViewHeaderTitle>
-          <ViewHeaderIdentifier identifier={{type: 'card', id: card.id}} />
+          <ViewHeaderTags>
+            <ViewHeaderIdentifier
+              identifier={{type: 'card', id: card.id}}
+              aria-label="Edit card alias"
+              onClick={editAlias}
+            />
+            {card.alias && (
+              <KeyAliasTag
+                as={AliasTag}
+                type="button"
+                aria-label="Edit card alias"
+                disabled={busy}
+                onClick={editAlias}
+              >
+                {card.alias}
+              </KeyAliasTag>
+            )}
+            {card.bundle !== false && (
+              <ViewHeaderIdentifier
+                identifier={{type: 'bundle', id: card.bundle}}
+              />
+            )}
+          </ViewHeaderTags>
           <ViewHeaderButton
             aria-label="Card actions"
             aria-haspopup="dialog"
@@ -1077,7 +1328,7 @@ const CardContent = observer(
                 visible={
                   !imported &&
                   selectedResources.length > 0 &&
-                  missing.length === 0
+                  missing.every(({item}) => !item.addressType)
                 }
                 color="neutral"
                 disabled={busy}
@@ -1186,7 +1437,7 @@ const CardContent = observer(
             </ViewPlaceholder>
           )}
         </ViewContent>
-        {editing && (
+        {editing?.addressType && (
           <AddressTypePicker
             value={editing.addressType}
             addressTypes={getCardKeyAddressTypes(editing.key.type)}
@@ -1306,10 +1557,10 @@ const CardContent = observer(
                       key={type}
                       className={type}
                       color="neutral"
-                      aria-label={type}
+                      aria-label={getKeyTypeName(type)}
                       onClick={errorService.catch(() => createKey(type))}
                     >
-                      {type}
+                      {getKeyTypeName(type)}
                     </CreateKeyButton>
                   ))}
                 </Buttons>
@@ -1354,14 +1605,54 @@ const CardContent = observer(
                         router.safe
                           .setupCard({
                             card: {id: card.id, publicKey: card.publicKey},
-                            createBundle: true,
+                            bundle: 'card',
                           })
                           .$push();
                       }}
                     >
-                      Setup card bundle
+                      Create bundle
                     </Button>
                   )}
+                  {!canDelete && card.authority && (
+                    <Button
+                      color="neutral"
+                      onClick={() => {
+                        setMenu(undefined);
+                        router.safe
+                          .setupCard({
+                            card: {id: card.id, publicKey: card.publicKey},
+                            bundle: 'authority',
+                          })
+                          .$push();
+                      }}
+                    >
+                      Join authority bundle
+                    </Button>
+                  )}
+                  {!canDelete &&
+                    card.bundle !== false &&
+                    card.allowPeerExtension && (
+                      <Button
+                        color="neutral"
+                        onClick={() => {
+                          setMenu(undefined);
+                          router.safe
+                            .extendBundle({
+                              card: {
+                                id: card.id,
+                                publicKey: card.publicKey,
+                                bundle: card.bundle,
+                                alias: card.alias,
+                                allowPeerExtension: card.allowPeerExtension,
+                                authority: card.authority,
+                              },
+                            })
+                            .$push();
+                        }}
+                      >
+                        Extend bundle
+                      </Button>
+                    )}
                   {canDelete ? (
                     <Button color="danger" onClick={() => setMenu('delete')}>
                       Delete
@@ -1405,6 +1696,8 @@ const CardContent = observer(
         )}
         {scanPromptContent}
         {createScanContent}
+        {aliasInput}
+        {aliasScanContent}
       </>
     );
   },

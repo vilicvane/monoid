@@ -1,0 +1,29 @@
+{
+  "name": "monoid-authority",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:init": "node scripts/init-dev.mjs",
+    "dev": "npm run build:web:dev && wrangler dev --ip 0.0.0.0 --local-upstream localhost:8787 --upstream-protocol http",
+    "dev:web": "npm --prefix web run build -- --mode development --watch",
+    "build:web": "npm --prefix web run build",
+    "build:web:dev": "npm --prefix web run build -- --mode development",
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "test:runtime": "npm run build:web && npm run build && wrangler deploy --dry-run --outdir .wrangler/test && node --test tests/runtime.mjs",
+    "deploy": "npm run build:web && wrangler deploy"
+  },
+  "dependencies": {
+    "@hpke/core": "1.9.0",
+    "jose": "6.2.13",
+    "viem": "2.57.12"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261016.1",
+    "miniflare": "5.20261012.1-beta",
+    "typescript": "~5.8.3",
+    "wrangler": "4.151.1"
+  }
+}

@@ -1,7 +1,5 @@
 package com.capacitorjs.plugins.keyboard;
 
-import android.os.Handler;
-import android.os.Looper;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -12,11 +10,14 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 public class KeyboardPlugin extends Plugin {
 
     private Keyboard implementation;
+    private boolean stopped;
+    private boolean destroyed;
 
     @Override
     public void load() {
-        execute(
+        bridge.executeOnMainThread(
             () -> {
+                if (destroyed) return;
                 boolean resizeOnFullScreen = getConfig().getBoolean("resizeOnFullScreen", false);
                 implementation = new Keyboard(getActivity(), resizeOnFullScreen);
 
@@ -27,24 +28,22 @@ public class KeyboardPlugin extends Plugin {
 
     @PluginMethod
     public void show(final PluginCall call) {
-        execute(
-            () ->
-                new Handler(Looper.getMainLooper())
-                    .postDelayed(
-                        () -> {
-                            implementation.show();
-                            call.resolve();
-                        },
-                        350
-                    )
+        bridge.executeOnMainThread(
+            () -> {
+                if (implementation == null || stopped || destroyed) {
+                    call.resolve();
+                } else {
+                    implementation.show(call::resolve);
+                }
+            }
         );
     }
 
     @PluginMethod
     public void hide(final PluginCall call) {
-        execute(
+        bridge.executeOnMainThread(
             () -> {
-                if (!implementation.hide()) {
+                if (implementation != null && !implementation.hide()) {
                     call.reject("Can't close keyboard, not currently focused");
                 } else {
                     call.resolve();
@@ -101,7 +100,19 @@ public class KeyboardPlugin extends Plugin {
     }
 
     @Override
+    protected void handleOnStart() {
+        stopped = false;
+    }
+
+    @Override
+    protected void handleOnStop() {
+        stopped = true;
+        if (implementation != null) implementation.cancelShow();
+    }
+
+    @Override
     protected void handleOnDestroy() {
-        implementation.destroy();
+        destroyed = true;
+        if (implementation != null) implementation.destroy();
     }
 }

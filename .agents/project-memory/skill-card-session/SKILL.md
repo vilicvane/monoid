@@ -5,7 +5,7 @@ description: Monoid NFC card sessions, Access/Safe PIN ownership, biometric vaul
 
 # Monoid card sessions
 
-Source: `../records.md`, especially records 29–32, 34, 38–41, 47 and 49–52, and `../29.md`. Treat records
+Source: `../records.md`, especially records 29–32, 34, 38–41, 47–50, 63, 83, 90–92, 98, 103 and 105–108, and `../29.md`, `../48.md` and `../50.md`. Treat records
 as authoritative and keep them up to date. Records 19–24 describe an older WIP;
 do not reintroduce their plain-storage design or assume those TODOs still exist.
 
@@ -26,13 +26,57 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   sessions may span related operations; temporary sessions dispose with the scan.
   They retain plaintext only for the owning flow. Persistent storage uses the
   biometric vault; the unencrypted backend is an explicit development-only option.
+- When both vault unlock and manual PIN input are required, unlock first, then
+  open the PIN input. Reuse that session for later Access PIN saving; do not add
+  unlocks to Secret-only operations. Access PIN setup/update uses `getPINs` to
+  preserve manual fallback when protected storage is unavailable. See `../48.md`.
+  After unlock, check cancellation/page activity before input or NFC. Clear a
+  failed unlock session so an explicit retry can authorize again. Keep successful
+  borrowed sessions page-owned and dispose temporary sessions when finished.
+- If the vault reports `AUTHORIZATION_EXPIRED` mid-procedure, `MonoidPINSession`
+  (`getPINs`, `setPIN`, `removePIN`, `authenticate`) disposes the expired access,
+  shares one renewed unlock and retries only the local vault operation once.
+  Preserve the native 60-second lifetime; never replay card work or renew on
+  cancellation/background/closed access/other storage errors. Abort and page
+  exit cancel renewal; a failed renewal or second expiry keeps the existing
+  warning. Never open a biometric prompt inside a live NFC callback: vault writes
+  run after NFC, and the in-scan removal before Reset (`allowUnlock = false`)
+  hands off, renews outside NFC and asks for another tap (record 92).
+- Keep PIN inputs remounted per prompt. On Android, DOM autofocus after biometric
+  unlock may not open the IME: use the shared input modal's explicit keyboard
+  request, which waits for native window focus. Cancel pending keyboard work on
+  prompt close/replacement/abort/unmount. Never blur/refocus to recover the IME
+  (blur cancels the input), or reopen it after a user dismissal. See `../48.md`.
 - A missing PIN ends the current reader before presenting a modal. Bind typed
   PINs to the card's `hello.id`, verify the intended card before credentials, and
   authenticate again on every tap. Do not await a web modal inside a live card
-  callback. Save a successfully verified Access PIN after native cleanup.
-- Safe PINs are entered explicitly and never persisted. Initialization only copies
-  the Safe PIN to Access PIN when Access PIN is unset. Changed card/Safe identity
-  invalidates a pending setup PIN. Wrong-PIN retries respect firmware tries.
+  callback. Save a successfully verified Access PIN after native stop.
+- Bundle Export/Import accept the Access PIN once a Secret Authenticate has
+  bound the Monoid install (firmware c05cce2), so ordinary Sync uses the Access
+  scan prompt; maintenance Sync, bundle join/extension and Copy keep Secret. Never
+  turn an Access failure (generic `6982`) into a Secret PIN fallback. Monoid RPC
+  ISO errors arrive as CBOR `INTERNAL`/`ISOException` with a signed-short
+  `reason`, decoded by `CBORAppletError`. See record 91.
+- Secret PINs are entered explicitly and never persisted. New Secret and Access
+  PINs require confirmation; initialization/Reset defaults to a separate Access
+  PIN, with an unchecked option to reuse the confirmed Secret PIN. Restore an
+  unset Access PIN from the unlocked local vault when available; otherwise ask
+  for it twice. Existing Secret PIN authentication needs one entry. Firmware
+  initially copies a new Secret PIN to Access PIN; authenticate Secret before
+  writing a distinct Access PIN on that connection. Changed card identity
+  invalidates pending input. Wrong-PIN retries respect firmware tries. See record 59.
+  A wrong PIN never ends a procedure: authenticate through `authenticateCardPIN`
+  and re-ask in place (`retryCardPIN` / `CardSecretPINSession.run`) with
+  "Incorrect PIN, tries remaining: N", keeping entered input; only before card
+  writes, never resubmitting the failed PIN. Reset keeps the Card ID and alias
+  and rotates keys (firmware 95f449f); same ID with a new key means reset or
+  reinstalled, not a wrong card. See record 90.
+- Every plaintext PIN held in JS memory goes through `HeldPINValue`/`HeldPINs`:
+  dropped after 5 idle minutes per holder or when `isAppHidden()` (lock, app
+  switch), never on inactive-only states. Android WebView stays `visible` on
+  lock, so Android also uses `appStateChange` false (`onStop`); never use it on
+  iOS (`willResignActive`). Only clear/expiry/hide abort the owner; capture it
+  before awaiting a write. See record 83.
 - iOS Core NFC covers the WebView and has a system session limit. Errors close
   the sheet and return to the caller; no automatic iOS retry hides the error or
   replays an uncertain mutation. Cancellation and iOS timeout before any card
@@ -60,6 +104,8 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   errors and unknown APDU outcomes; lost connections cancel without replaying.
   End the system sheet with a disconnect error for tag loss; successful post-read
   removal retains the normal completion indication.
+- A WebView page reload ends the native Android scan and session it started (`onPageStarted`, `PageSessionScope`); late results never reach the new page (record 98).
+- Android keeps Reader Mode on (linger) after an ordinary `stopScan` and offers a still-present card to the next scan after a silent presence probe; `NfcAdapter.ignore` hides an in-range card until it leaves, so call it only on the final stop (idle 5 min, pause, NFC off, reload, destroy) (record 103).
 - iOS requires the applet/card-manager AIDs in `Info.plist`. Keep them aligned with
   both the bundled CAP manifest and actual SELECT bytes, including the normal
   version-independent Monoid prefix `F06D6F6E6F69640201`. Native removal detection
@@ -71,3 +117,23 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   `Applet` transport sends 255-byte multipart frames (CLA 00/90/B0/A0), supports
   1–8192-byte encoded requests, and reads `61xx` with GET RESPONSE. Schemas are in
   `src/@lib/monoid/monoid-applet.ts`; inspect current firmware for changes.
+- Feature pages skip incompatible records individually; Copy, Sync and backup
+  treat items as opaque and report undecodable records, conflicts and import
+  rejections per item while the rest finish (record 71). Only local format errors
+  qualify, not NFC, PIN, cancellation or uncertain mutations. Do not delete the
+  skipped on-card items or overwrite them as if absent. Destructive maintenance
+  still requires complete recovery data. The temporary old `key`/`keyPrefix`
+  protocol adapter was removed at the user's request; use only the current
+  metadata fields. See `../50.md` for the separate Identity Bundle packet
+  incompatibility, which APP cannot repair by changing packet headers.
+- OTP time mode comes from the current card's required `Hello.authority`: false
+  accepts phone time without Challenge/network; a URL requires its signed time
+  proof, with the installed Identity key as the final verifier. Never fall back
+  after a service, signature or card rejection. Prepare precedes client-bound
+  Access PIN authentication in the same NFC session. Optional Identity Authority
+  installation parameters require URL and public key together; ordinary Monoid
+  replacement preserves them. See record 56.
+- Every Security Key `0xF101` record is resident; non-resident credentials have no
+  record and recover from the granted Seed and domain alone. Decoding ignores
+  record field 8. Replacing any bound Seed asks for confirmation, because
+  non-resident accounts may exist without a visible record. See record 63.

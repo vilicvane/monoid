@@ -1,0 +1,9 @@
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.env
+.env.*
+secrets*.json
+# Generated output left by the retired diagnostic client.
+/demo/dist/

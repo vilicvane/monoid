@@ -89,7 +89,7 @@ const OptionInput = styled.input`
 `;
 
 const OptionLabel = styled.span`
-  min-height: 26px;
+  height: 26px;
   padding: 3px 4px;
   border-radius: 999px;
   color: var(--color-text-secondary);
@@ -109,7 +109,7 @@ const OptionLabel = styled.span`
   }
 
   @media (pointer: coarse) {
-    min-height: 34px;
+    height: 34px;
   }
 `;
 

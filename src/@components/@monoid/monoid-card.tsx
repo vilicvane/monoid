@@ -1,4 +1,4 @@
-import type {ReactNode, Ref} from 'react';
+import {type ReactNode, type Ref, useState} from 'react';
 import {styled} from 'styled-components';
 
 import monoidCardWirelessInterface from '../../@assets/monoid-card-wireless-interface.svg';
@@ -51,13 +51,41 @@ const CardLabel = styled.span`
   pointer-events: none;
 `;
 
+/** The alias replaces the ID; it reads as text, not as a hex identifier. */
+const CardName = styled.span<{$alias: boolean}>`
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  ${props => props.$alias && 'letter-spacing: normal;'}
+`;
+
+const CardNameToggle = styled.button<{$alias: boolean}>`
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: auto;
+  cursor: pointer;
+  ${props => props.$alias && 'letter-spacing: normal;'}
+`;
+
 const CardDescription = styled.span`
   color: var(--monoid-card-description-color, var(--ion-color-primary));
   letter-spacing: normal;
 `;
 
 const CardSubtitle = styled.span`
-  color: var(--ion-color-primary);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--monoid-card-description-color, var(--ion-color-primary));
 `;
 
 export function MonoidCard({
@@ -65,6 +93,8 @@ export function MonoidCard({
   children,
   error = false,
   id,
+  alias,
+  aliasToggle = false,
   subtitle,
   description,
   ref,
@@ -73,16 +103,38 @@ export function MonoidCard({
   children?: ReactNode;
   error?: boolean;
   id?: string;
+  alias?: string | false;
+  /** Where the card has no tap action of its own, tapping its name shows the ID. */
+  aliasToggle?: boolean;
   subtitle?: string;
   description?: string;
   ref?: Ref<HTMLDivElement>;
 }): ReactNode {
+  const [showId, setShowId] = useState(false);
+  const showAlias = !!alias && !showId;
+  const name = showAlias ? alias : id;
   return (
     <MonoidCardFrame className={className} ref={ref}>
       {children}
       {id ? (
         <CardLabel>
-          {id}
+          {aliasToggle && alias ? (
+            <CardNameToggle
+              type="button"
+              $alias={showAlias}
+              aria-label={
+                showAlias ? `Show card ID of ${alias}` : `Show alias of ${id}`
+              }
+              onClick={event => {
+                event.stopPropagation();
+                setShowId(value => !value);
+              }}
+            >
+              {name}
+            </CardNameToggle>
+          ) : (
+            <CardName $alias={showAlias}>{name}</CardName>
+          )}
           {subtitle && <CardSubtitle>{subtitle}</CardSubtitle>}
           {description && <CardDescription>{description}</CardDescription>}
         </CardLabel>

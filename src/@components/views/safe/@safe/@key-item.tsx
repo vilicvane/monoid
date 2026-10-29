@@ -56,6 +56,8 @@ export const KeyItem = observer(
           </KeyTags>
           {wallet ? (
             <KeyListAddress>{wallet.address}</KeyListAddress>
+          ) : data.rawPublicKey ? (
+            <KeyListAddress>{data.rawPublicKey}</KeyListAddress>
           ) : (
             <KeyListPlaceholder>No derived addresses</KeyListPlaceholder>
           )}

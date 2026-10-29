@@ -19,6 +19,31 @@ export abstract class Applet<TCommandDefinitions> {
 
   constructor(readonly aid: Uint8Array) {}
 
+  /** Borrow this connection for GP work; the scan owner still closes it. */
+  get activeSessionId(): string {
+    if (this.sessionId === undefined)
+      throw new Error('Applet commands require an open NFC session.');
+    return this.sessionId;
+  }
+
+  /** Select another applet without closing the caller's NFC connection. */
+  async useSession(source: Applet<unknown>): Promise<this> {
+    const applet = this.attachSession(source);
+    await applet.select();
+    return applet;
+  }
+
+  /** Bind an existing connection without SELECT; its owner still closes it. */
+  attachSession(source: string | Applet<unknown>): this {
+    const sessionId = typeof source === 'string' ? source : source.sessionId;
+    if (sessionId === undefined) {
+      throw new Error('Applet commands require an open NFC session.');
+    }
+    const applet = Object.create(this) as this;
+    applet.sessionId = sessionId;
+    return applet;
+  }
+
   standby(
     callback: (applet: this) => Promise<void>,
     onError: (error: unknown) => void = console.error,
@@ -57,8 +82,7 @@ export abstract class Applet<TCommandDefinitions> {
 
   /** Select on an existing connection; the caller retains ownership of its lifetime. */
   async openSession(sessionId: string): Promise<this> {
-    const applet = Object.create(this) as this;
-    applet.sessionId = sessionId;
+    const applet = this.attachSession(sessionId);
 
     await applet.select();
 
@@ -99,23 +123,23 @@ export abstract class Applet<TCommandDefinitions> {
     }
   }
 
-  private async select(): Promise<void> {
+  async select(aid = this.aid): Promise<Uint8Array> {
     let response: AppletResponse;
 
     try {
       response = await this.transceive(
-        new Uint8Array([0x00, 0xa4, 0x04, 0x00, this.aid.length, ...this.aid]),
+        new Uint8Array([0x00, 0xa4, 0x04, 0x00, aid.length, ...aid]),
       );
     } catch (error) {
       if (error instanceof AppletISOError && error.sw === 0x6a82) {
-        throw new AppletNotFoundError(error.data);
+        throw new AppletNotFoundError(error.data, aid);
       }
 
       throw error;
     }
 
     // A failure fetching SELECT's remaining data does not mean it is absent.
-    await this.readResponse(response);
+    return this.readResponse(response);
   }
 
   public async sendRawCommand(command: Uint8Array): Promise<Uint8Array> {
@@ -177,7 +201,7 @@ export abstract class Applet<TCommandDefinitions> {
   }
 }
 
-const ISO7816_SW_CODE_TEXT_MAP = new Map([
+export const ISO7816_SW_CODE_TEXT_MAP = new Map([
   [0x9000, 'No Error'],
   [0x6100, 'Response bytes remaining'],
   [0x6700, 'Wrong length'],
@@ -198,7 +222,7 @@ const ISO7816_SW_CODE_TEXT_MAP = new Map([
   [0x6d00, 'INS value not supported'],
   [0x6e00, 'CLA value not supported'],
   [0x6f00, 'No precise diagnosis'],
-  [0x6a84, 'Not enough memory space in the file'],
+  [0x6a84, 'Not enough storage on card'],
 ]);
 
 export class AppletISOError extends Error {
@@ -214,8 +238,28 @@ export class AppletISOError extends Error {
   }
 }
 
+/** SELECT leaves the target active. Only an absent AID counts as not installed. */
+export async function probeApplet(
+  applet: Applet<unknown>,
+  aid: Uint8Array,
+  validate?: (response: Uint8Array) => void,
+): Promise<boolean> {
+  let response: Uint8Array;
+  try {
+    response = await applet.select(aid);
+  } catch (error) {
+    if (error instanceof AppletNotFoundError) return false;
+    throw error;
+  }
+  validate?.(response);
+  return true;
+}
+
 export class AppletNotFoundError extends AppletISOError {
-  constructor(data: Uint8Array) {
+  constructor(
+    data: Uint8Array,
+    readonly aid: Uint8Array,
+  ) {
     super('Applet not found during SELECT', 0x6a82, data);
   }
 }

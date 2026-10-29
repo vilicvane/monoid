@@ -139,7 +139,7 @@ export function WalletConnectSite({
   ...props
 }: SiteProps & {compact?: boolean; children?: ReactNode}): ReactNode {
   const info = getWalletConnectSiteInfo(props);
-  const {url, name, valid, dangerous, message} = info;
+  const {url, name, dangerous, message} = info;
   const {metadata} = props;
   const details = (
     <>
@@ -147,9 +147,9 @@ export function WalletConnectSite({
         <span title={url?.hostname}>
           {url?.hostname ?? 'Invalid site address'}
         </span>
-        {valid && <WalletConnectVerificationIcon info={info} />}
+        {!dangerous && <WalletConnectVerificationIcon info={info} />}
       </Domain>
-      {!valid && (
+      {dangerous && (
         <Verification $dangerous={dangerous}>
           <WalletConnectVerificationIcon info={info} />
           {message}

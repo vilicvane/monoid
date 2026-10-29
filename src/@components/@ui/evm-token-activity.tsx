@@ -40,7 +40,7 @@ import {
   InfoTableSection,
 } from './info-section.js';
 import {PopupAddress} from './popup-address.js';
-import {BlackTag} from './tag.js';
+import {DarkTag} from './tag.js';
 import {
   TokenActivity as Activity,
   TokenActivityAddress as ActivityAddress,
@@ -151,7 +151,7 @@ export const EvmTokenActivity = observer(function EvmTokenActivity({
       {transfers.length > 0 && (
         <InfoTableSection>
           <InfoSectionHeader>
-            <BlackTag>Token changes</BlackTag>
+            <DarkTag>Token changes</DarkTag>
             <DetailsButton
               aria-label="All ERC-20 transfers"
               aria-haspopup="dialog"
@@ -196,7 +196,7 @@ export const EvmTokenActivity = observer(function EvmTokenActivity({
       {approvals.length > 0 && (
         <InfoTableSection>
           <InfoSectionHeader>
-            <BlackTag>Approvals</BlackTag>
+            <DarkTag>Approvals</DarkTag>
             <DetailsButton
               aria-label="All ERC-20 approvals"
               aria-haspopup="dialog"

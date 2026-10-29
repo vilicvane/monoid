@@ -108,6 +108,7 @@ export function SessionListItem({
     <Item
       type="button"
       className="ion-activatable"
+      data-swipeable-content
       aria-label={`View session with ${info.name}${hasPendingRequest ? ', pending request' : ''}`}
       onClick={onClick}
     >

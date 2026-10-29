@@ -4,6 +4,7 @@ import {test} from 'node:test';
 import {autorun} from 'mobx';
 
 import {CardBundleSession} from '../.bld/app/@components/views/safe/@card/card-bundle-session.js';
+import {CardSecretPINSession} from '../.bld/app/@components/views/safe/@card/card-secret-pin-session.js';
 import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 
 const PIN = 'Safe-42';
@@ -17,6 +18,9 @@ function hello(identity, overrides = {}) {
     id: Uint8Array.of(0, 0, 0, identity),
     publicKey: Uint8Array.from([4, ...new Array(64).fill(identity)]),
     bundle: false,
+    authority: false,
+    alias: false,
+    allowPeerExtension: false,
     pins: {access: 5, secret: 5},
     ...overrides,
   };
@@ -26,6 +30,9 @@ function prepared(card) {
   return {
     id: hex(card.id),
     publicKey: hex(card.publicKey),
+    alias: card.alias,
+    allowPeerExtension: card.allowPeerExtension,
+    authority: card.authority,
     bundle: card.bundle === false ? false : hex(card.bundle),
   };
 }
@@ -61,14 +68,20 @@ function applet(card, members) {
     },
     async createBundle(request) {
       this.calls.push(['createBundle', structuredClone(request)]);
+      assert.equal(request.publicKeys.length, members.length - 1);
+      assert.equal(
+        request.publicKeys.some(key => hex(key) === hex(card.publicKey)),
+        false,
+      );
       const response = {
         bundle: bundle.slice(),
-        packets: members
-          .filter(member => hex(member.publicKey) !== hex(card.publicKey))
-          .map(member => ({
-            publicKey: member.publicKey.slice(),
-            data: packet(members, member),
-          })),
+        data: request.publicKeys.map(key => {
+          const member = members.find(
+            member => hex(member.publicKey) === hex(key),
+          );
+          assert.ok(member);
+          return packet(members, member);
+        }),
       };
       await this.onCreate?.(response);
       return response;
@@ -101,6 +114,52 @@ function deferred() {
   });
   return {promise, resolve};
 }
+
+test('a rejected PIN re-prompts before joining, while a lost join response is never replayed', async () => {
+  const {session, members, applets} = await ready([1, 2]);
+  await session.configureCard(applets[0], members[0], PIN, signal());
+  const pins = new CardSecretPINSession();
+  const card = prepared(members[1]);
+  pins.onAuthenticated(card, PIN)();
+  let prompts = 0;
+  const run = () =>
+    pins.run(
+      [card],
+      async (_card, _signal, message) => {
+        prompts++;
+        if (message) {
+          assert.equal(message, 'Incorrect PIN, tries remaining: 4');
+          assert.equal(applets[1].calls.length, 1);
+          applets[1].onAuthenticate = undefined;
+        }
+        return PIN;
+      },
+      async (credentials, signal) => {
+        session.validateCard(members[1]);
+        const {pin, onAuthenticated} = credentials(card);
+        await session.configureCard(
+          applets[1],
+          members[1],
+          pin,
+          signal,
+          onAuthenticated,
+        );
+      },
+    );
+  const failure = new CBORAppletError({code: 'INVALID_PIN', tries: 4});
+  applets[1].onAuthenticate = () => {
+    throw failure;
+  };
+  applets[1].onJoin = () => {
+    throw new Error('Lost response');
+  };
+  await assert.rejects(run(), /Lost response/);
+  assert.equal(prompts, 1);
+  applets[1].onJoin = undefined;
+  await run();
+  assert.equal(prompts, 1);
+  assert.equal(session.phase, 'complete');
+});
 
 test('collection requires distinct initialized cards and freezes the selected membership', async () => {
   const session = new CardBundleSession();
@@ -143,6 +202,9 @@ test('a prepared Card snapshot seeds collection without a synthetic Hello or PIN
       id: snapshot.id,
       publicKey: snapshot.publicKey,
       status: 'pending',
+      alias: snapshot.alias,
+      allowPeerExtension: snapshot.allowPeerExtension,
+      authority: snapshot.authority,
     },
   ]);
   assert.equal(session.phase, 'collecting');
@@ -156,7 +218,7 @@ test('a prepared Card snapshot seeds collection without a synthetic Hello or PIN
   assert.equal(session.configuredCount, 1);
   assert.deepEqual(creator.calls[1], [
     'createBundle',
-    {publicKeys: [first.publicKey, second.publicKey]},
+    {publicKeys: [second.publicKey]},
   ]);
 });
 
@@ -210,17 +272,17 @@ for (const [label, override, error] of [
   });
 }
 
-test('prepared and scanned cards share the firmware member limit', async () => {
+test('prepared and scanned cards respect the total enrollment packet size limit', async () => {
   const session = new CardBundleSession();
-  for (let identity = 1; identity <= 122; identity++) {
+  for (let identity = 1; identity <= 22; identity++) {
     await session.addPreparedCard(prepared(hello(identity)));
   }
   await assert.rejects(
-    session.addPreparedCard(prepared(hello(123))),
+    session.addPreparedCard(prepared(hello(23))),
     /Too many cards/,
   );
-  await assert.rejects(session.addCard(hello(123)), /Too many cards/);
-  assert.equal(session.cards.length, 122);
+  await assert.rejects(session.addCard(hello(23)), /Too many cards/);
+  assert.equal(session.cards.length, 22);
 });
 
 test('prepared cards still require live matching identity, Bundle and both PIN states in round two', async () => {
@@ -367,7 +429,10 @@ test('any member can create, and recipients complete in any order without a retu
     assert.equal(session.configuredCount, 1);
     assert.deepEqual(applets[1].calls, [
       ['authenticate', {secret: true, pin: PIN}],
-      ['createBundle', {publicKeys: members.map(card => card.publicKey)}],
+      [
+        'createBundle',
+        {publicKeys: [members[0].publicKey, members[2].publicKey]},
+      ],
     ]);
     await session.configureCard(applets[2], members[2], PIN, signal());
     await session.configureCard(applets[0], members[0], PIN, signal());
@@ -377,7 +442,7 @@ test('any member can create, and recipients complete in any order without a retu
         [
           'joinBundle',
           {
-            senderPublicKey: members[1].publicKey,
+            publicKey: members[1].publicKey,
             data: packet(members, members[index]),
           },
         ],
@@ -435,7 +500,7 @@ test('Secret authentication failures do not lock creation or use Access authenti
     };
     await assert.rejects(
       session.configureCard(applets[0], members[0], PIN, signal()),
-      tries ? /Incorrect Secret PIN.*4/ : /Secret PIN blocked/,
+      tries ? /Incorrect PIN.*4/ : /Secret PIN blocked/,
     );
     assert.equal(session.generationUncertain, false);
     assert.equal(session.creator, undefined);
@@ -516,43 +581,31 @@ for (const [label, modify] of [
   [
     'missing packet',
     response => {
-      response.packets.pop();
-    },
-  ],
-  [
-    'wrong recipient',
-    response => {
-      response.packets[0].publicKey = hello(9).publicKey;
-    },
-  ],
-  [
-    'reordered recipients',
-    response => {
-      response.packets.reverse();
+      response.data.pop();
     },
   ],
   [
     'wrong roster',
     response => {
-      response.packets[0].data[4] ^= 1;
+      response.data[0][4] ^= 1;
     },
   ],
   [
     'short packet',
     response => {
-      response.packets[0].data = response.packets[0].data.slice(1);
+      response.data[0] = response.data[0].slice(1);
     },
   ],
   [
     'wrong version',
     response => {
-      response.packets[0].data[0] = 2;
+      response.data[0][0] = 2;
     },
   ],
   [
     'wrong member count',
     response => {
-      response.packets[0].data[2] = 2;
+      response.data[0][2] = 2;
     },
   ],
 ]) {

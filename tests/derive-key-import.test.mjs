@@ -4,6 +4,8 @@ import {afterEach, mock, test} from 'node:test';
 import {observable, runInAction, toJS} from 'mobx';
 
 import {MonoidWrongCardError} from '../.bld/app/@lib/monoid/card-error.js';
+import {assertSameCard} from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
 import {
@@ -66,11 +68,17 @@ mock.module('../.bld/app/@services/index.js', {
   namedExports: {getWalletData, getWalletReference, matchesWalletReference},
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
-  namedExports: {getAppletKey, MonoidWrongCardError},
+  namedExports: {
+    assertSameCard,
+    getAppletKey,
+    MonoidWrongCardError,
+  },
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
     MonoidScanStatePromptProgress: 'progress',
+    scanCardPrompt: (card, action) =>
+      `Scan card ${cardNameWithId(card)}${action ? ` ${action}` : ''}`,
     useMonoidScanPrompt: options => {
       fixture.scanOptions.push(options);
       return [null, fixture.scan];
@@ -82,6 +90,12 @@ mock.module('../.bld/app/@components/views/safe/card-derivations.js', {
     writeCardDerivationRecord: (...args) => fixture.write(...args),
   },
 });
+mock.module(
+  '../.bld/app/@components/views/safe/@safe/derivable-key/derive-seed-key-view.js',
+  {
+    namedExports: {DeriveSeedKeyView: () => null},
+  },
+);
 const {useViewActive} = await import(
   '../.bld/app/@components/@view/use-view-active.js'
 );
@@ -90,6 +104,7 @@ for (const [path, exports] of [
   ['@ui/button', {Button: 'button'}],
   ['@ui/input', {ResettableInput: 'input'}],
   ['@ui/interactive-address', {InteractiveAddress: 'address'}],
+  ['@ui/segmented-control', {SegmentedControl: 'purpose-selector'}],
   ['@ui/step', {Steps: 'steps', Step: 'step'}],
   [
     '@view/index',
@@ -172,6 +187,7 @@ function mount() {
       $match: {$exact: {$active: true}},
     }),
     applet: {
+      async create() {},
       async viewKey() {
         state.keyReads++;
         return {publicKey: bytes(FRESH_PUBLIC_KEY)};
@@ -184,7 +200,8 @@ function mount() {
       fixture = state;
       rendering = state;
       state.index = 0;
-      state.tree = DeriveKeyView({view: state.view});
+      const selection = DeriveKeyView({view: state.view});
+      state.tree = selection.type(selection.props);
       rendering = undefined;
       return state.tree;
     },
@@ -203,7 +220,7 @@ function mount() {
       scan.validate?.(hello);
       state.authCount++;
       await scan.callback(
-        state.applet,
+        state.cardStore.observeApplet(state.applet, hello),
         () => {},
         hello,
         scan.controller.signal,
@@ -233,10 +250,11 @@ function mount() {
     state.writes.push({applet, key, wallets, signal});
     if (signal.aborted)
       throw Object.assign(new Error('Cancelled'), {code: 'CANCELLED'});
+    await applet.create({});
     return {
       index: '0f010000000000000001',
       type: 0x0f01,
-      key: INDEX,
+      metadata: INDEX,
       secret: false,
       derivationRecord: {index: INDEX, wallets},
     };
@@ -282,7 +300,10 @@ test('Import scans to save metadata and reuses the previewed public key without 
   state.click('Import');
   assert.deepEqual(
     state.scans.map(scan => scan.label),
-    ['Scan card to derive', 'Scan card to import'],
+    [
+      'Scan card to derive',
+      `Scan card ${Buffer.from(state.hello.id).toString('hex')} to import`,
+    ],
   );
   assert.equal(state.storage.keys[0].wallets.length, 1);
   assert.equal(state.button('Import').props.disabled, true);
@@ -328,6 +349,27 @@ test('a wrong Safe with the same short ID is rejected before authentication or w
   await state.tap();
   await state.finish();
   assert.equal(state.storage.keys[0].wallets.length, 2);
+});
+
+test('derived-key import resolves the card alias from the existing cache', async () => {
+  const state = mount();
+  await derive(state);
+  const id = Buffer.from(state.hello.id).toString('hex');
+  state.cardStore.set({
+    id,
+    publicKey: Buffer.from(state.hello.publicKey).toString('hex'),
+    alias: 'Daily wallet',
+    allowPeerExtension: false,
+    bundle: false,
+    items: [],
+  });
+  state.click('Import');
+  assert.equal(
+    state.scans.at(-1).label,
+    `Scan card Daily wallet (${id}) to import`,
+  );
+  await state.tap();
+  await state.finish();
 });
 
 test('a cancelled second scan leaves local wallets untouched and does not navigate', async () => {

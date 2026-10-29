@@ -2,10 +2,24 @@ import assert from 'node:assert/strict';
 import {afterEach, mock, test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
 
+import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {appletBundle} from '../.bld/app/@lib/monoid/@applet-bundle.js';
+import {APPLET_NAMES} from '../.bld/app/@lib/monoid/applet-install-progress.js';
 import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
+import {
+  assertSameCardWithBundle,
+  readBackupCardIdentity,
+} from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
+import {
+  CardPINError,
+  assertCardPINsNotBlocked,
+  authenticateCardPIN,
+} from '../.bld/app/@lib/monoid/card-pins.js';
+import {isOperationCancelled} from '../.bld/app/@lib/operation-cancelled.js';
 
 // Exercise the built hooks with effect cleanup and state-driven rerenders, without a DOM or sensor.
 let rendering;
@@ -14,6 +28,11 @@ let platform = 'android';
 const mounted = [];
 mock.module('@capacitor/core', {
   namedExports: {Capacitor: {getPlatform: () => platform}},
+});
+mock.module('@capacitor/app', {
+  namedExports: {
+    App: {addListener: async () => ({remove: async () => {}})},
+  },
 });
 const sameDependencies = (left, right) =>
   left?.length === right?.length &&
@@ -91,12 +110,19 @@ mock.module('../.bld/app/@components/@ui/use-input-modal.js', {
     useInputModal: () => {
       const owner = fixture;
       const [, setVisible] = hooks.useState(false);
-      const show = hooks.useCallback(options => {
+      const show = hooks.useCallback((options, signal) => {
         const input = deferred();
         input.options = options;
+        input.signal = signal;
+        const abort = () => {
+          input.closedByAbort = true;
+          input.resolve(undefined);
+        };
+        signal?.addEventListener('abort', abort, {once: true});
         owner.inputs.push(input);
         setVisible(true);
         return input.promise.then(value => {
+          signal?.removeEventListener('abort', abort);
           setVisible(false);
           return value;
         });
@@ -106,15 +132,6 @@ mock.module('../.bld/app/@components/@ui/use-input-modal.js', {
   },
 });
 
-class CBORAppletError extends Error {
-  constructor(source) {
-    super(source.code);
-    this.source = source;
-  }
-}
-mock.module('../.bld/app/@lib/cbor-applet.js', {
-  namedExports: {CBORAppletError},
-});
 class AppletISOError extends Error {
   constructor(note, sw, data) {
     super(note);
@@ -123,8 +140,9 @@ class AppletISOError extends Error {
   }
 }
 class AppletNotFoundError extends AppletISOError {
-  constructor() {
-    super('Applet not found', 0x6a82, new Uint8Array());
+  constructor(data, aid) {
+    super('Applet not found', 0x6a82, data);
+    this.aid = aid;
   }
 }
 mock.module('../.bld/app/@lib/applet.js', {
@@ -164,6 +182,15 @@ const {initializeMonoidCard} = await import(
 );
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    CardPINError,
+    authenticateCardPIN,
+    APPLET_NAMES,
+    getAppletCatalog: () => appletBundle,
+    cardName,
+    cardNameWithId,
+    assertSameCardWithBundle,
+    readBackupCardIdentity,
+    assertCardPINsNotBlocked,
     initializeMonoidCard,
     MonoidCardError,
     MonoidWrongCardError,
@@ -171,20 +198,49 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
     MonoidAppletHello,
   },
 });
-const {MonoidPINSession, isCredentialRequestCancelled} = await import(
+const {MonoidPINSession} = await import(
   '../.bld/app/@services/monoid-credentials-store.js'
 );
 mock.module('../.bld/app/@services/index.js', {
-  namedExports: {isCredentialRequestCancelled},
+  namedExports: {},
 });
 
 const {MonoidScanPromptPresenter} = await import(
   '../.bld/app/@services/monoid-scan-prompt-presenter.js'
 );
 const {ErrorService} = await import('../.bld/app/@services/error-service.js');
-const {useMonoidScanPrompt, MonoidScanRedirectError} = await import(
-  '../.bld/app/@components/@monoid/monoid-scan-prompt.js'
-);
+const {useMonoidScanPrompt, MonoidScanRedirectError, scanCardPrompt} =
+  await import('../.bld/app/@components/@monoid/monoid-scan-prompt.js');
+
+function promptText(node) {
+  if (typeof node === 'string') return node;
+  if (!node) return '';
+  return (Array.isArray(node) ? node : [node.props?.children])
+    .map(promptText)
+    .join('');
+}
+function promptHighlights(node) {
+  if (!node || typeof node !== 'object') return [];
+  if (node.type === 'span') return [promptText(node)];
+  return (Array.isArray(node) ? node : [node.props?.children]).flatMap(
+    promptHighlights,
+  );
+}
+
+test('specific-card prompts highlight the alias or ID, keep the ID visible and append the action', () => {
+  for (const alias of [undefined, false, '', 'Daily wallet']) {
+    for (const action of [undefined, 'to delete', 'to update Access PIN']) {
+      const prompt = scanCardPrompt({id: '10db2908', alias}, action);
+      assert.equal(
+        promptText(prompt),
+        `Scan card ${
+          alias ? 'Daily wallet (10db2908)' : '10db2908'
+        }${action ? ` ${action}` : ''}`,
+      );
+      assert.deepEqual(promptHighlights(prompt), [alias || '10db2908']);
+    }
+  }
+});
 
 class HookOwner {
   constructor(render) {
@@ -281,15 +337,15 @@ function mount(overrides = {}) {
       secureChannels: ['SCP03'],
     },
     exitedTokens: new Set(),
-    identityPublicKey: new Uint8Array(65),
+    identityPublicKey: Uint8Array.from([4, ...new Uint8Array(64)]),
     ...overrides,
   };
   state.presenter = new MonoidScanPromptPresenter();
   state.toast = options => state.notifications.push(options);
-  state.business = async (applet, _setContent, hello) => {
+  state.business = async (applet, _setContent, hello, signal) => {
     state.businessCalls++;
     state.businessHello = hello;
-    const result = await state.onBusiness?.(applet, _setContent, hello);
+    const result = await state.onBusiness?.(applet, _setContent, hello, signal);
     state.businessCompleted++;
     return result;
   };
@@ -368,6 +424,7 @@ function mount(overrides = {}) {
       },
     },
     monoidApplet: {
+      aid: Uint8Array.from(Buffer.from('f06d6f6e6f69640201', 'hex')),
       standby(
         callback,
         onError,
@@ -401,6 +458,11 @@ function mount(overrides = {}) {
     },
   };
   state.applet = {
+    async useSession(source) {
+      assert.equal(source, state.applet);
+      state.cardCommands.push({command: 'select-monoid'});
+      return state.applet;
+    },
     async hello(request) {
       state.helloRequests.push(request);
       state.cardCommands.push({command: 'hello', request});
@@ -411,6 +473,8 @@ function mount(overrides = {}) {
         id: new Uint8Array(Buffer.from(state.cardId, 'hex')),
         publicKey: state.identityPublicKey.slice(),
         bundle: false,
+        authority: false,
+        alias: state.cardAlias ?? false,
         pins: {access: state.accessPIN ?? 5, secret: state.secretPIN ?? 5},
       };
     },
@@ -451,7 +515,13 @@ function mount(overrides = {}) {
   state.owner.flush();
   state.start = () => {
     state.outcome = undefined;
-    state.operation = state.owner.output[1]('Scan card', state.business);
+    state.operation = state.owner.output[1](
+      'Scan card',
+      state.business,
+      state.validateCard,
+      state.operationSignal,
+      state.authentication,
+    );
     state.operation.then(
       () => {
         state.outcome = 'resolved';
@@ -497,7 +567,11 @@ function mount(overrides = {}) {
     scan.onConnectionChange(true);
     try {
       if (scan.onNotFound) await scan.onNotFound('missing-applet-card');
-      else throw new AppletNotFoundError();
+      else
+        throw new AppletNotFoundError(
+          new Uint8Array(),
+          state.entrances.monoidApplet.aid,
+        );
     } catch (error) {
       scan.onError(error);
     }
@@ -533,7 +607,20 @@ function mount(overrides = {}) {
   };
   state.enterPIN = async (value = PIN) => {
     assert.ok(state.inputs.length > 0, 'PIN input must already be shown');
-    state.inputs.at(-1).resolve(value);
+    let input = state.inputs.at(-1);
+    input.resolve(value);
+    for (let step = 0; step < 3; step++) {
+      await setImmediate();
+      const next = state.inputs.at(-1);
+      if (
+        next === input ||
+        value === undefined ||
+        !/^(Confirm|Set Access)/.test(next.options.placeholder)
+      )
+        break;
+      input = next;
+      input.resolve(value);
+    }
     await state.flush();
   };
   state.enterManualPIN = async () => {
@@ -650,24 +737,74 @@ test('prompt: wrong card highlights the expected card ID', async () => {
   const state = mount({
     auth: false,
     onBusiness: () => {
-      throw new MonoidWrongCardError('1234abcd');
+      throw new MonoidWrongCardError({id: '1234abcd'});
     },
   });
   const scan = await state.tap({cleanup: false});
 
   assert.equal(scan.waitingForRemoval, true);
   assert.equal(state.presenter.current.error, true);
-  assert.deepEqual(state.presenter.current.content, {
-    type: 'fragment',
-    props: {
-      children: [
-        'Wrong card, scan',
-        ' ',
-        {type: 'span', props: {children: '1234abcd'}},
-      ],
+  assert.equal(
+    promptText(state.presenter.current.content),
+    'Wrong card, scan 1234abcd',
+  );
+  assert.deepEqual(promptHighlights(state.presenter.current.content), [
+    '1234abcd',
+  ]);
+  assert.deepEqual(state.retryErrors, []);
+});
+
+test('prompt: wrong-card and PIN retry instructions retain the alias and unhighlighted ID', async () => {
+  const wrong = mount({
+    auth: false,
+    onBusiness: () => {
+      throw new MonoidWrongCardError({id: '1234abcd', alias: 'Daily wallet'});
     },
   });
-  assert.deepEqual(state.retryErrors, []);
+  await wrong.tap({cleanup: false});
+  assert.equal(
+    promptText(wrong.presenter.current.content),
+    'Wrong card, scan Daily wallet (1234abcd)',
+  );
+  assert.deepEqual(promptHighlights(wrong.presenter.current.content), [
+    'Daily wallet',
+  ]);
+
+  const retry = mount({cardAlias: 'Travel'});
+  await retry.enterManualPIN();
+  assert.equal(
+    promptText(retry.presenter.current.content),
+    `Scan card Travel (${CARD_ID}) again`,
+  );
+  assert.deepEqual(promptHighlights(retry.presenter.current.content), [
+    'Travel',
+  ]);
+});
+
+test('prompt: a same-ID key change displays the reset message and keeps wrong-card retry handling', async () => {
+  const state = mount({
+    auth: false,
+    onBusiness: (_applet, _setContent, hello) => {
+      assertSameCardWithBundle(hello, {
+        ...readBackupCardIdentity(hello),
+        alias: 'Daily wallet',
+        publicKey: `04${'11'.repeat(64)}`,
+      });
+    },
+  });
+  const scan = await state.tap({cleanup: false});
+  const failure = state.presentedErrors[0];
+  assert.ok(failure instanceof MonoidWrongCardError);
+  assert.equal(failure.keyChanged, true);
+  assert.equal(scan.waitingForRemoval, true);
+  assert.equal(
+    promptText(state.presenter.current.content),
+    `Card Daily wallet (${CARD_ID}) was reset or reinstalled, start over`,
+  );
+  scan.onCleanup();
+  await state.flush();
+  await state.finishExit();
+  assert.deepEqual(state.retryErrors, [failure]);
 });
 
 test('prompt: ordinary errors retain their identity after inline display and retry', async () => {
@@ -798,7 +935,7 @@ for (const pinSource of ['saved Access', 'entered Access', 'Secret']) {
     }
     const previousInputs = state.inputs.length;
     const scan = await state.tap();
-    const errorMessage = `Incorrect ${secret ? 'Secret ' : ''}PIN, tries remaining: 4`;
+    const errorMessage = 'Incorrect PIN, tries remaining: 4';
 
     assert.deepEqual(scan.closeOptions, {errorMessage});
     assert.equal(scan.waitingForRemoval, false);
@@ -849,7 +986,7 @@ for (const secret of [false, true]) {
     await state.finishExit();
     assert.equal(state.errors[0].message, errorMessage);
     assert.equal(state.authenticated.length, 1);
-    assert.equal(state.inputs.length, secret ? 1 : 0);
+    assert.equal(state.inputs.length, secret ? 3 : 0);
     assert.equal(state.scans.length, secret ? 2 : 1);
     assert.equal(state.businessCalls, 0);
     assert.deepEqual(state.writes, []);
@@ -1319,7 +1456,7 @@ for (const order of ['stop-first', 'animation-first']) {
     assert.equal(state.outcome, 'rejected');
     assert.equal(state.errors.length, 1);
     assert.ok(state.errors[0] instanceof MonoidScanRedirectError);
-    assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
+    assert.equal(isOperationCancelled(state.errors[0]), true);
     assert.equal(state.presenter.current, undefined);
     assert.equal(state.scans.length, 1);
     assert.equal(state.businessCalls, 0);
@@ -1388,7 +1525,7 @@ for (const allowInstallRedirect of [undefined, false]) {
     assert.deepEqual(state.cardInformationReads, []);
     assert.equal(state.businessCalls, 0);
     assert.equal(state.outcome, 'rejected');
-    assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
+    assert.equal(isOperationCancelled(state.errors[0]), true);
     assert.deepEqual(state.notifications, []);
     assert.equal(state.scans.length, 1);
   });
@@ -1418,14 +1555,6 @@ test('prompt: a business command returning 6a82 does not redirect to applet inst
   assert.equal(state.outcome, undefined);
 });
 
-function inputText(value) {
-  if (Array.isArray(value)) return value.map(inputText).join('');
-  if (typeof value === 'object' && value !== null) {
-    return inputText(value.props?.children);
-  }
-  return value === undefined || value === null ? '' : String(value);
-}
-
 for (const order of ['stop-first', 'animation-first']) {
   test(`prompt: new card initializes inline after ${order} cleanup and resumes business`, async () => {
     const state = mount({allowSetup: true, accessPIN: false, secretPIN: false});
@@ -1446,8 +1575,8 @@ for (const order of ['stop-first', 'animation-first']) {
     assert.equal(state.inputs.length, 1);
     assert.equal(state.inputs[0].options.placeholder, 'Set Secret PIN');
     assert.equal(
-      inputText(state.inputs[0].options.description),
-      'Will be used as initial Access PIN',
+      state.inputs[0].options.checkbox.label,
+      'Set a different Access PIN',
     );
     assert.deepEqual(state.navigations, []);
     assert.deepEqual(state.errors, []);
@@ -1490,10 +1619,7 @@ test('prompt: an existing Secret PIN authorizes setting only the missing Access 
   });
   await state.tap();
   await state.finishExit();
-  assert.equal(
-    state.inputs[0].options.placeholder,
-    'Enter existing Secret PIN',
-  );
+  assert.equal(state.inputs[0].options.placeholder, 'Enter Secret PIN');
   await state.enterPIN(SECRET_PIN);
   await state.tap();
 
@@ -1524,7 +1650,7 @@ test('prompt: initializing with auth disabled still verifies and saves the newly
   await state.enterPIN(SECRET_PIN);
   await state.tap();
 
-  assert.equal(state.gets, 0);
+  assert.equal(state.gets, 1);
   assert.deepEqual(state.authenticationRequests, [{pin: SECRET_PIN}]);
   assert.deepEqual(state.writes, []);
   await state.finishExit();
@@ -1545,11 +1671,8 @@ test('prompt: a Safe initialized between taps prompts for its existing PIN befor
   assert.deepEqual(state.cardPINWrites, []);
   assert.equal(state.businessCalls, 0);
   await state.finishExit();
-  assert.equal(state.inputs.length, 2);
-  assert.equal(
-    state.inputs[1].options.placeholder,
-    'Enter existing Secret PIN',
-  );
+  assert.equal(state.inputs.length, 5);
+  assert.equal(state.inputs[4].options.placeholder, 'Enter Secret PIN');
   await state.enterPIN(OLD_PIN);
   await state.tap();
   await state.finishExit();
@@ -1594,7 +1717,7 @@ test('prompt: both PINs initialized between taps discard the pending setup PIN',
   await state.tap();
   await state.finishExit();
 
-  assert.equal(state.inputs.length, 1);
+  assert.equal(state.inputs.length, 4);
   assert.deepEqual(state.cardPINWrites, []);
   assert.deepEqual(state.authenticationRequests, [{pin: PIN}]);
   assert.deepEqual(state.writes, []);
@@ -1623,7 +1746,7 @@ test('prompt: a lost response after setting Secret PIN cannot replay the pending
   assert.deepEqual(state.authenticationRequests, []);
   assert.deepEqual(state.writes, []);
   assert.equal(state.scans.length, 2);
-  assert.equal(state.inputs.length, 1);
+  assert.equal(state.inputs.length, 4);
   assert.equal(state.businessCalls, 0);
   assert.equal(state.outcome, 'rejected');
   assert.equal(state.errors[0].code, 'CANCELLED');
@@ -1648,7 +1771,7 @@ for (const differentIdentity of ['Identity ID', 'Identity public key']) {
     assert.ok(state.presentedErrors[0] instanceof MonoidWrongCardError);
     await state.finishExit();
     assert.equal(state.scans.length, 3);
-    assert.equal(state.inputs.length, 1);
+    assert.equal(state.inputs.length, 4);
     assert.deepEqual(state.retryErrors, state.presentedErrors);
     assert.deepEqual(state.notifications, []);
 
@@ -1675,17 +1798,14 @@ test('prompt: incorrect Secret PIN reopens input after cleanup without mutating 
   await state.enterPIN(OLD_PIN);
   const scan = await state.tap();
   assert.equal(scan.waitingForRemoval, false);
-  assert.equal(state.inputs.length, 1);
+  assert.equal(state.inputs.length, 3);
   assert.deepEqual(state.cardPINWrites, []);
   await state.finishStop();
-  assert.equal(state.inputs.length, 1);
+  assert.equal(state.inputs.length, 3);
   await state.finishAnimation();
 
-  assert.equal(state.inputs.length, 2);
-  assert.equal(
-    state.inputs[1].options.placeholder,
-    'Enter existing Secret PIN',
-  );
+  assert.equal(state.inputs.length, 4);
+  assert.equal(state.inputs[3].options.placeholder, 'Enter Secret PIN');
   assert.match(state.notifications[0].message, /tries remaining: 4/);
   assert.deepEqual(state.removals, []);
   assert.deepEqual(state.writes, []);
@@ -1694,7 +1814,12 @@ test('prompt: incorrect Secret PIN reopens input after cleanup without mutating 
   await state.tap();
   await state.finishExit();
   assert.equal(state.businessCompleted, 1);
-  assert.equal(state.savedPINs[CARD_ID], SECRET_PIN);
+  assert.equal(
+    state.savedPINs[CARD_ID],
+    OLD_PIN,
+    'The chosen Access PIN survives the Secret PIN retry',
+  );
+  assert.equal(state.inputs.length, 4, 'Access PIN is not requested again');
   assert.equal(state.outcome, 'resolved');
 });
 
@@ -1713,7 +1838,7 @@ test('prompt: Secret PIN exhaustion ends setup without another attempt', async (
   await state.finishExit();
 
   assert.equal(state.scans.length, 2);
-  assert.equal(state.inputs.length, 1);
+  assert.equal(state.inputs.length, 3);
   assert.equal(state.businessCalls, 0);
   assert.deepEqual(state.cardPINWrites, []);
   assert.deepEqual(state.writes, []);
@@ -1797,6 +1922,70 @@ test('prompt: callers can handle Safe setup themselves with ensureSetup disabled
   assert.equal(state.outcome, 'resolved');
 });
 
+test('prompt: a caller handling installation receives the original missing-applet cause', async () => {
+  const state = mount({auth: false, ensureSetup: false});
+  await state.missingApplet();
+  await state.finishExit();
+
+  assert.equal(state.errors.length, 1);
+  assert.ok(state.errors[0] instanceof MonoidCardError);
+  assert.equal(state.errors[0].message, 'Monoid not installed');
+  assert.ok(state.errors[0].cause instanceof AppletNotFoundError);
+  assert.equal(state.errors[0].cause.sw, 0x6a82);
+  assert.deepEqual(state.errors[0].cause.aid, state.entrances.monoidApplet.aid);
+  assert.deepEqual(state.navigations, []);
+  assert.deepEqual(state.authenticationRequests, []);
+});
+
+for (const [aidHex, name] of [
+  ['f06d6f6e6f69640501', 'Monoid OTP Applet'],
+  ['a0000006472f0001', 'Monoid Security Key Applet'],
+]) {
+  for (const ensureSetup of [false, true]) {
+    for (const device of ['android', 'ios']) {
+      test(`prompt: missing ${name} on ${device} ends without setup or retry (ensureSetup: ${ensureSetup})`, async () => {
+        platform = device;
+        const aid = Uint8Array.from(Buffer.from(aidHex, 'hex'));
+        const failure = new AppletNotFoundError(new Uint8Array(), aid);
+        const state = mount({
+          ensureSetup,
+          allowSetup: true,
+          allowInstallRedirect: true,
+          savedPINs: {[CARD_ID]: PIN},
+          authentication: {
+            aid,
+            prepare: async () => {
+              throw failure;
+            },
+          },
+        });
+        const scan = await state.tap({cleanup: device === 'ios'});
+        const message = `${name} not installed`;
+        if (device === 'ios')
+          assert.deepEqual(scan.closeOptions, {errorMessage: message});
+        else {
+          assert.equal(state.presenter.current.content, message);
+          scan.onCleanup();
+          await state.flush();
+        }
+        await state.finishExit();
+        assert.equal(state.outcome, 'rejected');
+        assert.equal(state.errors.length, 1);
+        assert.equal(state.errors[0].message, message);
+        assert.equal(state.errors[0].cause, failure);
+        assert.equal(state.scans.length, 1);
+        assert.equal(state.businessCalls, 0);
+        assert.deepEqual(state.inputs, []);
+        assert.deepEqual(state.authenticationRequests, []);
+        assert.deepEqual(state.navigations, []);
+        assert.deepEqual(state.cardInformationReads, []);
+        assert.deepEqual(state.notifications, []);
+        assert.deepEqual(state.retryErrors, []);
+      });
+    }
+  }
+}
+
 for (const allowSetup of [undefined, false, true]) {
   test(`prompt: Hello always returns Identity and both PIN states (allowSetup: ${allowSetup})`, async () => {
     const state = mount({allowSetup, savedPINs: {[CARD_ID]: PIN}});
@@ -1838,7 +2027,7 @@ for (const [missing, overrides] of [
     await state.finishStop();
 
     assert.equal(state.outcome, 'rejected');
-    assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
+    assert.equal(isOperationCancelled(state.errors[0]), true);
     assert.equal(
       state.notifications.at(-1).message,
       'Initialize card from Safe',
@@ -1876,7 +2065,7 @@ for (const [missing, overrides] of [
     assert.deepEqual(state.navigations, []);
     assert.deepEqual(state.retryErrors, []);
     assert.equal(state.outcome, 'rejected');
-    assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
+    assert.equal(isOperationCancelled(state.errors[0]), true);
     assert.deepEqual(state.notifications, []);
   });
 }
@@ -1918,7 +2107,7 @@ for (const [phase, callback] of [
     assert.equal(state.outcome, 'rejected');
     assert.equal(state.errors.length, 1);
     assert.equal(state.errors[0].code, 'CANCELLED');
-    assert.equal(isCredentialRequestCancelled(state.errors[0]), true);
+    assert.equal(isOperationCancelled(state.errors[0]), true);
     assert.equal(state.scans.length, 1);
     assert.equal(state.businessCompleted, 0);
     assert.equal(state.businessCalls, phase === 'business' ? 1 : 0);
@@ -1967,7 +2156,7 @@ test('prompt: native stop failure takes priority over tag-lost cancellation', as
   await state.flush();
 
   assert.deepEqual(state.errors, [failure]);
-  assert.equal(isCredentialRequestCancelled(state.errors[0]), false);
+  assert.equal(isOperationCancelled(state.errors[0]), false);
   assert.equal(state.outcome, 'rejected');
   assert.equal(state.scans.length, 1);
   assert.deepEqual(state.notifications, []);
@@ -2008,7 +2197,7 @@ test('prompt: a lifecycle error with tag-lost cause is not silently cancelled', 
   await state.finishExit();
 
   assert.deepEqual(state.errors, [failure]);
-  assert.equal(isCredentialRequestCancelled(failure), false);
+  assert.equal(isOperationCancelled(failure), false);
   assert.equal(state.outcome, 'rejected');
   assert.equal(state.scans.length, 1);
   assert.equal(state.businessCalls, 0);
@@ -2185,6 +2374,151 @@ test('prompt: unmount aborts preloading and rejects without accepting a late sna
   assert.equal(state.businessCalls, 0);
   assert.equal(state.outcome, 'rejected');
   assert.equal(state.errors[0].code, 'CANCELLED');
+});
+
+test('prompt: an already-aborted page signal does not open credentials or start scanning', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const state = mount({operationSignal: controller.signal});
+  await state.flush();
+
+  assert.equal(state.gets, 0);
+  assert.equal(state.unlocks, 0);
+  assert.equal(state.scans.length, 0);
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.errors[0].code, 'CANCELLED');
+});
+
+test('prompt: page cancellation aborts preloading and ignores a late PIN snapshot without unmounting', async () => {
+  const controller = new AbortController();
+  const read = deferred();
+  const state = mount({
+    operationSignal: controller.signal,
+    pinSession: true,
+    onGet: () => read.promise,
+  });
+  await state.flush();
+  controller.abort();
+  assert.equal(state.readSignals[0].aborted, true);
+  read.resolve({[CARD_ID]: PIN});
+  await state.flush();
+
+  assert.equal(state.scans.length, 0);
+  assert.equal(state.businessCalls, 0);
+  assert.equal(state.inputs.length, 0);
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.errors[0].code, 'CANCELLED');
+  assert.deepEqual(state.retryErrors, []);
+});
+
+test('prompt: page cancellation closes PIN input and cannot restart NFC from late input', async () => {
+  const controller = new AbortController();
+  const state = mount({operationSignal: controller.signal});
+  await state.tap();
+  await state.finishExit();
+  assert.equal(state.inputs.length, 1);
+  controller.abort();
+  assert.equal(state.inputs[0].signal.aborted, true);
+  assert.equal(state.inputs[0].closedByAbort, true);
+  await state.enterPIN();
+
+  assert.equal(state.scans.length, 1);
+  assert.equal(state.businessCalls, 0);
+  assert.deepEqual(state.authenticated, []);
+  assert.deepEqual(state.writes, []);
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.errors[0].code, 'CANCELLED');
+});
+
+for (const order of ['stop-first', 'animation-first']) {
+  test(`prompt: cancellation during authentication waits for ${order} cleanup and ignores the late PIN verification`, async () => {
+    const controller = new AbortController();
+    const authentication = deferred();
+    const state = mount({
+      operationSignal: controller.signal,
+      pinSession: true,
+    });
+    await state.enterManualPIN();
+    state.onAuthenticate = () => authentication.promise;
+    const tapping = state.tap();
+    await state.flush();
+    assert.deepEqual(state.authenticated, [PIN]);
+    controller.abort();
+    assert.equal(state.scans.at(-1).stopRequested, true);
+    authentication.resolve();
+    await tapping;
+
+    assert.equal(state.businessCalls, 0);
+    assert.equal(state.pinSession.hasUnsavedPIN(CARD_ID, PIN), false);
+    assert.deepEqual(state.writes, []);
+    assert.equal(state.outcome, undefined);
+    if (order === 'stop-first') await state.finishStop();
+    else await state.finishAnimation();
+    assert.equal(state.outcome, undefined);
+    if (order === 'stop-first') await state.finishAnimation();
+    else await state.finishStop();
+    assert.equal(state.outcome, 'rejected');
+    assert.equal(state.errors[0].code, 'CANCELLED');
+    assert.equal(state.scans.length, 2);
+    assert.deepEqual(state.retryErrors, []);
+    assert.deepEqual(state.notifications, []);
+  });
+
+  test(`prompt: cancellation after a completed card command preserves its ACK and awaits ${order} cleanup without replay`, async () => {
+    const controller = new AbortController();
+    const state = mount({operationSignal: controller.signal});
+    await state.enterManualPIN();
+    await state.tap();
+    assert.equal(state.businessCompleted, 1);
+    if (order === 'stop-first') await state.finishStop();
+    else await state.finishAnimation();
+    controller.abort();
+    await state.flush();
+    assert.equal(state.outcome, undefined);
+    if (order === 'stop-first') await state.finishAnimation();
+    else await state.finishStop();
+
+    assert.equal(state.businessCompleted, 1);
+    assert.equal(state.businessCalls, 1);
+    assert.equal(state.scans.length, 2);
+    assert.deepEqual(state.writes, []);
+    assert.deepEqual(state.retryErrors, []);
+    assert.deepEqual(state.notifications, []);
+    assert.equal(state.outcome, 'rejected');
+    assert.equal(state.errors[0].code, 'CANCELLED');
+  });
+}
+
+test('prompt: page cancellation reaches an in-flight business command without replaying or undoing a late ACK', async () => {
+  const controller = new AbortController();
+  const acknowledgement = deferred();
+  let commandSignal;
+  let recordedACK = false;
+  const state = mount({
+    auth: false,
+    operationSignal: controller.signal,
+    onBusiness: async (_applet, _content, _hello, signal) => {
+      commandSignal = signal;
+      await acknowledgement.promise;
+      recordedACK = true;
+    },
+  });
+  const tapping = state.tap();
+  await state.flush();
+  controller.abort();
+  assert.equal(commandSignal.aborted, true);
+  assert.equal(state.outcome, undefined);
+  acknowledgement.resolve();
+  await tapping;
+  await state.finishExit();
+
+  assert.equal(recordedACK, true);
+  assert.equal(state.businessCompleted, 1);
+  assert.equal(state.businessCalls, 1);
+  assert.equal(state.scans.length, 1);
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.errors[0].code, 'CANCELLED');
+  assert.deepEqual(state.retryErrors, []);
 });
 
 test('prompt: unmount during save aborts its signal and suppresses late warnings and retries', async () => {
@@ -2477,4 +2811,161 @@ test('prompt: a completed scan cannot overwrite progress in the next scan', asyn
   await state.flush();
   assert.equal(state.presenter.current.token, current.token);
   assert.equal(state.presenter.current.content, before);
+});
+
+test('prompt: client preparation precedes fresh Monoid authorization on the same scan', async () => {
+  const aid = new Uint8Array([0xf0, 0x6d, 0x6f, 0x6e, 0x6f, 0x69, 0x64, 5, 1]);
+  const state = mount({
+    savedPINs: {[CARD_ID]: PIN},
+    authentication: {
+      aid,
+      async prepare(applet, setContent, hello, signal) {
+        assert.equal(applet, state.applet);
+        assert.equal(Buffer.from(hello.id).toString('hex'), CARD_ID);
+        assert.equal(signal.aborted, false);
+        assert.equal(state.authenticated.length, 0);
+        setContent('Preparing codes...');
+        state.cardCommands.push({command: 'prepare-client'});
+      },
+    },
+    onBusiness() {
+      state.cardCommands.push({command: 'calculate-client'});
+    },
+  });
+  await state.tap();
+  await state.finishExit();
+  assert.equal(state.outcome, 'resolved');
+  assert.equal(state.scans.length, 1);
+  assert.deepEqual(state.authenticationRequests, [{pin: PIN, aid}]);
+  assert.deepEqual(
+    state.cardCommands.map(item => item.command),
+    [
+      'hello',
+      'prepare-client',
+      'select-monoid',
+      'authenticate',
+      'calculate-client',
+    ],
+  );
+});
+
+test('prompt: preparation without a client AID reselects Monoid and uses ordinary PIN authentication', async () => {
+  const state = mount({
+    savedPINs: {[CARD_ID]: PIN},
+    authentication: {
+      async prepare(applet) {
+        assert.equal(applet, state.applet);
+        state.cardCommands.push({command: 'check-client'});
+      },
+    },
+    onBusiness() {
+      state.cardCommands.push({command: 'add-account'});
+    },
+  });
+  await state.tap();
+  await state.finishExit();
+  assert.equal(state.outcome, 'resolved');
+  assert.equal(state.scans.length, 1);
+  assert.deepEqual(state.authenticationRequests, [{pin: PIN}]);
+  assert.deepEqual(
+    state.cardCommands.map(item => item.command),
+    ['hello', 'check-client', 'select-monoid', 'authenticate', 'add-account'],
+  );
+});
+
+test('prompt: absent PIN is collected before any client preparation, then saved by the shared flow', async () => {
+  const prepared = [];
+  const aid = new Uint8Array([1, 2, 3, 4, 5]);
+  const state = mount({
+    authentication: {
+      aid,
+      async prepare() {
+        prepared.push(true);
+      },
+    },
+  });
+  await state.enterManualPIN();
+  assert.equal(prepared.length, 0);
+  await state.tap();
+  await state.finishExit();
+  assert.equal(prepared.length, 1);
+  assert.equal(state.outcome, 'resolved');
+  assert.deepEqual(state.authenticationRequests, [{pin: PIN, aid}]);
+  assert.equal(state.savedPINs[CARD_ID], PIN);
+});
+
+test('prompt: an incorrect client PIN requires a new preparation on the explicit retry', async () => {
+  const prepared = [];
+  const aid = new Uint8Array([1, 2, 3, 4, 5]);
+  const state = mount({
+    savedPINs: {[CARD_ID]: OLD_PIN},
+    authentication: {
+      aid,
+      async prepare() {
+        prepared.push(true);
+      },
+    },
+    onAuthenticate() {
+      throw wrongPIN();
+    },
+  });
+  await state.tap();
+  await state.finishExit();
+  assert.equal(prepared.length, 1);
+  assert.equal(state.businessCalls, 0);
+  await state.enterPIN();
+  state.onAuthenticate = undefined;
+  await state.tap();
+  await state.finishExit();
+  assert.equal(prepared.length, 2);
+  assert.equal(state.businessCalls, 1);
+  assert.deepEqual(state.authenticationRequests, [
+    {pin: OLD_PIN, aid},
+    {pin: PIN, aid},
+  ]);
+  assert.equal(state.outcome, 'resolved');
+});
+
+test('prompt: client preparation failure never sends PIN or reaches business work', async () => {
+  const failure = new MonoidCardError('Could not verify time');
+  const state = mount({
+    retryOnError: false,
+    savedPINs: {[CARD_ID]: PIN},
+    authentication: {
+      aid: new Uint8Array([1, 2, 3, 4, 5]),
+      async prepare() {
+        throw failure;
+      },
+    },
+  });
+  await state.tap();
+  await state.finishExit();
+  assert.equal(state.authenticated.length, 0);
+  assert.equal(state.businessCalls, 0);
+  assert.equal(state.scans.length, 1);
+  assert.equal(state.outcome, 'rejected');
+  assert.equal(state.errors[0], failure);
+});
+
+test('prompt: wrong-card validation runs before client preparation and authentication', async () => {
+  let prepared = 0;
+  const state = mount({
+    retryOnError: false,
+    savedPINs: {[CARD_ID]: PIN},
+    validateCard() {
+      throw new MonoidWrongCardError({id: OTHER_CARD_ID});
+    },
+    authentication: {
+      aid: new Uint8Array([1, 2, 3, 4, 5]),
+      async prepare() {
+        prepared++;
+      },
+    },
+  });
+  await state.tap();
+  await state.finishExit();
+  assert.equal(prepared, 0);
+  assert.equal(state.authenticated.length, 0);
+  assert.equal(state.businessCalls, 0);
+  assert.equal(state.outcome, 'rejected');
 });

@@ -1,6 +1,11 @@
+import {
+  SSH_CHAIN_ID,
+  SSH_METADATA_METHOD,
+  SSH_METHOD,
+} from '@monoid/ssh-protocol';
 import type {IWalletKit, WalletKitTypes} from '@reown/walletkit';
 import {base58, base64} from '@scure/base';
-import {PAIRING_EVENTS} from '@walletconnect/core';
+import {PAIRING_EVENTS, RELAYER_EVENTS} from '@walletconnect/core';
 import {
   getAccountsChains,
   getSdkError,
@@ -28,6 +33,7 @@ import {
   addSolanaTransactionSignature,
   parseSolanaTransaction,
 } from '../@lib/solana-transaction.js';
+import {getSSHSessionAccounts} from '../@lib/ssh-request.js';
 import {getTypedDataAddresses} from '../@lib/typed-data-fields.js';
 import {normalizeWalletAddress} from '../@lib/wallet-address.js';
 import {
@@ -59,8 +65,11 @@ import {getSolanaSignatureStatus} from '../@lib/watch-solana-transaction.js';
 import type {AddressBookService} from './address-book-service.js';
 import type {EvmCallHistoryService} from './evm-call-history-service.js';
 import type {SolanaTransactionHistoryService} from './solana-transaction-history-service.js';
+import type {SSHKeyCandidates} from './ssh-key-store.js';
+import {SSHWalletService} from './ssh-wallet-service.js';
 import type {StorageService} from './storage-service.js';
 import type {TransactionHistoryService} from './transaction-history-service.js';
+import type {WalletConnectSigningLock} from './wallet-connect-signing-lock.js';
 
 const CONNECTION_REQUEST_TIMEOUT = ms('1m');
 
@@ -78,7 +87,8 @@ export function getWalletKitSessionAddresses(
     for (const account of namespace.accounts) {
       const {namespace: name, address} = parseAccountId(account);
       const identity = `${name}:${name === 'eip155' ? normalizeWalletAddress(address) : address}`;
-      if (!addresses.has(identity)) addresses.set(identity, address);
+      if (!addresses.has(identity))
+        addresses.set(identity, name === 'monoid' ? account : address);
     }
   }
 
@@ -159,6 +169,8 @@ declare global {
 }
 
 export class WalletKitService {
+  readonly ssh: SSHWalletService;
+  readonly signingLock: WalletConnectSigningLock;
   readonly sessions = observable.map<string, WalletKitSession>([], {
     deep: false,
   });
@@ -179,6 +191,7 @@ export class WalletKitService {
 
   private connecting = false;
   private approvals = new Map<number, Promise<WalletKitSession | undefined>>();
+  private approvingSSH = new Map<number, string>();
   private responses = observable.map<number, Promise<boolean>>([], {
     deep: false,
   });
@@ -206,7 +219,13 @@ export class WalletKitService {
     records: Record<string, WalletKitSessionRecord> = {},
     submissions: StorageMapping['walletKitTransactionSubmissions'] = {},
     solanaSubmissions: StorageMapping['walletKitSolanaTransactionSubmissions'] = {},
+    ssh?: SSHWalletService,
+    private isSigningBusy: () => boolean = () => false,
+    sshCandidates: SSHKeyCandidates = () => [],
   ) {
+    this.ssh =
+      ssh ?? new SSHWalletService(kit, storage, undefined, sshCandidates);
+    this.signingLock = this.ssh.signingLock;
     runInAction(() => {
       this.sessionRecords.replace(records);
       this.transactionSubmissions.replace(
@@ -229,6 +248,11 @@ export class WalletKitService {
     this.refreshSessions();
 
     reaction(
+      () => [...this.ssh.pending.values()],
+      () => this.refreshRequests(),
+    );
+
+    reaction(
       () => Object.fromEntries(this.sessionRecords),
       records => {
         storage.set('walletKitSessionRecords', records).catch(console.error);
@@ -247,6 +271,9 @@ export class WalletKitService {
     events.on('session_event', ({topic}) => this.recordActivity(topic));
     events.on('session_delete', ({topic}) => this.removeSession(topic));
     events.on('session_expire', ({topic}) => this.removeSession(topic));
+    kit.core.relayer.on(RELAYER_EVENTS.connect, () =>
+      this.ssh.notifyMetadataChanged(),
+    );
 
     kit.on('session_request', ({topic, verifyContext}) => {
       this.recordActivity(topic, verifyContext.verified);
@@ -901,6 +928,8 @@ export class WalletKitService {
       authentication,
     );
     const connectedAt = Date.now();
+    const ssh = getSSHSessionAccounts({namespaces}).length > 0;
+    if (ssh) this.approvingSSH.set(id, proposal.params.pairingTopic);
 
     try {
       const session = await this.kit.approveSession({
@@ -910,6 +939,16 @@ export class WalletKitService {
           proposalRequestsResponses: {authentication},
         }),
       });
+
+      try {
+        if (ssh) await this.ssh.registerSession(session);
+      } catch (error) {
+        await this.kit.disconnectSession({
+          topic: session.topic,
+          reason: getSdkError('USER_DISCONNECTED'),
+        });
+        throw error;
+      }
 
       runInAction(() => {
         this.proposals.delete(id);
@@ -949,10 +988,18 @@ export class WalletKitService {
       }
 
       throw error;
+    } finally {
+      if (ssh) {
+        this.approvingSSH.delete(id);
+        // The peer may send its first request before approveSession returns.
+        // Admit it only after our authorization has been durably registered.
+        this.refreshSessions();
+      }
     }
   }
 
   async disconnect(topic: string): Promise<void> {
+    this.ssh.invalidateSession(topic);
     if (!this.sessions.has(topic)) return;
 
     await this.kit.disconnectSession({
@@ -965,7 +1012,11 @@ export class WalletKitService {
 
   canSwitchAccount(topic: string): boolean {
     const session = this.sessions.get(topic);
-    return !!session && getSessionNamespaces(session, true).length > 0;
+    return (
+      !!session &&
+      (getSessionNamespaces(session, true).length > 0 ||
+        getSSHSessionAccounts(session).length > 0)
+    );
   }
 
   async switchAccounts(
@@ -978,6 +1029,40 @@ export class WalletKitService {
     if (!session) throw new Error('Session no longer available.');
     if (!this.canSwitchAccount(topic)) {
       throw new Error('This session does not support account switching.');
+    }
+
+    if (getSSHSessionAccounts(session).length) {
+      const selected = [...new Set(addresses)];
+      if (
+        !selected.length ||
+        selected.some(account => !account.startsWith(`${SSH_CHAIN_ID}:`))
+      )
+        throw new Error('Choose at least one SSH key.');
+      const revision = await this.ssh.beginSwitch(topic, selected);
+      const namespaces = {...session.namespaces};
+      const name = namespaces.monoid ? 'monoid' : SSH_CHAIN_ID;
+      namespaces[name] = {...namespaces[name], accounts: selected};
+      try {
+        const {acknowledged} = await this.kit.updateSession({
+          topic,
+          namespaces,
+        });
+        const acknowledgement = acknowledged();
+        onWaitingForAcknowledgement?.();
+        await acknowledgement;
+        await this.ssh.acknowledgeSwitch(topic, revision);
+      } finally {
+        this.refreshSessions();
+      }
+      await this.kit.emitSessionEvent({
+        topic,
+        chainId: SSH_CHAIN_ID,
+        event: {
+          name: 'accountsChanged',
+          data: selected.map(account => account.slice(SSH_CHAIN_ID.length + 1)),
+        },
+      });
+      return;
     }
 
     const identities = new Set<string>();
@@ -1055,15 +1140,52 @@ export class WalletKitService {
 
       this.refreshRequests();
     });
+    this.ssh.refresh();
   }
 
   private refreshRequests(): void {
     const now = Date.now();
+    const pending = this.kit.getPendingSessionRequests();
+    const approvingPairings = new Set(this.approvingSSH.values());
+    const sessions = this.kit.getActiveSessions();
+    for (const request of pending) {
+      if (request.params.request.method === SSH_METADATA_METHOD) {
+        // Read-only metadata neither waits for nor occupies an approval slot.
+        void this.ssh.receive(request).catch(() => {});
+        continue;
+      }
+      if (
+        request.params.request.method === SSH_METHOD ||
+        request.params.chainId === SSH_CHAIN_ID
+      ) {
+        if (approvingPairings.has(sessions[request.topic]?.pairingTopic))
+          continue;
+        void this.ssh
+          .receive(
+            request,
+            this.isSigningBusy() ||
+              pending.some(
+                other =>
+                  other.params.request.method !== SSH_METHOD &&
+                  other.params.request.method !== SSH_METADATA_METHOD &&
+                  other.params.chainId !== SSH_CHAIN_ID,
+              ),
+          )
+          .catch(() => {});
+      }
+    }
 
     runInAction(() => {
       this.requests.replace(
-        this.kit
-          .getPendingSessionRequests()
+        [
+          ...pending.filter(
+            request =>
+              request.params.request.method !== SSH_METHOD &&
+              request.params.request.method !== SSH_METADATA_METHOD &&
+              request.params.chainId !== SSH_CHAIN_ID,
+          ),
+          ...[...this.ssh.pending.values()].map(value => value.request),
+        ]
           .filter(({topic, params}) => {
             const session = this.sessions.get(topic);
             const expiry = params.request.expiryTimestamp;
@@ -1095,6 +1217,7 @@ export class WalletKitService {
   }
 
   private removeSession(topic: string): void {
+    this.ssh.invalidateSession(topic);
     runInAction(() => {
       this.sessions.delete(topic);
       this.sessionRecords.delete(topic);
@@ -1130,11 +1253,14 @@ export class WalletKitService {
     callHistory: EvmCallHistoryService,
     transactionHistory: TransactionHistoryService,
     solanaTransactionHistory: SolanaTransactionHistoryService,
+    isSigningBusy: () => boolean = () => false,
+    sshCandidates: SSHKeyCandidates = () => [],
   ): Promise<WalletKitService> {
-    const [records, submissions, solanaSubmissions] = await Promise.all([
+    const [records, submissions, solanaSubmissions, ssh] = await Promise.all([
       storage.get('walletKitSessionRecords'),
       storage.get('walletKitTransactionSubmissions'),
       storage.get('walletKitSolanaTransactionSubmissions'),
+      SSHWalletService.create(kit, storage, sshCandidates),
     ]);
     // A crash after broadcast must not let request cleanup discard its history.
     for (const submission of Object.values(solanaSubmissions ?? {})) {
@@ -1157,6 +1283,9 @@ export class WalletKitService {
       records ?? {},
       submissions ?? {},
       solanaSubmissions ?? {},
+      ssh,
+      isSigningBusy,
+      sshCandidates,
     );
   }
 

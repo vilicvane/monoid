@@ -24,6 +24,7 @@ export class PopupBackdropController {
     this.owners.add(owner);
 
     if (this.owners.size === 1) {
+      this.element.classList.add('active');
       return this.transition(true);
     }
 
@@ -35,6 +36,7 @@ export class PopupBackdropController {
       return Promise.resolve();
     }
 
+    this.element.classList.remove('active');
     return this.transition(false);
   }
 

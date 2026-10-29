@@ -82,6 +82,98 @@ test('preserves exact legacy transaction quantities and converts gas to gasLimit
   });
 });
 
+test('preserves a Sepolia payable contract request using gasLimit and EIP-1559 fees', () => {
+  const data = `0x3593564c${'00'.repeat(96)}`;
+  const incoming = request({
+    chainId: '0xaa36a7',
+    type: '0x2',
+    data,
+    value: '0x38d7ea4c68000',
+    gasLimit: '0x493e0',
+    maxFeePerGas: '0x77359400',
+    maxPriorityFeePerGas: '0x3b9aca00',
+  });
+  incoming.params.chainId = 'eip155:11155111';
+  const original = structuredClone(incoming);
+
+  assert.deepEqual(
+    parseWalletConnectTransactionRequest(
+      incoming,
+      session({
+        eip155: {
+          chains: ['eip155:11155111'],
+          accounts: [`eip155:11155111:${address}`],
+          methods: ['eth_sendTransaction'],
+          events: [],
+        },
+      }),
+    ),
+    {
+      method: 'eth_sendTransaction',
+      address,
+      chainId: 'eip155:11155111',
+      transaction: {
+        chainId: 11155111n,
+        type: 2,
+        to: recipient,
+        data,
+        value: 1000000000000000n,
+        gasLimit: 300000n,
+        maxFeePerGas: 2000000000n,
+        maxPriorityFeePerGas: 1000000000n,
+      },
+    },
+  );
+  assert.deepEqual(incoming, original);
+});
+
+test('accepts either gas alias and prefers gas when both are present', () => {
+  for (const fields of [
+    {gas: '0x5208'},
+    {gasLimit: '0x5208'},
+    {gas: undefined, gasLimit: '0x5208'},
+    {gas: '21000', gasLimit: '0x5208'},
+    {gas: '0x5208', gasLimit: 21000},
+    {gas: '0x5208', gasLimit: 21001},
+    {gas: '0x5208', gasLimit: 0},
+  ]) {
+    const {transaction} = parseWalletConnectTransactionRequest(
+      request(fields),
+      session(),
+    );
+    assert.equal(transaction.gasLimit, 21000n);
+    assert.equal(transaction.gas, undefined);
+  }
+
+  for (const gas of [0, '0x0']) {
+    const {transaction} = parseWalletConnectTransactionRequest(
+      request({gas, gasLimit: '0x5208'}),
+      session(),
+    );
+    assert.equal(transaction.gasLimit, 0n);
+  }
+});
+
+test('ignores an unselected gasLimit but still rejects an invalid selected gas value', () => {
+  for (const value of [null, -1, Number.MAX_SAFE_INTEGER + 1, 1n << 256n]) {
+    const {transaction} = parseWalletConnectTransactionRequest(
+      request({gas: 21000, gasLimit: value}),
+      session(),
+    );
+    assert.equal(transaction.gasLimit, 21000n);
+
+    for (const fields of [
+      {gas: value, gasLimit: 21000},
+      {gas: undefined, gasLimit: value},
+    ]) {
+      assertRequestError(
+        () => parseWalletConnectTransactionRequest(request(fields), session()),
+        -32602,
+      );
+    }
+  }
+});
+
 test('preserves access-list and EIP-1559 transactions with normalized addresses and storage keys', () => {
   for (const type of [1, 2]) {
     for (const accessList of [
@@ -336,6 +428,7 @@ test('rejects unsafe, fractional and negative numeric quantities rather than rou
   for (const field of [
     'value',
     'gas',
+    'gasLimit',
     'gasPrice',
     'maxFeePerGas',
     'maxPriorityFeePerGas',
@@ -399,6 +492,24 @@ test('rejects unsupported transaction fields and types instead of silently omitt
     assertRequestError(
       () => parseWalletConnectTransactionRequest(request(fields), session()),
       -32602,
+    );
+  }
+});
+
+test('preserves the transaction validation reason in invalid request errors', () => {
+  for (const [fields, message] of [
+    [{extra: 'ignored'}, 'Unsupported transaction field.'],
+    [{chainId: '0x89'}, 'The transaction uses a different network.'],
+    [{gasLimit: 1n << 256n}, 'Transaction quantity is too large.'],
+  ]) {
+    assert.throws(
+      () => parseWalletConnectTransactionRequest(request(fields), session()),
+      error => {
+        assert.ok(error instanceof WalletConnectRequestError);
+        assert.equal(error.code, -32602);
+        assert.equal(error.message, message);
+        return true;
+      },
     );
   }
 });

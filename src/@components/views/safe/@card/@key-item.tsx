@@ -8,7 +8,7 @@ import {observer} from 'mobx-react-lite';
 import type {ButtonHTMLAttributes, ReactNode} from 'react';
 import {css, styled} from 'styled-components';
 
-import type {BIP39PathString} from '../../../../@atomics.js';
+import type {BIP39PathString, PublicKeyHex} from '../../../../@atomics.js';
 import type {AddressType} from '../../../../@lib/wallet-address.js';
 import {
   ADDRESS_TYPES,
@@ -20,6 +20,7 @@ import {
   KeyListAddressPlaceholder,
   KeyListItem,
   KeyListItemContent,
+  KeyListPlaceholder,
 } from '../../../@key/key-list.js';
 import {
   KeyAliasTag,
@@ -94,7 +95,7 @@ export type KeySyncDirection = 'download' | 'upload';
 
 export const KeyItem = observer(
   ({
-    data: {type, index, alias},
+    data: {type, index, alias, publicKey},
     addressType,
     address,
     path: derivedPath,
@@ -108,8 +109,10 @@ export const KeyItem = observer(
     onChangeAddressType,
     onChangeSyncDirection,
   }: {
-    data: Pick<ScannedCardKeyData, 'type' | 'index' | 'alias'>;
-    addressType: AddressType;
+    data: Pick<ScannedCardKeyData, 'type' | 'index' | 'alias'> & {
+      publicKey?: PublicKeyHex;
+    };
+    addressType: AddressType | undefined;
     address: string | undefined;
     path?: BIP39PathString;
     state: KeyItemState;
@@ -123,11 +126,11 @@ export const KeyItem = observer(
     onChangeSyncDirection?: () => void;
   }): ReactNode => {
     const path =
-      type === 'seed'
+      type === 'seed' && addressType
         ? (derivedPath ?? ADDRESS_TYPES[addressType].path(0))
         : undefined;
     const canChangeAddressType =
-      empty || getCardKeyAddressTypes(type).length > 1;
+      !!addressType && (empty || getCardKeyAddressTypes(type).length > 1);
 
     const addressTypeButtonProps: ButtonHTMLAttributes<HTMLButtonElement> = {
       type: 'button',
@@ -168,23 +171,25 @@ export const KeyItem = observer(
           <KeyTags>
             <KeyTypeTag className={type}>{type}</KeyTypeTag>
             {alias && <KeyAliasTag>{alias}</KeyAliasTag>}
-            <DerivationTag
-              chain={ADDRESS_TYPES[addressType].chain}
-              buttonProps={
-                canChangeAddressType
-                  ? {
-                      ...addressTypeButtonProps,
-                      'aria-label': empty
-                        ? 'Add address'
-                        : `Change address type: ${path ?? ADDRESS_TYPE_LABELS[addressType]}`,
-                    }
-                  : undefined
-              }
-            >
-              {empty
-                ? 'No addresses'
-                : (path ?? ADDRESS_TYPE_LABELS[addressType])}
-            </DerivationTag>
+            {addressType && (
+              <DerivationTag
+                chain={ADDRESS_TYPES[addressType].chain}
+                buttonProps={
+                  canChangeAddressType
+                    ? {
+                        ...addressTypeButtonProps,
+                        'aria-label': empty
+                          ? 'Add address'
+                          : `Change address type: ${path ?? ADDRESS_TYPE_LABELS[addressType]}`,
+                      }
+                    : undefined
+                }
+              >
+                {empty
+                  ? 'No addresses'
+                  : (path ?? ADDRESS_TYPE_LABELS[addressType])}
+              </DerivationTag>
+            )}
             {canChangeAddressType && (
               <AddressTypeSwitch
                 as="button"
@@ -223,7 +228,11 @@ export const KeyItem = observer(
                     ? 'Update card from phone. Switch to updating phone'
                     : 'Update card from phone'
                 }
-                title="Replace card addresses with phone addresses"
+                title={
+                  addressType
+                    ? 'Replace card addresses with phone addresses'
+                    : 'Update card alias from phone'
+                }
               >
                 <AppIcon icon={arrowUpToLine} aria-hidden="true" />
               </KeyWriteTag>
@@ -236,12 +245,16 @@ export const KeyItem = observer(
           </KeyTags>
           {empty ? null : address ? (
             <KeyListAddress>{address}</KeyListAddress>
-          ) : (
+          ) : publicKey ? (
+            <KeyListAddress>{publicKey}</KeyListAddress>
+          ) : addressType ? (
             <KeyListAddressPlaceholder
               $chain={ADDRESS_TYPES[addressType].chain}
               role="img"
               aria-label="Address not derived"
             />
+          ) : (
+            <KeyListPlaceholder>Public key not read</KeyListPlaceholder>
           )}
         </KeyListItemContent>
         {!disabled && <RippleEffect />}

@@ -6,9 +6,7 @@ mock.module('../.bld/app/@lib/render-icon.js', {
   namedExports: {renderIcon: () => 'icon'},
 });
 mock.module('../.bld/app/@services/monoid-credentials-store.js', {
-  namedExports: {
-    isCredentialRequestCancelled: error => error?.code === 'CANCELLED',
-  },
+  namedExports: {},
 });
 
 const {ErrorService} = await import('../.bld/app/@services/error-service.js');

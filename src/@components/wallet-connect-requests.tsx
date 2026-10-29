@@ -21,6 +21,8 @@ export function WalletConnectRequests(): null {
         [
           router.features,
           router.cardApplets,
+          router.securityKey,
+          router.otp,
           router.bitcoin,
           router.sessions,
           router.ethereum,

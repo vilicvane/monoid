@@ -1,11 +1,16 @@
 import type {
   BIP39PathString,
   CurveName,
-  MonoidIdHex,
   PublicKeyHex,
   SafeIndexHex,
   SafeKnownType,
 } from '../../../@atomics.js';
+import type {DerivedKeyPublicKeyData} from '../../../@lib/key-derivation.js';
+import type {
+  CardDisplayData,
+  CardIdentity,
+  CardKeyDerivationRecord,
+} from '../../../@lib/monoid/index.js';
 import type {AddressType} from '../../../@lib/wallet-address.js';
 import type {WalletKeyPublicKeyData} from '../../../@services/index.js';
 
@@ -25,24 +30,25 @@ export type ScannedCardKeyData = {
   };
 };
 
-export type ScannedCardData = {
-  id: MonoidIdHex;
-  publicKey: PublicKeyHex;
-  bundle: string | false;
-  items: ScannedCardItemData[];
-};
+export type ScannedCardData = CardIdentity &
+  CardDisplayData & {
+    bundle: string | false;
+    items: ScannedCardItemData[];
+  };
 
 export type ScannedCardItemData = {
   index: SafeIndexHex;
   type?: string | number;
   alias?: string;
-  key?: string;
+  metadata?: string;
   secret: boolean;
   publicKey?: PublicKeyHex;
   ref?: ScannedCardKeyData['ref'];
   /** Cached public keys only; the companion derivationRecord holds the full saved list. */
   derivations?: WalletKeyPublicKeyData[];
   derivationRecord?: CardDerivationRecord;
+  derivedKeys?: DerivedKeyPublicKeyData[];
+  keyDerivationRecord?: CardKeyDerivationRecord;
 };
 
 export function isCardKeyItem(

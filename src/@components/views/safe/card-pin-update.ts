@@ -1,14 +1,19 @@
-import {type MonoidIdHex, MonoidPIN} from '../../../@atomics.js';
-import {CBORAppletError} from '../../../@lib/cbor-applet.js';
+import {
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
+  type MonoidIdHex,
+  MonoidPIN,
+} from '../../../@atomics.js';
 import {
   type MonoidApplet,
   type MonoidAppletHello,
-  MonoidAppletInvalidPINError,
   MonoidCardError,
+  assertCardPINNotBlocked,
+  assertSameCard,
+  authenticateCardPIN,
 } from '../../../@lib/monoid/index.js';
 import {uint8ArrayToHex} from '../../../@utils/index.js';
 
-import {assertCardForUpdate} from './card-alias-update.js';
 import type {ScannedCardData} from './common.js';
 
 export type CardPINKind = 'Access' | 'Secret';
@@ -22,30 +27,18 @@ export async function updateCardPIN(
   newPIN: MonoidPIN,
   signal: AbortSignal,
 ): Promise<MonoidIdHex> {
-  assertCardForUpdate(hello, card);
+  assertSameCard(hello, card);
   signal.throwIfAborted();
-  if (hello.pins.secret === 0) throw new MonoidCardError('Secret PIN blocked');
+  assertCardPINNotBlocked(hello, 'secret');
   if (hello.pins.secret === false)
     throw new MonoidCardError('Secret PIN not set');
   if (!MonoidPIN.is(currentSecretPIN) || !MonoidPIN.is(newPIN)) {
-    throw new MonoidCardError('PIN must contain 6 to 16 characters');
+    throw new MonoidCardError(
+      `PIN must contain ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} characters`,
+    );
   }
 
-  try {
-    await applet.authenticate({secret: true, pin: currentSecretPIN});
-  } catch (error) {
-    if (
-      error instanceof CBORAppletError &&
-      MonoidAppletInvalidPINError.is(error.source)
-    ) {
-      throw new MonoidCardError(
-        error.source.tries === 0
-          ? 'Secret PIN blocked'
-          : `Incorrect Secret PIN, tries remaining: ${error.source.tries}`,
-      );
-    }
-    throw error;
-  }
+  await authenticateCardPIN(applet, currentSecretPIN);
 
   signal.throwIfAborted();
   try {

@@ -11,7 +11,7 @@ import {
   getCardDerivationItemIndex,
   isCardDerivationItem,
   mergeCardDerivationWallets,
-  readCardDerivationRecord,
+  readCardDerivationItem,
   writeCardDerivationRecord,
   writeCardDerivations,
 } from '../.bld/app/@components/views/safe/card-derivations.js';
@@ -42,7 +42,7 @@ function wallet(addressType = 'evm', account = 0, root = SEED) {
 function recordItem(root = SEED, wallets = [wallet('evm', 0, root)]) {
   return {
     index: getCardDerivationItemIndex(root.index),
-    key: root.index,
+    metadata: root.index,
     secret: false,
     data: encodeCardDerivationRecord({index: root.index, wallets}),
   };
@@ -69,11 +69,13 @@ function createApplet(initial = []) {
 
       return {
         items: [...items.values()]
-          .filter(item => item.key?.startsWith(hex(request.keyPrefix)))
+          .filter(item =>
+            item.metadata?.startsWith(hex(request.metadataPrefix)),
+          )
           .map(({data: _data, ...item}) => ({
             ...item,
             index: bytes(item.index),
-            key: bytes(item.key),
+            metadata: bytes(item.metadata),
           })),
       };
     },
@@ -98,7 +100,7 @@ function createApplet(initial = []) {
       items.set(hex(request.index), {
         ...request,
         index: hex(request.index),
-        key: hex(request.key),
+        metadata: hex(request.metadata),
       });
       return {index: request.index};
     },
@@ -391,34 +393,34 @@ test('unknown versions, tuple fields, algorithms and malformed binary paths are 
   }
 });
 
-test('read validates the payload, immutable lookup key and stable index together', async () => {
+test('read validates the payload, immutable metadata and stable index together', async () => {
   const item = recordItem();
   const applet = createApplet([item]);
 
-  assert.deepEqual(await readCardDerivationRecord(applet, item), {
-    index: SEED.index,
-    wallets: [wallet()],
-  });
+  assert.deepEqual(
+    (await readCardDerivationItem(applet, item)).derivationRecord,
+    {
+      index: SEED.index,
+      wallets: [wallet()],
+    },
+  );
 
   for (const invalid of [
     {...item, secret: true},
-    {...item, key: undefined},
-    {...item, key: OTHER_SEED.index},
+    {...item, metadata: undefined},
+    {...item, metadata: OTHER_SEED.index},
     {...item, index: '0f010000000000000000'},
   ]) {
     applet.calls.length = 0;
-    await assert.rejects(readCardDerivationRecord(applet, invalid));
+    await assert.rejects(readCardDerivationItem(applet, invalid));
     assert.equal(applet.calls.length, 0);
   }
 
   applet.items.get(item.index).data = recordItem(OTHER_SEED).data;
-  await assert.rejects(
-    readCardDerivationRecord(applet, item),
-    /does not match/,
-  );
+  await assert.rejects(readCardDerivationItem(applet, item), /does not match/);
 });
 
-test('write creates an explicitly indexed non-secret item with the source lookup key', async () => {
+test('write creates an explicitly indexed non-secret item with the source metadata', async () => {
   const applet = createApplet();
   const result = await writeCardDerivations(applet, SEED, [wallet()], signal());
   const created = applet.calls.find(([command]) => command === 'create')[1];
@@ -429,7 +431,7 @@ test('write creates an explicitly indexed non-secret item with the source lookup
   );
   assert.equal('type' in created, false);
   assert.equal(created.secret, false);
-  assert.deepEqual(created.key, bytes(SEED.index));
+  assert.deepEqual(created.metadata, bytes(SEED.index));
   assert.deepEqual(
     decodeCardDerivationRecord(created.data),
     result.derivationRecord,
@@ -937,7 +939,7 @@ test('malformed, foreign-prefix and duplicate records cannot be overwritten', as
   for (const initial of [
     [{...original, data: encode([2, ...decode(original.data).slice(1)])}],
     [{...original, secret: true}],
-    [{...original, key: `${SEED.index}00`}],
+    [{...original, metadata: `${SEED.index}00`}],
     [original, {...original, index: '0f010000000000000000'}],
   ]) {
     const applet = createApplet(initial);
@@ -980,7 +982,7 @@ test('size guard includes encrypted Copy overhead before creating a record', asy
     const data = encodeCardDerivationRecord({index: SEED.index, wallets});
     const request = {
       index: bytes(getCardDerivationItemIndex(SEED.index)),
-      key: bytes(SEED.index),
+      metadata: bytes(SEED.index),
       data,
       secret: false,
     };
@@ -988,7 +990,7 @@ test('size guard includes encrypted Copy overhead before creating a record', asy
     importSize = encode({
       index: request.index,
       senderPublicKey: new Uint8Array(65),
-      key: request.key,
+      metadata: request.metadata,
       data: new Uint8Array(data.length + 144),
     }).length;
   } while (importSize <= 8192);

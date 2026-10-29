@@ -9,6 +9,13 @@ import type {
   SafeIndexHex,
 } from '../@atomics.js';
 import {parseDerivationPath} from '../@lib/bip39.js';
+import {
+  type DerivedKeyPublicKeyData,
+  type SeedKeyDerivation,
+  getSeedKeyDerivationId,
+  mergeDerivedPublicKeys,
+  normalizeKeyPublicKey,
+} from '../@lib/key-derivation.js';
 import type {AddressType} from '../@lib/wallet-address.js';
 import {ADDRESS_TYPES, computeWalletAddress} from '../@lib/wallet-address.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../@utils/index.js';
@@ -24,19 +31,60 @@ declare global {
 
 export class WalletStorageService {
   readonly keys: IObservableArray<WalletKeyData>;
+  private writing: Promise<void> = Promise.resolve();
+  private pendingWrites = 0;
+  private latestSnapshot: string | undefined;
 
-  constructor(storage: StorageService, keys: WalletKeyData[]) {
+  constructor(
+    private storage: StorageService,
+    keys: WalletKeyData[],
+  ) {
     this.keys = observable(keys);
+    this.latestSnapshot = JSON.stringify(keys);
 
     reaction(
       () => toJS(this.keys),
       keys => {
         console.info('Saving wallet keys:', keys);
-        storage.set('walletKeys', keys).catch(console.error);
+        this.persistKeys(keys).catch(console.error);
       },
     );
 
     // this.keys.clear();
+  }
+
+  /** Await the latest snapshot through the same queue used by observable edits. */
+  async flush(): Promise<void> {
+    await this.persistKeys(toJS(this.keys));
+  }
+
+  private persistKeys(keys: WalletKeyData[]): Promise<void> {
+    const snapshot = JSON.stringify(keys);
+    if (snapshot === this.latestSnapshot) return this.writing;
+
+    const pending = this.pendingWrites++ > 0;
+    let write: Promise<void>;
+    try {
+      write = pending
+        ? this.writing
+            .catch(() => {})
+            .then(() => this.storage.set('walletKeys', keys))
+        : Promise.resolve(this.storage.set('walletKeys', keys));
+    } catch (error) {
+      write = Promise.reject(error);
+    }
+    this.writing = write;
+    this.latestSnapshot = snapshot;
+    void write.then(
+      () => {
+        this.pendingWrites--;
+      },
+      () => {
+        this.pendingWrites--;
+        if (this.writing === write) this.latestSnapshot = undefined;
+      },
+    );
+    return write;
   }
 
   private computedIndexToKeyMap = computed(
@@ -75,6 +123,43 @@ export class WalletStorageService {
     });
   }
 
+  async addDerivedKeys(
+    index: SafeIndexHex,
+    ...sources: DerivedKeyPublicKeyData[]
+  ): Promise<void> {
+    const key = this.indexToKeyMap.get(index);
+    if (!key) return;
+    if (key.type !== 'seed') throw new Error('Key derivation requires a seed.');
+
+    const previous = key.derivedKeys ?? [];
+    const merged = mergeDerivedPublicKeys(previous, sources);
+    if (JSON.stringify(merged) !== JSON.stringify(previous)) {
+      runInAction(() => {
+        key.derivedKeys = merged;
+      });
+    }
+    await this.flush();
+  }
+
+  async deleteDerivedKey(
+    index: SafeIndexHex,
+    derivation: SeedKeyDerivation,
+  ): Promise<void> {
+    const key = this.indexToKeyMap.get(index);
+    if (!key) return;
+    const identity = getSeedKeyDerivationId(derivation);
+    const previous = key.derivedKeys ?? [];
+    const derivedKeys = previous.filter(
+      saved => getSeedKeyDerivationId(saved.derivation) !== identity,
+    );
+    if (derivedKeys.length !== previous.length) {
+      runInAction(() => {
+        key.derivedKeys = derivedKeys;
+      });
+    }
+    await this.flush();
+  }
+
   deleteWallet(
     index: SafeIndexHex,
     reference: WalletKeyWalletParameters,
@@ -91,7 +176,17 @@ export class WalletStorageService {
       return;
     }
 
+    const wallet = key.wallets[walletIndex];
+    const nativePublicKey =
+      key.type === 'ed25519' &&
+      !key.rawPublicKey &&
+      wallet.addressType === 'solana' &&
+      wallet.path === undefined
+        ? normalizeKeyPublicKey('ed25519', hexToUint8Array(wallet.publicKey))
+        : undefined;
+
     runInAction(() => {
+      if (nativePublicKey) key.rawPublicKey = nativePublicKey;
       key.wallets.splice(walletIndex, 1);
 
       if (
@@ -154,8 +249,8 @@ export class WalletStorageService {
         }
       };
 
-      // Legacy native keys displayed these addresses implicitly. Materialize
-      // that set once, then remove the fields so an empty list stays empty.
+      // Preserve the legacy secp256k1 address set. An Ed25519 public key stays
+      // a native key; only explicitly saved wallets survive its migration.
       if (current.type === 'secp256k1') {
         if (publicKey) {
           add('evm', publicKey);
@@ -163,7 +258,10 @@ export class WalletStorageService {
         }
         if (taprootOutputKey) add('bitcoin-taproot', taprootOutputKey);
       } else if (current.type === 'ed25519' && publicKey) {
-        add('solana', publicKey);
+        current.rawPublicKey ??= normalizeKeyPublicKey(
+          'ed25519',
+          hexToUint8Array(publicKey),
+        );
       }
 
       assertWalletPublicKeys(wallets);
@@ -180,6 +278,9 @@ export type WalletKeyData = {
   type: WalletKeyKnownType;
   index: SafeIndexHex;
   alias: string | undefined;
+  /** Native public key, independent of the saved wallet addresses. */
+  rawPublicKey?: PublicKeyHex;
+  derivedKeys?: DerivedKeyPublicKeyData[];
   wallets: WalletKeyPublicKeyData[];
   defaultWallet?: WalletKeyWalletParameters;
 };
@@ -278,6 +379,7 @@ export function getDefaultWallet(
 export const WalletKeyKnownType = x.union([
   x.literal('seed').nominal<'safe known type'>(),
   x.literal('secp256k1').nominal<'safe known type'>(),
+  x.literal('secp256r1').nominal<'safe known type'>(),
   x.literal('ed25519').nominal<'safe known type'>(),
 ]);
 

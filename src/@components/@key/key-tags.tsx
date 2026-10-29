@@ -16,6 +16,16 @@ export const KeyTags = styled.div`
 
 export const KeyTag = Tag;
 
+export const KeyParameterTag = styled(KeyTag)`
+  flex: 0 1 auto;
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+  line-height: 20px;
+`;
+
 const overlappingKeyTagCSS = css`
   margin-left: calc(
     -1 * var(--key-item-gap) - var(--tag-overlap) - var(--tag-inline-margin)

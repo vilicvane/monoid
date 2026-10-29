@@ -3,6 +3,7 @@ import {test} from 'node:test';
 
 import {runInAction, toJS} from 'mobx';
 
+import {SSHKeyStore} from '../.bld/app/@services/ssh-key-store.js';
 import {
   WalletStorageService,
   getDefaultWallet,
@@ -142,6 +143,7 @@ test('selecting a default persists its parameter reference without reordering pu
     ['walletKeys', [{...createKey(sources), defaultWallet: reference}]],
   ]);
 
+  await service.flush();
   const reloaded = await WalletStorageService.create(storage);
 
   assert.deepEqual(toJS(reloaded.keys), toJS(service.keys));
@@ -161,6 +163,7 @@ test('the first derived BTC address remains the implicit default when EVM is add
   assert.equal(Object.hasOwn(key, 'defaultWallet'), false);
   assert.equal(getDefaultWallet(key).addressType, 'bitcoin-segwit');
 
+  await service.flush();
   const reloaded = await WalletStorageService.create(storage);
 
   assert.deepEqual(toJS(reloaded.keys[0].wallets), [SEGWIT_SOURCE, EVM_SOURCE]);
@@ -208,6 +211,7 @@ test('adding derived sources preserves them and the chosen default after reload'
   service.addWallet(KEY_INDEX, SOLANA_SOURCE);
   service.addWallet(KEY_INDEX, SEGWIT_SOURCE);
 
+  await service.flush();
   const reloaded = await WalletStorageService.create(storage);
 
   assert.deepEqual(toJS(reloaded.keys[0].wallets), [
@@ -319,6 +323,7 @@ test('deleting a key removes all its addresses and persists only that index, eve
   assert.deepEqual(toJS(service.keys), [first, samePublicKey]);
   assert.deepEqual(storage.writes, [['walletKeys', [first, samePublicKey]]]);
 
+  await service.flush();
   const reloaded = await WalletStorageService.create(storage);
 
   assert.deepEqual(toJS(reloaded.keys), [first, samePublicKey]);
@@ -342,6 +347,7 @@ test('deleting the final empty key persists an empty store and repeated deletion
   assert.equal(service.indexToKeyMap.size, 0);
   assert.deepEqual(storage.writes, [['walletKeys', []]]);
 
+  await service.flush();
   const reloaded = await WalletStorageService.create(storage);
 
   assert.deepEqual(toJS(reloaded.keys), []);
@@ -387,6 +393,7 @@ for (const explicitDefault of [false, true]) {
     assert.deepEqual(toJS(service.keys[0].wallets), [remaining]);
     assert.equal(Object.hasOwn(service.keys[0], 'defaultWallet'), false);
 
+    await service.flush();
     const reloaded = await WalletStorageService.create(storage);
 
     assert.deepEqual(toJS(reloaded.keys), toJS(service.keys));
@@ -430,6 +437,7 @@ test('deleting the final source keeps its parent key and permits derivation afte
   assert.equal(service.indexToKeyMap.get(KEY_INDEX), key);
   assert.deepEqual(toJS(service.keys), [createKey([]), otherKey]);
 
+  await service.flush();
   const reloaded = await WalletStorageService.create(storage);
 
   assert.equal(getDefaultWallet(reloaded.keys[0]), undefined);
@@ -452,7 +460,8 @@ test('legacy native keys migrate displayed addresses once and do not restore the
       ...createKey([]),
       type: 'ed25519',
       index: '00000002',
-      publicKey: SOLANA_SOURCE.publicKey,
+      publicKey:
+        'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a',
     },
     {
       ...createKey([]),
@@ -471,12 +480,10 @@ test('legacy native keys migrate displayed addresses once and do not restore the
     service.keys.map(key =>
       getKeyWallets(key).map(wallet => wallet.addressType),
     ),
-    [
-      ['evm', 'bitcoin-segwit', 'bitcoin-taproot'],
-      ['solana'],
-      ['bitcoin-taproot'],
-    ],
+    [['evm', 'bitcoin-segwit', 'bitcoin-taproot'], [], ['bitcoin-taproot']],
   );
+
+  assert.equal(service.keys[1].rawPublicKey, keys[1].publicKey);
 
   for (const key of service.keys) {
     for (const wallet of getKeyWallets(key)) {
@@ -486,7 +493,9 @@ test('legacy native keys migrate displayed addresses once and do not restore the
 
   assert.ok(service.keys.every(key => key.wallets.length === 0));
   assert.equal(service.keys.length, keys.length);
+  await service.flush();
   const written = storage.writes.length;
+  await service.flush();
   const reloaded = await WalletStorageService.create(storage);
   assert.deepEqual(toJS(reloaded.keys), toJS(service.keys));
   assert.ok(reloaded.keys.every(key => getKeyWallets(key).length === 0));
@@ -517,8 +526,61 @@ test('modern empty native keys load without migration and can add and delete one
     getKeyWallets(service.keys[0]).map(wallet => wallet.addressType),
     ['bitcoin-segwit'],
   );
+  await service.flush();
   const reloaded = await WalletStorageService.create(storage);
   assert.deepEqual(toJS(reloaded.keys), toJS(service.keys));
+});
+
+test('removing a legacy native Ed25519 address preserves its SSH candidate in the same saved snapshot', async context => {
+  context.mock.method(console, 'info', () => {});
+  const index = '04010000000000000001';
+  const wallet = {
+    addressType: 'solana',
+    publicKey:
+      'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a',
+  };
+  const storage = createStorage([
+    {
+      type: 'ed25519',
+      index,
+      alias: 'Existing native key',
+      wallets: [wallet],
+    },
+  ]);
+  const service = await WalletStorageService.create(storage);
+  const ssh = new SSHKeyStore();
+  const before = ssh.candidates(service.keys);
+  assert.equal(before.length, 1);
+  assert.equal(service.keys[0].rawPublicKey, undefined);
+  service.deleteWallet(index, wallet);
+  await service.flush();
+  assert.equal(storage.writes.length, 1);
+  assert.deepEqual(storage.writes[0][1][0].wallets, []);
+  assert.equal(storage.writes[0][1][0].rawPublicKey, wallet.publicKey);
+  assert.deepEqual(ssh.candidates(service.keys), before);
+  const reloaded = await WalletStorageService.create(storage);
+  assert.deepEqual(ssh.candidates(reloaded.keys), before);
+  assert.deepEqual(toJS(reloaded.keys[0].wallets), []);
+});
+
+test('removing a Seed wallet does not turn its public key into a generic or native key', async context => {
+  context.mock.method(console, 'info', () => {});
+  const index = '02400000000000000001';
+  const wallet = {
+    ...SOLANA_SOURCE,
+    publicKey:
+      'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a',
+  };
+  const storage = createStorage([
+    {type: 'seed', index, alias: 'Seed', wallets: [wallet]},
+  ]);
+  const service = await WalletStorageService.create(storage);
+  service.deleteWallet(index, wallet);
+  await service.flush();
+  assert.equal(service.keys[0].rawPublicKey, undefined);
+  assert.equal(service.keys[0].derivedKeys, undefined);
+  assert.deepEqual(new SSHKeyStore().candidates(service.keys), []);
+  assert.deepEqual(toJS(service.keys[0].wallets), []);
 });
 
 test('equivalent derived requests reject inconsistent public keys but keep address types separate', async context => {
@@ -582,4 +644,107 @@ test('unknown keys or wallet references leave stored data unchanged', async () =
   assert.deepEqual(toJS(service.keys), keys);
   assert.deepEqual(storage.values.get('walletKeys'), keys);
   assert.deepEqual(storage.writes, []);
+});
+
+const DERIVED_KEY = {
+  derivation: {type: 'monoid-001', curve: 'ed25519', context: 'personal key'},
+  publicKey: 'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a',
+};
+
+test('derived key saves wait for earlier wallet writes and preserve snapshot order', async context => {
+  context.mock.method(console, 'info', () => {});
+  const writes = [];
+  const pending = [];
+  const service = new WalletStorageService(
+    {
+      set(_name, keys) {
+        writes.push(structuredClone(keys));
+        return new Promise(resolve => pending.push(resolve));
+      },
+    },
+    [createKey([])],
+  );
+  service.addWallet(KEY_INDEX, EVM_SOURCE);
+  const saved = service.addDerivedKeys(KEY_INDEX, DERIVED_KEY);
+  let completed = false;
+  void saved.then(() => {
+    completed = true;
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(writes.length, 1);
+  assert.equal(completed, false);
+  assert.equal(writes[0][0].derivedKeys, undefined);
+  pending.shift()();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(writes.length, 2);
+  assert.equal(completed, false);
+  assert.deepEqual(writes[1][0].wallets, [EVM_SOURCE]);
+  assert.deepEqual(writes[1][0].derivedKeys, [DERIVED_KEY]);
+  pending.shift()();
+  await saved;
+  assert.equal(completed, true);
+  await service.addDerivedKeys(KEY_INDEX, DERIVED_KEY);
+  assert.equal(
+    writes.length,
+    2,
+    'the same acknowledged snapshot is not rewritten',
+  );
+});
+
+test('a failed derived key save rejects and permits retrying the same in-memory snapshot', async context => {
+  context.mock.method(console, 'info', () => {});
+  context.mock.method(console, 'error', () => {});
+  const failure = new Error('Storage unavailable');
+  const writes = [];
+  let fail = true;
+  const service = new WalletStorageService(
+    {
+      async set(_name, keys) {
+        if (fail) throw failure;
+        writes.push(structuredClone(keys));
+      },
+    },
+    [createKey([])],
+  );
+  await assert.rejects(
+    service.addDerivedKeys(KEY_INDEX, DERIVED_KEY),
+    error => error === failure,
+  );
+  assert.deepEqual(toJS(service.keys[0].derivedKeys), [DERIVED_KEY]);
+  assert.deepEqual(writes, []);
+  fail = false;
+  await service.addDerivedKeys(KEY_INDEX, DERIVED_KEY);
+  assert.deepEqual(writes[0][0].derivedKeys, [DERIVED_KEY]);
+});
+
+test('derived key removal targets its full parameters and keeps the Seed and wallet addresses', async context => {
+  context.mock.method(console, 'info', () => {});
+  const second = {
+    ...DERIVED_KEY,
+    derivation: {...DERIVED_KEY.derivation, context: 'second key'},
+  };
+  const storage = createStorage([
+    {...createKey([EVM_SOURCE]), derivedKeys: [DERIVED_KEY, second]},
+  ]);
+  const service = await WalletStorageService.create(storage);
+  await service.deleteDerivedKey(KEY_INDEX, DERIVED_KEY.derivation);
+  assert.equal(service.keys.length, 1);
+  assert.deepEqual(toJS(service.keys[0].wallets), [EVM_SOURCE]);
+  assert.deepEqual(toJS(service.keys[0].derivedKeys), [second]);
+  assert.deepEqual(storage.values.get('walletKeys')[0].derivedKeys, [second]);
+});
+
+test('a derived save inside an outer action is persisted once and can be awaited', async context => {
+  context.mock.method(console, 'info', () => {});
+  const storage = createStorage([createKey([])]);
+  const service = await WalletStorageService.create(storage);
+  let saved;
+  runInAction(() => {
+    saved = service.addDerivedKeys(KEY_INDEX, DERIVED_KEY);
+  });
+  await saved;
+  assert.equal(storage.writes.length, 1);
+  assert.deepEqual(storage.values.get('walletKeys')[0].derivedKeys, [
+    DERIVED_KEY,
+  ]);
 });

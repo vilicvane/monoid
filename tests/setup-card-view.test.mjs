@@ -3,15 +3,30 @@ import {afterEach, mock, test} from 'node:test';
 
 import * as actualMobx from 'mobx';
 
+import {AuthorityBundleSession} from '../.bld/app/@components/views/safe/@card/authority-bundle-session.js';
+import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
 import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
+import {
+  assertSameCard,
+  assertSameCardWithBundle,
+  readBackupCardIdentity,
+  readCardIdentity,
+} from '../.bld/app/@lib/monoid/card-identity.js';
+import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
+import {
+  CardPINError,
+  assertCardPINsNotBlocked,
+  authenticateCardPIN,
+} from '../.bld/app/@lib/monoid/card-pins.js';
 import {initializeMonoidCard} from '../.bld/app/@lib/monoid/initialize-card.js';
 import {
   MonoidAppletHello,
   MonoidAppletInvalidPINError,
 } from '../.bld/app/@lib/monoid/monoid-applet.js';
+import {CardStore} from '../.bld/app/@services/card-store.js';
 
 let fixture;
 let rendering;
@@ -104,6 +119,9 @@ mock.module('mobx', {
     },
   },
 });
+mock.module('styled-components', {
+  namedExports: {styled: {div: () => 'bundle-mode-row'}},
+});
 mock.module('react/jsx-runtime', {
   namedExports: {
     jsx: element,
@@ -133,10 +151,9 @@ mock.module('../.bld/app/@components/@ui/operation-complete.js', {
 mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => fixture.entrances},
 });
+
 mock.module('../.bld/app/@services/index.js', {
-  namedExports: {
-    isCredentialRequestCancelled: error => error?.code === 'CANCELLED',
-  },
+  namedExports: {},
 });
 mock.module('../.bld/app/@components/@monoid/use-isodep-scan-prompt.js', {
   namedExports: {
@@ -168,6 +185,8 @@ mock.module('../.bld/app/@components/@monoid/use-isodep-scan-prompt.js', {
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
+    scanCardPrompt: (card, action) =>
+      `Scan card ${cardNameWithId(card)}${action ? ` ${action}` : ''}`,
     MonoidScanStatePromptContentHighlight: 'highlight',
   },
 });
@@ -179,9 +198,15 @@ mock.module('../.bld/app/@components/@monoid/card-preview.js', {
     CardPreviewButton: 'card-preview-button',
   },
 });
-mock.module('../.bld/app/@components/@ui/toggle.js', {
-  namedExports: {Toggle: 'toggle'},
+mock.module('../.bld/app/@components/@ui/segmented-control.js', {
+  namedExports: {SegmentedControl: 'segmented'},
 });
+mock.module(
+  '../.bld/app/@components/views/safe/@card/authority-bundle-setup.js',
+  {
+    namedExports: {AuthorityBundleSetup: 'authority-setup'},
+  },
+);
 mock.module('../.bld/app/@components/@ui/toast.js', {
   namedExports: {useToast: () => message => fixture.toasts.push(message)},
 });
@@ -196,6 +221,7 @@ mock.module('../.bld/app/@components/@ui/use-input-modal.js', {
     useInputModal: () => [
       null,
       (options, signal) => {
+        fixture.events.push('pin-input');
         const input = {...deferred(), options, signal};
         if (signal?.aborted) input.resolve(undefined);
         else
@@ -312,6 +338,15 @@ const install = async (sessionId, onProgress, signal) => {
 };
 mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
+    CardPINError,
+    authenticateCardPIN,
+    cardName,
+    cardNameWithId,
+    assertSameCard,
+    assertSameCardWithBundle,
+    readCardIdentity,
+    readBackupCardIdentity,
+    assertCardPINsNotBlocked,
     MonoidCardError,
     MonoidWrongCardError,
     MonoidAppletInvalidPINError,
@@ -404,14 +439,17 @@ function bundleCard(identity, overrides = {}) {
     id: Uint8Array.of(0, 0, 0, identity),
     publicKey: Uint8Array.from([4, ...new Array(64).fill(identity)]),
     bundle: false,
+    authority: false,
+    alias: false,
+    allowPeerExtension: false,
     pins: {access: 5, secret: 5},
     ...overrides,
   };
 }
 
 async function enableBundle(state) {
-  await find(state.render(), node => node.type === 'toggle').props.onChange(
-    true,
+  await find(state.render(), node => node.type === 'segmented').props.onChange(
+    'card',
   );
   state.render();
 }
@@ -421,6 +459,9 @@ function preparedCard(hello) {
     id: hex(hello.id),
     publicKey: hex(hello.publicKey),
     bundle: hello.bundle === false ? false : hex(hello.bundle),
+    alias: hello.alias,
+    authority: hello.authority,
+    allowPeerExtension: hello.allowPeerExtension,
     items: [],
   };
 }
@@ -438,8 +479,8 @@ async function roundTwo(identities = [1, 2]) {
   return state;
 }
 
-async function replacementCard() {
-  const hello = bundleCard(1, {bundle: new Uint8Array(32).fill(9)});
+async function replacementCard(alias = false) {
+  const hello = bundleCard(1, {bundle: new Uint8Array(32).fill(9), alias});
   const source = preparedCard(hello);
   source.items.push({index: '0001', secret: true});
   const state = mount(
@@ -447,7 +488,7 @@ async function replacementCard() {
     {
       cardInformation: undefined,
       card: {id: source.id, publicKey: source.publicKey},
-      createBundle: true,
+      bundle: 'card',
     },
     [source],
   );
@@ -499,6 +540,9 @@ function mount(
       id: new Uint8Array([1, 2, 3, 4]),
       publicKey: new Uint8Array([4, ...new Uint8Array(64).fill(5)]),
       bundle: false,
+      authority: false,
+      alias: false,
+      allowPeerExtension: false,
       pins: {access: 5, secret: 5},
     },
     view: {
@@ -522,6 +566,7 @@ function mount(
         rendering = state;
         state.index = 0;
         state.tree = Component({view: state.view});
+        if (!('firstTree' in state)) state.firstTree = state.tree;
         rendering = undefined;
         state.effects.forEach(effect => effect());
       } while (state.dirty);
@@ -634,8 +679,19 @@ function mount(
     },
     async answerBundlePIN(...values) {
       const pin = values.length ? values[0] : 'Safe-42';
-      state.bundleInputs.at(-1).resolve(pin);
       for (let index = 0; index < 10; index++) await Promise.resolve();
+      for (let step = 0; step < 4; step++) {
+        const input = state.bundleInputs.at(-1);
+        input.resolve(pin);
+        for (let index = 0; index < 10; index++) await Promise.resolve();
+        const next = state.bundleInputs.at(-1);
+        if (
+          next === input ||
+          pin === undefined ||
+          !/^(Confirm|Set Access)/.test(next.options.placeholder)
+        )
+          break;
+      }
     },
     async tapBundle(hello) {
       const scan = state.bundleScans.at(-1);
@@ -729,10 +785,16 @@ function mount(
       async openSession(sessionId) {
         state.events.push('open-session');
         state.openedSessions.push(sessionId);
-        return state.bundleApplet;
+        return CardStore.prototype.observeApplet.call(
+          state.entrances.cardStore,
+          state.bundleApplet,
+        );
       },
     },
     cardStore: {
+      forget(identity) {
+        state.cachedCards.delete(identity.publicKey);
+      },
       set(card) {
         state.cachedCards.set(card.publicKey, card);
         return card;
@@ -809,7 +871,9 @@ function mount(
       state.createStarted?.resolve();
       await state.createPending?.promise;
       if (state.createFailure) throw state.createFailure;
-      const keys = [...request.publicKeys].sort(Buffer.compare);
+      const keys = [state.bundleHello.publicKey, ...request.publicKeys].sort(
+        Buffer.compare,
+      );
       const data = Uint8Array.from([
         1,
         keys.length >> 8,
@@ -819,9 +883,7 @@ function mount(
       ]);
       return {
         bundle: BUNDLE,
-        packets: request.publicKeys
-          .filter(key => hex(key) !== hex(state.bundleHello.publicKey))
-          .map(publicKey => ({publicKey, data})),
+        data: request.publicKeys.map(() => data),
       };
     },
     async joinBundle(request) {
@@ -838,7 +900,8 @@ function mount(
       await state.resetPending?.promise;
       if (state.resetFailure) throw state.resetFailure;
       state.bundleHello = state.resetHello ?? {
-        ...bundleCard(9),
+        ...state.bundleHello,
+        publicKey: bundleCard(9).publicKey,
         bundle: false,
         pins: {access: false, secret: false},
       };
@@ -865,7 +928,7 @@ afterEach(() => {
 });
 
 test('missing applets leave Setup after reader cleanup and carry the stable Bundle flow into Card maintenance', async () => {
-  const state = mount(SetupCardView, {createBundle: true});
+  const state = mount(SetupCardView, {bundle: 'card'});
   const scanning = state.click('Add a card');
   await state.connect();
   assert.deepEqual(state.routes, []);
@@ -889,7 +952,7 @@ test('missing applets leave Setup after reader cleanup and carry the stable Bund
 test('Card maintenance return survives a Setup remount without rereading or duplicating the first card', async () => {
   const source = preparedCard(bundleCard(1));
   const store = new CardBundleStore();
-  const options = {bundleId: 'bundle-return', createBundle: true, card: source};
+  const options = {bundleId: 'bundle-return', bundle: 'card', card: source};
   const state = mount(SetupCardView, options, [source], store);
   await state.finished;
   state.unmount();
@@ -905,14 +968,14 @@ test('Card maintenance return survives a Setup remount without rereading or dupl
 });
 
 test('adding an initialized card does not cache unread resources as an empty card', async () => {
-  const state = mount(SetupCardView, {createBundle: true});
+  const state = mount(SetupCardView, {bundle: 'card'});
   const hello = bundleCard(2);
   await state.collect(hello);
   assert.ok(state.card('00000002'));
   assert.equal(state.cachedCards.has(hex(hello.publicKey)), false);
 });
 
-test('an existing Bundle is reset and initialized during Add with one tap before its new identity is counted', async () => {
+test('an existing Bundle is reset with the same ID and added once under its new key', async () => {
   const state = await replacementCard();
   const confirmation = state.confirmation();
   assert.deepEqual(confirmation.props.confirmText, [
@@ -920,7 +983,9 @@ test('an existing Bundle is reset and initialized during Add with one tap before
     'Confirm',
   ]);
   const adding = confirmation.props.onConfirm();
+  for (let index = 0; index < 10; index++) await Promise.resolve();
   assert.equal(state.bundleInputs.at(-1).options.placeholder, 'Set Secret PIN');
+  assert.deepEqual(state.events, ['vault-authenticate', 'pin-input']);
   assert.deepEqual(state.scans, []);
   assert.equal(state.card('00000001'), undefined);
   await state.answerBundlePIN('New-42');
@@ -931,17 +996,22 @@ test('an existing Bundle is reset and initialized during Add with one tap before
     ['reset', 'set-pin', 'authenticate'],
   );
   assert.deepEqual(state.bundleCalls[1].request, {secret: true, pin: 'New-42'});
-  assert.equal(state.card('00000009'), undefined);
+  assert.equal(state.card('00000001'), undefined);
   assert.equal(
     state.credentialCalls.some(call => call.type === 'save'),
     false,
   );
   assert.deepEqual(state.replacementSource.items, []);
   assert.equal(state.replacementSource.requiresPINSetup, true);
+  assert.equal(state.replacementSource.allowPeerExtension, false);
   state.bundleScans.at(-1).resolve();
   await adding;
-  assert.equal(state.card('00000009').props.description, 'ready');
-  assert.equal(state.card('00000001'), undefined);
+  assert.equal(state.card('00000001').props.description, 'ready');
+  const flow = state.entrances.cardBundleStore.get(state.view.bundleId);
+  assert.deepEqual(
+    flow.session.cards.map(card => [card.id, card.publicKey]),
+    [['00000001', hex(bundleCard(9).publicKey)]],
+  );
   assert.equal(
     state.credentialCalls.filter(call => call.type === 'authenticate').length,
     1,
@@ -952,13 +1022,92 @@ test('an existing Bundle is reset and initialized during Add with one tap before
   );
   assert.equal(
     state.credentialCalls.find(call => call.type === 'save').id,
-    '00000009',
+    '00000001',
   );
   assert.equal(
     state.cachedCards.get(hex(bundleCard(9).publicKey)).requiresPINSetup,
     false,
   );
   assert.deepEqual(state.errors, []);
+});
+
+test('Setup hands expired reset removal out of NFC and continues with the same PINs on the next tap', async () => {
+  const state = await replacementCard();
+  const removals = [];
+  const unlock = deferred();
+  let handedOff = false;
+  state.pinSession.removePIN = async (
+    id,
+    expectedPIN,
+    signal,
+    allowUnlock = true,
+  ) => {
+    removals.push({id, expectedPIN, allowUnlock});
+    if (removals.length === 1) throw {code: 'AUTHORIZATION_EXPIRED'};
+    if (allowUnlock) {
+      assert.equal(handedOff, true);
+      assert.equal(first.controller.signal.aborted, true);
+      signal.throwIfAborted();
+      await unlock.promise;
+    }
+  };
+  const adding = state.confirmation().props.onConfirm();
+  await state.answerBundlePIN('New-42');
+  const inputs = state.bundleInputs.length;
+  const first = state.bundleScans.at(-1);
+  first.deferFailure = true;
+  let handoff;
+  await assert.rejects(state.tapBundle(state.replacementHello), error => {
+    handoff = error;
+    assert.equal(error.code, 'CANCELLED');
+    return true;
+  });
+  assert.deepEqual(state.bundleCalls, []);
+  assert.equal(state.replacementSource.items.length, 1);
+  assert.equal(removals.length, 1);
+  handedOff = true;
+  first.controller.abort(handoff);
+  first.reject(handoff);
+  for (let index = 0; index < 20; index++) await Promise.resolve();
+  assert.equal(state.bundleScans.length, 1);
+  assert.equal(removals.length, 2);
+  unlock.resolve();
+  for (let index = 0; index < 20; index++) await Promise.resolve();
+  assert.equal(state.bundleScans.length, 2);
+  assert.equal(state.bundleInputs.length, inputs);
+  assert.deepEqual(state.bundleCalls, []);
+  await state.tapBundle(state.replacementHello);
+  state.bundleScans.at(-1).resolve();
+  await adding;
+
+  assert.deepEqual(
+    removals.map(call => call.allowUnlock),
+    [false, true, false],
+  );
+  assert.ok(removals.every(call => call.id === '00000001'));
+  assert.equal(
+    state.bundleCalls.filter(call => call.type === 'reset').length,
+    1,
+  );
+  assert.equal(state.card('00000001').props.description, 'ready');
+  assert.deepEqual(state.errors, []);
+});
+
+test('Setup names a cached bundled card in its confirmation and Reset scan', async () => {
+  const state = await replacementCard('Travel');
+  assert.match(
+    textOf(state.confirmation()),
+    /Card Travel already belongs to a bundle/,
+  );
+  const adding = state.confirmation().props.onConfirm();
+  await state.answerBundlePIN('New-42');
+  assert.equal(
+    textOf(state.bundleScans.at(-1).label),
+    'Scan card Travel (00000001)',
+  );
+  await state.tapBundle(state.replacementHello);
+  state.bundleScans.at(-1).resolve();
+  await adding;
 });
 
 test('cancelling the new Secret PIN prompt leaves the existing bundled card unchanged', async () => {
@@ -971,10 +1120,118 @@ test('cancelling the new Secret PIN prompt leaves the existing bundled card unch
   assert.equal(state.replacementSource.items.length, 1);
   assert.equal(state.card('00000001'), undefined);
   assert.equal(
-    state.credentialCalls.some(call => call.type === 'authenticate'),
-    false,
+    state.credentialCalls.filter(call => call.type === 'authenticate').length,
+    1,
   );
+  assert.equal(state.credentialCalls.at(-1).type, 'clear');
 });
+
+test('resetting a Bundle card unlocks the vault before requesting its new Secret PIN', async () => {
+  const state = await replacementCard();
+  state.credentialPending = deferred();
+  const adding = state.confirmation().props.onConfirm();
+  for (let index = 0; index < 10; index++) await Promise.resolve();
+  assert.deepEqual(state.events, ['vault-authenticate']);
+  assert.deepEqual(state.bundleInputs, []);
+  assert.deepEqual(state.scans, []);
+  state.credentialPending.resolve();
+  await state.answerBundlePIN(undefined);
+  await adding;
+  assert.deepEqual(state.events, ['vault-authenticate', 'pin-input']);
+  assert.equal(state.credentialCalls.at(-1).type, 'clear');
+  assert.deepEqual(state.scans, []);
+});
+
+test('cancelling vault unlock during Bundle replacement never requests a PIN or starts NFC', async () => {
+  const state = await replacementCard();
+  state.credentialFailure = Object.assign(new Error('Cancelled'), {
+    code: 'CANCELLED',
+  });
+  await state.confirmation().props.onConfirm();
+  assert.deepEqual(state.bundleInputs, []);
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.bundleCalls, []);
+  assert.equal(state.credentialCalls.at(-1).type, 'clear');
+  assert.equal(state.replacementSource.items.length, 1);
+  assert.deepEqual(state.errors, []);
+});
+
+for (const destination of ['inactive', 'leaving', 'unmounted']) {
+  test(`Bundle replacement does not request a PIN after vault unlock when Setup becomes ${destination}`, async () => {
+    const state = await replacementCard();
+    state.credentialPending = deferred();
+    const adding = state.confirmation().props.onConfirm();
+    if (destination === 'unmounted') state.unmount();
+    else {
+      if (destination === 'inactive') state.view.$match.$exact.$active = false;
+      else state.view.$leaving = true;
+      state.render();
+    }
+    state.credentialPending.resolve();
+    await adding;
+    assert.deepEqual(state.bundleInputs, []);
+    assert.deepEqual(state.scans, []);
+    assert.deepEqual(state.bundleCalls, []);
+    assert.equal(state.credentialCalls.at(-1).type, 'clear');
+    assert.deepEqual(state.errors, []);
+  });
+
+  test(`Bundle replacement does not scan after PIN entry when Setup becomes ${destination}`, async () => {
+    const state = await replacementCard();
+    const adding = state.confirmation().props.onConfirm();
+    for (let index = 0; index < 10; index++) await Promise.resolve();
+    assert.equal(state.bundleInputs.length, 1);
+    if (destination === 'unmounted') state.unmount();
+    else {
+      if (destination === 'inactive') state.view.$match.$exact.$active = false;
+      else state.view.$leaving = true;
+      state.render();
+    }
+    state.bundleInputs[0].resolve('New-42');
+    await adding;
+    assert.deepEqual(state.scans, []);
+    assert.deepEqual(state.bundleCalls, []);
+    assert.equal(state.credentialCalls.at(-1).type, 'clear');
+    assert.deepEqual(state.errors, []);
+  });
+}
+
+for (const leaveBeforeConfigure of [false, true]) {
+  test(`a PIN set while resetting a Bundle card ${leaveBeforeConfigure ? 'expires when leaving Setup' : 'is reused for round two under the new card identity'}`, async () => {
+    const state = await replacementCard();
+    const adding = state.confirmation().props.onConfirm();
+    await state.answerBundlePIN('New-42');
+    await state.tapBundle(state.replacementHello);
+    state.bundleScans.at(-1).resolve();
+    await adding;
+    await state.collect(bundleCard(2));
+    await state.click('Continue');
+    if (leaveBeforeConfigure) {
+      state.view.$match.$exact.$active = false;
+      state.render();
+      state.view.$match.$exact.$active = true;
+      state.render();
+    }
+    const inputCount = state.bundleInputs.length;
+    state.cardButton('00000001').props.onClick();
+    if (leaveBeforeConfigure) {
+      assert.equal(state.bundleInputs.length, inputCount + 1);
+      await state.answerBundlePIN('New-42');
+    } else {
+      assert.equal(state.bundleInputs.length, inputCount);
+    }
+    await state.tapBundle(bundleCard(9, {id: state.replacementHello.id}));
+    await state.finishBundle();
+    assert.deepEqual(
+      state.bundleCalls.find(
+        call => call.type === 'authenticate' && call.request.secret,
+      ).request,
+      {secret: true, pin: 'New-42'},
+    );
+    assert.equal(state.card('00000001').props.description, 'complete');
+    assert.deepEqual(state.errors, []);
+  });
+}
 
 test('a different physical identity is rejected before deleting its saved PIN or sending Reset', async () => {
   const state = await replacementCard();
@@ -1005,11 +1262,11 @@ test('a lost initialization response resumes by reading the known new identity w
   await adding;
   assert.ok(state.button('Check card'));
   const checking = state.click('Check card');
-  const initialized = bundleCard(9);
+  const initialized = bundleCard(9, {id: state.replacementHello.id});
   await state.tapBundle(initialized);
   state.bundleScans.at(-1).resolve();
   await checking;
-  assert.equal(state.card('00000009').props.description, 'ready');
+  assert.equal(state.card('00000001').props.description, 'ready');
   assert.equal(
     state.bundleCalls.filter(call => call.type === 'reset').length,
     1,
@@ -1018,7 +1275,11 @@ test('a lost initialization response resumes by reading the known new identity w
     state.bundleCalls.filter(call => call.type === 'set-pin').length,
     1,
   );
-  assert.equal(state.bundleInputs.length, 1);
+  assert.equal(state.bundleInputs.length, 4);
+  assert.equal(
+    state.credentialCalls.filter(call => call.type === 'authenticate').length,
+    1,
+  );
 });
 
 for (const destination of ['inactive', 'leaving', 'unmounted']) {
@@ -1039,7 +1300,7 @@ for (const destination of ['inactive', 'leaving', 'unmounted']) {
     await adding;
     assert.deepEqual(
       flow.session.cards.map(card => card.id),
-      ['00000009'],
+      ['00000001'],
     );
     assert.equal(flow.pendingReset, undefined);
     assert.equal(
@@ -1050,7 +1311,7 @@ for (const destination of ['inactive', 'leaving', 'unmounted']) {
   });
 
   test(`a verified added card remains in the Bundle when Setup becomes ${destination} during scan exit`, async () => {
-    const state = mount(SetupCardView, {createBundle: true});
+    const state = mount(SetupCardView, {bundle: 'card'});
     const flow = state.entrances.cardBundleStore.get(state.view.bundleId);
     state.existingHello = bundleCard(2);
     const adding = state.click('Add a card');
@@ -1078,9 +1339,12 @@ test('normal Setup is plural with bundle creation off, while every Copy origin s
     textOf(find(state.tree, node => node.type === 'h1')),
     'Setup cards',
   );
-  const toggle = find(state.tree, node => node.type === 'toggle');
-  assert.equal(textOf(toggle), 'Create bundle');
-  assert.equal(toggle.props.checked, false);
+  const toggle = find(state.tree, node => node.type === 'segmented');
+  assert.deepEqual(
+    toggle.props.options.map(option => option.label),
+    ['None', 'Cards', 'Authority'],
+  );
+  assert.equal(toggle.props.value, 'none');
   assert.equal(toggle.props.disabled, false);
 
   for (const copyId of ['source-copy', 'missing-copy']) {
@@ -1090,7 +1354,7 @@ test('normal Setup is plural with bundle creation off, while every Copy origin s
       'Setup card',
     );
     assert.equal(
-      find(copy.tree, node => node.type === 'toggle'),
+      find(copy.tree, node => node.type === 'segmented'),
       undefined,
     );
   }
@@ -1107,8 +1371,8 @@ test('Card entry adds the captured prepared card when enabling a bundle without 
   );
   assert.equal(state.card(source.id), undefined);
   assert.equal(
-    find(state.tree, node => node.type === 'toggle').props.checked,
-    false,
+    find(state.tree, node => node.type === 'segmented').props.value,
+    'none',
   );
   assert.deepEqual(state.cardLookups, [identity]);
   state.view.card = {id: other.id, publicKey: other.publicKey};
@@ -1117,7 +1381,7 @@ test('Card entry adds the captured prepared card when enabling a bundle without 
   assert.equal(state.card(source.id).props.description, 'ready');
   assert.equal(state.card(other.id), undefined);
   assert.equal(
-    find(state.tree, node => node.type === 'toggle').props.disabled,
+    find(state.tree, node => node.type === 'segmented').props.disabled,
     true,
   );
   assert.equal(state.button('Continue'), undefined);
@@ -1148,16 +1412,16 @@ test('Card bundle entry starts enabled and adds the cached first card once acros
   const identity = {id: source.id, publicKey: source.publicKey};
   const state = mount(
     SetupCardView,
-    {cardInformation: undefined, card: identity, createBundle: true},
+    {cardInformation: undefined, card: identity, bundle: 'card'},
     [source, other],
   );
   assert.equal(
-    find(state.tree, node => node.type === 'toggle'),
+    find(state.tree, node => node.type === 'segmented'),
     undefined,
   );
   assert.equal(
     textOf(find(state.tree, node => node.type === 'h1')),
-    'Setup card bundle',
+    'Create bundle',
   );
   state.replayEffects();
   await state.finished;
@@ -1167,17 +1431,17 @@ test('Card bundle entry starts enabled and adds the cached first card once acros
   assert.deepEqual(state.errors, []);
 
   state.view.card = {id: other.id, publicKey: other.publicKey};
-  state.view.createBundle = false;
+  state.view.bundle = undefined;
   state.render();
   state.replayEffects();
   await state.finished;
   assert.equal(
-    find(state.render(), node => node.type === 'toggle'),
+    find(state.render(), node => node.type === 'segmented'),
     undefined,
   );
   assert.equal(
     textOf(find(state.tree, node => node.type === 'h1')),
-    'Setup card bundle',
+    'Create bundle',
   );
   assert.equal(state.card(source.id).props.description, 'ready');
   assert.equal(state.card(other.id), undefined);
@@ -1213,7 +1477,7 @@ test('Card bundle entry waits for the entering route to become active before add
     {
       cardInformation: undefined,
       card: {id: source.id, publicKey: source.publicKey},
-      createBundle: true,
+      bundle: 'card',
       $match: {$exact: {$active: false, $transition: true}},
     },
     [source],
@@ -1256,7 +1520,7 @@ for (const destination of ['leaving', 'unmounted']) {
       {
         cardInformation: undefined,
         card: {id: source.id, publicKey: source.publicKey},
-        createBundle: true,
+        bundle: 'card',
         $match: {$exact: {$active: false, $transition: true}},
       },
       [source],
@@ -1288,16 +1552,16 @@ test('automatic bundle entry with no cached Card keeps bundle mode on and starts
   const state = mount(SetupCardView, {
     cardInformation: undefined,
     card: {id: source.id, publicKey: source.publicKey},
-    createBundle: true,
+    bundle: 'card',
   });
   await state.finished;
   assert.equal(
-    find(state.render(), node => node.type === 'toggle'),
+    find(state.render(), node => node.type === 'segmented'),
     undefined,
   );
   assert.equal(
     textOf(find(state.tree, node => node.type === 'h1')),
-    'Setup card bundle',
+    'Create bundle',
   );
   assert.equal(state.card(source.id), undefined);
   assert.ok(state.button('Add a card'));
@@ -1314,7 +1578,7 @@ test('Copy entry ignores bundle mode and source Card identity and retains its si
       cardInformation: undefined,
       card: {id: source.id, publicKey: source.publicKey},
       copyId: 'source-copy',
-      createBundle: true,
+      bundle: 'card',
     },
     [source],
   );
@@ -1326,7 +1590,7 @@ test('Copy entry ignores bundle mode and source Card identity and retains its si
     'Setup card',
   );
   assert.equal(
-    find(state.tree, node => node.type === 'toggle'),
+    find(state.tree, node => node.type === 'segmented'),
     undefined,
   );
   const destination = bundleCard(2);
@@ -1397,7 +1661,7 @@ test('bundle collection waits for scan cleanup and PIN setup before counting the
   );
   assert.equal(state.button('Continue'), undefined);
   assert.equal(
-    find(state.tree, node => node.type === 'toggle').props.disabled,
+    find(state.tree, node => node.type === 'segmented').props.disabled,
     true,
   );
   await state.collect(bundleCard(2));
@@ -1478,8 +1742,8 @@ test('collected members can be removed before round two, which locks membership'
     undefined,
   );
   assert.equal(
-    find(state.tree, node => node.type === 'toggle').props.disabled,
-    true,
+    find(state.tree, node => node.type === 'segmented'),
+    undefined,
   );
   assert.equal(
     find(state.tree, node => node.props?.['aria-label'] === 'Add card'),
@@ -1562,6 +1826,10 @@ test('two-round setup authenticates each member and completes only after the fin
   assert.equal(state.bundleScans.length, 2);
   assert.deepEqual(state.openedSessions, ['bundle-session', 'bundle-session']);
   assert.deepEqual(state.helloRequests, [{}, {}]);
+  assert.equal(
+    state.credentialCalls.some(call => call.type === 'authenticate'),
+    false,
+  );
 });
 
 for (const outcome of ['complete', 'uncertain']) {
@@ -1572,7 +1840,7 @@ for (const outcome of ['complete', 'uncertain']) {
       SetupCardView,
       {
         card: {id: source.id, publicKey: source.publicKey},
-        createBundle: true,
+        bundle: 'card',
       },
       [source],
     );
@@ -1704,7 +1972,7 @@ test('the generic round-two button configures three members in any order without
     state.click(scanLabel);
     assert.equal(
       textOf(state.bundleInputs.at(-1).options.description),
-      'For the card you will scan',
+      completed.size === 2 ? 'Card 00000001' : 'For the card you will scan',
     );
     await state.answerBundlePIN(`Safe-${identity}`);
     assert.equal(textOf(state.bundleScans.at(-1).label), scanLabel);
@@ -1733,7 +2001,7 @@ test('the generic round-two button configures three members in any order without
     ['authenticate', 'create', 'authenticate', 'join', 'authenticate', 'join'],
   );
   for (const call of state.bundleCalls.filter(call => call.type === 'join')) {
-    assert.deepEqual(call.request.senderPublicKey, state.members[1].publicKey);
+    assert.deepEqual(call.request.publicKey, state.members[1].publicKey);
   }
   assert.deepEqual(state.routes, []);
 });
@@ -1901,12 +2169,12 @@ test('a full bundle rejects a new card while the scan is still open', async () =
   const session = state.entrances.cardBundleStore.get(
     state.view.bundleId,
   ).session;
-  for (let identity = 1; identity <= 122; identity++) {
+  for (let identity = 1; identity <= 22; identity++) {
     await session.addCard(bundleCard(identity));
   }
-  await state.collect(bundleCard(123), /Too many cards/);
-  assert.equal(session.cards.length, 122);
-  assert.equal(state.card('0000007b'), undefined);
+  await state.collect(bundleCard(23), /Too many cards/);
+  assert.equal(session.cards.length, 22);
+  assert.equal(state.card('00000017'), undefined);
   assert.equal(state.confirmation(), undefined);
 });
 
@@ -1991,8 +2259,8 @@ test('a join error keeps the acknowledged creator and retries only the pending m
   assert.equal(state.cardButton('00000001').props.disabled, true);
   assert.equal(state.card('00000002').props.description, 'interrupted');
   assert.equal(
-    state.cachedCards.get(hex(state.members[1].publicKey)).bundle,
-    false,
+    state.cachedCards.get(hex(state.members[1].publicKey)),
+    undefined,
   );
   state.joinFailure = undefined;
   state.click('Scan next card');
@@ -2056,3 +2324,210 @@ test('cancelling an in-flight join keeps the late ACK and prevents another opera
     1,
   );
 });
+
+test('Authority mode is selectable without starting card setup, and fixed Authority has no switch', async () => {
+  const state = mount(SetupCardView, {cardInformation: undefined});
+  await find(state.render(), node => node.type === 'segmented').props.onChange(
+    'authority',
+  );
+  assert.ok(find(state.render(), node => node.type === 'authority-setup'));
+  assert.equal(
+    textOf(find(state.tree, node => node.type === 'h1')),
+    'Setup cards',
+  );
+  assert.deepEqual(state.scans, []);
+  const source = preparedCard(
+    bundleCard(1, {authority: 'https://card.example/authority/'}),
+  );
+  const fixed = mount(
+    SetupCardView,
+    {cardInformation: undefined, card: source, bundle: 'authority'},
+    [source],
+  );
+  assert.equal(
+    textOf(find(fixed.tree, node => node.type === 'h1')),
+    'Authority bundle',
+  );
+  assert.equal(
+    find(fixed.tree, node => node.type === 'segmented'),
+    undefined,
+  );
+  assert.ok(find(fixed.tree, node => node.type === 'authority-setup'));
+  assert.equal(
+    find(fixed.tree, node => node.type === 'authority-setup').props.session
+      .authorityUrl,
+    source.authority,
+  );
+  assert.deepEqual(fixed.scans, []);
+  assert.deepEqual(fixed.bundleCalls, []);
+});
+
+test('mode capsules belong to the first step and Cards locks them after collection', async () => {
+  const state = mount(SetupCardView, {cardInformation: undefined});
+  const firstStep = () =>
+    find(
+      state.render(),
+      node => node.type === 'step' && node.props.numero === 1,
+    );
+  assert.equal(textOf(firstStep().props.title), 'Set up card');
+  assert.ok(find(firstStep(), node => node.type === 'segmented'));
+  await enableBundle(state);
+  assert.equal(textOf(firstStep().props.title), 'Add cards');
+  assert.equal(
+    find(firstStep(), node => node.type === 'segmented').props.disabled,
+    false,
+  );
+  await state.collect(bundleCard(1));
+  assert.equal(
+    find(firstStep(), node => node.type === 'segmented').props.disabled,
+    true,
+  );
+});
+
+test('Authority pending cards allow mode changes, while joined cards lock the capsules', async () => {
+  const state = mount(SetupCardView, {cardInformation: undefined});
+  await find(state.render(), node => node.type === 'segmented').props.onChange(
+    'authority',
+  );
+  const authority = find(
+    state.render(),
+    node => node.type === 'authority-setup',
+  );
+  actualMobx.runInAction(() => {
+    authority.props.session.cards.push({
+      ...preparedCard(bundleCard(1)),
+      joined: false,
+    });
+  });
+  assert.equal(
+    find(state.render(), node => node.type === 'segmented').props.disabled,
+    false,
+  );
+  actualMobx.runInAction(() => {
+    authority.props.session.cards[0].joined = true;
+  });
+  assert.equal(
+    find(state.render(), node => node.type === 'segmented').props.disabled,
+    true,
+  );
+});
+
+test('Authority initialization never updates observed state during render and retains sessions through mode changes and install detours', async t => {
+  const renderWrites = [];
+  const stop = actualMobx.spy(event => {
+    if (rendering && event.type === 'update') renderWrites.push(event.type);
+  });
+  t.after(stop);
+  const source = preparedCard(
+    bundleCard(1, {
+      authority: 'https://authority.monoid.app/',
+    }),
+  );
+  const store = new CardBundleStore();
+  const state = mount(SetupCardView, {card: source}, [source], store);
+  const select = mode =>
+    find(state.render(), node => node.type === 'segmented').props.onChange(
+      mode,
+    );
+  await select('authority');
+  const session = find(state.render(), node => node.type === 'authority-setup')
+    .props.session;
+  assert.ok(session instanceof AuthorityBundleSession);
+  assert.equal(session.cards[0].publicKey, source.publicKey);
+  await select('none');
+  await select('authority');
+  assert.equal(
+    find(state.render(), node => node.type === 'authority-setup').props.session,
+    session,
+  );
+  state.unmount();
+  await store.acceptInstalledCard(state.view.bundleId, bundleCard(2));
+  const resumed = mount(SetupCardView, state.view, [source], store);
+  assert.equal(
+    find(resumed.tree, node => node.type === 'authority-setup').props.session,
+    session,
+  );
+  assert.equal(session.installedCard.id[3], 2);
+  const fixed = mount(SetupCardView, {card: source, bundle: 'authority'}, [
+    source,
+  ]);
+  const fixedSession = find(fixed.tree, node => node.type === 'authority-setup')
+    .props.session;
+  assert.equal(fixedSession.cards[0].publicKey, source.publicKey);
+  fixed.replayEffects();
+  assert.equal(
+    find(fixed.tree, node => node.type === 'authority-setup').props.session,
+    fixedSession,
+  );
+  assert.equal(fixedSession.cards.length, 1);
+  assert.deepEqual(renderWrites, []);
+});
+
+for (const [bundle, title, firstStep] of [
+  [undefined, 'Setup cards', 'Set up card'],
+  ['card', 'Create bundle', 'Add cards'],
+  ['authority', 'Authority bundle', undefined],
+]) {
+  test(`${title} includes its header and steps before any effects run`, () => {
+    const state = mount(SetupCardView, {bundle});
+    assert.equal(
+      textOf(find(state.firstTree, node => node.type === 'h1')),
+      title,
+    );
+    if (firstStep) {
+      const step = find(state.firstTree, node => node.type === 'step');
+      assert.equal(textOf(step.props.title), firstStep);
+    } else {
+      const content = find(
+        state.firstTree,
+        node => node.type === 'authority-setup',
+      );
+      assert.ok(content.props.session instanceof AuthorityBundleSession);
+    }
+  });
+}
+
+for (const outcome of ['correct', 'cancel', 'blocked']) {
+  test(`Create bundle wrong Secret PIN: ${outcome}, keeping collected cards`, async () => {
+    const state = await roundTwo([1, 2]);
+    const authenticate = state.bundleApplet.authenticate;
+    let attempts = 0;
+    state.bundleApplet.authenticate = async request => {
+      if (++attempts === 1)
+        throw new CBORAppletError({
+          code: 'INVALID_PIN',
+          tries: outcome === 'blocked' ? 0 : 4,
+        });
+      return authenticate(request);
+    };
+    state.click('Scan a card');
+    await state.answerBundlePIN();
+    await assert.rejects(state.tapBundle(state.members[0]));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(attempts, 1);
+    assert.equal(state.bundleScans.length, 1);
+    assert.ok(state.card('00000001'));
+    assert.ok(state.card('00000002'));
+    if (outcome === 'blocked') {
+      await state.finished;
+      assert.equal(state.errors[0].message, 'Secret PIN blocked');
+      return;
+    }
+    assert.equal(
+      state.bundleInputs.at(-1).options.description,
+      'Incorrect PIN, tries remaining: 4',
+    );
+    await state.answerBundlePIN(
+      outcome === 'correct' ? 'Correct-42' : undefined,
+    );
+    if (outcome === 'correct') {
+      await state.tapBundle(state.members[0]);
+      await state.finishBundle();
+      assert.equal(state.card('00000001').props.description, 'complete');
+    } else {
+      await state.finished;
+      assert.equal(state.bundleScans.length, 1);
+    }
+    assert.deepEqual(state.errors, []);
+  });
+}

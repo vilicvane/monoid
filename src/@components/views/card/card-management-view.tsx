@@ -5,7 +5,7 @@ import {type ReactNode, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
-import {MonoidIdHex, MonoidPIN, PublicKeyHex} from '../../../@atomics.js';
+import {MonoidIdHex, type MonoidPIN, PublicKeyHex} from '../../../@atomics.js';
 import {useEntrances} from '../../../@entrances.js';
 import {
   type CardInformation,
@@ -14,40 +14,65 @@ import {
 import {CardManagerNotFoundError} from '../../../@lib/global-platform/install.js';
 import {getCardInstallationChecks} from '../../../@lib/global-platform/installation-support.js';
 import {
+  APPLET_NAMES,
+  type AppletStage,
+  CardPINError,
+  type IdentityInstallationOptions,
+  type MonoidApplet,
   type MonoidAppletHello,
   MonoidCardError,
   MonoidWrongCardError,
+  assertCardPINsNotBlocked,
+  assertSameCard,
+  authenticateCardPIN,
+  cardName,
+  cardNameWithId,
   createMonoidApplet,
+  getAppletCatalog,
+  getAppletDependents,
   hasAppletBundle,
   initializeMonoidCard,
   installMonoidApplets,
+  readBackupCardIdentity,
+  readCardIdentity,
   readMonoidAppletInstallation,
   resolveMonoidAppletMaintenanceAid,
+  setCardAlias,
 } from '../../../@lib/monoid/index.js';
+import {isOperationCancelled} from '../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../@routes.js';
 import {
   type CardMaintenanceMode,
+  type CardMaintenanceOperation,
   type CardMaintenanceProgress,
+  type CardMaintenanceRestoreResult,
   cardFingerprint,
-  isCredentialRequestCancelled,
 } from '../../../@services/index.js';
-import {hexToUint8Array, uint8ArrayToHex} from '../../../@utils/index.js';
-import {AppletInstallProgressContent} from '../../@monoid/applet-install-progress.js';
-import {MonoidScanStatePromptProgress} from '../../@monoid/monoid-scan-prompt.js';
 import {
-  PINKind,
-  getPINInputPlaceholder,
-} from '../../@monoid/pin-input-placeholder.js';
+  createFlowId,
+  hexToUint8Array,
+  uint8ArrayToHex,
+} from '../../../@utils/index.js';
+import {popOutAnimationCSS} from '../../@animations.js';
+import {AppletInstallProgressContent} from '../../@monoid/applet-install-progress.js';
+import {
+  MonoidScanStatePromptProgress,
+  scanCardPrompt,
+} from '../../@monoid/monoid-scan-prompt.js';
+import {
+  type CardSetupPINs,
+  requestCardPINs,
+  retryCardPIN,
+} from '../../@monoid/request-card-pins.js';
 import {useIsoDepScanPrompt} from '../../@monoid/use-isodep-scan-prompt.js';
 import {AppIcon} from '../../@ui/app-icon.js';
-import {Button} from '../../@ui/button.js';
-import {ConfirmPopup} from '../../@ui/confirm-popup.js';
+import {Button, Buttons} from '../../@ui/button.js';
+import {ConfirmNotices, ConfirmPopup} from '../../@ui/confirm-popup.js';
 import {
   DetailsPopup,
   DetailsPopupDivider,
   DetailsPopupTitle,
 } from '../../@ui/details-popup.js';
-import {InfoMessage} from '../../@ui/message-content.js';
 import {OperationComplete} from '../../@ui/operation-complete.js';
 import {useToast} from '../../@ui/toast.js';
 import {useInputModal} from '../../@ui/use-input-modal.js';
@@ -59,21 +84,19 @@ import {
   ViewHeaderTitle,
   useViewActive,
 } from '../../@view/index.js';
-import {CardInformationPopup} from '../safe/index.js';
+import {CardInformationPopup, SyncCardsState} from '../safe/index.js';
 
+import {AppletSelectionPopup} from './applet-selection-popup.js';
+import type {CardAppletSnapshot} from './card-applet-snapshot.js';
 import {
   CardAppletsContent,
   CardInformationContent,
+  CardMaintenanceBatchContent,
+  CardMaintenanceContent,
   CardScanPlaceholder,
+  CardSupersededMaintenanceNotice,
 } from './card-management-content.js';
-
-type Installation = Awaited<ReturnType<typeof readMonoidAppletInstallation>>;
-type CardSnapshot = {
-  information?: CardInformation;
-  installation?: Installation;
-  unsupported?: boolean;
-};
-type Action = CardMaintenanceMode | 'install' | 'restore' | 'setup';
+type Action = CardMaintenanceMode | 'install' | 'resume' | 'restore' | 'setup';
 
 const HeaderActions = styled.div`
   grid-column: 3;
@@ -86,18 +109,45 @@ const HeaderActions = styled.div`
   }
 `;
 
+const MaintenanceProcess = styled.div<{$exiting: boolean}>`
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  ${props => props.$exiting && popOutAnimationCSS}
+
+  @media (prefers-reduced-motion: reduce) {
+    animation-duration: 1ms;
+  }
+`;
+
 function Progress({progress}: {progress: CardMaintenanceProgress}): ReactNode {
+  if (progress.stage === 'deleting')
+    return <AppletInstallProgressContent update={progress} />;
   if ('completed' in progress) {
     return (
       <MonoidScanStatePromptProgress
         current={progress.completed}
         total={progress.total}
       >
-        {progress.stage === 'backup' ? 'Exporting items' : 'Restoring items'}
+        {progress.stage === 'backup'
+          ? 'Exporting items'
+          : progress.stage === 'restoring-grants'
+            ? 'Restoring applet access'
+            : 'Restoring items'}
       </MonoidScanStatePromptProgress>
     );
   }
-  if (progress.stage === 'deleting') return 'Removing applets, hold tight...';
+  if (
+    progress.stage === 'verifying-backup' ||
+    progress.stage === 'verifying-restore' ||
+    progress.stage === 'verifying-grants'
+  )
+    return {
+      'verifying-backup': 'Verifying backup, hold tight...',
+      'verifying-restore': 'Verifying recovery, hold tight...',
+      'verifying-grants': 'Verifying applet access, hold tight...',
+    }[progress.stage];
   return <AppletInstallProgressContent update={progress} />;
 }
 
@@ -110,20 +160,51 @@ export const CardManagementView = observer(
       copyItemsStore,
       cardBundleStore,
       cardStore,
+      syncCardsStore,
       errorService,
     } = useEntrances();
     const [context] = useState(() => ({
       returnTo: view.returnTo,
       copyId: view.copyId,
       bundleId: view.bundleId,
+      extensionId: view.extensionId,
     }));
-    const [card, setCard] = useState<CardSnapshot>(() => ({
-      information: view.cardInformation,
-    }));
+    const [maintenanceSyncId] = useState(() => view.maintenanceSyncId);
+    const [card, setCard] = useState<CardAppletSnapshot>(
+      () =>
+        (maintenanceSyncId
+          ? syncCardsStore.get(maintenanceSyncId)?.maintenanceCardSnapshot
+          : undefined) ?? {information: view.cardInformation},
+    );
     const [complete, setComplete] = useState(false);
+    const [discardOperation, setDiscardOperation] =
+      useState<CardMaintenanceOperation>();
+    const [operationSnapshot, setOperationSnapshot] =
+      useState<CardMaintenanceOperation>();
+    const [restoreReport, setRestoreReport] = useState<{
+      operationId: string;
+      operation: CardMaintenanceOperation;
+      result: CardMaintenanceRestoreResult;
+      canFinish: boolean;
+    }>();
     const [busy, setBusy] = useState(false);
-    const [popup, setPopup] = useState<'details' | 'menu'>();
-    const [confirm, setConfirm] = useState<CardMaintenanceMode>();
+    const [popup, setPopup] = useState<
+      | 'details'
+      | 'menu'
+      | 'install'
+      | 'fresh'
+      | 'restart'
+      | 'finish'
+      | AppletStage
+    >();
+    const [selectedOptional, setSelectedOptional] = useState<AppletStage[]>([]);
+    const [installationAlias, setInstallationAlias] = useState<string>();
+    const [confirm, setConfirm] = useState<{
+      mode: CardMaintenanceMode;
+      replaceStages?: AppletStage[];
+      operationId?: string;
+      identityOptions?: IdentityInstallationOptions;
+    }>();
     const [pinContent, showPIN] = useInputModal();
     const [pinSession] = useState(() =>
       monoidCredentialsStore.createPINSession(),
@@ -134,12 +215,27 @@ export const CardManagementView = observer(
     const controller = useRef<AbortController | undefined>(undefined);
 
     useEffect(() => {
+      if (!maintenanceSyncId) return;
+      // A cancelled back gesture may mount this view without returning to it.
+      return reaction(
+        isActive,
+        active => {
+          if (!active || view.maintenanceSyncId !== maintenanceSyncId) return;
+          view.maintenanceSyncId = undefined;
+          syncCardsStore.delete(maintenanceSyncId);
+        },
+        {fireImmediately: true},
+      );
+    }, [isActive, maintenanceSyncId, syncCardsStore, view]);
+
+    useEffect(() => {
       const dispose = reaction(isActive, active => {
         if (!active) {
           controller.current?.abort();
           pinSession.clear();
           setPopup(undefined);
           setConfirm(undefined);
+          setDiscardOperation(undefined);
         }
       });
       return () => {
@@ -155,26 +251,93 @@ export const CardManagementView = observer(
       hello,
       cardInformation: card.information,
     });
+    const superseded =
+      hello || installation?.monoid.installed === false
+        ? maintenance.findSupersededOperation({
+            hello,
+            cardInformation: card.information,
+          })
+        : undefined;
+    const [batchId, setBatchId] = useState<string>();
+    const batch =
+      (maintenance.batches ?? []).find(
+        batch => batch.id === batchId || batch.id === pending?.batchId,
+      ) ??
+      (maintenance.batches ?? []).find(batch =>
+        batch.targets.some(target => !target.complete),
+      ) ??
+      (maintenance.batches ?? []).at(-1);
+    const batchComplete =
+      !!batch && batch.targets.every(target => target.complete);
+    const nextBatchTarget = batch?.targets.find(target => !target.complete);
+    const nextBatchOperation =
+      nextBatchTarget && maintenance.get(nextBatchTarget.operationId);
+    const [stepsExited, setStepsExited] = useState(batchComplete);
+    const processComplete =
+      !busy && (batch ? batchComplete : complete && !pending);
     const appletsPage =
+      !!batch ||
       !!installation?.monoid.installed ||
       (installation?.identity.installed &&
         installation.monoid.installed !== false) ||
       !!pending ||
+      !!superseded ||
       card.unsupported;
     const initialized =
       hello && hello.pins.secret !== false && hello.pins.access !== false;
     const recovery = !!pending?.archive;
-    const manualRestore = pending?.phase === 'manual-restore';
-    const needsResume = pending && !manualRestore;
+    const reportedOperation =
+      restoreReport &&
+      (processComplete ||
+        (!restoreReport.result.complete &&
+          (restoreReport.result.issues.length ||
+            restoreReport.result.droppedGrants.length)))
+        ? restoreReport
+        : undefined;
+    const processOperation =
+      reportedOperation?.operation ??
+      (pending?.phase !== 'setup' ? pending : undefined) ??
+      (busy || processComplete ? operationSnapshot : undefined);
+    const needsReplacement =
+      pending && ['ready', 'replacing'].includes(pending.phase);
+    const preparedOnly =
+      pending?.phase === 'ready' && pending.checkpoint === undefined;
+    const untouched = preparedOnly && !pending?.restarted;
+    const canRestart = !!pending && !pending.batchId;
+    const resumeLabel = needsReplacement
+      ? preparedOnly
+        ? pending.mode === 'fresh'
+          ? 'Fresh install'
+          : pending.mode === 'update'
+            ? 'Continue update'
+            : 'Continue installation'
+        : pending.mode === 'fresh'
+          ? 'Resume fresh install'
+          : pending.mode === 'update'
+            ? 'Resume update'
+            : 'Resume reinstall'
+      : recovery
+        ? 'Restore items'
+        : 'Restore applet access';
+    const optionalApplets = getAppletCatalog().filter(
+      applet => applet.optional,
+    );
+    const installedOptional = optionalApplets
+      .filter(applet => {
+        const state = installation?.optional?.[applet.stage];
+        return state?.installed || state?.loaded;
+      })
+      .map(applet => applet.stage);
 
     async function readSnapshot(
       sessionId: string,
       signal: AbortSignal,
       information?: CardInformation,
-    ): Promise<CardSnapshot> {
+    ): Promise<CardAppletSnapshot> {
       const installation = await readMonoidAppletInstallation(
         sessionId,
         signal,
+        {authenticateRegistry: true},
       );
       try {
         information ??= await readCardInformation(sessionId, signal);
@@ -201,10 +364,17 @@ export const CardManagementView = observer(
       };
     }
 
+    function resetCompletion(): void {
+      setComplete(false);
+      setStepsExited(false);
+      setOperationSnapshot(undefined);
+      setRestoreReport(undefined);
+    }
+
     async function scanCard(): Promise<void> {
       if (!isActive() || busy) return;
       setBusy(true);
-      setComplete(false);
+      resetCompletion();
       try {
         await scan('Scan a card', async (sessionId, setState, signal) => {
           setState('Reading card, hold tight...');
@@ -221,7 +391,7 @@ export const CardManagementView = observer(
           }
         });
       } catch (error) {
-        if (!isCredentialRequestCancelled(error)) {
+        if (!isOperationCancelled(error)) {
           errorService.catch(Promise.reject(error));
         }
       } finally {
@@ -229,45 +399,9 @@ export const CardManagementView = observer(
       }
     }
 
-    async function requestPIN(
-      action: Action,
-      signal: AbortSignal,
-    ): Promise<MonoidPIN | undefined> {
-      let description: ReactNode =
-        action === 'install' || action === 'fresh' || action === 'setup' ? (
-          <>
-            Will be used as initial <PINKind kind="Access" /> PIN
-          </>
-        ) : undefined;
-
-      for (;;) {
-        const value = await showPIN(
-          {
-            type: 'password',
-            ...getPINInputPlaceholder(
-              'Secret',
-              action === 'fresh' ||
-                hello?.pins.secret === false ||
-                (action === 'install' &&
-                  installation?.identity.installed === false)
-                ? 'Set'
-                : 'Enter',
-            ),
-            description,
-            maxLength: 16,
-            center: true,
-          },
-          signal,
-        );
-        if (value === undefined || signal.aborted || !isActive()) return;
-        if (MonoidPIN.is(value)) return value;
-        description = 'Use 6 to 16 ASCII characters';
-      }
-    }
-
     async function finishSetup(
       result: MonoidAppletHello,
-      snapshot: CardSnapshot,
+      snapshot: CardAppletSnapshot,
     ): Promise<void> {
       const identity = {
         id: uint8ArrayToHex(result.id),
@@ -283,71 +417,233 @@ export const CardManagementView = observer(
       if (context.returnTo === 'bundle' && context.bundleId) {
         await cardBundleStore.acceptInstalledCard(context.bundleId, result);
       }
+      if (context.returnTo === 'bundleExtension' && context.extensionId) {
+        await cardBundleStore.acceptExtensionCard(context.extensionId, result);
+      }
       setCard(snapshot);
       if (isActive()) setComplete(true);
     }
 
-    async function perform(action: Action): Promise<void> {
+    async function perform(
+      action: Action,
+      options: {
+        selectedOptionalStages?: readonly AppletStage[];
+        replaceStages?: readonly AppletStage[];
+        operationId?: string;
+        identityOptions?: IdentityInstallationOptions;
+        alias?: string;
+        batchOperation?: CardMaintenanceOperation;
+        finishWithout?: readonly string[];
+      } = {},
+    ): Promise<void> {
       if (!isActive() || controller.current || !hasAppletBundle) return;
+      const pending =
+        options.batchOperation ??
+        maintenance.matchOperation({hello, cardInformation: card.information});
+      const expectedHello = options.batchOperation ? undefined : hello;
+      const fresh =
+        action === 'fresh' ||
+        (action === 'resume' && pending?.mode === 'fresh');
+      const procedureCard =
+        !fresh && ['update', 'reinstall', 'resume', 'restore'].includes(action)
+          ? (pending?.card ??
+            (expectedHello && readCardIdentity(expectedHello)))
+          : undefined;
       const operation = new AbortController();
+      const holdSecretPIN = maintenance.secretPINWriter();
       controller.current = operation;
       setBusy(true);
       setPopup(undefined);
       setConfirm(undefined);
+      resetCompletion();
       let pin: MonoidPIN | undefined;
+      let requestedPINs: CardSetupPINs | undefined;
       let accessPINId: MonoidIdHex | undefined;
+      let staleAccessPINId: MonoidIdHex | undefined;
+      let appletsChanged = false;
+      let syncId: string | undefined;
+      let syncPreparation: CardMaintenanceOperation | undefined;
+      let restoration: typeof restoreReport;
       let result:
-        | {hello: MonoidAppletHello; snapshot: CardSnapshot}
+        | {hello: MonoidAppletHello; snapshot: CardAppletSnapshot}
         | undefined;
 
       try {
-        pin = await requestPIN(action, operation.signal);
-        if (!pin) return;
-        await pinSession.authenticate(operation.signal);
+        const savedPINs = await pinSession.getPINs(operation.signal);
         operation.signal.throwIfAborted();
         if (!isActive()) return;
+        const freshAlreadyInstalled =
+          fresh &&
+          action === 'resume' &&
+          ['install', 'verify'].includes(pending?.checkpoint ?? '') &&
+          !!hello &&
+          uint8ArrayToHex(hello.publicKey) !== pending?.card.publicKey;
+        const secretSet = options.batchOperation
+          ? true
+          : fresh
+            ? freshAlreadyInstalled && hello!.pins.secret !== false
+            : hello
+              ? hello.pins.secret !== false
+              : installation?.identity.installed === true ||
+                !!pending?.card.publicKey;
+        const stages = options.replaceStages ??
+          pending?.replaceStages ?? ['library', 'monoid'];
+        const collectingBundle =
+          !!hello?.bundle &&
+          !pending?.archive &&
+          ['update', 'reinstall'].includes(action);
+        const replacingMonoid =
+          !collectingBundle &&
+          !['install', 'verify'].includes(pending?.checkpoint ?? '') &&
+          ['update', 'reinstall', 'resume'].includes(action) &&
+          (stages.includes('monoid') || stages.includes('library'));
+        const accessSet = fresh
+          ? freshAlreadyInstalled && hello!.pins.access !== false
+          : !replacingMonoid &&
+            expectedHello?.pins.access !== false &&
+            !!expectedHello;
+        const id = expectedHello
+          ? uint8ArrayToHex(expectedHello.id)
+          : pending?.card.id;
+        const namedCard = id
+          ? {id, alias: expectedHello?.alias ?? pending?.card.alias}
+          : undefined;
+        requestedPINs = await requestCardPINs(
+          showPIN,
+          {
+            secretSet,
+            accessSet,
+            savedAccessPIN:
+              !fresh && id ? savedPINs[MonoidIdHex.satisfies(id)] : undefined,
+            heldSecretPIN:
+              procedureCard && maintenance.secretPIN(procedureCard),
+          },
+          operation.signal,
+        );
+        if (!requestedPINs || !isActive()) return;
+        pin = requestedPINs.secret;
+        operation.signal.throwIfAborted();
 
-        await scan('Scan the card', async (sessionId, setState, scanSignal) => {
+        let retryable = true;
+        const rejectSecretPIN = (error: unknown): never => {
+          if (
+            procedureCard &&
+            error instanceof CardPINError &&
+            error.kind === 'Secret'
+          )
+            maintenance.dropSecretPIN(procedureCard);
+          throw error;
+        };
+
+        const prompt = namedCard ? scanCardPrompt(namedCard) : 'Scan the card';
+        const scanCard: Parameters<typeof scan>[1] = async (
+          sessionId,
+          setState,
+          scanSignal,
+        ) => {
+          pin = requestedPINs!.secret;
           const signal = AbortSignal.any([operation.signal, scanSignal]);
           const progress = (progress: CardMaintenanceProgress): void =>
             setState(<Progress progress={progress} />);
+          const setupPINs = async (
+            applet: MonoidApplet,
+            next: MonoidAppletHello,
+          ): Promise<MonoidAppletHello> => {
+            assertCardPINsNotBlocked(next);
+            if (next.pins.access !== false && next.pins.secret !== false)
+              return next;
+            setState('Setting up PINs...');
+            const accessUnset = next.pins.access === false;
+            const authorityFlow =
+              context.returnTo === 'bundle' && context.bundleId
+                ? cardBundleStore.get(context.bundleId)?.authority
+                : undefined;
+            const rememberSetupPIN = authorityFlow?.secretPINs.onAuthenticated(
+              readBackupCardIdentity(next),
+              pin!,
+            );
+            const initialized = await initializeMonoidCard(
+              applet,
+              next,
+              pin!,
+              signal,
+              requestedPINs?.access,
+            ).catch(rejectSecretPIN);
+            retryable = false;
+            rememberSetupPIN?.();
+            if (procedureCard && pending && maintenance.get(pending.id))
+              holdSecretPIN(procedureCard, pin!);
+            if (accessUnset) {
+              await authenticateCardPIN(applet, requestedPINs!.access!, {
+                kind: 'Access',
+                retryable: false,
+              });
+              signal.throwIfAborted();
+              accessPINId = uint8ArrayToHex(initialized.id);
+            }
+            return initialized;
+          };
           setState('Reading card, hold tight...');
           const information = await readCardInformation(sessionId, signal);
           if (
+            !options.batchOperation &&
             card.information?.cplc &&
             cardFingerprint(information) !== cardFingerprint(card.information)
           ) {
-            throw new MonoidCardError('Scan the same card');
+            throw new MonoidCardError(
+              namedCard
+                ? `Scan card ${cardNameWithId(namedCard)}`
+                : 'Scan the same card',
+            );
           }
-          const current = await readMonoidAppletInstallation(sessionId, signal);
+          const current = await readMonoidAppletInstallation(
+            sessionId,
+            signal,
+            {authenticateRegistry: true},
+          );
           signal.throwIfAborted();
           let saved = maintenance.matchOperation({
             hello: current.hello,
             cardInformation: information,
           });
 
-          if (
-            pending &&
-            !manualRestore &&
-            action !== 'fresh' &&
-            saved?.id !== pending.id
-          ) {
-            throw new MonoidCardError('Scan the same card');
+          if (pending && action !== 'fresh' && saved?.id !== pending.id) {
+            throw new MonoidCardError(
+              namedCard
+                ? `Scan card ${cardNameWithId(namedCard)}`
+                : 'Scan the same card',
+            );
           }
           if (!pending && hello) {
-            if (
-              !current.hello ||
-              uint8ArrayToHex(current.hello.publicKey) !==
-                uint8ArrayToHex(hello.publicKey)
-            ) {
-              throw new MonoidWrongCardError(uint8ArrayToHex(hello.id));
+            if (!current.hello) {
+              throw new MonoidWrongCardError(hello);
             }
+            assertSameCard(current.hello, {
+              ...readCardIdentity(hello),
+              alias: hello.alias,
+            });
+          }
+          // A newly chosen action must never inherit an earlier destructive
+          // operation. Resuming binds the user's confirmation to its saved plan.
+          if (options.operationId && saved?.id !== options.operationId) {
+            throw new MonoidCardError(
+              `Scan ${namedCard ? `card ${cardNameWithId(namedCard)}` : 'the card'} again`,
+            );
           }
           if (
-            saved?.phase === 'manual-restore' &&
-            (action === 'update' || action === 'reinstall')
+            (action === 'resume' &&
+              (!options.operationId ||
+                !saved ||
+                !['ready', 'replacing'].includes(saved.phase))) ||
+            (action === 'restore' && saved?.phase !== 'restore') ||
+            (action === 'setup' && saved) ||
+            (action === 'fresh' && saved?.mode === 'fresh') ||
+            (saved &&
+              (action === 'install' ||
+                action === 'update' ||
+                action === 'reinstall'))
           ) {
-            saved = undefined;
+            throw new MonoidCardError('Resume card maintenance first');
           }
 
           if (action === 'fresh') {
@@ -355,6 +651,8 @@ export const CardManagementView = observer(
               information,
               current.hello,
               signal,
+              options.selectedOptionalStages,
+              options.identityOptions,
             );
           } else if (
             (action === 'update' || action === 'reinstall') &&
@@ -370,79 +668,173 @@ export const CardManagementView = observer(
             const applet = await createMonoidApplet(
               hexToUint8Array(appletAid),
             ).openSession(sessionId);
-            await applet.authenticate({secret: true, pin: pin!});
+            await authenticateCardPIN(applet, pin!).catch(rejectSecretPIN);
             signal.throwIfAborted();
+            retryable = false;
             saved = await maintenance.prepare(applet, {
               mode: action,
+              selectedOptionalStages: options.selectedOptionalStages,
+              replaceStages: options.replaceStages,
               appletAid,
               cardInformation: information,
               onProgress: progress,
               signal,
             });
+            holdSecretPIN(saved.card, pin!);
           }
 
+          // Bundle envelopes cannot be restored to their own sender. Sync to
+          // a peer and save that peer's new exports before replacing storage.
+          if (
+            saved?.card.bundle &&
+            !saved.archive &&
+            saved.phase === 'ready' &&
+            !maintenance.get(saved.id)
+          ) {
+            syncPreparation = saved;
+            if (!current.hello)
+              throw new MonoidCardError('Could not read Monoid Applet');
+            const applet = await createMonoidApplet(
+              hexToUint8Array(saved.card.appletAid),
+            ).openSession(sessionId);
+            const next = await setupPINs(applet, current.hello);
+            const flow = new SyncCardsState(undefined, saved, {
+              information,
+              installation: {...current, hello: next},
+            });
+            await flow.session.add(applet, next, signal, {pin}, update =>
+              setState(
+                <MonoidScanStatePromptProgress
+                  current={update.current}
+                  total={update.total}
+                >
+                  {update.stage === 'exporting'
+                    ? 'Exporting items'
+                    : 'Reading items'}
+                </MonoidScanStatePromptProgress>,
+              ),
+            );
+            signal.throwIfAborted();
+            syncId = createFlowId();
+            syncCardsStore.getOrCreate(syncId, () => flow);
+            return;
+          }
+
+          // Retain the process while successful card writes remove its saved task.
+          setOperationSnapshot(saved);
           let next: MonoidAppletHello;
           if (saved) {
-            if (
-              saved.card.id &&
-              saved.card.publicKey &&
-              (saved.phase === 'ready' || saved.phase === 'replacing')
-            ) {
+            const replacing =
+              saved.phase === 'ready' || saved.phase === 'replacing';
+            if (saved.card.id && saved.card.publicKey && replacing) {
               cardStore.forget({
                 id: MonoidIdHex.satisfies(saved.card.id),
                 publicKey: PublicKeyHex.satisfies(saved.card.publicKey),
               });
             }
+            if (replacing) retryable = false;
             next = await maintenance.replace(
               sessionId,
               saved.id,
               progress,
               signal,
             );
+            appletsChanged = replacing;
+            if (saved.mode === 'fresh' && saved.card.id) {
+              staleAccessPINId = MonoidIdHex.satisfies(saved.card.id);
+            }
           } else if (action === 'install') {
-            next = await installMonoidApplets(sessionId, progress, signal);
+            retryable = false;
+            next = await installMonoidApplets(
+              sessionId,
+              progress,
+              signal,
+              options.selectedOptionalStages,
+              options.identityOptions,
+            );
+            appletsChanged = true;
             await maintenance.recordInstallation(next, {
               identity:
                 current.identity.installed === false &&
                 current.identity.loaded === false,
+              library: current.library.loaded === false,
               monoid:
                 current.monoid.installed === false &&
                 current.monoid.loaded === false,
+              optional: (options.selectedOptionalStages ?? []).filter(
+                stage => current.optional?.[stage]?.loaded === false,
+              ),
             });
           } else if (action === 'setup' && current.hello) {
             next = current.hello;
           } else {
-            throw new MonoidCardError('Scan the card again');
+            throw new MonoidCardError(
+              `Scan ${namedCard ? `card ${cardNameWithId(namedCard)}` : 'the card'} again`,
+            );
           }
 
           signal.throwIfAborted();
-          const applet = await createMonoidApplet(
-            saved ? hexToUint8Array(saved.card.appletAid) : undefined,
-          ).openSession(sessionId);
-          if (next.pins.secret === 0) {
-            throw new MonoidCardError('Secret PIN blocked');
-          }
-          if (next.pins.access === 0) {
-            throw new MonoidCardError('Access PIN blocked');
-          }
-          if (next.pins.access === false || next.pins.secret === false) {
-            setState('Setting up PINs...');
-            const accessUnset = next.pins.access === false;
-            next = await initializeMonoidCard(applet, next, pin!, signal);
-            if (accessUnset) {
-              await applet.authenticate({pin: pin!});
-              signal.throwIfAborted();
-              accessPINId = uint8ArrayToHex(next.id);
+          const applet = cardStore.observeApplet(
+            await createMonoidApplet(
+              saved ? hexToUint8Array(saved.card.appletAid) : undefined,
+            ).openSession(sessionId),
+            next,
+          );
+          next = await setupPINs(applet, next);
+          const alias =
+            saved?.mode === 'fresh'
+              ? saved.card.alias
+              : (options.alias ?? installationAlias);
+          if (typeof alias === 'string') {
+            if ((next.alias || '') !== alias) {
+              setState('Saving alias, hold tight...');
+              await authenticateCardPIN(applet, pin!).catch(rejectSecretPIN);
+              retryable = false;
+              next = await setCardAlias(applet, next, alias, signal);
             }
+            setInstallationAlias(undefined);
           }
+          if (saved?.mode === 'fresh' && maintenance.get(saved.id))
+            await maintenance.finishFreshAlias(saved.id, next, signal);
           if (saved && maintenance.get(saved.id)?.phase === 'restore') {
+            let installedAppletAids: string[] | undefined;
+            if (saved.grants?.length) {
+              const installed = await readMonoidAppletInstallation(
+                sessionId,
+                signal,
+                {
+                  authenticateRegistry: true,
+                },
+              );
+              if (installed.registryError) throw installed.registryError;
+              installedAppletAids = [
+                installed.identity,
+                installed.monoid,
+                ...Object.values(installed.optional),
+              ].flatMap(applet =>
+                applet?.installed && applet.aid ? [applet.aid] : [],
+              );
+            }
             setState('Authenticating, hold tight...');
-            await applet.authenticate({secret: true, pin: pin!});
+            await authenticateCardPIN(applet, pin!).catch(rejectSecretPIN);
             signal.throwIfAborted();
-            await maintenance.restore(applet, saved.id, progress, signal);
+            holdSecretPIN(saved.card, pin!);
+            retryable = false;
+            const restored = await maintenance.restore(
+              applet,
+              saved.id,
+              progress,
+              signal,
+              installedAppletAids,
+              options.finishWithout,
+            );
+            restoration = {
+              operationId: saved.id,
+              operation: saved,
+              result: restored,
+              canFinish: !!maintenance.get(saved.id)?.rejectedItems?.length,
+            };
           }
-          if (saved?.mode === 'fresh') await maintenance.complete(saved.id);
-
           if (action !== 'setup' || saved) setState('Reading card...');
           const latest =
             action === 'setup' && !saved
@@ -452,43 +844,191 @@ export const CardManagementView = observer(
           // Publish the snapshot with completion after the scan and handoff,
           // so the applet list never flashes beneath the closing scan overlay.
           result = {hello: next, snapshot: latest};
-        });
+        };
+        await retryCardPIN(
+          showPIN,
+          requestedPINs,
+          () => scan(prompt, scanCard),
+          operation.signal,
+          () => retryable,
+        );
 
-        if (accessPINId) {
+        if (accessPINId && !operation.signal.aborted) {
           try {
-            await pinSession.setPIN(accessPINId, pin, operation.signal);
+            await pinSession.setPIN(
+              accessPINId,
+              requestedPINs!.access!,
+              operation.signal,
+            );
+            if (accessPINId === staleAccessPINId) staleAccessPINId = undefined;
           } catch {
-            toast({
-              message: 'Access PIN was not saved on this device',
-              color: 'warning',
-            });
+            if (!operation.signal.aborted) {
+              toast({
+                message: 'Access PIN was not saved on this device',
+                color: 'warning',
+              });
+            }
           }
         }
       } catch (error) {
-        if (!operation.signal.aborted && !isCredentialRequestCancelled(error)) {
+        if (!isOperationCancelled(error, operation.signal)) {
           errorService.catch(Promise.reject(error));
         }
       } finally {
+        // Replacement keeps the Card ID even if later setup fails. Clean its
+        // stale PIN only after NFC and presentation cleanup, unless overwritten.
+        if (staleAccessPINId && !operation.signal.aborted) {
+          try {
+            await pinSession.removePIN(
+              staleAccessPINId,
+              undefined,
+              operation.signal,
+            );
+          } catch {
+            if (!operation.signal.aborted) {
+              toast({
+                message: 'Old Access PIN is still saved on this device',
+                color: 'warning',
+              });
+            }
+          }
+        }
         pin = undefined;
+        requestedPINs = undefined;
         pinSession.clear();
         // The scan overlay can close before another route takes focus. A card
         // already verified as complete must still reach its originating flow.
         if (result) {
           try {
-            await finishSetup(result.hello, result.snapshot);
+            setRestoreReport(restoration);
+            if (restoration && !restoration.result.complete) {
+              setCard(result.snapshot);
+            } else {
+              await finishSetup(result.hello, result.snapshot);
+              if (pending?.batchId) {
+                setBatchId(pending.batchId);
+                setComplete(false);
+              }
+            }
           } catch (error) {
             errorService.catch(Promise.reject(error));
+          }
+        } else {
+          setOperationSnapshot(undefined);
+          if (appletsChanged) {
+            // Installation is recoverable by reading the card again; do not keep
+            // the previous identity or a pending setup action after interruption.
+            setCard({});
           }
         }
         if (controller.current === operation) controller.current = undefined;
         setBusy(false);
+        if (syncId && isActive() && !operation.signal.aborted) {
+          runInAction(() => {
+            view.maintenanceSyncId = syncId;
+          });
+          router.safe.syncCards({syncId}).$push();
+        } else if (syncPreparation) {
+          maintenance.dropSecretPIN(syncPreparation.card);
+        }
       }
     }
 
-    function requestMaintenance(mode: CardMaintenanceMode): void {
+    function requestMaintenance(
+      mode: CardMaintenanceMode,
+      replaceStages?: AppletStage[],
+    ): void {
       setPopup(undefined);
-      if (mode === 'fresh' || hello?.bundle) setConfirm(mode);
-      else void perform(mode);
+      setSelectedOptional(installedOptional);
+      setConfirm({
+        mode,
+        replaceStages:
+          replaceStages && baseUpdateAvailable
+            ? [...new Set<AppletStage>(['library', 'monoid', ...replaceStages])]
+            : replaceStages,
+      });
+    }
+
+    function requestInstall(fresh = false): void {
+      setSelectedOptional(installedOptional);
+      setPopup(fresh ? 'fresh' : 'install');
+    }
+
+    function resumeMaintenance(): void {
+      if (!pending) return;
+      if (needsReplacement) {
+        setSelectedOptional([...(pending.selectedOptionalStages ?? [])]);
+        setConfirm({
+          mode: pending.mode,
+          replaceStages: pending.replaceStages,
+          operationId: pending.id,
+        });
+      } else {
+        void perform('restore', {
+          operationId: pending.id,
+        });
+      }
+    }
+
+    function resumeBatch(): void {
+      const target = batch?.targets.find(target => !target.complete);
+      if (!target) return;
+      const operation = maintenance.get(target.operationId)!;
+      setBatchId(batch!.id);
+      if (operation.phase === 'ready' || operation.phase === 'replacing') {
+        setSelectedOptional([...(operation.selectedOptionalStages ?? [])]);
+        setConfirm({
+          mode: operation.mode,
+          replaceStages: operation.replaceStages,
+          operationId: operation.id,
+        });
+      } else
+        void perform('restore', {
+          operationId: operation.id,
+          batchOperation: operation,
+        });
+    }
+
+    async function startOver(): Promise<void> {
+      if (!isActive() || busy || !canRestart || !pending) return;
+      setBusy(true);
+      setPopup(undefined);
+      try {
+        if (untouched) {
+          await maintenance.discardPrepared(pending.id);
+        } else {
+          await maintenance.restart(pending.id);
+          if (pending.mode === 'fresh') pinSession.clear();
+          setConfirm(undefined);
+          resetCompletion();
+        }
+      } catch (error) {
+        errorService.catch(Promise.reject(error));
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function discardOldMaintenance(): Promise<void> {
+      if (
+        !isActive() ||
+        busy ||
+        !discardOperation ||
+        (!hello && installation?.monoid.installed !== false)
+      )
+        return;
+      setBusy(true);
+      setDiscardOperation(undefined);
+      try {
+        await maintenance.discardSuperseded(discardOperation.id, {
+          hello,
+          cardInformation: card.information,
+        });
+      } catch (error) {
+        errorService.catch(Promise.reject(error));
+      } finally {
+        setBusy(false);
+      }
     }
 
     const backToCopy =
@@ -498,32 +1038,92 @@ export const CardManagementView = observer(
     const backToBundle =
       context.returnTo === 'bundle'
         ? router.$backTo(router.safe.setupCard.$exact)
-        : undefined;
+        : context.returnTo === 'bundleExtension'
+          ? router.$backTo(router.safe.extendBundle.$exact)
+          : undefined;
     const backToSafe =
       context.returnTo === 'safe'
         ? router.$backTo(router.safe.$exact)
         : undefined;
-    const back = backToCopy ?? backToBundle ?? backToSafe;
+    const backToSecurityKey =
+      context.returnTo === 'securityKey'
+        ? router.$backTo(router.securityKey.$exact)
+        : undefined;
+    const backToOTP =
+      context.returnTo === 'otp'
+        ? router.$backTo(router.otp.$exact)
+        : undefined;
+    const back =
+      backToCopy ??
+      backToBundle ??
+      backToSecurityKey ??
+      backToOTP ??
+      backToSafe;
     const backLabel = backToCopy
       ? 'Back to Copy'
       : backToBundle
         ? 'Back to Bundle'
-        : 'Back to Safe';
+        : backToSecurityKey
+          ? 'Back to Security Key'
+          : backToOTP
+            ? 'Back to OTP'
+            : 'Back to Safe';
+    const canStartMaintenance = !busy && !pending && !superseded;
     const canMaintain =
-      !busy &&
-      (!pending || manualRestore) &&
-      !!installation?.identity.installed;
+      canStartMaintenance && !!installation?.identity.installed;
     const canFreshInstall =
-      !busy && !!card.information && !!installation?.identity.installed;
-    const updateAvailable = hello && maintenance.isUpdateAvailable(hello);
+      !busy &&
+      !pending &&
+      !superseded &&
+      !!card.information &&
+      !!installation?.identity.installed;
+    const baseUpdateAvailable = hello && maintenance.isUpdateAvailable(hello);
+    const optionalUpdates = hello
+      ? installedOptional.filter(stage =>
+          maintenance.isAppletUpdateAvailable(hello, stage),
+        )
+      : [];
+    const updateAvailable = baseUpdateAvailable || optionalUpdates.length > 0;
+    const updateStages: AppletStage[] = baseUpdateAvailable
+      ? ['library', 'monoid']
+      : optionalUpdates;
+    const affectedStages = confirm
+      ? [
+          ...(confirm.mode === 'fresh'
+            ? (['identity', 'library', 'monoid'] as const)
+            : (confirm.replaceStages ?? (['library', 'monoid'] as const))),
+          ...getAppletDependents(
+            confirm.mode === 'fresh'
+              ? ['identity', 'library', 'monoid']
+              : (confirm.replaceStages ?? ['library', 'monoid']),
+          ).map(applet => applet.stage),
+        ]
+      : [];
+    const affectsSecurityKey =
+      affectedStages.includes('security-key') &&
+      (installedOptional.includes('security-key') ||
+        (!!confirm?.operationId && selectedOptional.includes('security-key')));
+    const replacesStorage = affectedStages.includes('monoid');
+    const affectsOTP =
+      affectedStages.includes('otp') && installedOptional.includes('otp');
+    const confirmationOperation = confirm?.operationId
+      ? maintenance.get(confirm.operationId)
+      : pending;
+    const lostItems = discardOperation?.archive?.items ?? [];
+    const lostItemNames = lostItems.flatMap(item =>
+      item.alias ? [item.alias] : [],
+    );
+    const unnamedItems = lostItems.length - lostItemNames.length;
+    if (unnamedItems)
+      lostItemNames.push(
+        `${unnamedItems} unnamed ${unnamedItems === 1 ? 'item' : 'items'}`,
+      );
 
     return (
       <>
         <View>
           <ViewHeader>
-            <ViewHeaderTitle>
-              {appletsPage ? 'Card applets' : 'Card information'}
-            </ViewHeaderTitle>
+            <ViewHeaderTitle>Card applets</ViewHeaderTitle>
             <HeaderActions>
               {card.information && (
                 <ViewHeaderButton
@@ -534,7 +1134,7 @@ export const CardManagementView = observer(
                   <AppIcon icon={info} />
                 </ViewHeaderButton>
               )}
-              {appletsPage && !card.unsupported && !complete && (
+              {appletsPage && !batch && !card.unsupported && !complete && (
                 <ViewHeaderButton
                   aria-label="Card menu"
                   disabled={busy}
@@ -547,23 +1147,71 @@ export const CardManagementView = observer(
           </ViewHeader>
           <ViewContent
             footer={
-              complete ? (
+              restoreReport?.canFinish && !restoreReport.result.complete ? (
+                // A card rejection repeats on retry, so finishing leads.
+                <Buttons>
+                  <Button
+                    color="warning"
+                    disabled={busy}
+                    onClick={() => setPopup('finish')}
+                  >
+                    {`Finish without ${restoreReport.result.issues.length} items`}
+                  </Button>
+                  <Button
+                    color="neutral"
+                    disabled={busy}
+                    onClick={batch ? resumeBatch : resumeMaintenance}
+                  >
+                    Retry
+                  </Button>
+                </Buttons>
+              ) : batch ? (
+                <Button
+                  color={batchComplete ? 'neutral' : 'warning'}
+                  disabled={busy}
+                  onClick={() => {
+                    if (batchComplete)
+                      void maintenance
+                        .dismissBatch(batch.id)
+                        .then(() => {
+                          setBatchId(undefined);
+                          resetCompletion();
+                        })
+                        .catch(error =>
+                          errorService.catch(Promise.reject(error)),
+                        );
+                    else resumeBatch();
+                  }}
+                >
+                  {batchComplete
+                    ? 'Back to Card Applets'
+                    : nextBatchOperation?.phase === 'restore'
+                      ? 'Restore items'
+                      : nextBatchOperation?.checkpoint === undefined
+                        ? nextBatchOperation?.mode === 'update'
+                          ? 'Continue update'
+                          : 'Continue installation'
+                        : nextBatchOperation.mode === 'update'
+                          ? 'Resume update'
+                          : 'Resume reinstall'}
+                </Button>
+              ) : complete ? (
                 <Button
                   color="neutral"
                   onClick={() => {
                     if (back) back();
-                    else setComplete(false);
+                    else resetCompletion();
                   }}
                 >
                   {back ? backLabel : 'Back to Card Applets'}
                 </Button>
-              ) : needsResume ? (
+              ) : pending ? (
                 <Button
                   color={recovery ? 'warning' : 'primary'}
                   disabled={busy}
-                  onClick={() => void perform('restore')}
+                  onClick={resumeMaintenance}
                 >
-                  {recovery ? 'Restore items' : 'Continue'}
+                  {resumeLabel}
                 </Button>
               ) : (!card.information && !installation) || card.unsupported ? (
                 <Button
@@ -575,8 +1223,8 @@ export const CardManagementView = observer(
                 </Button>
               ) : !installation?.monoid.installed && card.information ? (
                 <Button
-                  disabled={busy || !hasAppletBundle}
-                  onClick={() => void perform('install')}
+                  disabled={!canStartMaintenance || !hasAppletBundle}
+                  onClick={() => requestInstall()}
                 >
                   Install applets
                 </Button>
@@ -586,10 +1234,10 @@ export const CardManagementView = observer(
                 </Button>
               ) : updateAvailable ? (
                 <Button
-                  disabled={busy}
-                  onClick={() => requestMaintenance('update')}
+                  disabled={!canStartMaintenance}
+                  onClick={() => requestMaintenance('update', updateStages)}
                 >
-                  Update Monoid Applet
+                  Update applets
                 </Button>
               ) : (
                 <Button
@@ -604,41 +1252,145 @@ export const CardManagementView = observer(
               )
             }
           >
-            {complete ? (
-              <>
-                <OperationComplete />
-                {manualRestore && (
-                  <InfoMessage>
-                    Restore your items from another bundle card.
-                  </InfoMessage>
+            {processComplete &&
+            (stepsExited || (!batch && !processOperation)) ? (
+              <OperationComplete />
+            ) : batch || processOperation ? (
+              <MaintenanceProcess
+                $exiting={processComplete}
+                onAnimationEnd={event => {
+                  if (processComplete && event.target === event.currentTarget) {
+                    setStepsExited(true);
+                    setOperationSnapshot(undefined);
+                    setRestoreReport(undefined);
+                  }
+                }}
+              >
+                {batch ? (
+                  <CardMaintenanceBatchContent
+                    mode={
+                      processOperation?.mode ??
+                      nextBatchOperation?.mode ??
+                      'reinstall'
+                    }
+                    cards={batch.targets.map(target => {
+                      const next = target === nextBatchTarget;
+                      return {
+                        publicKey: target.card.publicKey!,
+                        id: target.card.id,
+                        alias: target.card.alias,
+                        complete: target.complete,
+                        scan: target.complete
+                          ? 'ready'
+                          : next
+                            ? 'next'
+                            : 'pending',
+                        interrupted: !target.complete,
+                        status: target.complete
+                          ? 'complete'
+                          : !next
+                            ? 'install later'
+                            : nextBatchOperation?.phase === 'restore'
+                              ? 'scan to restore'
+                              : 'scan to install',
+                      };
+                    })}
+                    complete={processComplete}
+                    processing={busy}
+                    report={reportedOperation?.result}
+                    items={reportedOperation?.operation.archive?.items}
+                  />
+                ) : (
+                  processOperation && (
+                    <CardMaintenanceContent
+                      operation={processOperation}
+                      processing={busy}
+                      complete={processComplete}
+                      report={reportedOperation?.result}
+                    />
+                  )
                 )}
-              </>
-            ) : card.unsupported || (!card.information && !installation) ? (
+              </MaintenanceProcess>
+            ) : complete ? null : card.unsupported ||
+              (!card.information && !installation) ? (
               <CardScanPlaceholder unsupported={card.unsupported} />
             ) : appletsPage ? (
               <CardAppletsContent
                 id={hello ? uint8ArrayToHex(hello.id) : pending?.card.id}
+                alias={hello?.alias ?? pending?.card.alias}
                 bundled={!!(hello?.bundle || pending?.card.bundle)}
                 recovery={recovery}
-                manualRestore={manualRestore}
-                applets={(['identity', 'monoid'] as const).map(name => ({
-                  name,
-                  installed: installation?.[name].installed ?? false,
-                  version: installation?.[name].version?.toString(),
-                  unknown:
-                    installation?.[name].installed === undefined ||
-                    (name === 'monoid' && !!installation?.helloError),
-                  update: name === 'monoid' && updateAvailable,
-                }))}
+                applets={[
+                  ...(['identity', 'monoid'] as const).map(name => ({
+                    name,
+                    installed: installation?.[name].installed ?? false,
+                    version: installation?.[name].version?.toString(),
+                    unknown:
+                      installation?.[name].installed === undefined ||
+                      (name === 'monoid' && !!installation?.helloError),
+                    update: name === 'monoid' && baseUpdateAvailable,
+                  })),
+                  ...optionalApplets
+                    .filter(
+                      applet =>
+                        installation?.optional?.[applet.stage]?.installed ||
+                        installation?.optional?.[applet.stage]?.loaded,
+                    )
+                    .map(applet => ({
+                      name: applet.stage,
+                      selectable: true,
+                      installed:
+                        installation?.optional?.[applet.stage]?.installed ===
+                        true,
+                      unknown:
+                        installation?.optional?.[applet.stage]?.installed !==
+                        true,
+                      update: optionalUpdates.includes(applet.stage),
+                    })),
+                ]}
+                onSelectApplet={stage => {
+                  if (optionalApplets.some(applet => applet.stage === stage))
+                    setPopup(stage);
+                }}
               />
             ) : card.information ? (
               <CardInformationContent information={card.information} />
             ) : (
               <CardScanPlaceholder />
             )}
+            {superseded && (
+              <CardSupersededMaintenanceNotice operation={superseded} />
+            )}
           </ViewContent>
         </View>
         {pinContent}
+        {popup === 'finish' && restoreReport && (
+          <ConfirmPopup
+            title={`Finish without ${restoreReport.result.issues.length} items?`}
+            confirmText={`Finish without ${restoreReport.result.issues.length} items`}
+            confirmColor="warning"
+            onCancel={() => setPopup(undefined)}
+            onConfirm={() =>
+              void perform('restore', {
+                operationId: restoreReport.operationId,
+                batchOperation: batch
+                  ? maintenance.get(restoreReport.operationId)
+                  : undefined,
+                finishWithout: restoreReport.result.issues.map(
+                  issue => issue.index,
+                ),
+              })
+            }
+          >
+            <ConfirmNotices
+              notices={[
+                'The skipped items will not be restored.',
+                'Applet access that requires them will not be restored.',
+                'The recovery archive will be discarded after verification.',
+              ]}
+            />
+          </ConfirmPopup>
+        )}
         {popup === 'details' && card.information && (
           <CardInformationPopup
             information={card.information}
@@ -652,45 +1404,261 @@ export const CardManagementView = observer(
           >
             <DetailsPopupTitle>Card applets</DetailsPopupTitle>
             <DetailsPopupDivider />
-            {!updateAvailable && (
+            <Buttons data-popup-animation-group>
+              {superseded && (
+                <Button
+                  color="danger"
+                  disabled={busy}
+                  onClick={() => {
+                    setPopup(undefined);
+                    setDiscardOperation(superseded);
+                  }}
+                >
+                  {superseded.archive
+                    ? 'Discard old recovery'
+                    : 'Discard old maintenance'}
+                </Button>
+              )}
+              {canRestart && (
+                <Button
+                  color="neutral"
+                  disabled={busy}
+                  onClick={() => setPopup('restart')}
+                >
+                  Start over
+                </Button>
+              )}
+              {optionalApplets.some(
+                applet => !installation?.optional?.[applet.stage]?.installed,
+              ) && (
+                <Button
+                  color="primary"
+                  disabled={!canStartMaintenance || !hasAppletBundle}
+                  onClick={() => requestInstall()}
+                >
+                  Install applets
+                </Button>
+              )}
+              {!updateAvailable && (
+                <Button
+                  color="neutral"
+                  disabled={!canMaintain || !hello}
+                  onClick={() => requestMaintenance('reinstall')}
+                >
+                  Reinstall Monoid Applet
+                </Button>
+              )}
+              <Button
+                color="danger"
+                disabled={!canFreshInstall}
+                onClick={() => requestInstall(true)}
+              >
+                Fresh install
+              </Button>
+            </Buttons>
+          </DetailsPopup>
+        )}
+        {discardOperation && (
+          <ConfirmPopup
+            title={`Discard ${discardOperation.archive ? 'recovery' : 'maintenance'} of ${cardName({id: discardOperation.card.id ?? 'unknown', alias: discardOperation.card.alias})}?`}
+            confirmText={
+              discardOperation.archive
+                ? 'Discard old recovery'
+                : 'Discard old maintenance'
+            }
+            confirmColor="danger"
+            onCancel={() => setDiscardOperation(undefined)}
+            onConfirm={() => void discardOldMaintenance()}
+          >
+            <ConfirmNotices
+              notices={[
+                lostItemNames.length
+                  ? `${new Intl.ListFormat('en').format(lostItemNames)} will be lost.`
+                  : discardOperation.archive
+                    ? 'The saved recovery archive will be discarded.'
+                    : 'The saved maintenance progress will be discarded.',
+                'This cannot be undone.',
+              ]}
+            />
+          </ConfirmPopup>
+        )}
+        {popup === 'restart' && (
+          <ConfirmPopup
+            title="Start over?"
+            confirmText="Start over"
+            onCancel={() => setPopup(undefined)}
+            onConfirm={() => void startOver()}
+          >
+            {untouched ? (
+              <>
+                Discard this preparation. Changes already written to cards will
+                remain.
+              </>
+            ) : pending?.mode === 'fresh' ? (
+              <>
+                The applets will be installed again from scratch. The card keeps
+                its Card ID and alias.
+              </>
+            ) : pending?.archive ? (
+              <>
+                The applets will be installed again from scratch, then the
+                card's items are restored from the saved recovery.
+              </>
+            ) : (
+              <>
+                The selected applets will be installed again from scratch, then
+                their access is restored.
+              </>
+            )}
+          </ConfirmPopup>
+        )}
+        {(popup === 'install' || popup === 'fresh') && (
+          <AppletSelectionPopup
+            installation={installation}
+            selected={selectedOptional}
+            fresh={popup === 'fresh'}
+            onChange={setSelectedOptional}
+            onDismiss={() => setPopup(undefined)}
+            onInstall={(identityOptions = {}, alias) => {
+              if (popup === 'fresh') {
+                setPopup(undefined);
+                setConfirm({mode: 'fresh', identityOptions});
+              } else if (baseUpdateAvailable) {
+                setPopup(undefined);
+                setConfirm({
+                  mode: 'update',
+                  replaceStages: ['library', 'monoid'],
+                });
+              } else {
+                setInstallationAlias(alias);
+                void perform('install', {
+                  selectedOptionalStages: selectedOptional,
+                  identityOptions,
+                  alias,
+                });
+              }
+            }}
+          />
+        )}
+        {optionalApplets.some(applet => applet.stage === popup) && (
+          <DetailsPopup
+            aria-label={APPLET_NAMES[popup as AppletStage]}
+            onDismiss={() => setPopup(undefined)}
+          >
+            <DetailsPopupTitle>
+              {APPLET_NAMES[popup as AppletStage]}
+            </DetailsPopupTitle>
+            <DetailsPopupDivider />
+            <Buttons data-popup-animation-group>
+              {popup === 'security-key' && hello && (
+                <Button
+                  onClick={() => {
+                    setPopup(undefined);
+                    router
+                      .securityKey({
+                        card: {
+                          id: uint8ArrayToHex(hello.id),
+                          publicKey: uint8ArrayToHex(hello.publicKey),
+                        },
+                      })
+                      .$push();
+                  }}
+                >
+                  Open Security Key
+                </Button>
+              )}
+              {popup === 'otp' && hello && (
+                <Button
+                  onClick={() => {
+                    setPopup(undefined);
+                    router
+                      .otp({
+                        card: {
+                          id: uint8ArrayToHex(hello.id),
+                          publicKey: uint8ArrayToHex(hello.publicKey),
+                        },
+                      })
+                      .$push();
+                  }}
+                >
+                  Open OTP
+                </Button>
+              )}
               <Button
                 color="neutral"
                 disabled={!canMaintain || !hello}
-                onClick={() => requestMaintenance('reinstall')}
+                onClick={() =>
+                  requestMaintenance(
+                    optionalUpdates.includes(popup as AppletStage)
+                      ? 'update'
+                      : 'reinstall',
+                    [popup as AppletStage],
+                  )
+                }
               >
-                Reinstall Monoid Applet
+                {optionalUpdates.includes(popup as AppletStage)
+                  ? 'Update applet'
+                  : 'Reinstall applet'}
               </Button>
-            )}
-            <Button
-              color="danger"
-              disabled={!canFreshInstall}
-              onClick={() => requestMaintenance('fresh')}
-            >
-              Fresh install
-            </Button>
+            </Buttons>
           </DetailsPopup>
         )}
         {confirm && (
           <ConfirmPopup
             title={
-              confirm === 'fresh' ? 'Fresh install' : 'Replace Monoid Applet'
+              confirm.mode === 'fresh'
+                ? 'Fresh install'
+                : confirm.mode === 'update'
+                  ? 'Update applets'
+                  : 'Reinstall applets'
             }
-            confirmColor={confirm === 'fresh' ? 'danger' : 'warning'}
+            confirmColor={confirm.mode === 'fresh' ? 'danger' : 'warning'}
             confirmText={['Continue', 'Confirm']}
             onCancel={() => setConfirm(undefined)}
-            onConfirm={() => void perform(confirm)}
+            onConfirm={() =>
+              void perform(confirm.operationId ? 'resume' : confirm.mode, {
+                selectedOptionalStages: selectedOptional,
+                replaceStages: confirm.replaceStages,
+                operationId: confirm.operationId,
+                batchOperation:
+                  batch && confirm.operationId
+                    ? maintenance.get(confirm.operationId)
+                    : undefined,
+                identityOptions: confirm.identityOptions,
+              })
+            }
           >
-            {confirm === 'fresh' ? (
-              <>
-                <p>All items, PINs and bundle membership will be erased.</p>
-                <p>The card will receive a new identity.</p>
-              </>
-            ) : (
-              <>
-                <p>Copy your items to another bundle card before continuing.</p>
-                <p>Restore them from that card after installation.</p>
-              </>
-            )}
+            <ConfirmNotices
+              notices={
+                confirm.mode === 'fresh'
+                  ? [
+                      'All items, PINs and bundle membership will be erased. They cannot be restored.',
+                      'Card keys will be regenerated.',
+                      affectsSecurityKey &&
+                        !selectedOptional.includes('security-key') &&
+                        'Monoid Security Key Applet will be removed. Websites can no longer sign in with this card.',
+                      affectsSecurityKey &&
+                        selectedOptional.includes('security-key') &&
+                        'Websites can no longer sign in with this card. Its FIDO PIN must be set again from a FIDO client.',
+                      affectsOTP && 'OTP accounts will be removed.',
+                      !!(hello || pending?.card.id) && 'Card ID will be kept.',
+                    ]
+                  : [
+                      replacesStorage &&
+                        'This card cannot be used until its items are restored in the final scan.',
+                      replacesStorage &&
+                        !(
+                          hello?.bundle || confirmationOperation?.card.bundle
+                        ) &&
+                        'Until then, the recovery saved in this app is the only copy of its items. Do not uninstall the app or clear its data.',
+                      affectsSecurityKey &&
+                        'The FIDO PIN will be reset. Set it again from a FIDO client.',
+                      !replacesStorage &&
+                        !affectsSecurityKey &&
+                        'Items and applet access are kept.',
+                    ]
+              }
+            />
           </ConfirmPopup>
         )}
       </>

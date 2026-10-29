@@ -4,7 +4,7 @@ import {styled} from 'styled-components';
 
 import {selectionTransition} from '../@animations.js';
 
-import {AppIcon} from './app-icon.js';
+import {AppIcon, type AppIconSource} from './app-icon.js';
 
 export const Input = styled.input`
   border: solid 0.5px var(--ion-color-light-shade);
@@ -50,6 +50,11 @@ export const PopupInput = styled(Input)`
     padding-bottom ${selectionTransition.duration}ms
       ${selectionTransition.easing};
 
+  &::placeholder {
+    color: var(--color-text-label);
+    opacity: 1;
+  }
+
   &:focus {
     min-width: min(2ch, 100%);
     border-bottom-width: 1px;
@@ -85,7 +90,7 @@ export const PopupNumberInput = (
   />
 );
 
-const InputContainer = styled.div`
+const InputContainer = styled.div<{$hasAction: boolean}>`
   position: relative;
   display: flex;
   align-self: stretch;
@@ -93,11 +98,11 @@ const InputContainer = styled.div`
   ${Input} {
     flex: 1;
     min-width: 0;
-    padding-right: 40px;
+    padding-right: ${({$hasAction}) => ($hasAction ? '40px' : '12px')};
   }
 `;
 
-const ResetButton = styled.button<{$invalid: boolean}>`
+const InputActionButton = styled.button<{$invalid: boolean}>`
   position: absolute;
   top: 0;
   right: 4px;
@@ -120,6 +125,40 @@ const ResetButton = styled.button<{$invalid: boolean}>`
   }
 `;
 
+export const InputWithAction = ({
+  action,
+  ...props
+}: InputHTMLAttributes<HTMLInputElement> & {
+  action?: {
+    label: string;
+    icon: AppIconSource;
+    disabled?: boolean;
+    onClick: (input: HTMLInputElement | null) => void;
+  };
+}): ReactNode => {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  return (
+    <InputContainer $hasAction={!!action}>
+      <Input {...props} ref={inputRef} />
+      {action && (
+        <InputActionButton
+          type="button"
+          aria-label={action.label}
+          title={action.label}
+          disabled={action.disabled || props.disabled}
+          $invalid={
+            props['aria-invalid'] === true || props['aria-invalid'] === 'true'
+          }
+          onClick={() => action.onClick(inputRef.current)}
+        >
+          <AppIcon icon={action.icon} aria-hidden="true" />
+        </InputActionButton>
+      )}
+    </InputContainer>
+  );
+};
+
 export const ResettableInput = ({
   onReset,
   resetDisabled,
@@ -127,27 +166,17 @@ export const ResettableInput = ({
 }: InputHTMLAttributes<HTMLInputElement> & {
   onReset: () => void;
   resetDisabled: boolean;
-}): ReactNode => {
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  return (
-    <InputContainer>
-      <Input {...props} ref={inputRef} />
-      <ResetButton
-        type="button"
-        aria-label="Reset to default"
-        title="Reset to default"
-        disabled={resetDisabled || props.disabled}
-        $invalid={
-          props['aria-invalid'] === true || props['aria-invalid'] === 'true'
-        }
-        onClick={() => {
-          onReset();
-          inputRef.current?.focus();
-        }}
-      >
-        <AppIcon icon={rotateCcw} aria-hidden="true" />
-      </ResetButton>
-    </InputContainer>
-  );
-};
+}): ReactNode => (
+  <InputWithAction
+    {...props}
+    action={{
+      label: 'Reset to default',
+      icon: rotateCcw,
+      disabled: resetDisabled,
+      onClick: input => {
+        onReset();
+        input?.focus();
+      },
+    }}
+  />
+);

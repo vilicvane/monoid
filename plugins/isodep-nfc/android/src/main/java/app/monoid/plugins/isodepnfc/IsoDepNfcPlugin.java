@@ -13,6 +13,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.util.Log;
+import android.webkit.WebView;
 import androidx.core.content.ContextCompat;
 import androidx.lifecycle.Lifecycle;
 import com.getcapacitor.JSArray;
@@ -20,6 +21,7 @@ import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.WebViewListener;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -35,9 +37,22 @@ public final class IsoDepNfcPlugin extends Plugin {
     private final ExecutorService closer = Executors.newSingleThreadExecutor(runnable -> new Thread(runnable, "IsoDepNfc-close"));
     private NfcAdapter adapter;
     private SessionController sessions;
+    private PageSessionScope page;
+    private Object scanDocument;
     private boolean resumed;
     private boolean destroyed;
     private Boolean lastEnabled;
+
+    private final WebViewListener webViewListener = new WebViewListener() {
+        @Override
+        public void onPageStarted(WebView webView) {
+            // WebViewClient delivers this callback on the main thread, before
+            // the new document can start scanning. Never resume old card work.
+            if (!destroyed) {
+                page.pageStarted();
+            }
+        }
+    };
 
     private final BroadcastReceiver adapterReceiver = new BroadcastReceiver() {
         @Override
@@ -51,6 +66,10 @@ public final class IsoDepNfcPlugin extends Plugin {
         NfcManager manager = (NfcManager) getContext().getSystemService(Context.NFC_SERVICE);
         adapter = manager == null ? null : manager.getDefaultAdapter();
         resumed = getActivity().getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED);
+        SessionController.Scheduler scheduler = (delayMs, action) -> {
+            main.postDelayed(action, delayMs);
+            return () -> main.removeCallbacks(action);
+        };
         sessions = new SessionController(new ReaderModeController<>(new ReaderModeController.Platform<Tag>() {
             @Override
             public void enable(ReaderModeController.TagCallback<Tag> onTag) {
@@ -91,12 +110,12 @@ public final class IsoDepNfcPlugin extends Plugin {
             public void disable() {
                 adapter.disableReaderMode(getActivity());
             }
-        }), main::post, io, closer, (delayMs, action) -> {
-            main.postDelayed(action, delayMs);
-            return () -> main.removeCallbacks(action);
-        }, new SessionController.Listener() {
+        }, scheduler), main::post, io, closer, scheduler, new SessionController.Listener() {
             @Override
             public void opened(String scanId, String sessionId, SessionController.TagInfo info) {
+                if (!page.isCurrent(scanDocument)) {
+                    return;
+                }
                 JSObject tag = new JSObject();
                 if (info.identifier != null && info.identifier.length > 0) {
                     tag.put("identifier", bytes(info.identifier));
@@ -112,6 +131,9 @@ public final class IsoDepNfcPlugin extends Plugin {
 
             @Override
             public void ended(String scanId, String sessionId, String reason, String code) {
+                if (!page.isCurrent(scanDocument)) {
+                    return;
+                }
                 JSObject event = endedEvent(scanId, reason, code);
                 event.put("sessionId", sessionId);
                 notifyListeners("sessionEnded", event);
@@ -119,9 +141,14 @@ public final class IsoDepNfcPlugin extends Plugin {
 
             @Override
             public void scanEnded(String scanId, String reason, String code) {
+                if (!page.isCurrent(scanDocument)) {
+                    return;
+                }
                 notifyListeners("scanEnded", endedEvent(scanId, reason, code));
             }
         });
+        page = new PageSessionScope(sessions, main::post, getBridge()::execute);
+        getBridge().addWebViewListener(webViewListener);
         ContextCompat.registerReceiver(getContext(), adapterReceiver,
             new IntentFilter(NfcAdapter.ACTION_ADAPTER_STATE_CHANGED), ContextCompat.RECEIVER_EXPORTED);
         refreshStatus();
@@ -129,7 +156,7 @@ public final class IsoDepNfcPlugin extends Plugin {
 
     @PluginMethod
     public void getStatus(PluginCall call) {
-        main.post(() -> {
+        page.dispatch(() -> {
             Boolean enabled = readEnabled();
             if (enabled == null) {
                 reject(call, "IO_ERROR", "Unable to read the NFC adapter state.", null, null, null);
@@ -141,7 +168,7 @@ public final class IsoDepNfcPlugin extends Plugin {
 
     @PluginMethod
     public void openSettings(PluginCall call) {
-        main.post(() -> {
+        page.dispatch(() -> {
             if (!available(call, null, null, false)) {
                 return;
             }
@@ -156,12 +183,12 @@ public final class IsoDepNfcPlugin extends Plugin {
 
     @PluginMethod
     public void setSessionMessage(PluginCall call) {
-        call.reject("Android NFC reader mode does not provide a system message sheet.", "UNSUPPORTED");
+        page.dispatch(() -> call.reject("Android NFC reader mode does not provide a system message sheet.", "UNSUPPORTED"));
     }
 
     @PluginMethod
     public void startScan(PluginCall call) {
-        main.post(() -> {
+        page.dispatch(() -> {
             String id = requiredId(call, "scanId", "startScan");
             if (id == null) {
                 return;
@@ -170,13 +197,25 @@ public final class IsoDepNfcPlugin extends Plugin {
             if (transceiveTimeout == null || !available(call, null, "startScan", true)) {
                 return;
             }
-            sessions.startScan(id, transceiveTimeout, scanResult(call, id));
+            SessionController.Result<Void> result = scanResult(call, id);
+            sessions.startScan(id, transceiveTimeout, new SessionController.Result<Void>() {
+                @Override
+                public void resolve(Void ignored) {
+                    scanDocument = page.currentDocument();
+                    result.resolve(null);
+                }
+
+                @Override
+                public void reject(SessionController.Failure failure) {
+                    result.reject(failure);
+                }
+            });
         });
     }
 
     @PluginMethod
     public void transceive(PluginCall call) {
-        main.post(() -> {
+        page.dispatch(() -> {
             String id = requiredId(call, "sessionId", "transceive");
             if (id == null) {
                 return;
@@ -206,7 +245,7 @@ public final class IsoDepNfcPlugin extends Plugin {
             if (!available(call, id, "transceive", true)) {
                 return;
             }
-            sessions.transceive(id, data, timeoutMs, new SessionController.Result<byte[]>() {
+            sessions.transceive(id, data, timeoutMs, page.bind(new SessionController.Result<byte[]>() {
                 @Override
                 public void resolve(byte[] response) {
                     JSObject result = new JSObject();
@@ -218,13 +257,13 @@ public final class IsoDepNfcPlugin extends Plugin {
                 public void reject(SessionController.Failure failure) {
                     rejectFailure(call, id, failure);
                 }
-            });
+            }));
         });
     }
 
     @PluginMethod
     public void stopScan(PluginCall call) {
-        main.post(() -> {
+        page.dispatch(() -> {
             String id = requiredId(call, "scanId", null);
             if (id == null) {
                 return;
@@ -235,7 +274,7 @@ public final class IsoDepNfcPlugin extends Plugin {
 
     @PluginMethod
     public void closeSession(PluginCall call) {
-        main.post(() -> {
+        page.dispatch(() -> {
             String id = requiredId(call, "sessionId", null);
             if (id == null) {
                 return;
@@ -245,7 +284,7 @@ public final class IsoDepNfcPlugin extends Plugin {
                 reject(call, "INVALID_ARGUMENT", "waitForRemoval must be a boolean.", id, null, null);
                 return;
             }
-            sessions.close(id, Boolean.TRUE.equals(waitForRemoval), new SessionController.Result<Void>() {
+            sessions.close(id, Boolean.TRUE.equals(waitForRemoval), page.bind(new SessionController.Result<Void>() {
                 @Override
                 public void resolve(Void ignored) {
                     call.resolve();
@@ -255,7 +294,7 @@ public final class IsoDepNfcPlugin extends Plugin {
                 public void reject(SessionController.Failure failure) {
                     rejectFailure(call, id, failure);
                 }
-            });
+            }));
         });
     }
 
@@ -335,7 +374,8 @@ public final class IsoDepNfcPlugin extends Plugin {
     protected void handleOnDestroy() {
         destroyed = true;
         resumed = false;
-        sessions.terminate("destroyed", "APP_INACTIVE");
+        getBridge().removeWebViewListener(webViewListener);
+        page.destroy();
         getContext().unregisterReceiver(adapterReceiver);
         // Let already submitted work finish, including the independent close.
         io.shutdown();
@@ -385,8 +425,8 @@ public final class IsoDepNfcPlugin extends Plugin {
         reject(call, failure.code, failure.message, id, failure.operation, failure.outcome);
     }
 
-    private static SessionController.Result<Void> scanResult(PluginCall call, String scanId) {
-        return new SessionController.Result<Void>() {
+    private SessionController.Result<Void> scanResult(PluginCall call, String scanId) {
+        return page.bind(new SessionController.Result<Void>() {
             @Override
             public void resolve(Void ignored) {
                 call.resolve();
@@ -401,7 +441,7 @@ public final class IsoDepNfcPlugin extends Plugin {
                 }
                 call.reject(failure.message, failure.code, details);
             }
-        };
+        });
     }
 
     private static JSObject endedEvent(String scanId, String reason, String code) {

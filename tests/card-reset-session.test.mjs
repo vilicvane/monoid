@@ -13,13 +13,18 @@ function fixture() {
     id: Uint8Array.of(1, 2, 3, 4),
     publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(5)),
     bundle: new Uint8Array(32).fill(6),
+    authority: false,
+    alias: false,
+    allowPeerExtension: false,
     pins: {access: 5, secret: 5},
   };
   const resetHello = {
     ...hello,
-    id: Uint8Array.of(8, 7, 6, 5),
     publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(9)),
     bundle: false,
+    authority: false,
+    alias: false,
+    allowPeerExtension: false,
     pins: {access: false, secret: false},
   };
   const session = new CardResetSession({
@@ -65,7 +70,7 @@ function fixture() {
   return state;
 }
 
-test('full reset runs only after identity validation and pre-reset cleanup, then confirms the fresh Hello', async () => {
+test('reset keeps the ID, rotates the key and confirms cleared state after pre-reset cleanup', async () => {
   const state = fixture();
   assert.deepEqual(await state.run(), state.resetHello);
   assert.deepEqual(state.calls, [
@@ -187,7 +192,12 @@ test('an unbundled card discovered before any Reset attempt is rejected without 
   const unbundled = {...state.hello, bundle: false};
   const reinitialized = {...unbundled, pins: {access: 5, secret: 5}};
   for (const hello of [unbundled, reinitialized]) {
-    await assert.rejects(state.run(hello), /Card bundle changed, scan again/);
+    await assert.rejects(
+      state.run(hello),
+      new RegExp(
+        `Card bundle changed, scan card ${state.session.card.id} again`,
+      ),
+    );
     assert.deepEqual(state.calls, []);
     assert.equal(state.session.attempted, false);
     assert.equal(state.session.confirmed, false);
@@ -230,6 +240,7 @@ for (const changed of ['id', 'publicKey']) {
   test(`post-reset Hello validates the full ${changed}`, async () => {
     const state = fixture();
     const value = state.hello[changed].slice();
+    if (changed === 'id') value[value.length - 1] ^= 1;
     state.resetHello = {...state.resetHello, [changed]: value};
     await assert.rejects(state.run(), /Card reset state not confirmed/);
     assert.equal(state.session.confirmed, true);

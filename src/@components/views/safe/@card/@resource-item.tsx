@@ -3,6 +3,8 @@ import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../../../@entrances.js';
+import {isCardKeyDerivationItem} from '../../../../@lib/monoid/index.js';
+import {SECURITY_KEY_ITEM_TYPE} from '../../../../@lib/security-key.js';
 import {
   ADDRESS_TYPES,
   ADDRESS_TYPE_LABELS,
@@ -25,11 +27,19 @@ import {
   KeyTags,
   KeyTypeTag,
 } from '../../../@key/key-tags.js';
+import {ListItemButton} from '../../../@ui/list.js';
+import {RippleEffect} from '../../../@ui/ripple-effect.js';
 import {
   getCardDerivationSourceType,
   isCardDerivationItem,
 } from '../card-derivations.js';
 import type {ScannedCardItemData} from '../common.js';
+
+const RESOURCE_TYPE_LABELS: Readonly<Record<number, string>> = {
+  0x0fff: 'generic',
+  0xf201: 'otp',
+  [SECURITY_KEY_ITEM_TYPE]: 'security key',
+};
 
 export const CardResourceList = styled(KeyList)`
   flex: ${({$contained}) => ($contained ? 0 : 1)};
@@ -76,18 +86,25 @@ export const CardResourceItem = observer(
     selected = false,
     disabled = false,
     onSelect,
+    onOpen,
   }: {
     data: Pick<
       ScannedCardItemData,
-      'index' | 'type' | 'alias' | 'publicKey' | 'derivationRecord'
+      | 'index'
+      | 'type'
+      | 'alias'
+      | 'publicKey'
+      | 'derivationRecord'
+      | 'keyDerivationRecord'
     >;
     resources?: readonly Pick<
       ScannedCardItemData,
-      'index' | 'type' | 'alias' | 'derivationRecord'
+      'index' | 'type' | 'alias' | 'derivationRecord' | 'keyDerivationRecord'
     >[];
     selected?: boolean;
     disabled?: boolean;
     onSelect?: (selected: boolean) => void;
+    onOpen?: () => void;
   }): ReactNode => {
     const {walletStorageService} = useEntrances();
     const localKey = walletStorageService.indexToKeyMap.get(item.index);
@@ -101,15 +118,19 @@ export const CardResourceItem = observer(
         : parseInt(item.index.slice(0, 4), 16);
     const type = isCardDerivationItem(item)
       ? 'addresses'
-      : typeof item.type === 'string'
-        ? item.type
-        : typeCode === 0x0fff
-          ? 'generic'
-          : `0x${typeCode.toString(16).padStart(4, '0')}`;
+      : isCardKeyDerivationItem(item)
+        ? 'keys'
+        : typeof item.type === 'string'
+          ? item.type
+          : (RESOURCE_TYPE_LABELS[typeCode] ??
+            `0x${typeCode.toString(16).padStart(4, '0')}`);
     const sourceIndex = (
       item.derivationRecord ??
+      item.keyDerivationRecord ??
       resources?.find(resource => resource.index === item.index)
-        ?.derivationRecord
+        ?.derivationRecord ??
+      resources?.find(resource => resource.index === item.index)
+        ?.keyDerivationRecord
     )?.index;
     const source = sourceIndex
       ? (resources?.find(resource => resource.index === sourceIndex) ??
@@ -121,7 +142,14 @@ export const CardResourceItem = observer(
       'item';
 
     return (
-      <KeyListItem as={onSelect ? 'label' : 'div'}>
+      <KeyListItem
+        as={onSelect ? 'label' : onOpen ? ListItemButton : 'div'}
+        type={onOpen ? 'button' : undefined}
+        disabled={onOpen ? disabled : undefined}
+        className={onOpen ? 'ion-activatable' : undefined}
+        aria-label={onOpen ? `Select ${item.alias || item.index}` : undefined}
+        onClick={onOpen}
+      >
         {onSelect && (
           <KeyCheckbox
             checked={selected}
@@ -166,6 +194,7 @@ export const CardResourceItem = observer(
             </KeyListPlaceholder>
           )}
         </KeyListItemContent>
+        {onOpen && !disabled && <RippleEffect />}
       </KeyListItem>
     );
   },

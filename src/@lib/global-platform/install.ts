@@ -14,7 +14,11 @@ import {openSecureChannel} from './secure-channel.js';
 
 export type AppletPackage = {
   packageAid: Uint8Array;
-  appletAid: Uint8Array;
+  /** CAP executable module, which can differ from the installed instance. */
+  appletAid?: Uint8Array;
+  instanceAid?: Uint8Array;
+  /** Applet-specific application data within GP installation tag C9. */
+  applicationData?: Uint8Array;
   code: Uint8Array;
 };
 
@@ -60,11 +64,14 @@ export class GlobalPlatformInstaller {
   /** Read registry metadata without authenticating or exposing write operations. */
   static async inspect(
     transceive: CardTransceive,
-  ): Promise<Pick<GlobalPlatformInstaller, 'getEntry'>> {
+  ): Promise<Pick<GlobalPlatformInstaller, 'getEntry' | 'getEntries'>> {
     const aid = await this.selectDomain(transceive);
     const reader = new GlobalPlatformInstaller(transceive, aid);
 
-    return {getEntry: (scope, entryAid) => reader.getEntry(scope, entryAid)};
+    return {
+      getEntry: (scope, entryAid) => reader.getEntry(scope, entryAid),
+      getEntries: scope => reader.getEntries(scope),
+    };
   }
 
   private static async selectDomain(
@@ -94,7 +101,11 @@ export class GlobalPlatformInstaller {
   ): Promise<void> {
     onProgress({phase: 'checking'});
 
-    const instance = await this.getEntry(0x40, applet.appletAid);
+    const {appletAid} = applet;
+    const instanceAid = applet.instanceAid ?? appletAid;
+    const instance = appletAid
+      ? await this.getEntry(0x40, instanceAid!)
+      : undefined;
 
     if (instance) {
       if ((instance.lifecycle & 0x87) !== 0x07) {
@@ -112,7 +123,9 @@ export class GlobalPlatformInstaller {
     if (loaded) {
       if (
         loaded.lifecycle !== 0x01 ||
-        !loaded.modules.some(aid => equalBytes(aid, applet.appletAid))
+        (appletAid
+          ? !loaded.modules.some(aid => equalBytes(aid, appletAid))
+          : loaded.modules.length !== 0)
       ) {
         throw new Error(
           'An incomplete or different applet package is already on this card. Its data has been left unchanged.',
@@ -122,21 +135,44 @@ export class GlobalPlatformInstaller {
       await this.load(applet, onProgress);
     }
 
+    if (!appletAid) {
+      const library = loaded ?? (await this.getEntry(0x10, applet.packageAid));
+
+      if (
+        !library ||
+        library.lifecycle !== 0x01 ||
+        library.modules.length !== 0
+      ) {
+        throw new Error(
+          'The card did not confirm a loaded library package after installation.',
+        );
+      }
+
+      onProgress({phase: 'complete'});
+      return;
+    }
+
     onProgress({phase: 'configuring'});
 
-    // No privileges, no installation parameters, no delegated-management token.
+    // No privileges or delegated-management token; C9 carries application data.
+    const parameters = concat(
+      new Uint8Array([0xc9]),
+      lengthValue(applet.applicationData ?? new Uint8Array()),
+    );
     const data = concat(
       lengthValue(applet.packageAid),
-      lengthValue(applet.appletAid),
-      lengthValue(applet.appletAid),
-      new Uint8Array([1, 0, 2, 0xc9, 0, 0]),
+      lengthValue(appletAid),
+      lengthValue(instanceAid!),
+      new Uint8Array([1, 0]),
+      lengthValue(parameters),
+      new Uint8Array([0]),
     );
     successful(
       await this.transceive(shortCommand(0xe6, 0x0c, 0, data)),
       'Installing the applet',
     );
 
-    const installed = await this.getEntry(0x40, applet.appletAid);
+    const installed = await this.getEntry(0x40, instanceAid!);
 
     if (!installed || (installed.lifecycle & 0x87) !== 0x07) {
       throw new Error(
@@ -245,6 +281,19 @@ export class GlobalPlatformInstaller {
     if (aid.length < 5 || aid.length > 16) {
       throw new Error('A card registry AID must contain 5–16 bytes.');
     }
+    return (await this.readEntries(scope, aid)).find(entry =>
+      equalBytes(entry.aid, aid),
+    );
+  }
+
+  getEntries(scope: 0x10 | 0x40): Promise<RegistryEntry[]> {
+    return this.readEntries(scope, new Uint8Array());
+  }
+
+  private async readEntries(
+    scope: 0x10 | 0x40,
+    aid: Uint8Array,
+  ): Promise<RegistryEntry[]> {
     const chunks: Uint8Array[] = [];
 
     for (let page = 0; page < 256; page++) {
@@ -259,7 +308,7 @@ export class GlobalPlatformInstaller {
       const {data, sw} = parseResponse(response);
 
       if (sw === 0x6a88 && page === 0) {
-        return undefined;
+        return [];
       }
 
       if (sw !== 0x9000 && sw !== 0x6310) {
@@ -276,7 +325,7 @@ export class GlobalPlatformInstaller {
         continue;
       }
 
-      for (const record of readTLV(concat(...chunks))) {
+      return readTLV(concat(...chunks)).map(record => {
         if (record.tag !== 0xe3) {
           throw new Error('Unsupported card registry format.');
         }
@@ -299,22 +348,18 @@ export class GlobalPlatformInstaller {
           throw new Error('Missing or invalid card registry fields.');
         }
 
-        if (equalBytes(entryAid, aid)) {
-          return {
-            aid: entryAid,
-            lifecycle: lifecycle[0],
-            modules: fields
-              .filter(field => field.tag === 0x84)
-              .map(field => field.value),
-            ...(packageAid !== undefined && {packageAid}),
-            ...(version !== undefined && {
-              version: {major: version[0], minor: version[1]},
-            }),
-          };
-        }
-      }
-
-      return undefined;
+        return {
+          aid: entryAid,
+          lifecycle: lifecycle[0],
+          modules: fields
+            .filter(field => field.tag === 0x84)
+            .map(field => field.value),
+          ...(packageAid !== undefined && {packageAid}),
+          ...(version !== undefined && {
+            version: {major: version[0], minor: version[1]},
+          }),
+        };
+      });
     }
 
     throw new Error('The card registry did not finish responding.');

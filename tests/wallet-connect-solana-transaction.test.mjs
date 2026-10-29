@@ -121,7 +121,7 @@ function setup(context, incoming) {
   const sessions = {[TOPIC]: approved};
   const requests = [incoming];
   const kit = Object.assign(new EventEmitter(), {
-    core: {pairing: {events: new EventEmitter()}},
+    core: {pairing: {events: new EventEmitter()}, relayer: new EventEmitter()},
     engine: {signClient: {events: new EventEmitter()}},
     getActiveSessions: context.mock.fn(() => ({...sessions})),
     getPendingSessionRequests: context.mock.fn(() => [...requests]),

@@ -1,3 +1,5 @@
+import {Capacitor} from '@capacitor/core';
+import {Keyboard} from '@capacitor/keyboard';
 import type {BackButtonEvent} from '@ionic/react';
 import {
   Fragment,
@@ -370,11 +372,22 @@ export const CenteredPopup = ({
       });
     };
 
+    // Scrolling while the keyboard animates measures a moving layout; reveal
+    // the focused input only once the keyboard has settled.
+    const keyboardShown = Capacitor.isNativePlatform()
+      ? Keyboard.addListener('keyboardDidShow', () => {
+          const active = document.activeElement;
+          if (active instanceof HTMLElement && dialog.contains(active))
+            active.scrollIntoView({block: 'nearest'});
+        })
+      : undefined;
+
     document.addEventListener('focusin', onFocusIn);
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('ionBackButton', onBackButton);
 
     return () => {
+      void keyboardShown?.then(handle => handle.remove());
       document.removeEventListener('focusin', onFocusIn);
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('ionBackButton', onBackButton);

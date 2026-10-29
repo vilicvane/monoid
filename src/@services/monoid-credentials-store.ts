@@ -7,6 +7,7 @@ import {BiometricVault} from 'capacitor-biometric-vault';
 
 import type {MonoidIdHex} from '../@atomics.js';
 import {MonoidPIN} from '../@atomics.js';
+import {HeldPINValue} from '../@lib/held-pins.js';
 
 import type {StorageService} from './storage-service.js';
 
@@ -67,15 +68,6 @@ function credentialError(
 
   // Do not forward bridge payloads, validation details, or unknown error causes to app logs.
   return Object.assign(new Error(ERROR_MESSAGES[knownCode]), {code: knownCode});
-}
-
-export function isCredentialRequestCancelled(error: unknown): boolean {
-  return (
-    error !== null &&
-    typeof error === 'object' &&
-    'code' in error &&
-    (error.code === 'CANCELLED' || error.code === 'APP_INACTIVE')
-  );
 }
 
 const ENTRY_ID = 'monoid.access-pins';
@@ -368,9 +360,10 @@ export class MonoidCredentialsStore {
 
 /** Plaintext credentials owned by one page flow, never persisted outside the vault. */
 export class MonoidPINSession implements AsyncDisposable {
-  private owner = new AbortController();
-  private unlocked: MonoidPINs | undefined;
-  private pins: MutablePINs | undefined;
+  private readonly held = new HeldPINValue<{
+    readonly unlocked: MonoidPINs;
+    readonly pins: MonoidPINs;
+  }>(() => this.release());
   private loading: Promise<void> | undefined;
   private access: Promise<BiometricVaultAccess> | undefined;
   private releasing: Promise<void> = Promise.resolve();
@@ -378,11 +371,11 @@ export class MonoidPINSession implements AsyncDisposable {
   constructor(private store: MonoidCredentialsStore) {}
 
   clear(): void {
+    this.held.clear();
+  }
+
+  private release(): void {
     const access = this.access;
-    this.owner.abort();
-    this.owner = new AbortController();
-    this.unlocked = undefined;
-    this.pins = undefined;
     this.loading = undefined;
     this.access = undefined;
     const release = access?.then(
@@ -411,6 +404,68 @@ export class MonoidPINSession implements AsyncDisposable {
     return (this.access ??= this.store.authenticate(owner));
   }
 
+  private renewAccess(
+    owner: AbortSignal,
+    expired: Promise<BiometricVaultAccess>,
+  ): Promise<BiometricVaultAccess> {
+    throwIfCancelled(owner);
+    if (this.access === expired) {
+      // Concurrent requests share the replacement authorization. Keep the page's
+      // owner and PIN cache; clearing the session would cancel the request itself.
+      this.access = expired
+        .then(async access => {
+          await access[Symbol.asyncDispose]();
+          throwIfCancelled(owner);
+          return this.store.authenticate(owner);
+        })
+        .catch(error => {
+          throw credentialError(error);
+        });
+    }
+    return this.getAccess(owner);
+  }
+
+  private async withRenewal<T>(
+    owner: AbortSignal,
+    operation: (getAccess: GetAccess) => Promise<T>,
+    allowUnlock = true,
+  ): Promise<T> {
+    let access: Promise<BiometricVaultAccess> | undefined;
+    const attempt = async (): Promise<T> => {
+      try {
+        return await operation(() => {
+          throwIfCancelled(owner);
+          // Live NFC callbacks may use existing access, but must hand off to
+          // their caller before any biometric prompt, including the first one.
+          if (!allowUnlock && !this.access) {
+            throw credentialError({code: 'ACCESS_CLOSED'});
+          }
+          access = this.getAccess(owner);
+          return access;
+        });
+      } catch (error) {
+        throw credentialError(error);
+      }
+    };
+
+    try {
+      return await attempt();
+    } catch (error) {
+      if (
+        !allowUnlock ||
+        credentialError(error).code !== 'AUTHORIZATION_EXPIRED' ||
+        !access
+      ) {
+        throw error;
+      }
+      // Native expiry guarantees no write committed. Retry only this local
+      // operation once; cancellation and every other failure must propagate.
+      await this.renewAccess(owner, access);
+      throwIfCancelled(owner);
+      return attempt();
+    }
+  }
+
   private async request<T>(
     signal: AbortSignal | undefined,
     operation: (owner: AbortSignal) => Promise<T>,
@@ -418,16 +473,17 @@ export class MonoidPINSession implements AsyncDisposable {
   ): Promise<T> {
     throwIfCancelled(signal);
 
-    const owner = this.owner;
+    const owner = this.held.signal;
+    throwIfCancelled(owner);
     const cancel = (): void => {
-      if (this.owner === owner) this.clear();
+      if (!owner.aborted) this.clear();
     };
 
     signal?.addEventListener('abort', cancel, {once: true});
 
     try {
-      const result = await operation(owner.signal);
-      if (!mutation) throwIfCancelled(owner.signal);
+      const result = await operation(owner);
+      if (!mutation) throwIfCancelled(owner);
       return result;
     } finally {
       signal?.removeEventListener('abort', cancel);
@@ -435,24 +491,27 @@ export class MonoidPINSession implements AsyncDisposable {
   }
 
   authenticate(signal?: AbortSignal): Promise<void> {
-    return this.request(signal, async owner => {
-      try {
-        await this.getAccess(owner);
-      } catch (error) {
-        throw credentialError(error);
-      }
-    });
+    return this.request(signal, owner =>
+      this.withRenewal(owner, async getAccess => {
+        const reused = this.access !== undefined;
+        const access = await getAccess();
+        throwIfCancelled(owner);
+        // A resolved access promise does not reveal native expiry. Probe reused
+        // access without parsing or retaining the document; fresh unlocks need no probe.
+        if (reused) await access.get({id: ENTRY_ID});
+      }),
+    );
   }
 
   getPINs(signal?: AbortSignal): Promise<MonoidPINs> {
     return this.request(signal, async owner => {
-      if (!this.pins) {
-        this.loading ??= this.store
-          .getPINs(owner, () => this.getAccess(owner))
+      if (!this.held.get()) {
+        this.loading ??= this.withRenewal(owner, getAccess =>
+          this.store.getPINs(owner, getAccess),
+        )
           .then(snapshot => {
             throwIfCancelled(owner);
-            this.unlocked = snapshot;
-            this.pins = {...snapshot};
+            this.held.set({unlocked: snapshot, pins: snapshot}, owner);
           })
           .finally(() => {
             if (!owner.aborted) this.loading = undefined;
@@ -461,37 +520,47 @@ export class MonoidPINSession implements AsyncDisposable {
         await this.loading;
       }
 
-      return Object.freeze({...this.pins});
+      return Object.freeze({...this.held.get()?.pins});
     });
   }
 
   rememberPIN(id: MonoidIdHex, pin: MonoidPIN): void {
-    if (this.pins) this.pins[id] = pin;
+    const snapshot = this.held.get();
+    if (snapshot) {
+      this.held.set({...snapshot, pins: {...snapshot.pins, [id]: pin}});
+    }
   }
 
   hasUnsavedPIN(id: MonoidIdHex, pin: MonoidPIN): boolean {
-    return this.pins?.[id] === pin && this.unlocked?.[id] !== pin;
+    const snapshot = this.held.get();
+    return snapshot?.pins[id] === pin && snapshot.unlocked[id] !== pin;
   }
 
   forgetPIN(id: MonoidIdHex, expectedPIN: MonoidPIN): void {
-    if (this.pins?.[id] === expectedPIN) delete this.pins[id];
+    const snapshot = this.held.get();
+    if (snapshot?.pins[id] === expectedPIN) {
+      const pins = {...snapshot.pins};
+      delete pins[id];
+      this.held.set({...snapshot, pins});
+    }
   }
 
   setPIN(id: MonoidIdHex, pin: MonoidPIN, signal?: AbortSignal): Promise<void> {
     return this.request(
       signal,
       async owner => {
-        const snapshot = await this.store.setPIN(
-          id,
-          pin,
-          owner,
-          this.unlocked,
-          () => this.getAccess(owner),
+        const snapshot = await this.withRenewal(owner, getAccess =>
+          this.store.setPIN(
+            id,
+            pin,
+            owner,
+            this.held.get()?.unlocked,
+            getAccess,
+          ),
         );
         if (owner.aborted) return;
-        this.unlocked = snapshot;
-        this.pins ??= {...snapshot};
-        this.pins[id] = pin;
+        const pins = {...(this.held.get()?.pins ?? snapshot), [id]: pin};
+        this.held.set({unlocked: snapshot, pins}, owner);
       },
       true,
     );
@@ -501,28 +570,34 @@ export class MonoidPINSession implements AsyncDisposable {
     id: MonoidIdHex,
     expectedPIN?: MonoidPIN,
     signal?: AbortSignal,
+    allowUnlock = true,
   ): Promise<void> {
     return this.request(
       signal,
       async owner => {
-        const snapshot = await this.store.removePIN(
-          id,
-          expectedPIN,
+        const snapshot = await this.withRenewal(
           owner,
-          this.unlocked,
-          () => this.getAccess(owner),
+          getAccess =>
+            this.store.removePIN(
+              id,
+              expectedPIN,
+              owner,
+              this.held.get()?.unlocked,
+              getAccess,
+            ),
+          allowUnlock,
         );
         if (owner.aborted) return;
-        this.unlocked = snapshot;
-        this.pins ??= {...snapshot};
+        const pins = {...(this.held.get()?.pins ?? snapshot)};
         if (
           expectedPIN === undefined ||
-          this.pins[id] === undefined ||
-          this.pins[id] === expectedPIN
+          pins[id] === undefined ||
+          pins[id] === expectedPIN
         ) {
-          if (snapshot[id] === undefined) delete this.pins[id];
-          else this.pins[id] = snapshot[id];
+          if (snapshot[id] === undefined) delete pins[id];
+          else pins[id] = snapshot[id];
         }
+        this.held.set({unlocked: snapshot, pins}, owner);
       },
       true,
     );

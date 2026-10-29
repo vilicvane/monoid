@@ -22,6 +22,15 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>app.monoid</string>
+			</array>
+		</dict>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NFCReaderUsageDescription</key>
@@ -74,6 +83,8 @@
 	<array>
 		<string>F06D6F6E6F69640201</string>
 		<string>F06D6F6E6F69640001</string>
+		<string>A0000006472F0001</string>
+		<string>F06D6F6E6F69640501</string>
 		<string>A000000151000000</string>
 		<string>A000000003000000</string>
 	</array>

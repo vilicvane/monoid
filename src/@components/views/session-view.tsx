@@ -9,11 +9,13 @@ import type {RouteComponentProps} from 'routra-react';
 
 import {useEntrances} from '../../@entrances.js';
 import {getPendingActions} from '../../@lib/pending-action.js';
+import {getSSHSessionAccounts} from '../../@lib/ssh-request.js';
 import type {Router} from '../../@routes.js';
 import {
   getWalletKitSessionAddressTypes,
   getWalletKitSessionAddresses,
 } from '../../@services/index.js';
+import {SSHAccountList} from '../@key/ssh-account-list.js';
 import {WalletAccountList} from '../@key/wallet-account-list.js';
 import {AppIcon} from '../@ui/app-icon.js';
 import {AsyncButton} from '../@ui/button.js';
@@ -24,6 +26,7 @@ import {
   InfoSectionItemLabel,
   InfoSectionRow,
 } from '../@ui/info-section.js';
+import {InfoMessage} from '../@ui/message-content.js';
 import {
   View,
   ViewContent,
@@ -51,6 +54,8 @@ export const SessionView = observer(
 
     const {session, record} = data;
     const addresses = getWalletKitSessionAddresses(session);
+    const sshAccounts = getSSHSessionAccounts(session);
+    const addressTypes = getWalletKitSessionAddressTypes(session);
     const canSwitch = walletKitService.canSwitchAccount(view.topic);
     const actions = getPendingActions(walletKitService).filter(
       action => action.request.topic === view.topic,
@@ -97,13 +102,33 @@ export const SessionView = observer(
               <PopupDateTime value={record.lastActivityAt} />
             </InfoSectionRow>
           </InfoSection>
-          <InfoSection>
-            <WalletAccountList
-              keys={walletStorageService.keys}
-              addressType={getWalletKitSessionAddressTypes(session)}
-              addresses={addresses}
-            />
-          </InfoSection>
+          {addressTypes.length > 0 && (
+            <InfoSection>
+              <WalletAccountList
+                keys={walletStorageService.keys}
+                addressType={addressTypes}
+                addresses={addresses.filter(
+                  address => !address.startsWith('monoid:ssh:'),
+                )}
+              />
+            </InfoSection>
+          )}
+          {sshAccounts.length > 0 && (
+            <InfoSection>
+              <SSHAccountList
+                accounts={
+                  walletKitService.ssh.getDesiredAccounts(session.topic) ??
+                  sshAccounts
+                }
+              />
+            </InfoSection>
+          )}
+          {walletKitService.ssh.syncing.has(session.topic) && (
+            <InfoMessage>
+              Account changes are not synchronized. Retry Switch or disconnect.
+              Removed keys remain unauthorized.
+            </InfoMessage>
+          )}
           {!canSwitch && (
             <InfoSection>
               <InfoSectionItemLabel>

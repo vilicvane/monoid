@@ -3,16 +3,26 @@ import {observer} from 'mobx-react-lite';
 import {type ReactNode, useEffect, useRef} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
-import {type MonoidIdHex, MonoidPIN} from '../../../../@atomics.js';
+import {
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
+  type MonoidIdHex,
+  MonoidPIN,
+} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
+import {assertSameCard} from '../../../../@lib/monoid/index.js';
+import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
-import type {MonoidPINSession} from '../../../../@services/index.js';
-import {useMonoidScanPrompt} from '../../../@monoid/monoid-scan-prompt.js';
+import {type MonoidPINSession} from '../../../../@services/index.js';
+import {
+  scanCardPrompt,
+  useMonoidScanPrompt,
+} from '../../../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
+import {retryCardPIN} from '../../../@monoid/request-card-pins.js';
 import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 import {useViewActive} from '../../../@view/index.js';
-import {assertCardForUpdate} from '../card-alias-update.js';
 import {type CardPINKind, updateCardPIN} from '../card-pin-update.js';
 import type {ScannedCardData} from '../common.js';
 
@@ -88,7 +98,7 @@ export const CardPINUpdate = observer(
             ...getPINInputPlaceholder(pinKind, prefix),
             description,
             center: true,
-            maxLength: 16,
+            maxLength: MONOID_PIN_MAX_LENGTH,
           }).then(value => {
             signal.removeEventListener('abort', cancel);
             resolve(signal.aborted ? undefined : value);
@@ -104,12 +114,21 @@ export const CardPINUpdate = observer(
         for (;;) {
           const value = await prompt(pinKind, prefix, description);
           if (value === undefined || MonoidPIN.is(value)) return value;
-          description = 'Use 6 to 16 ASCII characters';
+          description = `Use ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} ASCII characters`;
         }
       };
 
       const run = async (): Promise<void> => {
         try {
+          if (kind === 'Access') {
+            try {
+              await waitForOperation(pinSession.getPINs(signal), signal);
+            } catch (error) {
+              pinSession.clear();
+              throw error;
+            }
+            signal.throwIfAborted();
+          }
           currentPIN = await readPIN('Secret', 'Enter current');
           if (currentPIN === undefined) return;
           newPIN = await readPIN(kind, 'Enter new');
@@ -123,37 +142,46 @@ export const CardPINUpdate = observer(
           confirmation = undefined;
           if (signal.aborted) return;
 
+          const pins = {secret: currentPIN};
           try {
-            await waitForOperation(
-              scan(
-                `Scan card to update ${kind} PIN`,
-                async (applet, setState, hello, scanSignal) => {
-                  const cancel = (): void => operation.abort();
-                  scanSignal.addEventListener('abort', cancel, {once: true});
-                  if (scanSignal.aborted) cancel();
-                  try {
-                    setState(`Updating ${kind} PIN, hold tight...`);
-                    writing = (async () => {
-                      updatedCardId = await updateCardPIN(
-                        applet,
-                        hello,
-                        card,
-                        kind,
-                        currentPIN!,
-                        newPIN!,
-                        signal,
-                      );
-                      if (kind === 'Access' && active()) {
-                        pinSession.rememberPIN(updatedCardId, newPIN!);
+            await retryCardPIN(
+              showInput,
+              pins,
+              () =>
+                waitForOperation(
+                  scan(
+                    scanCardPrompt(card, `to update ${kind} PIN`),
+                    async (applet, setState, hello, scanSignal) => {
+                      const cancel = (): void => operation.abort();
+                      scanSignal.addEventListener('abort', cancel, {
+                        once: true,
+                      });
+                      if (scanSignal.aborted) cancel();
+                      try {
+                        setState(`Updating ${kind} PIN, hold tight...`);
+                        writing = (async () => {
+                          updatedCardId = await updateCardPIN(
+                            applet,
+                            hello,
+                            card,
+                            kind,
+                            pins.secret,
+                            newPIN!,
+                            signal,
+                          );
+                          if (kind === 'Access' && active()) {
+                            pinSession.rememberPIN(updatedCardId, newPIN!);
+                          }
+                        })();
+                        await writing;
+                      } finally {
+                        scanSignal.removeEventListener('abort', cancel);
                       }
-                    })();
-                    await writing;
-                  } finally {
-                    scanSignal.removeEventListener('abort', cancel);
-                  }
-                },
-                hello => assertCardForUpdate(hello, card),
-              ),
+                    },
+                    hello => assertSameCard(hello, card),
+                  ),
+                  signal,
+                ),
               signal,
             );
           } finally {
@@ -179,7 +207,7 @@ export const CardPINUpdate = observer(
             }
           }
         } catch (error) {
-          if (active() && !signal.aborted)
+          if (active() && !isOperationCancelled(error, signal))
             errorService.catch(Promise.reject(error));
         } finally {
           currentPIN = undefined;

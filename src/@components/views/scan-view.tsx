@@ -11,6 +11,7 @@ import type {RouteComponentProps} from 'routra-react';
 import {createGlobalStyle, styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
+import {parseOTPURI} from '../../@lib/otp.js';
 import {QrScanForeground, qrScanLifecycle} from '../../@lib/qr-scanner.js';
 import {parseWalletConnectUri} from '../../@lib/wallet-connect.js';
 import type {Router} from '../../@routes.js';
@@ -201,14 +202,29 @@ const STATUS_TEXT: Record<
   error: 'Could not scan. Please try again.',
 };
 
+type ScanLink = {kind: 'wallet-connect' | 'otp'; uri: string};
+
+function parseScanLink(value: string): ScanLink | undefined {
+  const uri = value.trim();
+  if (/^otpauth:/i.test(uri)) {
+    const account = parseOTPURI(uri);
+    account.secret.fill(0);
+    return {kind: 'otp', uri};
+  }
+  const walletConnect = parseWalletConnectUri(uri);
+  return walletConnect
+    ? {kind: 'wallet-connect', uri: walletConnect}
+    : undefined;
+}
+
 export const ScanView = observer(
   ({view}: RouteComponentProps<Router['scan']>): ReactNode => {
-    const {router, walletKitService, errorService} = useEntrances();
+    const {router, walletKitService, otpStore, errorService} = useEntrances();
     const toast = useToast();
     const previewRef = useRef<HTMLDivElement>(null);
     const revealRef = useRef<(duration: number) => Promise<boolean>>(undefined);
     const completeRef = useRef<() => void>(undefined);
-    const scannedUriRef = useRef<{uri: string; consumed: boolean}>(undefined);
+    const scannedUriRef = useRef<ScanLink & {consumed: boolean}>(undefined);
     const pasteRef = useRef<AbortController>(undefined);
     const foregroundRef = useRef<QrScanForeground>(undefined);
     const [pasting, setPasting] = useState(false);
@@ -246,7 +262,7 @@ export const ScanView = observer(
     }, [errorService]);
 
     const acceptUri = useCallback(
-      (uri: string): void => {
+      (link: ScanLink): void => {
         if (
           scannedUriRef.current ||
           view.$leaving ||
@@ -254,8 +270,8 @@ export const ScanView = observer(
         )
           return;
 
-        // Claim the result synchronously so scanning and pasting cannot connect twice.
-        scannedUriRef.current = {uri, consumed: false};
+        // Claim the result synchronously so scanning and pasting cannot handle it twice.
+        scannedUriRef.current = {...link, consumed: false};
         setConnectionResult(undefined);
         setSettledPhase(undefined);
         setStatus('completing');
@@ -285,19 +301,18 @@ export const ScanView = observer(
 
         if (type !== 'text/plain' && type !== 'text/uri-list') {
           toast({
-            message:
-              'Unsupported clipboard format. Paste a WalletConnect link.',
+            message: 'Paste a WalletConnect or OTP link.',
           });
         } else if (!value.trim()) {
           toast({message: 'Clipboard is empty.'});
         } else {
-          const uri = parseWalletConnectUri(value);
-          if (uri) {
-            acceptUri(uri);
-          } else {
+          try {
+            const link = parseScanLink(value);
+            if (link) acceptUri(link);
+            else toast({message: 'Paste a WalletConnect or OTP link.'});
+          } catch (error) {
             toast({
-              message:
-                'Unsupported or invalid link. Paste a WalletConnect v2 link.',
+              message: error instanceof Error ? error.message : 'Invalid link',
             });
           }
         }
@@ -352,6 +367,7 @@ export const ScanView = observer(
       let started = false;
       let stopped: Promise<void> | undefined;
       let cancelResume: (() => void) | undefined;
+      let lastInvalidMessage: string | undefined;
 
       const stop = (): Promise<void> =>
         (stopped ??= QrScanner.stopScan({scanId}));
@@ -480,12 +496,23 @@ export const ScanView = observer(
             )
               return;
 
-            const uri = event.values
-              .map(value => parseWalletConnectUri(value))
-              .find(value => value !== undefined);
-            if (!uri) return;
-
-            acceptUri(uri);
+            let invalidMessage: string | undefined;
+            for (const value of event.values) {
+              try {
+                const link = parseScanLink(value);
+                if (link) {
+                  acceptUri(link);
+                  return;
+                }
+              } catch (error) {
+                invalidMessage =
+                  error instanceof Error ? error.message : 'Invalid OTP link';
+              }
+            }
+            if (invalidMessage && invalidMessage !== lastInvalidMessage) {
+              lastInvalidMessage = invalidMessage;
+              toast({message: invalidMessage});
+            }
           }),
         );
         if (disposed || finished || scannedUriRef.current) return;
@@ -573,7 +600,7 @@ export const ScanView = observer(
           stop().catch(error => errorService.catch(Promise.reject(error))),
         ]).then(() => undefined);
       };
-    }, [scanAttempt, cameraVisible, errorService, view, acceptUri]);
+    }, [scanAttempt, cameraVisible, errorService, view, acceptUri, toast]);
 
     useEffect(() => {
       if (!connecting || !active) return;
@@ -590,6 +617,8 @@ export const ScanView = observer(
         }));
         return;
       }
+
+      if (scannedUri.kind === 'otp') return;
 
       const controller = new AbortController();
       scannedUri.consumed = true;
@@ -624,14 +653,27 @@ export const ScanView = observer(
     }, [connecting, active, walletKitService, view]);
 
     useEffect(() => {
-      if (
-        status !== 'scanned' ||
-        settledPhase !== 'scanned' ||
-        !active ||
-        !connectionResult ||
-        connectionResult.signal.aborted
-      )
+      if (status !== 'scanned' || settledPhase !== 'scanned' || !active) return;
+
+      const scanned = scannedUriRef.current;
+      if (scanned?.kind === 'otp') {
+        if (scanned.consumed) return;
+        scanned.consumed = true;
+        const importId = otpStore.prepareImport(scanned.uri);
+        scanned.uri = '';
+        errorService.catch(
+          (async () => {
+            try {
+              await router.otp({importId}).$push().$completed;
+            } finally {
+              otpStore.discardImport(importId);
+            }
+          })(),
+        );
         return;
+      }
+
+      if (!connectionResult || connectionResult.signal.aborted) return;
 
       if ('error' in connectionResult) {
         scannedUriRef.current = undefined;
@@ -640,7 +682,15 @@ export const ScanView = observer(
       } else {
         router.scan.connection({id: connectionResult.proposalId}).$push();
       }
-    }, [status, settledPhase, active, connectionResult, router, errorService]);
+    }, [
+      status,
+      settledPhase,
+      active,
+      connectionResult,
+      router,
+      otpStore,
+      errorService,
+    ]);
 
     const scanning =
       status === 'starting' || status === 'scanning' || status === 'completing';

@@ -1,4 +1,4 @@
-import {makeAutoObservable, toJS} from 'mobx';
+import {makeAutoObservable, runInAction, toJS} from 'mobx';
 
 import type {MonoidIdHex, PublicKeyHex, SafeIndexHex} from '../@atomics.js';
 import type {
@@ -6,7 +6,9 @@ import type {
   ScannedCardItemData,
   ScannedCardKeyData,
 } from '../@components/views/safe/index.js';
+import type {MonoidApplet, MonoidAppletHello} from '../@lib/monoid/index.js';
 import type {AddressType} from '../@lib/wallet-address.js';
+import {uint8ArrayToHex} from '../@utils/index.js';
 
 import {
   type WalletKeyPublicKeyData,
@@ -20,11 +22,13 @@ export class CardItem implements ScannedCardItemData {
   readonly index: SafeIndexHex;
   type: ScannedCardItemData['type'];
   alias: string | undefined;
-  key: string | undefined;
+  metadata: string | undefined;
   secret: boolean;
   publicKey: PublicKeyHex | undefined;
   derivationRecord: ScannedCardItemData['derivationRecord'];
   derivations: ScannedCardItemData['derivations'];
+  keyDerivationRecord: ScannedCardItemData['keyDerivationRecord'];
+  derivedKeys: ScannedCardItemData['derivedKeys'];
   addressType: AddressType | undefined;
   refs: Partial<Record<AddressType, ScannedCardKeyData['ref']>> = {};
 
@@ -52,11 +56,13 @@ export class CardItem implements ScannedCardItemData {
   update(item: ScannedCardItemData): void {
     this.type = item.type;
     this.alias = item.alias;
-    this.key = item.key;
+    this.metadata = item.metadata;
     this.secret = item.secret;
     this.publicKey = item.publicKey;
     this.derivationRecord = item.derivationRecord;
     this.derivations = item.derivations;
+    this.keyDerivationRecord = item.keyDerivationRecord;
+    this.derivedKeys = item.derivedKeys;
 
     for (const wallet of item.derivations ?? []) {
       this.refs[wallet.addressType] ??= {
@@ -107,6 +113,9 @@ export class CardState implements ScannedCardData {
   readonly id: MonoidIdHex;
   readonly publicKey: PublicKeyHex;
   bundle: string | false;
+  alias: string | false;
+  authority: string | false;
+  allowPeerExtension: boolean;
   items: CardItem[];
   /** Reset invalidates the initialization assumed by the original Card scan. */
   requiresPINSetup = false;
@@ -115,6 +124,9 @@ export class CardState implements ScannedCardData {
     this.id = card.id;
     this.publicKey = card.publicKey;
     this.bundle = card.bundle;
+    this.alias = card.alias;
+    this.authority = card.authority;
+    this.allowPeerExtension = card.allowPeerExtension;
     this.items = card.items.map(item => new CardItem(item));
     makeAutoObservable(this, {id: false, publicKey: false});
   }
@@ -137,11 +149,14 @@ export class CardState implements ScannedCardData {
       id: this.id,
       publicKey: this.publicKey,
       bundle: this.bundle,
+      alias: this.alias,
+      authority: this.authority,
+      allowPeerExtension: this.allowPeerExtension,
       items: this.items.map(item => ({
         index: item.index,
         ...(item.type !== undefined && {type: item.type}),
         ...(item.alias !== undefined && {alias: item.alias}),
-        ...(item.key !== undefined && {key: item.key}),
+        ...(item.metadata !== undefined && {metadata: item.metadata}),
         secret: item.secret,
         ...(item.publicKey !== undefined && {publicKey: item.publicKey}),
         ...(item.ref !== undefined && {ref: toJS(item.ref)}),
@@ -150,6 +165,12 @@ export class CardState implements ScannedCardData {
         }),
         ...(item.derivationRecord !== undefined && {
           derivationRecord: toJS(item.derivationRecord),
+        }),
+        ...(item.derivedKeys !== undefined && {
+          derivedKeys: toJS(item.derivedKeys),
+        }),
+        ...(item.keyDerivationRecord !== undefined && {
+          keyDerivationRecord: toJS(item.keyDerivationRecord),
         }),
       })),
     };
@@ -172,11 +193,98 @@ export class CardStore {
     this.cards.delete(`${identity.id}:${identity.publicKey}`);
   }
 
+  /** Observe each connection's Hello, including a new identity after reset. */
+  observeApplet(
+    applet: MonoidApplet,
+    initialHello?: MonoidAppletHello,
+  ): MonoidApplet {
+    const identities = new WeakMap<MonoidApplet, MonoidAppletHello>();
+    const store = this;
+    const observe = (
+      connection: MonoidApplet,
+      hello: MonoidAppletHello,
+    ): void => {
+      identities.set(connection, hello);
+      const cached = store.get({
+        id: uint8ArrayToHex(hello.id),
+        publicKey: uint8ArrayToHex(hello.publicKey),
+      });
+      if (cached)
+        runInAction(() => {
+          cached.alias = hello.alias;
+          cached.authority = hello.authority;
+          cached.allowPeerExtension = hello.allowPeerExtension;
+          cached.bundle =
+            hello.bundle === false ? false : uint8ArrayToHex(hello.bundle);
+        });
+    };
+    const observed: MonoidApplet = Object.create(applet, {
+      hello: {
+        async value(
+          this: MonoidApplet,
+          request: Parameters<MonoidApplet['hello']>[0],
+        ) {
+          const hello = await applet.hello.call(this, request);
+          observe(this, hello);
+          return hello;
+        },
+      },
+      // PINs and extension packets do not change cached items or membership.
+      ...Object.fromEntries(
+        (
+          [
+            'create',
+            'set',
+            'setAlias',
+            'remove',
+            'importItem',
+            'createRandomKey',
+            'setAppletGrant',
+            'removeAppletGrant',
+            'createBundle',
+            'joinBundle',
+            'reset',
+          ] as const
+        ).map(name => [
+          name,
+          {
+            async value(this: MonoidApplet, request: never) {
+              // Every writable connection greets the card before authentication.
+              const hello = identities.get(this)!;
+              const identity = {
+                id: uint8ArrayToHex(hello.id),
+                publicKey: uint8ArrayToHex(hello.publicKey),
+              };
+              try {
+                const command: (request: never) => Promise<unknown> =
+                  applet[name];
+                return await command.call(this, request);
+              } finally {
+                // A lost acknowledgement may still have changed the card. Never retry.
+                store.forget(identity);
+              }
+            },
+          },
+        ]),
+      ),
+    });
+    if (initialHello) observe(observed, initialHello);
+    return observed;
+  }
+
   set(card: ScannedCardData): CardState {
+    if (card instanceof CardState) {
+      this.cards.set(`${card.id}:${card.publicKey}`, card);
+      return card;
+    }
+
     const existing = this.get(card);
 
     if (existing) {
       existing.bundle = card.bundle;
+      existing.alias = card.alias;
+      existing.authority = card.authority;
+      existing.allowPeerExtension = card.allowPeerExtension;
       existing.items = card.items.map(item => new CardItem(item));
       existing.requiresPINSetup = false;
       return existing;

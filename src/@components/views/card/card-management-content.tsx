@@ -9,20 +9,39 @@ import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import type {CardInformation} from '../../../@lib/global-platform/card-information.js';
-import {CardPlaceholder, CardPreview} from '../../@monoid/card-preview.js';
+import {
+  APPLET_NAMES,
+  APPLET_SHORT_NAMES,
+  type AppletStage,
+  cardName,
+  cardNameWithId,
+  getAppletCatalog,
+} from '../../../@lib/monoid/index.js';
+import type {
+  CardMaintenanceOperation,
+  CardMaintenanceRestoreResult,
+} from '../../../@services/index.js';
+import {
+  CardGrid,
+  CardPlaceholder,
+  CardPreview,
+  type CardScanState,
+} from '../../@monoid/card-preview.js';
 import {AppIcon} from '../../@ui/app-icon.js';
 import {AppletIcon} from '../../@ui/feature-icons.js';
 import {InfoSection} from '../../@ui/info-section.js';
 import {
   IconList,
-  LIST_ICON_SIZE,
   ListItem,
+  ListItemButton,
   ListItemContent,
   ListItemDescription,
   ListItemName,
 } from '../../@ui/list.js';
-import {InfoMessage} from '../../@ui/message-content.js';
-import {CardSetupInformation} from '../safe/index.js';
+import {InfoMessage, WarningMessage} from '../../@ui/message-content.js';
+import {Step, Steps} from '../../@ui/step.js';
+import {Symbol} from '../../@ui/symbol.js';
+import {CardResourceIssues, CardSetupInformation} from '../safe/index.js';
 
 const Empty = styled.div`
   flex: 1;
@@ -103,26 +122,183 @@ const Hero = styled.div`
   margin: 12px auto 30px;
 `;
 
+function CardAppletHero({
+  id,
+  alias,
+  bundled,
+  recovery,
+}: {
+  id?: string;
+  alias?: string | false;
+  bundled?: boolean;
+  recovery?: boolean;
+}): ReactNode {
+  return (
+    <Hero>
+      <CardPreview
+        id={id}
+        alias={alias}
+        aliasToggle
+        subtitle={bundled ? 'bundle' : undefined}
+        $interrupted={recovery}
+      />
+    </Hero>
+  );
+}
+
+/** Items a restore pass skipped, then applet access it could not restore. */
+function RestoreReport({
+  report,
+  items,
+}: {
+  report: CardMaintenanceRestoreResult;
+  items?: readonly {index: string; alias?: string}[];
+}): ReactNode {
+  return (
+    <>
+      {!!report.issues.length && (
+        <CardResourceIssues issues={report.issues} items={items} />
+      )}
+      {!!report.droppedGrants.length && (
+        <WarningMessage>
+          Access not restored for{' '}
+          {report.droppedGrants
+            .map(aid => {
+              const applet = getAppletCatalog().find(
+                applet =>
+                  (applet.instanceAid ?? applet.appletAid)?.toLowerCase() ===
+                  aid,
+              );
+              return applet ? APPLET_NAMES[applet.stage] : aid;
+            })
+            .join(', ')}
+        </WarningMessage>
+      )}
+    </>
+  );
+}
+
+export function CardMaintenanceContent({
+  operation,
+  processing,
+  complete = false,
+  report,
+}: {
+  operation: CardMaintenanceOperation;
+  processing: boolean;
+  complete?: boolean;
+  report?: CardMaintenanceRestoreResult;
+}): ReactNode {
+  const replacing = ['ready', 'replacing'].includes(operation.phase);
+  const activeStep =
+    complete || report?.complete ? 4 : report || !replacing ? 3 : 2;
+  const itemCount = operation.archive?.items.length ?? 0;
+  const color = operation.archive ? 'warning' : 'primary';
+  const scanInstruction = operation.card.id
+    ? `Scan card ${cardNameWithId({id: operation.card.id, alias: operation.card.alias})}`
+    : 'Scan this card';
+  const appletSummary = [
+    ...new Set([
+      ...(operation.replaceStages ?? []),
+      ...(operation.selectedOptionalStages ?? []),
+    ]),
+  ]
+    .map(stage => APPLET_SHORT_NAMES[stage])
+    .filter(Boolean)
+    .join(' · ');
+
+  return (
+    <>
+      <CardAppletHero
+        id={operation.card.id}
+        alias={operation.card.alias}
+        bundled={!!operation.card.bundle}
+        recovery={!!operation.archive}
+      />
+      <Steps>
+        <Step
+          title="Save recovery"
+          numero={1}
+          activeNumero={activeStep}
+          color={color}
+          summary={`${itemCount} ${itemCount === 1 ? 'item' : 'items'}`}
+        />
+        <Step
+          title={
+            operation.mode === 'fresh'
+              ? 'Fresh install'
+              : operation.mode === 'update'
+                ? 'Update applets'
+                : 'Reinstall applets'
+          }
+          numero={2}
+          activeNumero={activeStep}
+          color={color}
+          processing={processing && activeStep === 2}
+          summary={appletSummary || 'Complete'}
+        >
+          {activeStep === 2 && (
+            <InfoMessage>
+              {scanInstruction}{' '}
+              {operation.mode === 'fresh'
+                ? 'to install fresh applets.'
+                : operation.mode === 'update'
+                  ? 'to update its applets.'
+                  : 'to reinstall its applets.'}
+            </InfoMessage>
+          )}
+        </Step>
+        <Step
+          title="Restore"
+          numero={3}
+          activeNumero={activeStep}
+          color={color}
+          processing={processing && activeStep === 3}
+          summary="Complete"
+          keepExpanded
+        >
+          {activeStep === 3 && !report && (
+            <InfoMessage>
+              {`${scanInstruction} to restore its ${itemCount} ${itemCount === 1 ? 'item' : 'items'} and applet access.`}
+            </InfoMessage>
+          )}
+          {report && (
+            <RestoreReport report={report} items={operation.archive?.items} />
+          )}
+        </Step>
+      </Steps>
+    </>
+  );
+}
+
 const Applets = styled(IconList)`
   flex: none;
   margin-top: 4px;
 `;
 
+export function CardSupersededMaintenanceNotice({
+  operation,
+}: {
+  operation: CardMaintenanceOperation;
+}): ReactNode {
+  const count = operation.archive?.items.length;
+  return (
+    <WarningMessage>
+      This card still holds unfinished maintenance of card{' '}
+      {cardName({
+        id: operation.card.id ?? 'unknown',
+        alias: operation.card.alias,
+      })}{' '}
+      from before it was set up again.{' '}
+      {count !== undefined &&
+        `${count} ${count === 1 ? 'item was' : 'items were'} never restored. `}
+      Discard it from the menu.
+    </WarningMessage>
+  );
+}
+
 const AppletRow = styled(ListItem)`
   align-items: center;
-`;
-
-const Symbol = styled.span`
-  width: ${LIST_ICON_SIZE}px;
-  height: ${LIST_ICON_SIZE}px;
-  border-radius: ${LIST_ICON_SIZE / 4}px;
-  background: var(--ion-color-primary);
-  color: var(--ion-color-primary-contrast);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  font-size: 28px;
 `;
 
 const Status = styled(AppIcon)<{$status: 'unknown' | 'update' | 'installed'}>`
@@ -137,35 +313,120 @@ const Status = styled(AppIcon)<{$status: 'unknown' | 'update' | 'installed'}>`
 `;
 
 export type AppletDisplay = {
-  name: 'identity' | 'monoid';
+  name: AppletStage;
   installed: boolean;
   version?: string;
   unknown?: boolean;
   update?: boolean;
+  selectable?: boolean;
 };
+
+export function CardMaintenanceCards({
+  cards,
+}: {
+  cards: readonly {
+    publicKey: string;
+    id?: string;
+    alias?: string | false;
+    complete: boolean;
+    scan: CardScanState;
+    status: string;
+    interrupted?: boolean;
+  }[];
+}): ReactNode {
+  return (
+    <CardGrid>
+      {cards.map(card => (
+        <CardPreview
+          key={card.publicKey}
+          id={card.id}
+          alias={card.alias}
+          aliasToggle
+          description={card.status}
+          $scan={card.scan}
+          $interrupted={card.interrupted}
+        />
+      ))}
+    </CardGrid>
+  );
+}
+
+/**
+ * A batch reads like Sync: the saved recoveries, then one step in which the
+ * card grid shows which card to scan next. The current card's restore report
+ * follows the grid.
+ */
+export function CardMaintenanceBatchContent({
+  mode,
+  cards,
+  complete,
+  processing,
+  report,
+  items,
+}: {
+  mode: CardMaintenanceOperation['mode'];
+  cards: Parameters<typeof CardMaintenanceCards>[0]['cards'];
+  complete: boolean;
+  processing: boolean;
+  report?: CardMaintenanceRestoreResult;
+  items?: readonly {index: string; alias?: string}[];
+}): ReactNode {
+  const activeStep = complete ? 3 : 2;
+
+  return (
+    <Steps>
+      <Step
+        title="Save recovery"
+        numero={1}
+        activeNumero={activeStep}
+        color="warning"
+        summary={`${cards.length} cards`}
+      />
+      <Step
+        title={mode === 'update' ? 'Update applets' : 'Reinstall applets'}
+        numero={2}
+        activeNumero={activeStep}
+        color="warning"
+        processing={processing}
+        keepExpanded
+      >
+        <CardMaintenanceCards cards={cards} />
+        {!report && (
+          <InfoMessage>
+            {mode === 'update'
+              ? 'Each card is updated and restored before the next one.'
+              : 'Each card is reinstalled and restored before the next one.'}
+          </InfoMessage>
+        )}
+        {report && <RestoreReport report={report} items={items} />}
+      </Step>
+    </Steps>
+  );
+}
 
 export function CardAppletsContent({
   id,
+  alias,
   bundled,
   recovery,
-  manualRestore,
   applets,
+  onSelectApplet,
 }: {
   id?: string;
+  alias?: string | false;
   bundled?: boolean;
   recovery?: boolean;
-  manualRestore?: boolean;
   applets: AppletDisplay[];
+  onSelectApplet?: (stage: AppletStage) => void;
 }): ReactNode {
   return (
     <>
-      <Hero>
-        <CardPreview
-          id={id}
-          description={bundled ? 'bundle' : undefined}
-          $interrupted={recovery}
-        />
-      </Hero>
+      <CardAppletHero
+        id={id}
+        alias={alias}
+        bundled={bundled}
+        recovery={recovery}
+      />
       <Applets>
         {applets.map(applet => {
           const status = applet.unknown
@@ -173,18 +434,13 @@ export function CardAppletsContent({
             : applet.update
               ? 'update'
               : 'installed';
-
-          return (
-            <AppletRow key={applet.name}>
+          const content = (
+            <>
               <Symbol>
                 <AppIcon icon={AppletIcon} aria-hidden="true" />
               </Symbol>
               <ListItemContent>
-                <ListItemName>
-                  {applet.name === 'identity'
-                    ? 'Monoid Identity Applet'
-                    : 'Monoid Applet'}
-                </ListItemName>
+                <ListItemName>{APPLET_NAMES[applet.name]}</ListItemName>
                 <ListItemDescription>
                   {applet.unknown
                     ? 'Unknown'
@@ -212,13 +468,21 @@ export function CardAppletsContent({
                   }
                 />
               )}
-            </AppletRow>
+            </>
+          );
+          return applet.selectable ? (
+            <ListItemButton
+              key={applet.name}
+              type="button"
+              onClick={() => onSelectApplet?.(applet.name)}
+            >
+              {content}
+            </ListItemButton>
+          ) : (
+            <AppletRow key={applet.name}>{content}</AppletRow>
           );
         })}
       </Applets>
-      {manualRestore && (
-        <InfoMessage>Restore your items from another bundle card.</InfoMessage>
-      )}
     </>
   );
 }

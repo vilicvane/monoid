@@ -15,10 +15,33 @@ const targets = [
     appletAid: 'f06d6f6e6f69640001',
   },
   {
+    name: 'monoidlib',
+    stage: 'library',
+    packageAid: 'f06d6f6e6f696404',
+  },
+  {
     name: 'monoid',
     stage: 'monoid',
     packageAid: 'f06d6f6e6f696402',
     appletAid: 'f06d6f6e6f69640201',
+    dependencies: ['identity', 'library'],
+  },
+  {
+    name: 'monoidsecuritykey',
+    stage: 'security-key',
+    packageAid: 'f06d6f6e6f696403',
+    appletAid: 'f06d6f6e6f69640301',
+    instanceAid: 'a0000006472f0001',
+    optional: true,
+    dependencies: ['library', 'monoid'],
+  },
+  {
+    name: 'monoidotp',
+    stage: 'otp',
+    packageAid: 'f06d6f6e6f696405',
+    appletAid: 'f06d6f6e6f69640501',
+    optional: true,
+    dependencies: ['identity', 'library', 'monoid'],
   },
 ];
 
@@ -55,19 +78,30 @@ export function readAppletPackage(cap, target) {
   );
   assert.equal(packageAid, target.packageAid, 'Unexpected package AID');
   const applets = entries[`${directory}Applet.cap`];
-  assert(applets, 'CAP has no applet');
-  assert.equal(applets[3], 1, 'Expected exactly one applet');
-  assert.equal(
-    Buffer.from(applets.subarray(5, 5 + applets[4])).toString('hex'),
-    target.appletAid,
-    'Unexpected applet AID',
-  );
+
+  if (target.appletAid) {
+    assert(applets, 'CAP has no applet');
+    assert.equal(applets[3], 1, 'Expected exactly one applet');
+    assert.equal(
+      Buffer.from(applets.subarray(5, 5 + applets[4])).toString('hex'),
+      target.appletAid,
+      'Unexpected applet AID',
+    );
+  } else if (applets) {
+    assert.equal(applets[3], 0, 'Library CAP must not contain applets');
+    assert.equal(applets.length, 4, 'Invalid empty Applet component');
+  }
 
   const code = Buffer.concat(
     components.flatMap(([name, tag]) => {
       const component = entries[`${directory}${name}.cap`];
 
-      if (!component && name === 'Export') return [];
+      if (
+        !component &&
+        (name === 'Export' || (name === 'Applet' && !target.appletAid))
+      ) {
+        return [];
+      }
 
       assert(component, `Missing ${name} component`);
       assert.equal(component[0], tag, `Invalid ${name} tag`);
@@ -84,7 +118,26 @@ export function readAppletPackage(cap, target) {
     code.length > 0 && code.length <= 220 * 256 - 4,
     'CAP exceeds short LOAD block capacity',
   );
-  return {code, packageAid, appletAid: target.appletAid};
+  const importComponent = entries[`${directory}Import.cap`];
+  const imports = [];
+  let offset = 4;
+  for (let index = 0; index < importComponent[3]; index++) {
+    const length = importComponent[offset + 2];
+    assert(length >= 5 && length <= 16, 'Invalid imported package AID');
+    offset += 3;
+    assert(
+      offset + length <= importComponent.length,
+      'Invalid Import component',
+    );
+    imports.push(
+      Buffer.from(importComponent.subarray(offset, offset + length)).toString(
+        'hex',
+      ),
+    );
+    offset += length;
+  }
+  assert.equal(offset, importComponent.length, 'Invalid Import component');
+  return {code, packageAid, appletAid: target.appletAid, imports};
 }
 
 const sha256 = value => createHash('sha256').update(value).digest('hex');
@@ -119,7 +172,8 @@ export async function prepareApplets(sourceDirectory) {
     }),
   );
 
-  // Keep a complete bundle: a missing or older source must not downgrade one part.
+  // Optional installation choices still ship as one coherent source bundle.
+  // A missing or older source must not downgrade one part.
   // Compare recorded source times; Git checkout does not preserve file mtimes.
   const useSource = sources.every((source, index) => {
     if (!source) return false;
@@ -136,7 +190,7 @@ export async function prepareApplets(sourceDirectory) {
     );
   }
 
-  // Validate both CAPs before writing any bundle artifacts.
+  // Validate every CAP before writing any bundle artifacts.
   const bundle = await Promise.all(
     targets.map(async (target, index) => {
       const saved = previous.find(item => item.name === target.name);
@@ -178,8 +232,13 @@ export async function prepareApplets(sourceDirectory) {
     );
     manifest.push({
       name: item.name,
+      stage: item.stage,
       packageAid: item.packageAid,
       appletAid: item.appletAid,
+      instanceAid: item.instanceAid,
+      optional: item.optional,
+      dependencies: item.dependencies,
+      imports: item.imports,
       sourceModifiedAt: item.sourceModifiedAt,
       capSha256: sha256(item.cap),
       loadSha256: sha256(item.code),
@@ -192,10 +251,23 @@ export async function prepareApplets(sourceDirectory) {
     `${JSON.stringify(manifest, null, 2)}\n`,
   );
   const entries = bundle
-    .map(
-      item =>
-        `  {stage: '${item.stage}', packageAid: '${item.packageAid}', appletAid: '${item.appletAid}', codeURL: new URL('../../@assets/applets/${item.name}.bin', import.meta.url), sha256: '${sha256(item.code)}'}`,
-    )
+    .map(item => {
+      const fields = [
+        `stage: '${item.stage}'`,
+        `packageAid: '${item.packageAid}'`,
+        ...(item.appletAid ? [`appletAid: '${item.appletAid}'`] : []),
+        ...(item.instanceAid ? [`instanceAid: '${item.instanceAid}'`] : []),
+        ...(item.optional ? ['optional: true'] : []),
+        ...(item.dependencies
+          ? [
+              `dependencies: [${item.dependencies.map(stage => `'${stage}'`).join(', ')}]`,
+            ]
+          : []),
+        `codeURL: new URL('../../@assets/applets/${item.name}.bin', import.meta.url)`,
+        `sha256: '${sha256(item.code)}'`,
+      ];
+      return `  {${fields.join(', ')}}`;
+    })
     .join(',\n');
   await writeChangedFile(
     path.join(root, 'src/@lib/monoid/@applet-bundle.ts'),

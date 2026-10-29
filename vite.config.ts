@@ -1,8 +1,10 @@
 import react from '@vitejs/plugin-react';
 import {defineConfig} from 'vite';
 
+import {viteHmrReconnect} from './scripts/vite-hmr-reconnect.mjs';
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), viteHmrReconnect()],
   esbuild: {
     target: 'es2024',
   },

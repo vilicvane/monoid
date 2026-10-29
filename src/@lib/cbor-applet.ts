@@ -3,7 +3,7 @@ import * as x from 'x-value';
 import {xCBOR} from '../@x-value/index.js';
 
 import type {AppletCommandDefinition} from './applet.js';
-import {Applet} from './applet.js';
+import {Applet, ISO7816_SW_CODE_TEXT_MAP} from './applet.js';
 
 export class CBORApplet<
   TCommandDefinitions,
@@ -29,7 +29,9 @@ export class CBORApplet<
     const decoded = xCBOR.unpack(data);
 
     if (XCBORErrorResponse.is(decoded)) {
-      throw new CBORAppletError(decoded.error);
+      const ErrorClass =
+        CARD_ERROR_CLASSES.get(decoded.error.code) ?? CBORAppletError;
+      throw new ErrorClass(decoded.error);
     }
 
     return decoded;
@@ -95,12 +97,37 @@ type CBORCommandDefinitionsToMethods<
 const XCBORErrorResponse = x.object({
   error: x.object({
     code: x.string,
+    exception: x.string.optional(),
+    reason: x.number.optional(),
   }),
 });
 
 export class CBORAppletError extends Error {
-  constructor(readonly source: {code: string}) {
-    super(source.code);
+  constructor(
+    readonly source: {code: string; exception?: string; reason?: number},
+  ) {
+    let message = source.code;
+    if (source.code === 'INTERNAL' && source.exception) {
+      if (
+        source.exception === 'ISOException' &&
+        typeof source.reason === 'number'
+      ) {
+        const sw = source.reason & 0xffff;
+        message = `0x${sw.toString(16).padStart(4, '0')} ${ISO7816_SW_CODE_TEXT_MAP.get(sw) ?? 'Unknown SW'}`;
+      } else {
+        message += `: ${source.exception}${source.reason === undefined ? '' : ` (${source.reason})`}`;
+      }
+    }
+    super(message);
     this.name = new.target.name;
   }
 }
+
+export class CardItemNotFoundError extends CBORAppletError {}
+
+export class CardItemExistsError extends CBORAppletError {}
+
+const CARD_ERROR_CLASSES = new Map([
+  ['NOT_FOUND', CardItemNotFoundError],
+  ['EXISTS', CardItemExistsError],
+]);

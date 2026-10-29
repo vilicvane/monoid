@@ -13,6 +13,7 @@ const hello = {
   id: bytes(card.id),
   publicKey: bytes(card.publicKey),
   bundle: false,
+  authority: false,
   pins: {access: 5, secret: 5},
 };
 const oldPIN = 'old-pin',
@@ -74,7 +75,7 @@ for (const tries of [4, 0]) {
     };
     await assert.rejects(state.run(), {
       message: tries
-        ? 'Incorrect Secret PIN, tries remaining: 4'
+        ? 'Incorrect PIN, tries remaining: 4'
         : 'Secret PIN blocked',
     });
     assert.equal(attempts, 1);

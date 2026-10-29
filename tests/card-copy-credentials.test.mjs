@@ -1,0 +1,345 @@
+import assert from 'node:assert/strict';
+import {test} from 'node:test';
+
+import {CardBackupSession} from '../.bld/app/@components/views/safe/@card/card-backup-session.js';
+import {AppletISOError} from '../.bld/app/@lib/applet.js';
+import {CardItemNotFoundError} from '../.bld/app/@lib/cbor-applet.js';
+
+import {credential} from './helpers/security-key-credential.mjs';
+
+const PIN = 'Secret-42';
+const hex = value => Buffer.from(value).toString('hex');
+const bytes = value => Uint8Array.from(Buffer.from(value, 'hex'));
+const signal = () => new AbortController().signal;
+const progress = () => {};
+
+function card(id, entries) {
+  const records = new Map(
+    entries.map(item => [item.index, structuredClone(item)]),
+  );
+  const calls = [];
+  return {
+    records,
+    calls,
+    hello: {
+      version: 1,
+      id: bytes(`0000000${id}`),
+      publicKey: Uint8Array.from([4, ...new Array(64).fill(id)]),
+      bundle: new Uint8Array(32).fill(1),
+      authority: false,
+      pins: {access: 5, secret: 5},
+    },
+    async authenticate(request) {
+      calls.push(['authenticate']);
+      assert.deepEqual(request, {secret: true, pin: PIN});
+    },
+    async list() {
+      return {
+        items: [...records.values()].map(
+          ({index, metadata, alias, secret}) => ({
+            index: bytes(index),
+            metadata: bytes(metadata),
+            alias,
+            secret,
+          }),
+        ),
+      };
+    },
+    async view({index}) {
+      calls.push(['view', hex(index)]);
+      const item = records.get(hex(index));
+      if (!item) throw new CardItemNotFoundError({code: 'NOT_FOUND'});
+      return {
+        metadata: bytes(item.metadata),
+        alias: item.alias,
+        secret: item.secret,
+      };
+    },
+    async get({index}) {
+      calls.push(['get', hex(index)]);
+      const item = records.get(hex(index));
+      assert.equal(item.secret, false, 'never read Secret plaintext');
+      this.afterGet?.();
+      return {data: bytes(item.data)};
+    },
+    async exportItem({index}) {
+      calls.push(['export', hex(index)]);
+      const item = records.get(hex(index));
+      return {
+        metadata: bytes(item.metadata),
+        alias: item.alias,
+        data: new TextEncoder().encode(JSON.stringify(item)),
+      };
+    },
+    async importItem(request) {
+      const index = hex(request.index);
+      calls.push(['import', index]);
+      const incoming = JSON.parse(new TextDecoder().decode(request.data));
+      assert.equal(incoming.index, index);
+      assert.equal(incoming.metadata, hex(request.metadata));
+      assert.equal(incoming.alias, request.alias);
+      const current = records.get(index);
+      if (current) {
+        try {
+          assert.deepEqual(current, incoming);
+        } catch {
+          throw new AppletISOError(
+            'Conflicting item',
+            0x6985,
+            new Uint8Array(),
+          );
+        }
+      } else {
+        records.set(index, incoming);
+      }
+      this.afterImport?.();
+    },
+  };
+}
+
+async function ready(sourceEntries, targetEntries) {
+  const source = card(1, sourceEntries);
+  const target = card(2, targetEntries);
+  const session = new CardBackupSession();
+  await session.readSource(source, source.hello, signal());
+  await session.addTarget(target.hello);
+  await session.confirmTargets();
+  await session.exportItems(source, source.hello, PIN, signal(), progress);
+  return {source, target, session};
+}
+
+test('Copy skips identical credentials, adds distinct indices and keeps destination-only records', async () => {
+  const first = credential(1);
+  const second = credential(2);
+  const third = credential(3);
+  const {session, target} = await ready([first, second], [first, third]);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
+  assert.equal(session.backup.complete, true);
+  assert.deepEqual([...target.records.values()], [first, third, second]);
+  assert.deepEqual(
+    target.calls.filter(([name]) => name === 'import'),
+    [['import', second.index]],
+  );
+});
+
+test('Copy preserves a conflicting credential while copying independent records', async () => {
+  const first = credential(1);
+  const conflicting = credential(1, {fields: [[6, 'other name']]});
+  const second = credential(2);
+  const {session, target} = await ready([first, second], [conflicting]);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
+  assert.equal(session.backup.complete, true);
+  assert.equal(session.backup.targets[0].items[0].issue?.reason, 'Conflict');
+  assert.equal(session.backup.targets[0].items[0].imported, false);
+  assert.equal(session.backup.targets[0].items[1].imported, true);
+  assert.deepEqual([...target.records.values()], [conflicting, second]);
+  assert.deepEqual(
+    target.calls.filter(([name]) => name === 'import'),
+    [['import', second.index]],
+  );
+});
+
+test('Copy skips identical key and payload without overwriting the destination alias', async () => {
+  const first = credential(1, {alias: 'Source'});
+  const existing = {...first, alias: 'Destination'};
+  const {session, target} = await ready([first], [existing]);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
+  assert.equal(session.backup.complete, true);
+  assert.equal(
+    target.calls.some(([name]) => name === 'import'),
+    false,
+  );
+  assert.deepEqual(target.records.get(first.index), existing);
+});
+
+test('Copy refuses a Secret credential index without reading its body', async () => {
+  const first = credential(1);
+  const {session, target} = await ready([first], [{...first, secret: true}]);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
+  assert.equal(session.backup.targets[0].items[0].issue?.reason, 'Conflict');
+  assert.equal(session.backup.complete, true);
+  assert.equal(session.backup.importStarted, false);
+  assert.deepEqual(
+    target.calls.map(([name]) => name),
+    ['authenticate', 'view'],
+  );
+});
+
+test('cancellation during credential comparison does not mark it imported or send a write', async () => {
+  const first = credential(1);
+  const {session, target} = await ready([first], [first]);
+  const controller = new AbortController();
+  target.afterGet = () => controller.abort();
+  await assert.rejects(
+    session.importItems(target, target.hello, PIN, controller.signal, progress),
+    /cancelled/,
+  );
+  assert.equal(session.backup.targets[0].items[0].imported, false);
+  assert.equal(session.backup.importStarted, false);
+  assert.equal(
+    target.calls.some(([name]) => name === 'import'),
+    false,
+  );
+});
+
+test('cancellation after a credential import preserves its acknowledgement and sends no next command', async () => {
+  const first = credential(1);
+  const second = credential(2);
+  const {session, target} = await ready([first, second], []);
+  const controller = new AbortController();
+  target.afterImport = () => controller.abort();
+  await assert.rejects(
+    session.importItems(target, target.hello, PIN, controller.signal, progress),
+    /cancelled/,
+  );
+  assert.deepEqual(
+    session.backup.targets[0].items.map(item => item.imported),
+    [true, false],
+  );
+  assert.deepEqual(
+    target.calls.filter(([name]) => name === 'view' || name === 'import'),
+    [
+      ['view', first.index],
+      ['import', first.index],
+    ],
+  );
+});
+
+test('Copy keeps same-RP same-user registrations from different scopes as independent records', async () => {
+  const first = credential(1, {scope: 1});
+  const second = credential(2, {scope: 2});
+  const {session, source, target} = await ready([first, second], []);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
+  assert.equal(session.backup.complete, true);
+  assert.deepEqual([...target.records.values()], [first, second]);
+  assert.deepEqual(
+    target.calls
+      .filter(([name]) => name === 'import')
+      .map(([, index]) => index),
+    [first.index, second.index],
+  );
+  assert.ok(
+    [...source.calls, ...target.calls].every(
+      ([name]) => !name.toLowerCase().includes('grant'),
+    ),
+  );
+});
+
+test('Copy carries old and malformed source records unchanged', async () => {
+  for (const item of [
+    credential(1, {fields: [[10, undefined]]}),
+    credential(1, {metadata: '11'.repeat(32)}),
+    credential(1, {data: 'ff'}),
+    credential(1, {secret: true}),
+  ]) {
+    const {source, target, session} = await ready([item], []);
+    await session.importItems(target, target.hello, PIN, signal(), progress);
+    assert.deepEqual(target.records.get(item.index), item);
+    assert.equal(session.backup.complete, true);
+    if (item.secret)
+      assert.equal(
+        source.calls.some(([name]) => name === 'get'),
+        false,
+      );
+  }
+});
+
+test('Copy skips malformed destination data without replacing or marking it imported', async () => {
+  const first = credential(1);
+  const existing = credential(1, {fields: [[10, undefined]]});
+  const {session, target} = await ready([first], [existing]);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
+  assert.equal(session.backup.targets[0].items[0].issue?.reason, 'Conflict');
+  assert.equal(session.backup.complete, true);
+  assert.deepEqual(target.records.get(first.index), existing);
+  assert.equal(
+    target.calls.some(([name]) => name === 'import'),
+    false,
+  );
+  assert.equal(session.backup.importStarted, false);
+});
+
+test('Copy finishes independent items after skipping an incompatible destination record', async () => {
+  const first = credential(1);
+  const second = credential(2);
+  const existing = credential(1, {fields: [[1, 2]]});
+  const {session, target} = await ready([first, second], [existing]);
+  const updates = [];
+  await session.importItems(target, target.hello, PIN, signal(), (...values) =>
+    updates.push(values),
+  );
+  assert.deepEqual([...target.records.values()], [existing, second]);
+  assert.equal(session.backup.complete, true);
+  assert.deepEqual(
+    session.backup.targets[0].items.map(item => [item.index, item.imported]),
+    [
+      [first.index, false],
+      [second.index, true],
+    ],
+  );
+  assert.deepEqual(updates.at(-1), [2, 2]);
+});
+
+test('an incompatible source record does not block exporting a valid credential', async () => {
+  const first = credential(1);
+  const second = credential(2, {fields: [[10, undefined]]});
+  const source = card(1, [first, second]);
+  const target = card(2, []);
+  const session = new CardBackupSession();
+  await session.readSource(source, source.hello, signal());
+  await session.addTarget(target.hello);
+  await session.confirmTargets();
+  await session.exportItems(source, source.hello, PIN, signal(), progress);
+  assert.ok(session.backup.targets[0].items[0].exported);
+  assert.equal(session.backup.targets[0].items.length, 2);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
+  assert.equal(session.backup.complete, true);
+  assert.deepEqual([...target.records.values()], [first, second]);
+  assert.deepEqual(
+    source.calls
+      .filter(([name]) => name === 'export')
+      .map(([, index]) => index),
+    [first.index, second.index],
+  );
+});
+
+test('Copy preserves opaque export metadata without feature validation', async () => {
+  const first = credential(1);
+  const source = card(1, [first]);
+  const target = card(2, []);
+  const session = new CardBackupSession();
+  await session.readSource(source, source.hello, signal());
+  await session.addTarget(target.hello);
+  await session.confirmTargets();
+  const exportItem = source.exportItem;
+  source.exportItem = async function (request) {
+    return {
+      ...(await exportItem.call(this, request)),
+      metadata: new Uint8Array(64),
+    };
+  };
+  await session.exportItems(source, source.hello, PIN, signal(), progress);
+  assert.equal(
+    session.backup.targets[0].items[0].exported.metadata,
+    '00'.repeat(64),
+  );
+});
+
+test('Copy carries a legacy OTP pair and undecodable Security Key bytes intact', async () => {
+  const records = [
+    {index: '05010000000000000001', secret: true, metadata: '', data: '1234'},
+    {
+      index: 'f2010000000000000001',
+      secret: false,
+      metadata: '05010000000000000001',
+      data: 'ff',
+      alias: 'Old OTP',
+    },
+    credential(1, {data: 'ff'}),
+  ];
+  const {session, target} = await ready(records, []);
+  await session.importItems(target, target.hello, PIN, signal(), progress);
+  assert.deepEqual([...target.records.values()], records);
+  assert.equal(session.backup.complete, true);
+  assert.ok(session.backup.targets[0].items.every(item => !item.issue));
+});

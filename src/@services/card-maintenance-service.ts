@@ -1,80 +1,150 @@
 import {randomBytes, sha256, toUtf8Bytes} from 'ethers';
 import {observable, runInAction} from 'mobx';
 
-import {PublicKey, SafeIndex} from '../@atomics.js';
+import {
+  type MonoidIdHex,
+  type MonoidPIN,
+  PublicKey,
+  type PublicKeyHex,
+  SafeIndex,
+} from '../@atomics.js';
+import {CBORAppletError} from '../@lib/cbor-applet.js';
 import {
   type CardInformation,
   readCardInformation,
 } from '../@lib/global-platform/card-information.js';
+import {HeldPINs} from '../@lib/held-pins.js';
 import {
   type AppletInstallProgress,
   type AppletReplacementCheckpoint,
   type AppletReplacementProgress,
+  type AppletStage,
+  CardItemConflictError,
+  type CardItemIssue,
+  type IdentityInstallationOptions,
   type MonoidApplet,
   type MonoidAppletHello,
+  MonoidCardError,
+  acceptMatchingItem,
+  assertSameCardWithBundle,
+  cardItemIssue,
+  cardName,
   createMonoidApplet,
+  getAppletCatalog,
+  getAppletDependents,
   getBundledMonoidAppletAid,
   getCardMaintenanceFingerprint,
+  getMonoidAppletBundleHash,
   getMonoidAppletBundleHashes,
+  hasMatchingItem,
   monoidCommandDefinitions,
   replaceMonoidApplets,
 } from '../@lib/monoid/index.js';
+import {isOperationCancelled} from '../@lib/operation-cancelled.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../@utils/index.js';
 import {xCBOR} from '../@x-value/index.js';
 
 import type {StorageService} from './storage-service.js';
 
 export type CardMaintenanceMode = 'update' | 'reinstall' | 'fresh';
+
 export type CardMaintenancePhase =
   | 'ready'
   | 'replacing'
   | 'restore'
-  | 'manual-restore'
+  /** Legacy PIN-setup tasks remain available for an explicit Start over. */
   | 'setup';
 
 export type CardMaintenanceItem = {
   index: string;
+  /** Stable archive field for item metadata; wire requests use `metadata`. */
   key?: string;
   alias?: string;
   secret: boolean;
 };
 
 export type CardMaintenanceArchive = {
-  items: (CardMaintenanceItem & {data: string})[];
+  source?: CardMaintenanceBundleRecovery['source'];
+  items: (CardMaintenanceItem & {data: string; plaintext?: string})[];
   checksum: string;
+};
+
+export type CardMaintenanceBundleRecovery = {
+  source: {id: string; publicKey: string; bundle: string};
+  items: CardMaintenanceArchive['items'];
 };
 
 export type CardMaintenanceOperation = {
   id: string;
+  batchId?: string;
   createdAt: number;
   mode: CardMaintenanceMode;
   phase: CardMaintenancePhase;
+  /** A prior attempt may have written to the card even with no current checkpoint. */
+  restarted?: boolean;
   card: {
-    id?: string;
-    publicKey?: string;
+    id?: MonoidIdHex;
+    alias?: string | false;
+    publicKey?: PublicKeyHex;
     bundle: string | false;
     appletAid: string;
     fingerprint: string;
   };
   bundleHashes: string[];
+  selectedOptionalStages?: AppletStage[];
+  replaceStages?: AppletStage[];
+  /** Public Identity trust selected before fresh installation, retained for resume. */
+  authority?: {url: string; publicKey: string};
+  /** Public authorization scopes only; installation tokens are never copied. */
+  grants?: string[];
+  grantsChecksum?: string;
+  /** Public token hashes distinguish old grants from an acknowledged re-grant. */
+  previousGrantTokens?: Record<string, string>;
+  previousGrantTokensChecksum?: string;
   archive?: CardMaintenanceArchive;
+  /** Only a complete pass of definite card rejections authorizes omission. */
+  rejectedItems?: CardItemIssue[];
   checkpoint?: AppletReplacementCheckpoint;
-  restored: number;
+};
+
+export type CardMaintenanceRestoreResult = {
+  complete: boolean;
+  issues: CardItemIssue[];
+  droppedGrants: string[];
+};
+
+export type CardMaintenanceBatch = {
+  id: string;
+  targets: {
+    operationId: string;
+    card: CardMaintenanceOperation['card'];
+    complete: boolean;
+  }[];
 };
 
 export type CardMaintenanceProgress =
   | AppletInstallProgress
   | AppletReplacementProgress
-  | {stage: 'backup' | 'restore'; completed: number; total: number};
+  | {stage: 'verifying-backup'}
+  | {stage: 'verifying-restore'}
+  | {stage: 'verifying-grants'}
+  | {
+      stage: 'backup' | 'restore' | 'restoring-grants';
+      completed: number;
+      total: number;
+    };
 
 type MaintenanceStorage = {
   version: 1;
   operations: CardMaintenanceOperation[];
+  batches?: CardMaintenanceBatch[];
   installations?: {
     publicKey: string;
     appletAid: string;
     identityHash?: string;
+    libraryHash?: string;
     monoidHash?: string;
+    optionalHashes?: Partial<Record<AppletStage, string>>;
   }[];
 };
 
@@ -90,12 +160,21 @@ type PrepareOptions = {
   cardInformation: CardInformation;
   /** Exact instance AID returned by the registry. */
   appletAid: string;
+  selectedOptionalStages?: readonly AppletStage[];
+  replaceStages?: readonly AppletStage[];
   onProgress?: (progress: CardMaintenanceProgress) => void;
   signal?: AbortSignal;
 };
 
+type ScannedMaintenanceCard = {
+  hello?: MonoidAppletHello;
+  cardInformation?: CardInformation;
+};
+
 /** Only card-encrypted item envelopes and public metadata are persisted here. */
 export class CardMaintenanceService {
+  /** Verified procedure credentials only; never part of persisted state. */
+  private readonly secretPINs = new HeldPINs<string, MonoidPIN>();
   private readonly state = observable.box<MaintenanceStorage>({
     version: 1,
     operations: [],
@@ -114,41 +193,179 @@ export class CardMaintenanceService {
     return this.state.get().operations;
   }
 
+  holdSecretPIN(
+    card: Pick<CardMaintenanceOperation['card'], 'publicKey'>,
+    pin: MonoidPIN,
+    owner?: AbortSignal,
+  ): void {
+    if (card.publicKey) this.secretPINs.set(card.publicKey, pin, owner);
+  }
+
+  /** Capture the owner before awaiting authentication or other card work. */
+  secretPINWriter(): (
+    card: Pick<CardMaintenanceOperation['card'], 'publicKey'>,
+    pin: MonoidPIN,
+  ) => void {
+    const owner = this.secretPINs.signal;
+    return (card, pin) => this.holdSecretPIN(card, pin, owner);
+  }
+
+  secretPIN(
+    card: Pick<CardMaintenanceOperation['card'], 'publicKey'>,
+  ): MonoidPIN | undefined {
+    return card.publicKey ? this.secretPINs.get(card.publicKey) : undefined;
+  }
+
+  dropSecretPIN(
+    card: Pick<CardMaintenanceOperation['card'], 'publicKey'>,
+  ): void {
+    if (card.publicKey) this.secretPINs.delete(card.publicKey);
+  }
+
   get(id: string): CardMaintenanceOperation | undefined {
     return this.operations.find(operation => operation.id === id);
+  }
+
+  get batches(): readonly CardMaintenanceBatch[] {
+    return this.state.get().batches ?? [];
+  }
+
+  async dismissBatch(id: string): Promise<void> {
+    return this.exclusive(async () => {
+      const batch = this.batches.find(batch => batch.id === id);
+      if (batch?.targets.some(target => !target.complete))
+        throw new MonoidCardError('Finish card maintenance first');
+      await this.write(current => ({
+        ...current,
+        batches: current.batches?.filter(batch => batch.id !== id),
+      }));
+      for (const target of batch?.targets ?? [])
+        this.dropSecretPIN(target.card);
+    });
+  }
+
+  /** Only preparations that have never started may be discarded. */
+  async discardPrepared(operationId: string): Promise<void> {
+    return this.exclusive(async () => {
+      const operation = this.get(operationId);
+      if (!operation) return;
+      if (!isPreparedOnly(operation)) {
+        throw new MonoidCardError('Card maintenance has already started');
+      }
+      if (operation.batchId) {
+        const batch = this.batches.find(
+          batch => batch.id === operation.batchId,
+        )!;
+        if (
+          batch.targets.some(
+            target =>
+              target.complete ||
+              !isPreparedOnly(this.require(target.operationId)),
+          )
+        )
+          throw new MonoidCardError('Card maintenance has already started');
+        await this.write(current => ({
+          ...current,
+          operations: current.operations.filter(
+            item => item.batchId !== batch.id,
+          ),
+          batches: current.batches?.filter(item => item.id !== batch.id),
+        }));
+        return;
+      }
+      await this.remove(operationId);
+    });
+  }
+
+  /** Discard an untouched plan, or restart while keeping its card binding and recovery. */
+  async restart(
+    operationId: string,
+  ): Promise<CardMaintenanceOperation | undefined> {
+    return this.exclusive(async () => {
+      const operation = this.require(operationId);
+      if (operation.batchId)
+        throw new MonoidCardError('Finish the maintenance batch first');
+      if (isPreparedOnly(operation)) {
+        await this.remove(operationId);
+        return;
+      }
+      if (operation.mode !== 'fresh') {
+        if (operation.archive !== undefined)
+          assertArchive(operation.archive, operation.card);
+        assertGrants(operation);
+        if (replacesMonoid(operation) && !operation.archive)
+          throw new MonoidCardError('The card recovery archive is missing');
+      }
+
+      // Fresh has no recovery; other modes retain the exact archive, grants and
+      // original Identity. Never rebind recovery to the incomplete card's Hello.
+      await this.save({
+        ...(operation.mode !== 'fresh' ? operation : {}),
+        id: operation.id,
+        createdAt: operation.createdAt,
+        mode: operation.mode,
+        phase: 'ready',
+        restarted: true,
+        checkpoint: undefined,
+        rejectedItems: undefined,
+        card: {
+          ...operation.card,
+          appletAid:
+            operation.mode === 'fresh'
+              ? getBundledMonoidAppletAid()
+              : operation.card.appletAid,
+        },
+        bundleHashes: getMonoidAppletBundleHashes(),
+        selectedOptionalStages: operation.selectedOptionalStages,
+        replaceStages: operation.replaceStages,
+        authority: operation.authority,
+      });
+      // A retained Identity keeps its Secret PIN; fresh installation needs new PINs.
+      if (operation.mode === 'fresh') this.dropSecretPIN(operation.card);
+      return this.require(operationId);
+    });
   }
 
   matchOperation({
     hello,
     cardInformation,
-  }: {
-    hello?: MonoidAppletHello;
-    cardInformation?: CardInformation;
-  }): CardMaintenanceOperation | undefined {
+  }: ScannedMaintenanceCard): CardMaintenanceOperation | undefined {
     const publicKey = hello && uint8ArrayToHex(hello.publicKey);
     const fingerprint =
       cardInformation?.cplc && cardFingerprint(cardInformation);
     const operations = [...this.operations].reverse();
-    const active = operations.filter(
-      operation => operation.phase !== 'manual-restore',
-    );
     return (
-      active.find(
+      operations.find(
         operation => publicKey && operation.card.publicKey === publicKey,
       ) ??
-      active.find(
-        operation =>
-          fingerprint === operation.card.fingerprint &&
-          ((operation.mode === 'fresh' && operation.phase !== 'setup') ||
-            (!publicKey && ['replacing', 'setup'].includes(operation.phase))),
-      ) ??
-      operations.find(
-        operation =>
-          operation.phase === 'manual-restore' &&
-          publicKey &&
-          operation.card.publicKey === publicKey,
+      operations.find(operation =>
+        matchesMaintenanceFingerprint(operation, fingerprint, publicKey),
       )
     );
+  }
+
+  findSupersededOperation(
+    card: ScannedMaintenanceCard,
+  ): CardMaintenanceOperation | undefined {
+    return [...this.operations]
+      .reverse()
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .find(operation => isSupersededOperation(operation, card));
+  }
+
+  /** Discard only recovery whose original identity no longer matches this chip. */
+  async discardSuperseded(
+    operationId: string,
+    card: ScannedMaintenanceCard,
+  ): Promise<void> {
+    return this.exclusive(async () => {
+      const operation = this.require(operationId);
+      if (operation.batchId)
+        throw new MonoidCardError('Finish the maintenance batch first');
+      if (!isSupersededOperation(operation, card))
+        throw new MonoidCardError('This card maintenance is not superseded');
+      await this.remove(operationId);
+    });
   }
 
   /** The caller authenticates Secret PIN before this method; it is never stored. */
@@ -170,47 +387,125 @@ export class CardMaintenanceService {
         );
       }
       const fingerprint = cardFingerprint(options.cardInformation);
-      this.assertNoPending(hello, options.cardInformation);
+      this.assertNoPending(
+        {publicKey: uint8ArrayToHex(hello.publicKey), fingerprint},
+        undefined,
+        false,
+      );
+      if (hello.pins.secret === false) {
+        throw new Error('Set Secret PIN before updating this card');
+      }
+      const {grants} = await monoid.listAppletGrants({});
+      signal?.throwIfAborted();
       const operation = newOperation(options.mode, fingerprint, hello, monoid);
+      operation.selectedOptionalStages = [
+        ...(options.selectedOptionalStages ?? []),
+      ];
+      operation.replaceStages = options.replaceStages && [
+        ...options.replaceStages,
+      ];
+      const replacesStorage = replacesMonoid(operation);
+      if (!replacesStorage && this.isUpdateAvailable(hello)) {
+        throw new MonoidCardError('Update required applets first');
+      }
+      const affected = replacementStages(operation);
+      const affectedAids = getAppletCatalog()
+        .filter(applet => affected.includes(applet.stage))
+        .map(applet => applet.instanceAid ?? applet.appletAid);
+      operation.grants = grants
+        .filter(
+          grant =>
+            replacesStorage ||
+            affectedAids.includes(uint8ArrayToHex(grant.aid)),
+        )
+        .map(encodeGrant);
+      operation.grantsChecksum = grantsChecksum(operation.grants);
+      if (!replacesStorage) {
+        operation.previousGrantTokens = Object.fromEntries(
+          grants.map(grant => [
+            uint8ArrayToHex(grant.aid),
+            uint8ArrayToHex(grant.tokenHash),
+          ]),
+        );
+        operation.previousGrantTokensChecksum = sha256(
+          toUtf8Bytes(JSON.stringify(operation.previousGrantTokens)),
+        );
+      }
 
-      if (!hello.bundle) {
-        if (hello.pins.secret === false) {
-          throw new Error('Set Secret PIN before updating this card');
-        }
+      if (replacesStorage && hello.bundle) {
+        return operation;
+      }
+
+      if (replacesStorage && !hello.bundle) {
         const manifest = normalizeItems((await monoid.list({})).items);
         const items: NonNullable<CardMaintenanceOperation['archive']>['items'] =
           [];
         onProgress({stage: 'backup', completed: 0, total: manifest.length});
 
+        const issues: CardItemIssue[] = [];
+        let completed = 0;
         for (const item of manifest) {
           signal?.throwIfAborted();
-          const exported = await monoid.exportItem({
-            index: SafeIndex.satisfies(hexToUint8Array(item.index)),
-            recipientPublicKey: hello.publicKey,
-          });
-          signal?.throwIfAborted();
-          const archived = {
-            ...item,
-            key: exported.key && uint8ArrayToHex(exported.key),
-            alias: exported.alias,
-            data: uint8ArrayToHex(exported.data),
-          };
-          if (
-            archived.key !== item.key ||
-            archived.alias !== item.alias ||
-            exported.data[0] !== 1
-          ) {
-            throw new Error('Card changed while creating the backup');
+          try {
+            const plaintext = item.secret
+              ? undefined
+              : uint8ArrayToHex(
+                  (
+                    await monoid.get({
+                      index: SafeIndex.satisfies(hexToUint8Array(item.index)),
+                    })
+                  ).data,
+                );
+            signal?.throwIfAborted();
+            const exported = await monoid.exportItem({
+              index: SafeIndex.satisfies(hexToUint8Array(item.index)),
+              recipientPublicKey: hello.publicKey,
+            });
+            signal?.throwIfAborted();
+            const archived = {
+              ...item,
+              key: exported.metadata && uint8ArrayToHex(exported.metadata),
+              alias: exported.alias,
+              data: uint8ArrayToHex(exported.data),
+              ...(plaintext !== undefined && {plaintext}),
+            };
+            if (
+              archived.key !== item.key ||
+              archived.alias !== item.alias ||
+              exported.data[0] !== 1
+            ) {
+              throw new Error('Card changed while creating the backup');
+            }
+            assertImportSize(operation, archived);
+            items.push(archived);
+          } catch (cause) {
+            if (isOperationCancelled(cause, signal)) throw cause;
+            const issue = cardItemIssue(item.index, cause);
+            if (!issue)
+              throw new MonoidCardError(
+                `Item ${item.index}: ${cause instanceof Error ? cause.message : 'Recovery export failed'}`,
+                {cause},
+              );
+            issues.push(issue);
           }
-          assertImportSize(operation, archived);
-          items.push(archived);
+          signal?.throwIfAborted();
           onProgress({
             stage: 'backup',
-            completed: items.length,
+            completed: ++completed,
             total: manifest.length,
           });
         }
+        if (issues.length)
+          throw new MonoidCardError(
+            issues
+              .map(
+                issue =>
+                  `Item ${issue.index}: cannot export recovery (${issue.reason})`,
+              )
+              .join('; '),
+          );
 
+        onProgress({stage: 'verifying-backup'});
         assertManifest(manifest, normalizeItems((await monoid.list({})).items));
         assertIdentity(operation, await monoid.hello({}), monoid);
         operation.archive = {items, checksum: archiveChecksum(items)};
@@ -218,8 +513,97 @@ export class CardMaintenanceService {
 
       signal?.throwIfAborted();
       // Acknowledged, read-back-verified storage precedes every destructive APDU.
-      await this.save(operation, true);
-      return this.require(operation.id);
+      return this.savePrepared(operation, signal);
+    });
+  }
+
+  /** Save another member's encrypted items before replacing this card's storage. */
+  async saveBundleRecovery(
+    operation: CardMaintenanceOperation,
+    recovery: CardMaintenanceBundleRecovery,
+    signal?: AbortSignal,
+  ): Promise<CardMaintenanceOperation> {
+    return this.exclusive(async () => {
+      signal?.throwIfAborted();
+      if (
+        this.get(operation.id) ||
+        !isPreparedOnly(operation) ||
+        operation.mode === 'fresh' ||
+        !replacesMonoid(operation) ||
+        !operation.card.bundle ||
+        operation.archive !== undefined
+      ) {
+        throw new MonoidCardError('This card recovery cannot be replaced');
+      }
+      this.assertNoPending(operation.card);
+      return this.savePrepared(withBundleRecovery(operation, recovery), signal);
+    });
+  }
+
+  /** Commit the entire set together: no target is replaceable with a partial batch. */
+  async saveBundleRecoveryBatch(
+    preparations: readonly {
+      operation: CardMaintenanceOperation;
+      recovery: CardMaintenanceBundleRecovery;
+    }[],
+    signal?: AbortSignal,
+  ): Promise<CardMaintenanceBatch> {
+    return this.exclusive(async () => {
+      signal?.throwIfAborted();
+      if (preparations.length < 2)
+        throw new MonoidCardError('Select at least two maintenance targets');
+      const id = preparations[0].operation.id;
+      const bundle = preparations[0].operation.card.bundle;
+      const keys = new Set<string>();
+      const fingerprints = new Set<string>();
+      const operations = preparations.map(({operation, recovery}) => {
+        const {publicKey, fingerprint} = operation.card;
+        if (!publicKey)
+          throw new MonoidCardError(
+            'A maintenance target has no card identity',
+          );
+        if (!bundle || operation.card.bundle !== bundle)
+          throw new MonoidCardError(
+            'Maintenance targets must belong to the same Bundle',
+          );
+        if (operation.batchId)
+          throw new MonoidCardError('Finish the maintenance batch first');
+        if (!isPreparedOnly(operation))
+          throw new MonoidCardError('Card maintenance has already started');
+        if (operation.mode === 'fresh')
+          throw new MonoidCardError(
+            'Fresh installation cannot be part of a maintenance batch',
+          );
+        if (!replacesMonoid(operation))
+          throw new MonoidCardError(
+            'A maintenance batch must replace card storage',
+          );
+        if (operation.archive)
+          throw new MonoidCardError('This card recovery cannot be replaced');
+        if (keys.has(publicKey) || fingerprints.has(fingerprint))
+          throw new MonoidCardError(
+            'The same card cannot be added to a maintenance batch twice',
+          );
+        this.assertNoPending(operation.card);
+        keys.add(publicKey);
+        fingerprints.add(fingerprint);
+        return withBundleRecovery({...operation, batchId: id}, recovery);
+      });
+      const batch: CardMaintenanceBatch = {
+        id,
+        targets: operations.map(operation => ({
+          operationId: operation.id,
+          card: operation.card,
+          complete: false,
+        })),
+      };
+      // write() reads back the whole batch, archives and grants before publishing it.
+      await this.write(current => ({
+        ...current,
+        operations: [...current.operations, ...operations],
+        batches: [...(current.batches ?? []), batch],
+      }));
+      return this.batches.find(saved => saved.id === id)!;
     });
   }
 
@@ -227,26 +611,46 @@ export class CardMaintenanceService {
     cardInformation: CardInformation,
     hello?: MonoidAppletHello,
     signal?: AbortSignal,
+    selectedOptionalStages: readonly AppletStage[] = [],
+    identityOptions: IdentityInstallationOptions = {},
   ): Promise<CardMaintenanceOperation> {
     return this.exclusive(async () => {
       signal?.throwIfAborted();
+      const fingerprint = cardFingerprint(cardInformation);
       const existing = this.operations.find(
         operation =>
           operation.mode === 'fresh' &&
-          operation.card.fingerprint === cardFingerprint(cardInformation),
+          !operation.batchId &&
+          operation.card.fingerprint === fingerprint,
+      );
+      this.assertNoPending(
+        {publicKey: hello && uint8ArrayToHex(hello.publicKey), fingerprint},
+        existing?.id,
       );
       if (existing) return existing;
-      const operation = newOperation(
-        'fresh',
-        cardFingerprint(cardInformation),
-        hello,
-      );
-      await this.save(operation);
-      return this.require(operation.id);
+      const operation = newOperation('fresh', fingerprint, hello);
+      operation.selectedOptionalStages = [...selectedOptionalStages];
+      if (
+        identityOptions.authorityUrl !== undefined ||
+        identityOptions.authorityPublicKey !== undefined
+      ) {
+        if (
+          !identityOptions.authorityUrl ||
+          !identityOptions.authorityPublicKey
+        )
+          throw new MonoidCardError(
+            'Authority URL and public key are required together',
+          );
+        operation.authority = {
+          url: identityOptions.authorityUrl,
+          publicKey: uint8ArrayToHex(identityOptions.authorityPublicKey),
+        };
+      }
+      return this.savePrepared(operation, signal);
     });
   }
 
-  /** Explicitly resumed calls use the saved next step, never restart deletion. */
+  /** Resume the saved next step unless Start over cleared replacement progress. */
   async replace(
     sessionId: string,
     id: string,
@@ -255,106 +659,219 @@ export class CardMaintenanceService {
   ): Promise<MonoidAppletHello> {
     return this.exclusive(async () => {
       let operation = this.require(id);
-      if (!['ready', 'replacing'].includes(operation.phase)) {
-        const information = await readCardInformation(sessionId, signal);
-        if (cardFingerprint(information) !== operation.card.fingerprint) {
-          throw new Error('Wrong card');
+      if (operation.batchId) {
+        const batch = this.batches.find(
+          batch => batch.id === operation.batchId,
+        );
+        if (batch?.targets.find(target => !target.complete)?.operationId !== id)
+          throw new MonoidCardError('Restore the previous card first');
+        for (const target of batch.targets.filter(target => !target.complete)) {
+          const pending = this.require(target.operationId);
+          if (!pending.archive)
+            throw new MonoidCardError('The card recovery archive is missing');
+          assertArchive(pending.archive, pending.card);
+          assertGrants(pending);
         }
-        const monoid = await createMonoidApplet(
-          hexToUint8Array(operation.card.appletAid),
-        ).openSession(sessionId);
-        const hello = await monoid.hello({});
-        assertIdentity(operation, hello, monoid);
-        return hello;
       }
-      if (operation.archive) assertArchive(operation.archive);
-      if (
-        operation.mode !== 'fresh' &&
-        !operation.card.bundle &&
-        !operation.archive
-      ) {
-        throw new Error('The card recovery archive is missing');
-      }
-      if (
-        JSON.stringify(operation.bundleHashes) !==
-        JSON.stringify(getMonoidAppletBundleHashes())
-      ) {
-        throw new Error('The applet package changed during card maintenance');
-      }
+      try {
+        signal?.throwIfAborted();
+        if (!['ready', 'replacing'].includes(operation.phase)) {
+          const information = await readCardInformation(sessionId, signal);
+          if (cardFingerprint(information) !== operation.card.fingerprint) {
+            throw new Error('Wrong card');
+          }
+          const monoid = await createMonoidApplet(
+            hexToUint8Array(operation.card.appletAid),
+          ).openSession(sessionId);
+          const hello = await monoid.hello({});
+          assertIdentity(operation, hello, monoid);
+          return hello;
+        }
+        if (operation.archive !== undefined)
+          assertArchive(operation.archive, operation.card);
+        assertGrants(operation);
+        if (
+          operation.mode !== 'fresh' &&
+          replacesMonoid(operation) &&
+          !operation.archive
+        ) {
+          throw new Error('The card recovery archive is missing');
+        }
+        if (
+          JSON.stringify(operation.bundleHashes) !==
+          JSON.stringify(getMonoidAppletBundleHashes())
+        ) {
+          throw new Error('The applet package changed during card maintenance');
+        }
 
-      const hello = await replaceMonoidApplets(sessionId, {
-        fresh: operation.mode === 'fresh',
-        checkpoint: operation.checkpoint,
-        expectedPublicKey: operation.card.publicKey,
-        expectedAppletAid: operation.card.appletAid,
-        expectedBundle: operation.card.bundle,
-        expectedFingerprint: operation.card.fingerprint,
-        onProgress,
-        onCheckpoint: async checkpoint => {
-          operation = {...operation, phase: 'replacing', checkpoint};
-          await this.save(operation);
-        },
-        signal,
-      });
-      operation = {
-        ...operation,
-        phase:
-          operation.mode === 'fresh'
-            ? 'setup'
-            : operation.card.bundle
-              ? 'manual-restore'
-              : 'restore',
-      };
-      if (operation.mode === 'fresh') {
-        operation = {
-          ...operation,
-          card: {
-            ...operation.card,
-            id: uint8ArrayToHex(hello.id),
-            publicKey: uint8ArrayToHex(hello.publicKey),
-            bundle: hello.bundle ? uint8ArrayToHex(hello.bundle) : false,
+        const hello = await replaceMonoidApplets(sessionId, {
+          ...(operation.mode === 'fresh' && operation.authority
+            ? {
+                authorityUrl: operation.authority.url,
+                authorityPublicKey: hexToUint8Array(
+                  operation.authority.publicKey,
+                ),
+              }
+            : {}),
+          fresh: operation.mode === 'fresh',
+          selectedOptionalStages: operation.selectedOptionalStages,
+          replaceStages: operation.replaceStages,
+          checkpoint: operation.checkpoint,
+          restarted: operation.restarted,
+          expectedPublicKey: operation.card.publicKey,
+          expectedCardId: operation.card.id,
+          expectedCardAlias: operation.card.alias,
+          expectedAppletAid: operation.card.appletAid,
+          expectedBundle: operation.card.bundle,
+          expectedFingerprint: operation.card.fingerprint,
+          onProgress,
+          onCheckpoint: async checkpoint => {
+            const next = {
+              ...operation,
+              phase: 'replacing' as const,
+              checkpoint,
+            };
+            await this.save(next);
+            operation = next;
           },
-        };
-      } else {
-        assertIdentity(operation, hello, {
-          aid: hexToUint8Array(operation.card.appletAid),
+          signal,
         });
+        if (operation.mode === 'fresh' && !operation.card.id) {
+          operation = {
+            ...operation,
+            card: {...operation.card, id: uint8ArrayToHex(hello.id)},
+          };
+          await this.save(operation);
+        } else if (operation.mode !== 'fresh') {
+          operation = {
+            ...operation,
+            phase: 'restore',
+          };
+          assertIdentity(operation, hello, {
+            aid: hexToUint8Array(operation.card.appletAid),
+          });
+          await this.save(operation);
+        }
+        await this.recordInstallation(hello, {
+          identity: operation.mode === 'fresh',
+          library: replacementStages(operation).includes('library'),
+          monoid: replacementStages(operation).includes('monoid'),
+          optional: (operation.selectedOptionalStages ?? []).filter(stage =>
+            replacementStages(operation).includes(stage),
+          ),
+          appletAid: operation.card.appletAid,
+        });
+        // Keep even empty recovery until PIN setup and restore verification finish.
+        // Fresh stays restartable until PIN and alias verification instead.
+        return hello;
+      } catch (error) {
+        // Until a checkpoint has been saved, no destructive command can run.
+        // Discard preparations without turning a later scan into a resume.
+        if (isPreparedOnly(operation) && !operation.archive?.source)
+          await this.remove(id);
+        throw error;
       }
-      await this.save(operation);
-      await this.recordInstallation(hello, {
-        identity: operation.mode === 'fresh',
-        monoid: true,
-        appletAid: operation.card.appletAid,
-      });
-      return hello;
     });
   }
 
-  /** Reimports are idempotent; final verification must succeed before deletion. */
+  /** Complete fresh installation only after PIN setup and the alias are verified. */
+  async finishFreshAlias(
+    id: string,
+    hello: MonoidAppletHello,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    return this.exclusive(async () => {
+      const operation = this.require(id);
+      signal?.throwIfAborted();
+      if (
+        operation.mode !== 'fresh' ||
+        operation.checkpoint !== 'verify' ||
+        hello.pins.secret === false ||
+        hello.pins.access === false ||
+        (operation.card.id &&
+          operation.card.id !== uint8ArrayToHex(hello.id)) ||
+        hello.alias !== (operation.card.alias || false)
+      )
+        throw new MonoidCardError('Could not verify the card alias');
+      await this.remove(id);
+    });
+  }
+
+  /** Reconcile restored items before writing; verify before discarding the archive. */
   async restore(
     monoid: MonoidApplet,
     id: string,
     onProgress: (progress: CardMaintenanceProgress) => void = () => {},
     signal?: AbortSignal,
-  ): Promise<void> {
+    installedAppletAids?: readonly string[],
+    finishWithout?: readonly string[],
+  ): Promise<CardMaintenanceRestoreResult> {
     return this.exclusive(async () => {
-      let operation = this.require(id);
-      if (operation.phase !== 'restore' || !operation.archive) {
+      const operation = this.require(id);
+      if (
+        operation.phase !== 'restore' ||
+        (replacesMonoid(operation) && !operation.archive)
+      ) {
         throw new Error('This operation has no automatic recovery archive');
       }
-      assertArchive(operation.archive);
+      if (operation.archive !== undefined)
+        assertArchive(operation.archive, operation.card);
+      assertGrants(operation);
+      const omitted = new Set(finishWithout);
+      const skipped = operation.rejectedItems ?? [];
+      if (
+        finishWithout &&
+        (!operation.archive ||
+          !skipped.length ||
+          omitted.size !== skipped.length ||
+          skipped.some(item => !omitted.has(item.index)))
+      )
+        throw new MonoidCardError('Retry item recovery before finishing');
+      // A failed or cancelled attempt invalidates the previous finish offer.
+      if (operation.rejectedItems)
+        await this.save({...operation, rejectedItems: undefined});
       signal?.throwIfAborted();
       assertIdentity(operation, await monoid.hello({}), monoid);
-      const {items} = operation.archive;
-      onProgress({stage: 'restore', completed: 0, total: items.length});
+      const items = operation.archive?.items ?? [];
+      if (operation.archive)
+        onProgress({stage: 'restore', completed: 0, total: items.length});
 
-      // Replay the whole archive on explicit retry. Never trust only a saved
-      // count after an uncertain card response or a later card data change.
+      const issues: CardItemIssue[] = [];
+      let definiteRejections = true;
+
+      // Explicit retries read actual state, including imports whose ACK was lost.
       for (let index = 0; index < items.length; index++) {
         signal?.throwIfAborted();
-        await monoid.importItem(importRequest(operation, items[index]));
-        operation = {...operation, restored: index + 1};
-        await this.save(operation);
+        const item = items[index];
+        if (omitted.has(item.index)) continue;
+        const request = importRequest(operation, item);
+        const expected = {
+          index: request.index,
+          metadata: request.metadata,
+          alias: request.alias,
+          secret: item.secret,
+          data:
+            item.plaintext === undefined
+              ? undefined
+              : hexToUint8Array(item.plaintext),
+        };
+        try {
+          if (!(await hasMatchingItem(monoid, expected, signal))) {
+            try {
+              await monoid.importItem(request);
+            } catch (error) {
+              await acceptMatchingItem(monoid, expected, error, signal);
+            }
+          }
+        } catch (error) {
+          const issue = cardItemIssue(item.index, error);
+          if (!issue) throw error;
+          issues.push(issue);
+          definiteRejections &&=
+            error instanceof CBORAppletError ||
+            error instanceof CardItemConflictError;
+        }
+        signal?.throwIfAborted();
         onProgress({
           stage: 'restore',
           completed: index + 1,
@@ -363,45 +880,141 @@ export class CardMaintenanceService {
       }
 
       signal?.throwIfAborted();
-      onProgress({stage: 'verifying'});
+      if (issues.length) {
+        await this.save({
+          ...operation,
+          rejectedItems: definiteRejections ? issues : undefined,
+        });
+        return {complete: false, issues, droppedGrants: []};
+      }
+      onProgress({stage: 'verifying-restore'});
       assertIdentity(operation, await monoid.hello({}), monoid);
-      assertManifest(items, normalizeItems((await monoid.list({})).items));
+      const manifest =
+        operation.archive || operation.grants?.length
+          ? normalizeItems((await monoid.list({})).items)
+          : [];
+      // Conflicting on-card items are preserved, but cannot supply restored grants.
+      const restoredItems = manifest.filter(item => !omitted.has(item.index));
+      if (operation.archive)
+        assertManifest(
+          items.filter(item => !omitted.has(item.index)),
+          restoredItems,
+        );
+      const droppedGrants: string[] = [];
+      if (operation.grants?.length) {
+        const grants = decodeGrants(operation).filter(grant => {
+          if (!grantSources(grant).some(index => omitted.has(index)))
+            return true;
+          droppedGrants.push(uint8ArrayToHex(grant.aid));
+          return false;
+        });
+        assertGrantSources(grants, restoredItems);
+        for (const grant of grants) {
+          if (
+            installedAppletAids &&
+            !installedAppletAids.some(
+              aid => aid.toLowerCase() === uint8ArrayToHex(grant.aid),
+            )
+          ) {
+            throw new MonoidCardError('Install the required applet first');
+          }
+        }
+        const total = grants.length;
+        const existing = (await monoid.listAppletGrants({})).grants;
+        onProgress({stage: 'restoring-grants', completed: 0, total});
+        for (const [index, grant] of grants.entries()) {
+          signal?.throwIfAborted();
+          const previous = existing.find(
+            item => uint8ArrayToHex(item.aid) === uint8ArrayToHex(grant.aid),
+          );
+          if (
+            !previous ||
+            encodeGrant(previous) !== encodeGrant(grant) ||
+            (operation.previousGrantTokens !== undefined &&
+              operation.previousGrantTokens[uint8ArrayToHex(grant.aid)] ===
+                uint8ArrayToHex(previous.tokenHash))
+          )
+            await monoid.setAppletGrant(grant);
+          onProgress({stage: 'restoring-grants', completed: index + 1, total});
+        }
+        signal?.throwIfAborted();
+        onProgress({stage: 'verifying-grants'});
+        const restoredGrants = (await monoid.listAppletGrants({})).grants;
+        const restored = restoredGrants.map(encodeGrant);
+        if (
+          grants.some(grant => !restored.includes(encodeGrant(grant))) ||
+          restoredGrants.some(grant =>
+            droppedGrants.includes(uint8ArrayToHex(grant.aid)),
+          ) ||
+          restoredGrants.some(
+            grant =>
+              operation.previousGrantTokens !== undefined &&
+              grants.some(
+                expected => encodeGrant(expected) === encodeGrant(grant),
+              ) &&
+              operation.previousGrantTokens[uint8ArrayToHex(grant.aid)] ===
+                uint8ArrayToHex(grant.tokenHash),
+          )
+        ) {
+          throw new MonoidCardError('Could not verify applet access');
+        }
+      }
       signal?.throwIfAborted();
       await this.remove(id);
+      return {
+        complete: true,
+        issues: finishWithout ? skipped : [],
+        droppedGrants,
+      };
     });
-  }
-
-  /** Bundle recovery reminders intentionally survive the completion screen. */
-  async complete(id: string): Promise<void> {
-    const operation = this.require(id);
-    if (operation.mode !== 'fresh' || operation.phase !== 'setup') {
-      throw new Error('Card recovery is not complete');
-    }
-    await this.remove(id);
   }
 
   isUpdateAvailable(hello: MonoidAppletHello): boolean | undefined {
     const saved = this.installation(hello);
-    return saved?.monoidHash === undefined
-      ? undefined
-      : saved.monoidHash !== getMonoidAppletBundleHashes()[1];
+    const updates = (['library', 'monoid'] as const).map(stage => {
+      const bundled = getMonoidAppletBundleHash(stage);
+      if (bundled === undefined) return false;
+      const installed = saved?.[`${stage}Hash`];
+      return installed === undefined ? undefined : installed !== bundled;
+    });
+    return updates.includes(true)
+      ? true
+      : updates.includes(undefined)
+        ? undefined
+        : false;
   }
 
   isIdentityUpdateAvailable(hello: MonoidAppletHello): boolean | undefined {
     const saved = this.installation(hello);
     return saved?.identityHash === undefined
       ? undefined
-      : saved.identityHash !== getMonoidAppletBundleHashes()[0];
+      : saved.identityHash !== getMonoidAppletBundleHash('identity');
+  }
+
+  isAppletUpdateAvailable(
+    hello: MonoidAppletHello,
+    stage: AppletStage,
+  ): boolean | undefined {
+    const installed = this.installation(hello)?.optionalHashes?.[stage];
+    const bundled = getMonoidAppletBundleHash(stage);
+    return installed === undefined || bundled === undefined
+      ? undefined
+      : installed !== bundled;
   }
 
   /** Mark only components known to have loaded the bundled image, not skipped packages. */
   async recordInstallation(
     hello: MonoidAppletHello,
-    options: {identity?: boolean; monoid?: boolean; appletAid?: string},
+    options: {
+      identity?: boolean;
+      library?: boolean;
+      monoid?: boolean;
+      optional?: readonly AppletStage[];
+      appletAid?: string;
+    },
   ): Promise<void> {
     const publicKey = uint8ArrayToHex(hello.publicKey);
     const appletAid = options.appletAid ?? getBundledMonoidAppletAid();
-    const hashes = getMonoidAppletBundleHashes();
     await this.write(current => {
       const installations = current.installations ?? [];
       const previous = installations.find(
@@ -418,8 +1031,28 @@ export class CardMaintenanceService {
             ...previous,
             publicKey,
             appletAid,
-            ...(options.identity ? {identityHash: hashes[0]} : {}),
-            ...(options.monoid ? {monoidHash: hashes[1]} : {}),
+            ...(options.identity
+              ? {identityHash: getMonoidAppletBundleHash('identity')}
+              : {}),
+            ...(options.library
+              ? {libraryHash: getMonoidAppletBundleHash('library')}
+              : {}),
+            ...(options.monoid
+              ? {monoidHash: getMonoidAppletBundleHash('monoid')}
+              : {}),
+            ...(options.optional?.length
+              ? {
+                  optionalHashes: {
+                    ...previous?.optionalHashes,
+                    ...Object.fromEntries(
+                      options.optional.map(stage => [
+                        stage,
+                        getMonoidAppletBundleHash(stage),
+                      ]),
+                    ),
+                  },
+                }
+              : {}),
           },
         ],
       };
@@ -433,13 +1066,63 @@ export class CardMaintenanceService {
     if (state && (state.version !== 1 || !Array.isArray(state.operations))) {
       throw new Error('The saved card maintenance data is invalid');
     }
-    for (const operation of state?.operations ?? []) {
-      if (operation.archive) assertArchive(operation.archive);
+    const operations = (state?.operations ?? [])
+      .map(saved => {
+        const {restored: _restored, ...operation} =
+          saved as CardMaintenanceOperation & {
+            restored?: number;
+          };
+        return operation;
+      })
+      .filter(
+        operation =>
+          // Obsolete phases are discarded before validation so their data
+          // cannot block loading.
+          ['ready', 'replacing', 'restore', 'setup'].includes(
+            operation.phase,
+          ) &&
+          (!isPreparedOnly(operation) || !!operation.archive?.source),
+      );
+    for (const operation of operations) {
+      if (operation.archive !== undefined)
+        assertArchive(operation.archive, operation.card);
+      assertGrants(operation);
+      if (
+        ['restore', 'setup'].includes(operation.phase) &&
+        operation.mode !== 'fresh' &&
+        replacesMonoid(operation) &&
+        operation.archive === undefined
+      ) {
+        throw new Error('The card recovery archive is missing');
+      }
+      if (
+        operation.phase === 'setup' &&
+        operation.mode === 'fresh' &&
+        (operation.archive || operation.grants?.length)
+      ) {
+        throw new Error('The saved card maintenance data is invalid');
+      }
     }
-    return new CardMaintenanceService(
+    for (const batch of state?.batches ?? []) {
+      for (const target of batch.targets.filter(target => !target.complete)) {
+        const operation = operations.find(
+          operation => operation.id === target.operationId,
+        );
+        if (!operation || operation.batchId !== batch.id || !operation.archive)
+          throw new Error('The saved maintenance batch is incomplete');
+      }
+    }
+    const service = new CardMaintenanceService(
       storage,
       state ?? {version: 1, operations: []},
     );
+    if (
+      state &&
+      JSON.stringify(operations) !== JSON.stringify(state.operations)
+    ) {
+      await service.write(current => ({...current, operations}));
+    }
+    return service;
   }
 
   private require(id: string): CardMaintenanceOperation {
@@ -449,47 +1132,60 @@ export class CardMaintenanceService {
   }
 
   private assertNoPending(
-    hello: MonoidAppletHello | undefined,
-    information: CardInformation,
+    card: Pick<CardMaintenanceOperation['card'], 'publicKey' | 'fingerprint'>,
+    resumedId?: string,
+    matchBatchByFingerprint = true,
   ): void {
-    const fingerprint = cardFingerprint(information);
-    if (
-      this.operations.some(
-        operation =>
-          operation.phase !== 'manual-restore' &&
-          (hello
-            ? operation.card.publicKey === uint8ArrayToHex(hello.publicKey) ||
-              (operation.mode === 'fresh' &&
-                operation.phase !== 'setup' &&
-                operation.card.fingerprint === fingerprint)
-            : operation.card.fingerprint === fingerprint),
-      )
-    ) {
-      throw new Error('Continue the existing card maintenance first');
-    }
+    const pending = this.operations.filter(
+      operation =>
+        operation.id !== resumedId &&
+        ((card.publicKey && operation.card.publicKey === card.publicKey) ||
+          (operation.card.fingerprint === card.fingerprint &&
+            (!operation.batchId ||
+              matchBatchByFingerprint ||
+              operation.mode === 'fresh'))),
+    );
+    if (pending.some(operation => operation.batchId))
+      throw new MonoidCardError('Finish the maintenance batch first');
+    const operation = pending.at(-1);
+    if (operation)
+      throw new MonoidCardError(
+        (card.publicKey && operation.card.publicKey === card.publicKey) ||
+        matchesMaintenanceFingerprint(
+          operation,
+          card.fingerprint,
+          card.publicKey,
+        )
+          ? 'Continue the existing card maintenance first'
+          : `This card still has unfinished maintenance of card ${cardName({...operation.card, id: operation.card.id ?? 'unknown'})}. Discard it in Card Applets first.`,
+      );
   }
 
-  private async save(
-    operation: CardMaintenanceOperation,
-    replaceManualRestore = false,
-  ): Promise<void> {
+  private async save(operation: CardMaintenanceOperation): Promise<void> {
     await this.write(current => ({
       ...current,
       version: 1,
       operations: [
-        ...current.operations.filter(
-          saved =>
-            saved.id !== operation.id &&
-            !(
-              replaceManualRestore &&
-              saved.phase === 'manual-restore' &&
-              saved.card.publicKey === operation.card.publicKey &&
-              saved.card.appletAid === operation.card.appletAid
-            ),
-        ),
+        ...current.operations.filter(saved => saved.id !== operation.id),
         operation,
       ],
     }));
+  }
+
+  private async savePrepared(
+    operation: CardMaintenanceOperation,
+    signal?: AbortSignal,
+  ): Promise<CardMaintenanceOperation> {
+    try {
+      await this.save(operation);
+      signal?.throwIfAborted();
+      return this.require(operation.id);
+    } catch (error) {
+      // A failed write/read-back or a cancellation never permits card changes.
+      // Clear any ready record which the storage may already have accepted.
+      await this.remove(operation.id);
+      throw error;
+    }
   }
 
   private async remove(id: string): Promise<void> {
@@ -497,6 +1193,12 @@ export class CardMaintenanceService {
       ...current,
       version: 1,
       operations: current.operations.filter(operation => operation.id !== id),
+      batches: current.batches?.map(batch => ({
+        ...batch,
+        targets: batch.targets.map(target =>
+          target.operationId === id ? {...target, complete: true} : target,
+        ),
+      })),
     }));
   }
 
@@ -526,6 +1228,10 @@ export class CardMaintenanceService {
         if (JSON.stringify(saved) !== JSON.stringify(next)) {
           throw new Error('Could not verify the saved card recovery data');
         }
+        for (const operation of this.operations) {
+          if (!next.operations.some(saved => saved.id === operation.id))
+            this.dropSecretPIN(operation.card);
+        }
         runInAction(() => this.state.set(next));
       });
     this.writing = write;
@@ -547,6 +1253,138 @@ export function cardFingerprint(information: CardInformation): string {
   return getCardMaintenanceFingerprint(information);
 }
 
+function matchesMaintenanceFingerprint(
+  operation: CardMaintenanceOperation,
+  fingerprint: string | undefined,
+  publicKey: string | undefined,
+): boolean {
+  return (
+    fingerprint !== undefined &&
+    fingerprint === operation.card.fingerprint &&
+    (operation.mode === 'fresh' ||
+      (!publicKey &&
+        (operation.phase === 'replacing' || !!operation.restarted)))
+  );
+}
+
+function isSupersededOperation(
+  operation: CardMaintenanceOperation,
+  {hello, cardInformation}: ScannedMaintenanceCard,
+): boolean {
+  const fingerprint = cardInformation?.cplc && cardFingerprint(cardInformation);
+  const publicKey = hello && uint8ArrayToHex(hello.publicKey);
+  return (
+    !operation.batchId &&
+    fingerprint !== undefined &&
+    fingerprint === operation.card.fingerprint &&
+    !(publicKey && operation.card.publicKey === publicKey) &&
+    !matchesMaintenanceFingerprint(operation, fingerprint, publicKey)
+  );
+}
+
+function isPreparedOnly(operation: CardMaintenanceOperation): boolean {
+  return (
+    operation.phase === 'ready' &&
+    operation.checkpoint === undefined &&
+    !operation.restarted
+  );
+}
+
+function replacementStages(operation: CardMaintenanceOperation): AppletStage[] {
+  const roots: AppletStage[] =
+    operation.mode === 'fresh'
+      ? ['identity', 'library', 'monoid']
+      : (operation.replaceStages ?? ['library', 'monoid']);
+  return [
+    ...roots,
+    ...getAppletDependents(roots)
+      .filter(
+        applet =>
+          !applet.optional ||
+          operation.selectedOptionalStages?.includes(applet.stage),
+      )
+      .map(applet => applet.stage),
+  ];
+}
+
+function replacesMonoid(operation: CardMaintenanceOperation): boolean {
+  return replacementStages(operation).includes('monoid');
+}
+
+function encodeGrant(
+  grant: Parameters<MonoidApplet['setAppletGrant']>[0],
+): string {
+  const {aid, types, keys, seed} = grant;
+  return uint8ArrayToHex(
+    monoidCommandDefinitions.setAppletGrant.request.encode(xCBOR, {
+      aid,
+      types,
+      keys,
+      seed,
+    }),
+  );
+}
+
+function grantsChecksum(grants: readonly string[]): string {
+  return sha256(toUtf8Bytes(JSON.stringify(grants)));
+}
+
+function assertGrants(operation: CardMaintenanceOperation): void {
+  if (
+    operation.grants !== undefined &&
+    (!Array.isArray(operation.grants) ||
+      grantsChecksum(operation.grants) !== operation.grantsChecksum)
+  ) {
+    throw new MonoidCardError('Applet access recovery data is invalid');
+  }
+  if (
+    operation.previousGrantTokens &&
+    sha256(toUtf8Bytes(JSON.stringify(operation.previousGrantTokens))) !==
+      operation.previousGrantTokensChecksum
+  )
+    throw new MonoidCardError('Applet access recovery data is invalid');
+}
+
+function decodeGrants(
+  operation: CardMaintenanceOperation,
+): Parameters<MonoidApplet['setAppletGrant']>[0][] {
+  return (operation.grants ?? []).map(data =>
+    monoidCommandDefinitions.setAppletGrant.request.decode(
+      xCBOR,
+      hexToUint8Array(data),
+    ),
+  );
+}
+
+function assertGrantSources(
+  grants: Parameters<MonoidApplet['setAppletGrant']>[0][],
+  items: CardMaintenanceItem[],
+): void {
+  const indexes = new Set(items.map(item => item.index.toLowerCase()));
+  for (const grant of grants) {
+    if (grantSources(grant).some(index => !indexes.has(index))) {
+      throw new MonoidCardError('Restore applet keys first');
+    }
+    for (const key of grant.keys ?? []) {
+      if (
+        key.type === 'hmac' &&
+        (key.index.length !== 10 || key.index[0] !== 5 || key.index[1] === 0)
+      ) {
+        throw new MonoidCardError('Invalid HMAC key');
+      }
+    }
+  }
+}
+
+function grantSources(
+  grant: Parameters<MonoidApplet['setAppletGrant']>[0],
+): string[] {
+  return [
+    ...(grant.keys?.map(key => key.index) ?? []),
+    ...(grant.seed ? [grant.seed.index] : []),
+  ].map(index => uint8ArrayToHex(index));
+}
+
 function newOperation(
   mode: CardMaintenanceMode,
   fingerprint: string,
@@ -562,13 +1400,13 @@ function newOperation(
     phase: 'ready',
     card: {
       id: hello && uint8ArrayToHex(hello.id),
+      alias: hello?.alias,
       publicKey: hello && uint8ArrayToHex(hello.publicKey),
       bundle: hello?.bundle ? uint8ArrayToHex(hello.bundle) : false,
       appletAid: uint8ArrayToHex(monoid.aid),
       fingerprint,
     },
     bundleHashes: getMonoidAppletBundleHashes(),
-    restored: 0,
   };
 }
 
@@ -577,7 +1415,7 @@ function normalizeItems(
 ): CardMaintenanceItem[] {
   const normalized = items.map(item => ({
     index: uint8ArrayToHex(item.index),
-    key: item.key && uint8ArrayToHex(item.key),
+    key: item.metadata && uint8ArrayToHex(item.metadata),
     alias: item.alias,
     secret: item.secret,
   }));
@@ -607,26 +1445,142 @@ function assertIdentity(
   hello: MonoidAppletHello,
   monoid: Pick<MonoidApplet, 'aid'>,
 ): void {
-  if (
-    uint8ArrayToHex(hello.publicKey) !== operation.card.publicKey ||
-    uint8ArrayToHex(monoid.aid) !== operation.card.appletAid
-  ) {
+  assertSameCardWithBundle(
+    hello,
+    {
+      id: operation.card.id!,
+      alias: operation.card.alias,
+      publicKey: operation.card.publicKey!,
+      bundle: operation.card.bundle,
+    },
+    'The card Bundle changed during maintenance',
+  );
+
+  if (uint8ArrayToHex(monoid.aid) !== operation.card.appletAid) {
     throw new Error('Wrong card');
   }
-  const bundle = hello.bundle ? uint8ArrayToHex(hello.bundle) : false;
-  if (bundle !== operation.card.bundle) {
-    throw new Error('The card Bundle changed during maintenance');
-  }
 }
 
-function archiveChecksum(items: CardMaintenanceArchive['items']): string {
-  return sha256(toUtf8Bytes(JSON.stringify(items)));
+function withBundleRecovery(
+  operation: CardMaintenanceOperation,
+  recovery: CardMaintenanceBundleRecovery,
+): CardMaintenanceOperation {
+  assertGrants(operation);
+  assertCardMaintenanceBundleRecovery(operation.card, recovery);
+  assertGrantSources(decodeGrants(operation), recovery.items);
+  const source = {
+    id: recovery.source.id.toLowerCase(),
+    publicKey: recovery.source.publicKey.toLowerCase(),
+    bundle: recovery.source.bundle.toLowerCase(),
+  };
+  const items = recovery.items
+    .map(({index, key, alias, secret, data, plaintext}) => ({
+      index: index.toLowerCase(),
+      key: key?.toLowerCase(),
+      alias,
+      secret,
+      data: data.toLowerCase(),
+      ...(plaintext !== undefined && {plaintext: plaintext.toLowerCase()}),
+    }))
+    .sort((left, right) => left.index.localeCompare(right.index));
+  return {
+    ...operation,
+    archive: {source, items, checksum: archiveChecksum(items, source)},
+  };
 }
 
-function assertArchive(archive: CardMaintenanceArchive): void {
-  if (archive.checksum !== archiveChecksum(archive.items)) {
+function archiveChecksum(
+  items: CardMaintenanceArchive['items'],
+  source?: CardMaintenanceBundleRecovery['source'],
+): string {
+  return sha256(toUtf8Bytes(JSON.stringify(source ? {source, items} : items)));
+}
+
+function assertArchive(
+  archive: CardMaintenanceArchive,
+  card: CardMaintenanceOperation['card'],
+): void {
+  if (
+    !archive ||
+    !Array.isArray(archive.items) ||
+    archive.checksum !== archiveChecksum(archive.items, archive.source)
+  ) {
     throw new Error('The card recovery archive failed its integrity check');
   }
+  if (archive.source) {
+    assertCardMaintenanceBundleRecovery(card, {
+      source: archive.source,
+      items: archive.items,
+    });
+  } else if (card.bundle) {
+    throw new Error('The Bundle recovery source is missing');
+  }
+}
+
+/** Validate the wire envelope before acknowledging or persisting a peer export. */
+export function assertCardMaintenanceBundleRecovery(
+  target: {publicKey?: string; bundle: string | false},
+  recovery: CardMaintenanceBundleRecovery,
+): void {
+  const isHex = (value: unknown, bytes?: number): value is string =>
+    typeof value === 'string' &&
+    /^(?:[0-9a-f]{2})*$/i.test(value) &&
+    (bytes === undefined || value.length === bytes * 2);
+  const isPublicKey = (value: unknown): value is string =>
+    isHex(value, 65) && value.startsWith('04');
+  const source = recovery?.source;
+  if (
+    !isPublicKey(target.publicKey) ||
+    !isHex(target.bundle, 32) ||
+    !source ||
+    !isHex(source.id, 4) ||
+    !isPublicKey(source.publicKey) ||
+    !isHex(source.bundle, 32) ||
+    source.bundle.toLowerCase() !== target.bundle.toLowerCase() ||
+    source.publicKey.toLowerCase() === target.publicKey.toLowerCase() ||
+    !Array.isArray(recovery.items)
+  ) {
+    throw new MonoidCardError('Choose another card in the same Bundle');
+  }
+  const indexes = new Set<string>();
+  for (const item of recovery.items) {
+    if (
+      !item ||
+      !isHex(item.index, 10) ||
+      indexes.has(item.index.toLowerCase()) ||
+      typeof item.secret !== 'boolean' ||
+      (item.key !== undefined && !isHex(item.key)) ||
+      (item.alias !== undefined && typeof item.alias !== 'string') ||
+      (item.plaintext !== undefined &&
+        (item.secret || !isHex(item.plaintext))) ||
+      !isHex(item.data) ||
+      item.data.length < 320 ||
+      !item.data.startsWith('02') ||
+      item.data.slice(2, 66).toLowerCase() !== source.bundle.toLowerCase() ||
+      item.data.slice(66, 196).toLowerCase() !== source.publicKey.toLowerCase()
+    ) {
+      throw new MonoidCardError('The Bundle recovery item is invalid');
+    }
+    indexes.add(item.index.toLowerCase());
+    const encoded = monoidCommandDefinitions.importItem.request.encode(
+      xCBOR,
+      recoveryImportRequest(item),
+    );
+    if (encoded.length > 8192) {
+      throw new MonoidCardError('An item is too large to restore on this card');
+    }
+  }
+}
+
+function recoveryImportRequest(
+  item: CardMaintenanceArchive['items'][number],
+): Parameters<MonoidApplet['importItem']>[0] {
+  return {
+    index: SafeIndex.satisfies(hexToUint8Array(item.index)),
+    metadata: item.key === undefined ? undefined : hexToUint8Array(item.key),
+    alias: item.alias,
+    data: hexToUint8Array(item.data),
+  };
 }
 
 function importRequest(
@@ -634,13 +1588,14 @@ function importRequest(
   item: CardMaintenanceArchive['items'][number],
 ): Parameters<MonoidApplet['importItem']>[0] {
   return {
-    index: SafeIndex.satisfies(hexToUint8Array(item.index)),
-    senderPublicKey: PublicKey.satisfies(
-      hexToUint8Array(operation.card.publicKey!),
-    ),
-    key: item.key === undefined ? undefined : hexToUint8Array(item.key),
-    alias: item.alias,
-    data: hexToUint8Array(item.data),
+    ...recoveryImportRequest(item),
+    ...(operation.archive?.source
+      ? {}
+      : {
+          senderPublicKey: PublicKey.satisfies(
+            hexToUint8Array(operation.card.publicKey!),
+          ),
+        }),
   };
 }
 

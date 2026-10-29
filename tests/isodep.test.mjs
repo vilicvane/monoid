@@ -1366,6 +1366,40 @@ test('iOS backgrounding terminates a pending operation instead of replaying it o
   assert.equal(device.starts.length, 1);
 });
 
+for (const currentPlatform of ['android', 'ios']) {
+  test(`${currentPlatform} BUSY startup reports a scan error after cleanup without retrying`, async () => {
+    platform = currentPlatform;
+    const failure = Object.assign(
+      new Error('Scanning is already active or stopping.'),
+      {code: 'BUSY'},
+    );
+    const stopped = deferred();
+    device.onStart = async () => {
+      throw failure;
+    };
+    device.onStop = () => stopped.promise;
+    let callbacks = 0;
+    const dispose = device.standby(async () => callbacks++);
+    await until(() => device.stops.length === 1);
+    assert.deepEqual(device.errors, []);
+    assert.equal(device.cleanupCount, 0);
+
+    stopped.resolve();
+    await until(() => device.errors.length === 1);
+    await dispose();
+    assert.ok(device.errors[0] instanceof IsoDepScanError);
+    assert.equal(device.errors[0].code, 'BUSY');
+    assert.equal(device.errors[0].cause, failure);
+    assert.equal(device.cleanupCount, 1);
+    assert.equal(device.starts.length, 1);
+    assert.equal(device.stops.length, 1);
+    assert.equal(callbacks, 0);
+    assert.ok(
+      [...device.listeners.values()].every(entries => entries.size === 0),
+    );
+  });
+}
+
 test('fatal scan termination reports one scan error and releases every listener', async () => {
   device.standby(async () => {});
   await until(() => device.starts.length === 1);

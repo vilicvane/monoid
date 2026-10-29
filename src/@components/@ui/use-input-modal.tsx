@@ -1,3 +1,5 @@
+import {Capacitor} from '@capacitor/core';
+import {Keyboard} from '@capacitor/keyboard';
 import classNames from 'classNames';
 import type {ReactNode} from 'react';
 import {useCallback, useEffect, useId, useRef, useState} from 'react';
@@ -5,7 +7,9 @@ import {createPortal} from 'react-dom';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../@entrances.js';
+import {showInputKeyboard} from '../../@lib/input-keyboard.js';
 import {fadeInAnimationCSS, fadeOutAnimationCSS} from '../@animations.js';
+import {KeyCheckbox} from '../@key/key-checkbox.js';
 
 import {PopupBackdrop} from './popup-backdrop.js';
 import {popupContentPaddingCSS} from './popup-layout.js';
@@ -104,6 +108,37 @@ const Description = styled.div`
   }
 `;
 
+const InputCheckbox = styled.label`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  line-height: 20px;
+  pointer-events: auto;
+
+  && > div {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    background: transparent;
+    border-color: currentColor;
+    color: inherit;
+
+    &.checked {
+      background: white;
+      border-color: white;
+      color: transparent;
+      mask:
+        url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"%3E%3Cpath d="m20 6-11 11-5-5" fill="none" stroke="black" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/%3E%3C/svg%3E')
+          center / 13px 13px no-repeat,
+        linear-gradient(black 0 0);
+      mask-composite: exclude;
+    }
+  }
+`;
+
 export type InputModalOptions = {
   type?: 'text' | 'password';
   center?: boolean;
@@ -111,7 +146,14 @@ export type InputModalOptions = {
   placeholderContent?: ReactNode;
   description?: ReactNode;
   defaultValue?: string;
+  /** Initial selection within `defaultValue`. */
+  selection?: {start: number; end: number};
   maxLength?: number;
+  checkbox?: {
+    label: string;
+    defaultChecked: boolean;
+    onChange: (checked: boolean) => void;
+  };
 };
 
 type InputModalInstance = {
@@ -119,7 +161,37 @@ type InputModalInstance = {
   options: InputModalOptions;
   resolve: (value: string | undefined) => void;
   release: () => void;
+  cancelKeyboard?: () => void;
 };
+
+/** Phone WebViews move the caret to the end once focus and the keyboard settle. */
+function selectInitialRange(
+  input: HTMLInputElement,
+  {selection}: InputModalOptions,
+): () => void {
+  if (!selection) return () => {};
+
+  const select = (): void =>
+    input.setSelectionRange(selection.start, selection.end);
+
+  select();
+
+  const timer = setTimeout(select);
+  const listener = Capacitor.isNativePlatform()
+    ? Keyboard.addListener('keyboardDidShow', select)
+    : undefined;
+
+  const cancel = (): void => {
+    clearTimeout(timer);
+    input.removeEventListener('input', cancel);
+    void listener?.then(handle => handle.remove());
+  };
+
+  // Typing ends the initial selection; a later keyboard show keeps the caret.
+  input.addEventListener('input', cancel);
+
+  return cancel;
+}
 
 export function useInputModal(): [
   ReactNode,
@@ -133,9 +205,11 @@ export function useInputModal(): [
   } = useEntrances();
 
   const [value, setValue] = useState('');
+  const [checked, setChecked] = useState(false);
   const descriptionId = useId();
   const nextInstanceId = useRef(0);
   const activeInstance = useRef<InputModalInstance | undefined>(undefined);
+  const inputRef = useRef<HTMLInputElement>(null);
   const [completion, setCompletion] = useState<{
     value: string | undefined;
   }>();
@@ -169,6 +243,30 @@ export function useInputModal(): [
     [close],
   );
 
+  useEffect(() => {
+    if (
+      !instance ||
+      completion ||
+      activeInstance.current !== instance ||
+      !inputRef.current
+    ) {
+      return;
+    }
+
+    const input = inputRef.current;
+    const cancelSelection = selectInitialRange(input, instance.options);
+
+    const cancelKeyboard = showInputKeyboard(input);
+    instance.cancelKeyboard = cancelKeyboard;
+    return () => {
+      cancelSelection();
+      cancelKeyboard();
+      if (instance.cancelKeyboard === cancelKeyboard) {
+        instance.cancelKeyboard = undefined;
+      }
+    };
+  }, [instance, completion]);
+
   const show = useCallback(
     (options: InputModalOptions, signal?: AbortSignal) => {
       if (signal?.aborted) return Promise.resolve(undefined);
@@ -179,10 +277,14 @@ export function useInputModal(): [
           id: nextInstanceId.current++,
           options,
           resolve,
-          release: () => signal?.removeEventListener('abort', cancel),
+          release: () => {
+            signal?.removeEventListener('abort', cancel);
+            current.cancelKeyboard?.();
+          },
         };
         activeInstance.current = current;
         setValue(options.defaultValue ?? '');
+        setChecked(options.checkbox?.defaultChecked ?? false);
         setCompletion(undefined);
         setInstance(current);
         signal?.addEventListener('abort', cancel, {once: true});
@@ -202,11 +304,13 @@ export function useInputModal(): [
         description,
         center = false,
         maxLength,
+        checkbox,
       },
     } = instance;
 
     const complete = (value: string | undefined): void => {
       if (activeInstance.current !== instance) return;
+      instance.cancelKeyboard?.();
       setCompletion(current => current ?? {value});
     };
 
@@ -227,6 +331,7 @@ export function useInputModal(): [
           >
             <InputField className={classNames({center})}>
               <Input
+                ref={inputRef}
                 className={classNames({
                   'rich-placeholder': placeholderContent != null,
                 })}
@@ -248,7 +353,15 @@ export function useInputModal(): [
 
                   complete(value);
                 }}
-                onBlur={() => complete(undefined)}
+                onBlur={event => {
+                  if (
+                    !event.relatedTarget ||
+                    !event.currentTarget.parentElement?.parentElement?.contains(
+                      event.relatedTarget,
+                    )
+                  )
+                    complete(undefined);
+                }}
               />
               {placeholderContent != null && !value && (
                 <Placeholder aria-hidden="true">
@@ -260,6 +373,30 @@ export function useInputModal(): [
               <Description id={descriptionId} className={classNames({center})}>
                 {description}
               </Description>
+            )}
+            {checkbox && (
+              <InputCheckbox
+                onPointerDown={event => event.preventDefault()}
+                onClick={event => {
+                  // Label activation normally focuses its checkbox and hides the
+                  // phone keyboard. Toggle without taking focus from the PIN.
+                  if ((event.target as HTMLElement).tagName === 'INPUT') return;
+                  event.preventDefault();
+                  event.currentTarget.querySelector('input')?.click();
+                }}
+              >
+                <KeyCheckbox
+                  checked={checked}
+                  disabled={!!completion}
+                  onChange={event => {
+                    if (activeInstance.current !== instance || completion)
+                      return;
+                    setChecked(event.target.checked);
+                    checkbox.onChange(event.target.checked);
+                  }}
+                />
+                {checkbox.label}
+              </InputCheckbox>
             )}
           </InputContainer>,
           popup,

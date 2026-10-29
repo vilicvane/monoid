@@ -1,0 +1,12 @@
+# Local configuration only. The local Durable Object generates development keys.
+# Authority key material is not imported through environment variables.
+# GitHub organization OAuth is optional and uses its own development credentials.
+GITHUB_CLIENT_SECRET="test-only"
+GITHUB_CLIENT_ID="your-development-oauth-app-client-id"
+AUTHORITY_URL="http://localhost:8787/api/authority"
+# Native return + actual APP browser build + optional diagnostic demo.
+APP_REDIRECT_URIS='["app.monoid://authority/callback","http://localhost:8100/authority","http://localhost:5173/authority/callback"]'
+APP_ORIGINS='["http://localhost:8100","capacitor://localhost","https://localhost","http://localhost","http://localhost:5173"]'
+REOWN_PROJECT_ID="your-development-reown-project-id"
+# SIWX originates from the hosted page; 5173 is only for the optional demo.
+REOWN_AUTH_ORIGINS='["http://localhost:8787","http://localhost:5173"]'

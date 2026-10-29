@@ -1,8 +1,13 @@
 import {SafeKnownType} from '../../../@atomics.js';
-import {CBORAppletError} from '../../../@lib/cbor-applet.js';
+import {
+  CBORAppletError,
+  CardItemExistsError,
+} from '../../../@lib/cbor-applet.js';
 import {
   type MonoidApplet,
   MonoidCardError,
+  type NamedCard,
+  cardNameWithId,
 } from '../../../@lib/monoid/index.js';
 import type {AddressType} from '../../../@lib/wallet-address.js';
 import {uint8ArrayToHex} from '../../../@utils/index.js';
@@ -29,6 +34,7 @@ function throwIfCancelled(signal: AbortSignal): void {
 
 export async function createCardKey(
   applet: MonoidApplet,
+  card: NamedCard,
   type: CardKeyType,
   signal: AbortSignal,
   onUpdated: (item: ScannedCardItemData) => void,
@@ -43,9 +49,18 @@ export async function createCardKey(
       ...(type === 'seed' && {length: 64}),
     })
     .catch(error => {
+      if (error instanceof CardItemExistsError) {
+        // The failed random-key response supplies no index to reconcile.
+        throw new MonoidCardError(
+          `Key already exists, scan card ${cardNameWithId(card)} again to check`,
+          {
+            cause: error,
+          },
+        );
+      }
       if (error instanceof CBORAppletError) throw error;
       throw new MonoidCardError(
-        'Creation not confirmed, rescan card to check',
+        `Creation not confirmed, scan card ${cardNameWithId(card)} again to check`,
         {
           cause: error,
         },
@@ -66,12 +81,14 @@ export async function createCardKey(
   Object.assign(item, {
     secret: metadata.secret,
     ...(metadata.alias !== undefined && {alias: metadata.alias}),
-    ...(metadata.key !== undefined && {key: uint8ArrayToHex(metadata.key)}),
+    ...(metadata.metadata !== undefined && {
+      metadata: uint8ArrayToHex(metadata.metadata),
+    }),
   });
   onUpdated(item);
   throwIfCancelled(signal);
 
-  if (type === 'secp256r1') {
+  if (type === 'secp256r1' || type === 'ed25519') {
     const {publicKey} = await applet.viewKey({type, index});
     item.publicKey = uint8ArrayToHex(publicKey);
   } else {

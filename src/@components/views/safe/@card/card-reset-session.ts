@@ -2,16 +2,28 @@ import {
   type MonoidApplet,
   MonoidAppletHello,
   MonoidCardError,
-  MonoidWrongCardError,
+  assertSameCardWithBundle,
+  cardNameWithId,
+  readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
+import type {MonoidPINSession} from '../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import type {ScannedCardData} from '../common.js';
 
-export type CardResetIdentity = Pick<ScannedCardData, 'id' | 'publicKey'> & {
-  bundle: string;
-};
+export type CardResetIdentity = Pick<ScannedCardData, 'id' | 'publicKey'> &
+  Partial<Pick<ScannedCardData, 'alias'>> & {
+    bundle: string;
+  };
 
-/** One explicit reset approval, bound to the old and observed replacement IDs. */
+class ResetPINUnlockRequired extends Error {
+  readonly code = 'CANCELLED';
+
+  constructor() {
+    super('Unlock saved Access PINs before resetting the card');
+  }
+}
+
+/** One explicit reset approval, bound to the old and observed replacement keys. */
 export class CardResetSession {
   attempted = false;
   confirmed = false;
@@ -19,15 +31,44 @@ export class CardResetSession {
 
   constructor(readonly card: CardResetIdentity) {}
 
-  private assertIdentity(
-    hello: MonoidAppletHello,
-    identity: Pick<CardResetIdentity, 'id' | 'publicKey'> = this.card,
-  ): void {
-    if (
-      uint8ArrayToHex(hello.id) !== identity.id ||
-      uint8ArrayToHex(hello.publicKey) !== identity.publicKey
-    ) {
-      throw new MonoidWrongCardError(identity.id);
+  async run(
+    pinSession: MonoidPINSession,
+    signal: AbortSignal,
+    scan: (removePIN: (signal: AbortSignal) => Promise<void>) => Promise<void>,
+  ): Promise<void> {
+    for (;;) {
+      signal.throwIfAborted();
+      try {
+        await scan(async scanSignal => {
+          try {
+            await pinSession.removePIN(
+              this.card.id,
+              undefined,
+              scanSignal,
+              false,
+            );
+          } catch (error) {
+            if (
+              error !== null &&
+              typeof error === 'object' &&
+              'code' in error &&
+              error.code === 'AUTHORIZATION_EXPIRED'
+            ) {
+              // A normal handoff closes NFC without sending Reset or presenting
+              // an error. The page-owned signal survives that reader's cleanup.
+              throw new ResetPINUnlockRequired();
+            }
+            throw error;
+          }
+        });
+        return;
+      } catch (error) {
+        signal.throwIfAborted();
+        if (!(error instanceof ResetPINUnlockRequired)) throw error;
+        // scan() has awaited native cleanup and presentation exit. Renew and
+        // retry only the removal here; a refused unlock or second expiry fails.
+        await pinSession.removePIN(this.card.id, undefined, signal);
+      }
     }
   }
 
@@ -40,30 +81,26 @@ export class CardResetSession {
   ): Promise<MonoidAppletHello> {
     signal.throwIfAborted();
     if (this.attempted) {
-      // Reset rotates identity. Without an observed replacement, a later tap
-      // cannot establish that it is the same physical card.
+      // Reset keeps the ID but rotates the keys. Without an observed replacement,
+      // the unauthenticated ID cannot establish that a later tap is the same card.
       if (!this.replacement) {
         throw new MonoidCardError(
           'Card reset not confirmed, add the card again',
         );
       }
-      this.assertIdentity(hello, {
-        id: uint8ArrayToHex(this.replacement.id),
-        publicKey: uint8ArrayToHex(this.replacement.publicKey),
-      });
-      if (hello.bundle !== false) {
-        throw new MonoidCardError('Card bundle changed, scan again');
-      }
+      assertSameCardWithBundle(
+        hello,
+        readBackupCardIdentity(this.replacement),
+        `Card bundle changed, scan card ${cardNameWithId(this.replacement)} again`,
+      );
       return hello;
     }
 
-    this.assertIdentity(hello);
-    if (
-      hello.bundle === false ||
-      uint8ArrayToHex(hello.bundle) !== this.card.bundle
-    ) {
-      throw new MonoidCardError('Card bundle changed, scan again');
-    }
+    assertSameCardWithBundle(
+      hello,
+      this.card,
+      `Card bundle changed, scan card ${cardNameWithId(this.card)} again`,
+    );
 
     await beforeReset();
     signal.throwIfAborted();
@@ -79,12 +116,12 @@ export class CardResetSession {
       reset.bundle !== false ||
       reset.pins.secret !== false ||
       reset.pins.access !== false ||
-      uint8ArrayToHex(reset.id) === this.card.id ||
+      uint8ArrayToHex(reset.id) !== this.card.id ||
       uint8ArrayToHex(reset.publicKey) === this.card.publicKey
     ) {
       throw new MonoidCardError('Card reset state not confirmed');
     }
-    // Keep an acknowledged new identity even when cancellation follows Hello.
+    // Keep the observed replacement key even when cancellation follows Hello.
     this.replacement = reset;
     signal.throwIfAborted();
     return reset;

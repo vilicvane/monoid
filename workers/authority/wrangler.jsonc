@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "monoid-authority",
+  "account_id": "ca460ca2dd53b5a2335003df88d0db8f",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-19",
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./web/dist",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "none",
+    "not_found_handling": "none",
+  },
+  "routes": [{"pattern": "authority.monoid.app", "custom_domain": true}],
+  "vars": {
+    "AUTHORITY_URL": "https://authority.monoid.app",
+    "GOOGLE_CLIENT_ID": "818509822776-fc2e11uja2jveuus9mv76lcet3hffi36.apps.googleusercontent.com",
+    "GITHUB_CLIENT_ID": "Ov23liaMpV1L4NnKmCBb",
+    "ETHEREUM_RPC_URL": "https://ethereum-rpc.publicnode.com",
+    "WALLETCONNECT_PROJECT_ID": "aec3500aba9026d07588b3b244c402c7",
+    "APP_REDIRECT_URIS": "[\"app.monoid://authority/callback\",\"https://www.monoid.app/authority\"]",
+    "APP_ORIGINS": "[\"*\"]",
+  },
+  "durable_objects": {
+    "bindings": [{"name": "AUTHORITY_STATE", "class_name": "AuthorityState"}],
+  },
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["AuthorityState"]}],
+  "ratelimits": [
+    {
+      "name": "REQUEST_LIMIT",
+      "namespace_id": "1002",
+      "simple": {"limit": 30, "period": 60},
+    },
+  ],
+  "observability": {"enabled": false},
+}

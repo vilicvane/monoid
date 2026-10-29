@@ -10,7 +10,7 @@ const Container = styled.button`
   border: 0;
   border-radius: 4px;
   background: none;
-  color: var(--ion-color-dark);
+  color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;

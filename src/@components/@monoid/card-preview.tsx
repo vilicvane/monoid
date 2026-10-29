@@ -31,12 +31,18 @@ export const CardPreviewButton = styled.button`
   }
 `;
 
+/**
+ * A card's part in the current step: `next` is the specific card to scan now,
+ * `pending` still needs a scan, `ready` needs nothing more and recedes.
+ */
+export type CardScanState = 'next' | 'pending' | 'ready';
+
 export const CardPreview = styled(MonoidCard)<{
   $interrupted?: boolean;
-  $pending?: boolean;
+  $scan?: CardScanState;
 }>`
   --monoid-card-background: ${props =>
-    props.$pending
+    props.$scan === 'ready'
       ? 'var(--ion-color-light)'
       : 'var(--ion-color-dark-contrast)'};
   --monoid-card-logo-width: calc(72 / 430 * 100%);
@@ -51,6 +57,13 @@ export const CardPreview = styled(MonoidCard)<{
 
   box-sizing: border-box;
   border: 0.5px solid var(--ion-color-medium-tint);
+
+  ${props =>
+    props.$scan === 'next' &&
+    `
+      border-color: var(--monoid-card-logo-background);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--monoid-card-logo-background) 35%, transparent);
+    `}
 `;
 
 export const CardPlaceholder = styled(MonoidCardFrame)`

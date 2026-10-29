@@ -37,8 +37,11 @@ const Features = x.object({
 export const MonoidAppletHello = x.object({
   version: x.number,
   id: MonoidId,
+  alias: x.union([x.string, x.literal(false)]),
   publicKey: PublicKey,
+  authority: x.union([x.string, x.literal(false)]),
   bundle: x.union([XUint8Array, x.literal(false)]),
+  allowPeerExtension: x.boolean,
   pins: x.object({
     access: x.union([x.number, x.literal(false)]),
     secret: x.union([x.number, x.literal(false)]),
@@ -68,11 +71,18 @@ const KeyED25519 = x.intersection([
     x.object({type: x.literal('ed25519')}),
     x.object({
       type: x.literal('seed'),
-      derivation: x.object({
-        type: x.literal('slip10'),
-        curve: x.literal('ed25519'),
-        path: BIP39Path,
-      }),
+      derivation: x.union([
+        x.object({
+          type: x.literal('slip10'),
+          curve: x.literal('ed25519'),
+          path: BIP39Path,
+        }),
+        x.object({
+          type: x.literal('monoid-001'),
+          curve: x.literal('ed25519'),
+          context: XUint8Array,
+        }),
+      ]),
     }),
   ]),
 ]);
@@ -85,6 +95,7 @@ const KeySECP256R1 = x.intersection([
       type: x.literal('seed'),
       derivation: x.object({
         type: x.literal('monoid-001'),
+        curve: x.literal('secp256r1').optional(),
         context: XUint8Array,
       }),
     }),
@@ -92,6 +103,24 @@ const KeySECP256R1 = x.intersection([
 ]);
 
 const Key = x.union([KeySECP256K1, KeySECP256R1, KeyED25519]);
+const AppletGrantKey = x.union([
+  KeySECP256K1,
+  KeySECP256R1,
+  KeyED25519,
+  x.intersection([KeyIndex, x.object({type: x.literal('hmac')})]),
+]);
+const AppletGrantOptions = x.object({
+  aid: XUint8Array,
+  // Custom item types use signed 16-bit integers on the wire.
+  types: x.array(x.tuple([x.number, x.boolean])).optional(),
+  keys: x.array(AppletGrantKey).optional(),
+  seed: x.object({index: SafeIndex, domain: XUint8Array}).optional(),
+});
+const AppletGrant = x.intersection([
+  AppletGrantOptions,
+  x.object({tokenHash: XUint8Array}),
+]);
+
 const Taproot = x.union([
   x.boolean,
   x.object({merkleRoot: XUint8Array.optional()}),
@@ -127,6 +156,7 @@ export const monoidCommandDefinitions = {
   authenticate: {
     ins: 0x21,
     request: x.object({
+      aid: XUint8Array.optional(),
       secret: x.literal(true).optional(),
       pin: x.string,
     }),
@@ -144,17 +174,39 @@ export const monoidCommandDefinitions = {
 
   createBundle: {
     ins: 0x23,
+    // Only other cards' Identity keys; data preserves their request order.
     request: x.object({publicKeys: x.array(PublicKey)}),
     response: x.object({
       bundle: XUint8Array,
-      packets: x.array(x.object({publicKey: PublicKey, data: XUint8Array})),
+      data: x.array(XUint8Array),
     }),
   },
 
   joinBundle: {
     ins: 0x24,
-    request: x.object({senderPublicKey: PublicKey, data: XUint8Array}),
+    request: x.object({publicKey: PublicKey, data: XUint8Array}),
     response: x.object({bundle: XUint8Array}),
+  },
+
+  // Requires Secret PIN on an existing member; publicKey is the new card.
+  extendBundle: {
+    ins: 0x25,
+    request: x.object({publicKey: PublicKey}),
+    response: x.object({data: XUint8Array}),
+  },
+
+  // Requires Secret PIN on another existing member. Forward the full response
+  // to the new card's joinBundle; publicKey identifies the approving member.
+  approveBundleExtension: {
+    ins: 0x26,
+    request: x.object({data: XUint8Array}),
+    response: x.object({publicKey: PublicKey, data: XUint8Array}),
+  },
+
+  setAlias: {
+    ins: 0x27,
+    request: x.object({alias: x.string}),
+    response: x.object({}),
   },
 
   reset: {
@@ -183,14 +235,14 @@ export const monoidCommandDefinitions = {
     ins: 0x30,
     request: x.object({
       type: SafeItemType.optional(),
-      keyPrefix: XUint8Array.optional(),
+      metadataPrefix: XUint8Array.optional(),
     }),
     response: x.object({
       items: x.array(
         x.object({
           index: SafeIndex,
           type: SafeItemType.optional(),
-          key: XUint8Array.optional(),
+          metadata: XUint8Array.optional(),
           alias: x.string.optional(),
           secret: x.boolean,
         }),
@@ -202,7 +254,7 @@ export const monoidCommandDefinitions = {
     ins: 0x31,
     request: x.object({index: SafeIndex}),
     response: x.object({
-      key: XUint8Array.optional(),
+      metadata: XUint8Array.optional(),
       alias: x.string.optional(),
       secret: x.boolean,
     }),
@@ -231,7 +283,7 @@ export const monoidCommandDefinitions = {
     request: x.intersection([
       x.object({
         data: XUint8Array,
-        key: XUint8Array.optional(),
+        metadata: XUint8Array.optional(),
         alias: x.string.optional(),
         secret: x.boolean.optional(),
       }),
@@ -243,7 +295,7 @@ export const monoidCommandDefinitions = {
   remove: {
     ins: 0x35,
     request: x.object({index: SafeIndex}),
-    response: x.object({}),
+    response: x.object({removed: x.boolean}),
   },
 
   // Secret PIN authentication is required. Enrolled cards export for their Bundle;
@@ -255,7 +307,7 @@ export const monoidCommandDefinitions = {
       recipientPublicKey: PublicKey.optional(),
     }),
     response: x.object({
-      key: XUint8Array.optional(),
+      metadata: XUint8Array.optional(),
       alias: x.string.optional(),
       data: XUint8Array,
     }),
@@ -268,7 +320,7 @@ export const monoidCommandDefinitions = {
     request: x.object({
       index: SafeIndex,
       senderPublicKey: PublicKey.optional(),
-      key: XUint8Array.optional(),
+      metadata: XUint8Array.optional(),
       alias: x.string.optional(),
       data: XUint8Array,
     }),
@@ -322,6 +374,26 @@ export const monoidCommandDefinitions = {
     response: x.object({
       signature: XUint8Array,
     }),
+  },
+
+  // Applet grant management requires Access PIN authentication.
+  listAppletGrants: {
+    ins: 0x50,
+    request: x.object({}),
+    response: x.object({grants: x.array(AppletGrant)}),
+  },
+
+  // Replaces the entire grant; omitted permissions are removed.
+  setAppletGrant: {
+    ins: 0x51,
+    request: AppletGrantOptions,
+    response: x.object({}),
+  },
+
+  removeAppletGrant: {
+    ins: 0x52,
+    request: x.object({aid: XUint8Array}),
+    response: x.object({}),
   },
 } satisfies CBORCommandDefinitions;
 

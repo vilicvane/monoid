@@ -5,7 +5,7 @@ import {useCallback, useLayoutEffect, useRef} from 'react';
 import {useEntrances} from '../../@entrances.js';
 import {IsoDepScanError, standbyIsoDep} from '../../@lib/isodep.js';
 import {MonoidCardError} from '../../@lib/monoid/index.js';
-import {isCredentialRequestCancelled} from '../../@services/index.js';
+import {isOperationCancelled} from '../../@lib/operation-cancelled.js';
 
 type ScanCallback = (
   sessionId: string,
@@ -187,7 +187,7 @@ export function useIsoDepScanPrompt(): (
               if ('success' in result) return {message: ''};
 
               return result.error instanceof IsoDepScanError ||
-                isCredentialRequestCancelled(result.error)
+                isOperationCancelled(result.error)
                 ? {}
                 : {errorMessage: 'Card operation failed.'};
             }
@@ -197,7 +197,7 @@ export function useIsoDepScanPrompt(): (
               !result ||
               !('error' in result) ||
               result.error instanceof IsoDepScanError ||
-              isCredentialRequestCancelled(result.error)
+              isOperationCancelled(result.error)
             ) {
               return {};
             }

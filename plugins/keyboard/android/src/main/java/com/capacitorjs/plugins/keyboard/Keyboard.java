@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Rect;
 import android.util.DisplayMetrics;
 import android.view.View;
+import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.FrameLayout;
@@ -27,6 +28,7 @@ public class Keyboard {
     private FrameLayout.LayoutParams frameLayoutParams;
     private View mChildOfContent;
     private int keyboardHeightPrevious = -1;
+    private final KeyboardShowRequest showRequest = new KeyboardShowRequest();
 
     public void setKeyboardEventListener(@Nullable KeyboardEventListener keyboardEventListener) {
         this.keyboardEventListener = keyboardEventListener;
@@ -135,6 +137,7 @@ public class Keyboard {
     }
 
     public void destroy() {
+        cancelShow();
         ViewCompat.setWindowInsetsAnimationCallback(rootView, null);
         keyboardEventListener = null;
     }
@@ -147,18 +150,93 @@ public class Keyboard {
         }
     }
 
-    public void show() {
-        ((InputMethodManager) activity.getSystemService(Context.INPUT_METHOD_SERVICE)).showSoftInput(activity.getCurrentFocus(), 0);
+    public void show(Runnable settled) {
+        View focused = activity.getCurrentFocus();
+        showRequest.show(focused == null ? null : new ShowTarget(focused), settled);
+    }
+
+    public void cancelShow() {
+        showRequest.cancel();
     }
 
     public boolean hide() {
+        cancelShow();
         InputMethodManager inputManager = (InputMethodManager) activity.getSystemService(Context.INPUT_METHOD_SERVICE);
         View v = activity.getCurrentFocus();
         if (v == null) {
-            return false;
+            return true;
         } else {
             inputManager.hideSoftInputFromWindow(v.getWindowToken(), InputMethodManager.HIDE_NOT_ALWAYS);
             return true;
+        }
+    }
+
+    private final class ShowTarget implements KeyboardShowRequest.Target {
+        private final View view;
+
+        ShowTarget(View view) {
+            this.view = view;
+        }
+
+        @Override
+        public boolean isCurrentFocus() {
+            return activity.getCurrentFocus() == view;
+        }
+
+        @Override
+        public boolean isAttached() {
+            return view.isAttachedToWindow();
+        }
+
+        @Override
+        public boolean hasWindowFocus() {
+            return view.hasWindowFocus();
+        }
+
+        @Override
+        public Runnable watch(Runnable changed, Runnable invalidated) {
+            ViewTreeObserver observer = view.getViewTreeObserver();
+            ViewTreeObserver.OnWindowFocusChangeListener windowFocus = focused -> changed.run();
+            ViewTreeObserver.OnGlobalFocusChangeListener viewFocus = (previous, current) -> {
+                if (current != view) invalidated.run();
+                else changed.run();
+            };
+            View.OnAttachStateChangeListener attachment = new View.OnAttachStateChangeListener() {
+                @Override
+                public void onViewAttachedToWindow(View view) {
+                    changed.run();
+                }
+
+                @Override
+                public void onViewDetachedFromWindow(View view) {
+                    invalidated.run();
+                }
+            };
+            observer.addOnWindowFocusChangeListener(windowFocus);
+            observer.addOnGlobalFocusChangeListener(viewFocus);
+            view.addOnAttachStateChangeListener(attachment);
+            return () -> {
+                if (observer.isAlive()) {
+                    observer.removeOnWindowFocusChangeListener(windowFocus);
+                    observer.removeOnGlobalFocusChangeListener(viewFocus);
+                }
+                view.removeOnAttachStateChangeListener(attachment);
+            };
+        }
+
+        @Override
+        public boolean post(Runnable callback) {
+            return view.post(callback);
+        }
+
+        @Override
+        public void remove(Runnable callback) {
+            view.removeCallbacks(callback);
+        }
+
+        @Override
+        public void show() {
+            ((InputMethodManager) activity.getSystemService(Context.INPUT_METHOD_SERVICE)).showSoftInput(view, 0);
         }
     }
 

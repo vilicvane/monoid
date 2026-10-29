@@ -22,10 +22,7 @@ mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => fixture.entrances},
 });
 mock.module('../.bld/app/@services/index.js', {
-  namedExports: {
-    isCredentialRequestCancelled: error =>
-      error?.code === 'CANCELLED' || error?.code === 'APP_INACTIVE',
-  },
+  namedExports: {},
 });
 mock.module('../.bld/app/@utils/index.js', {
   namedExports: {uint8ArrayToHex: bytes => Buffer.from(bytes).toString('hex')},
@@ -185,7 +182,7 @@ test('a completed scan stores every resource and routes to Card with only its id
   });
   state.scannedItems = [
     {type: 'seed', index: '00010000000000000001', alias: 'Seed', secret: true},
-    {index: 'ffff0000000000000002', alias: '', key: '', secret: false},
+    {index: 'ffff0000000000000002', alias: '', metadata: '', secret: false},
   ];
   const applet = {};
   const publicKey = Uint8Array.from([
@@ -196,6 +193,9 @@ test('a completed scan stores every resource and routes to Card with only its id
     id: new Uint8Array([1, 2, 3, 4]),
     publicKey,
     bundle: new Uint8Array(32).fill(0x42),
+    alias: 'Travel',
+    authority: 'https://authority.monoid.app/',
+    allowPeerExtension: false,
   });
   state.resolveScan();
   await state.finished;
@@ -207,6 +207,9 @@ test('a completed scan stores every resource and routes to Card with only its id
       id: '01020304',
       publicKey: Buffer.from(publicKey).toString('hex'),
       bundle: '42'.repeat(32),
+      alias: 'Travel',
+      authority: 'https://authority.monoid.app/',
+      allowPeerExtension: false,
       items: state.scannedItems,
     },
   ]);

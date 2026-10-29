@@ -1,13 +1,34 @@
 import assert from 'node:assert/strict';
 import {afterEach, mock, test} from 'node:test';
 
-import {observable, runInAction, toJS} from 'mobx';
+import {p256} from '@noble/curves/nist';
+import {observable, onReactionError, runInAction, toJS} from 'mobx';
+import {routra} from 'routra';
 
+import {CBORAppletError} from '../.bld/app/@lib/cbor-applet.js';
+import {
+  setCardAlias,
+  validateCardAlias,
+} from '../.bld/app/@lib/monoid/card-alias.js';
 import {
   MonoidCardError,
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
+import {assertSameCard} from '../.bld/app/@lib/monoid/card-identity.js';
+import {getCardKeyDerivationItemIndex} from '../.bld/app/@lib/monoid/card-key-derivations.js';
+import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
+import {
+  CardPINError,
+  authenticateCardPIN,
+} from '../.bld/app/@lib/monoid/card-pins.js';
 import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
+import {
+  acceptMatchingItem,
+  removeItems,
+  setItemAlias,
+} from '../.bld/app/@lib/monoid/item-operations.js';
+import {MultiCardSeries} from '../.bld/app/@lib/monoid/multi-card-series.js';
+import {ROUTE_SCHEMA} from '../.bld/app/@routes.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
 import {
   WalletStorageService,
@@ -28,6 +49,7 @@ const PUBLIC_KEY =
 const OTHER_PUBLIC_KEY =
   '02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5';
 const bytes = value => Uint8Array.from(Buffer.from(value, 'hex'));
+const hex = value => Buffer.from(value).toString('hex');
 
 mock.method(console, 'info', () => {});
 mock.module('react', {
@@ -71,6 +93,7 @@ mock.module('styled-components', {
   namedExports: {
     styled: Object.assign(component => () => component, {
       p: () => 'description',
+      button: () => 'alias-button',
     }),
   },
 });
@@ -86,11 +109,28 @@ mock.module('../.bld/app/@services/index.js', {
   },
 });
 mock.module('../.bld/app/@lib/monoid/index.js', {
-  namedExports: {getAppletKey, MonoidCardError, MonoidWrongCardError},
+  namedExports: {
+    CardPINError,
+    authenticateCardPIN,
+    cardName,
+    cardNameWithId,
+    assertSameCard,
+    getAppletKey,
+    MonoidCardError,
+    MonoidWrongCardError,
+    MultiCardSeries,
+    removeItems,
+    setItemAlias,
+    acceptMatchingItem,
+    setCardAlias,
+    validateCardAlias,
+  },
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
     MonoidScanStatePromptProgress: 'progress',
+    scanCardPrompt: (card, action) =>
+      `Scan card ${cardNameWithId(card)}${action ? ` ${action}` : ''}`,
     useMonoidScanPrompt: options => {
       const state = fixture;
       state.scanOptions.push(options);
@@ -122,8 +162,35 @@ for (const [path, exports] of [
     },
   ],
   ['@key/key-list', {KeyListPlaceholder: 'placeholder'}],
-  ['@key/key-tags', {KeyTypeTag: 'key-type-tag', keyTypeColorsCSS: ''}],
-  ['@monoid/pin-input-placeholder', {PINKind: 'pin-kind'}],
+  [
+    '@key/key-tags',
+    {
+      KeyTypeTag: 'key-type-tag',
+      KeyAliasTag: 'alias-tag',
+      keyTypeColorsCSS: '',
+    },
+  ],
+  [
+    '@monoid/pin-input-placeholder',
+    {
+      PINKind: 'pin-kind',
+      getPINInputPlaceholder: (kind, prefix) => ({
+        placeholder: `${prefix} ${kind} PIN`,
+      }),
+    },
+  ],
+  [
+    '@ui/use-input-modal',
+    {
+      useInputModal: () => [
+        null,
+        async (options, signal) => {
+          fixture.inputs.push({options, signal});
+          return fixture.answers.shift();
+        },
+      ],
+    },
+  ],
   ['@ui/app-icon', {AppIcon: 'icon'}],
   ['@ui/button', {Button: 'popup-button', Buttons: 'buttons'}],
   ['@ui/centered-popup', {CenteredPopup: 'popup'}],
@@ -140,12 +207,14 @@ for (const [path, exports] of [
     '@view/index',
     {
       useViewActive,
+      viewHeaderTagCSS: '',
       View: 'view',
       ViewActionButton: 'button',
       ViewContent: 'content',
       ViewHeader: 'header',
       ViewHeaderButton: 'header-button',
       ViewHeaderIdentifier: 'identifier',
+      ViewHeaderTags: 'header-tags',
       ViewHeaderTitle: 'h1',
       ViewPlaceholder: 'placeholder',
     },
@@ -222,7 +291,7 @@ function metadata(index, wallets) {
   return {
     index: `0f01${index.slice(4)}`,
     type: 0x0f01,
-    key: index,
+    metadata: index,
     secret: false,
     derivationRecord: {index, wallets: wallets.map(getWalletReference)},
   };
@@ -256,12 +325,16 @@ function sparseCardItems(index, wallets, known = [], preview) {
   ];
 }
 
-function mount({items, keys = []}) {
+function mount({items = [], keys = [], view, router}) {
   const storage = new WalletStorageService({async set() {}}, keys);
   const state = {
     slots: [],
     index: 0,
     scans: [],
+    inputs: [],
+    answers: [],
+    cardAliasWrites: [],
+    authentications: [],
     scanOptions: [],
     writes: [],
     aliasWrites: [],
@@ -277,14 +350,16 @@ function mount({items, keys = []}) {
     authCount: 0,
     clears: 0,
     storage,
-    view: observable({
-      card: {
-        id: 'aabbccdd',
-        publicKey: `04${'12'.repeat(64)}`,
-      },
-      $leaving: false,
-      $match: {$exact: {$active: true}},
-    }),
+    view:
+      view ??
+      observable({
+        card: {
+          id: 'aabbccdd',
+          publicKey: `04${'12'.repeat(64)}`,
+        },
+        $leaving: false,
+        $match: {$exact: {$active: true}},
+      }),
     slot(create) {
       return (this.slots[this.index++] ??= create());
     },
@@ -294,7 +369,7 @@ function mount({items, keys = []}) {
       state.index = 0;
       const outer = CardView({view: state.view});
       const content = find(outer, node => typeof node.type === 'function');
-      state.tree = content.type(content.props);
+      state.tree = content ? content.type(content.props) : outer;
       rendering = undefined;
       return state.tree;
     },
@@ -362,11 +437,12 @@ function mount({items, keys = []}) {
       return find(state.render(), node => node.type === 'popup');
     },
     popupButton(label) {
+      const displayLabel = label === 'seed' ? 'Seed' : label;
       return find(
         state.popup(),
         node =>
           node.type === 'popup-button' &&
-          (node.props['aria-label'] ?? textContent(node)) === label,
+          (node.props['aria-label'] ?? textContent(node)) === displayLabel,
       );
     },
     confirmDelete() {
@@ -385,7 +461,7 @@ function mount({items, keys = []}) {
       scan.validate?.(hello);
       state.authCount++;
       await scan.callback(
-        state.applet,
+        state.cardStore.observeApplet(state.applet, hello),
         content => state.progressUpdates.push(content),
         hello,
         scan.controller.signal,
@@ -393,6 +469,11 @@ function mount({items, keys = []}) {
     },
     async finish() {
       state.scans.at(-1).resolve();
+      await new Promise(resolve => setImmediate(resolve));
+      // Deletion then asks for further cards; close that prompt as a user would.
+      const next = state.scans.at(-1);
+      if (next.label === 'Scan next card to delete')
+        next.reject(Object.assign(new Error('Cancelled'), {code: 'CANCELLED'}));
       await state.finished;
       state.render();
     },
@@ -414,9 +495,23 @@ function mount({items, keys = []}) {
     id: bytes(state.view.card.id),
     publicKey: bytes(state.view.card.publicKey),
     bundle: false,
+    authority: false,
+    alias: false,
+    allowPeerExtension: false,
     pins: {access: 5, secret: 5},
   };
   state.applet = {
+    async authenticate(request) {
+      state.authentications.push(request);
+    },
+    async hello() {
+      return state.hello;
+    },
+    async setAlias({alias}) {
+      state.cardAliasWrites.push(alias);
+      state.hello = {...state.hello, alias: alias || false};
+      if (state.aliasError) throw state.aliasError;
+    },
     async createRandomKey(request) {
       state.creations.push(request);
       return {index: bytes(CREATED_INDEX)};
@@ -434,6 +529,7 @@ function mount({items, keys = []}) {
     },
     async remove({index}) {
       state.removals.push(Buffer.from(index).toString('hex'));
+      return {removed: true};
     },
   };
   state.scan = (label, callback, validate, options) => {
@@ -468,12 +564,12 @@ function mount({items, keys = []}) {
     return {...metadata(source.index, merged), derivations};
   };
   state.pinSession = {clear: () => state.clears++};
-  state.view.$match.$view = () => ({$entries: [state.view]});
+  if (!view) state.view.$match.$view = () => ({$entries: [state.view]});
   state.entrances = {
     cardStore: state.cardStore,
     walletStorageService: storage,
     monoidCredentialsStore: {createPINSession: () => state.pinSession},
-    router: {
+    router: router ?? {
       safe: {
         $exact: {},
         copyItems: options => ({$push: () => state.copies.push(options)}),
@@ -482,10 +578,14 @@ function mount({items, keys = []}) {
       $backTo: () => () => state.routes.push('safe'),
     },
     errorService: {
-      catch: callback => () => {
-        state.finished = Promise.resolve(callback()).catch(error =>
-          state.errors.push(error),
-        );
+      catch: task => {
+        const capture = promise =>
+          (state.finished = Promise.resolve(promise).catch(error =>
+            state.errors.push(error),
+          ));
+        return typeof task === 'function'
+          ? () => capture(task())
+          : capture(task);
       },
     },
   };
@@ -496,23 +596,23 @@ function mount({items, keys = []}) {
 
 afterEach(() => owners.splice(0).forEach(owner => owner.unmount()));
 
-test('Setup card bundle passes the current card identity and starts in bundle mode without scanning', () => {
+test('Create bundle passes the current card identity and starts in bundle mode without scanning', () => {
   const state = mount({items: cardItems(INDEX, [wallet(0)])});
   state.menuButton().props.onClick();
-  const setup = state.popupButton('Setup card bundle');
+  const setup = state.popupButton('Create bundle');
   assert.ok(setup);
   setup.props.onClick();
   assert.deepEqual(state.setups, [
     {
       card: {id: state.card.id, publicKey: state.card.publicKey},
-      createBundle: true,
+      bundle: 'card',
     },
   ]);
   assert.equal(state.popup(), undefined);
   assert.deepEqual(state.scans, []);
   state.select(INDEX);
   state.menuButton().props.onClick();
-  assert.equal(state.popupButton('Setup card bundle'), undefined);
+  assert.equal(state.popupButton('Create bundle'), undefined);
 });
 
 test('Card actions remains available without a selection and cancelling deletion never starts a scan', () => {
@@ -590,7 +690,7 @@ test('deleting a selected group and standalone resource removes companions first
   state.select(unknown.index);
   state.confirmDelete()();
 
-  assert.equal(state.scans[0].label, 'Scan card to delete');
+  assert.equal(state.scans[0].label, `Scan card ${state.card.id} to delete`);
   assert.equal(state.menuButton().props.disabled, true);
   assert.equal(state.popup(), undefined);
   assert.equal(state.item(INDEX).props.disabled, true);
@@ -611,6 +711,38 @@ test('deleting a selected group and standalone resource removes companions first
   assert.deepEqual(toJS(state.storage.keys), phoneBefore);
   assert.equal(state.menuButton().props.disabled, false);
   assert.deepEqual(state.routes, []);
+  assert.deepEqual(state.errors, []);
+});
+
+test('deletion continues on further cards with the same indices and rejects a finished card', async () => {
+  const state = mount({
+    items: cardItems(INDEX, [wallet(0)]),
+    keys: [key(INDEX, [wallet(0)])],
+  });
+  state.select(INDEX);
+  state.confirmDelete()();
+  await state.tap();
+  state.scans.at(-1).resolve();
+  await new Promise(resolve => setImmediate(resolve));
+
+  const next = state.scans.at(-1);
+  assert.equal(next.label, 'Scan next card to delete');
+  assert.throws(() => next.validate(state.hello), /Card already done/);
+  const removals = [...state.removals];
+  state.removals.length = 0;
+  await state.tap({...state.hello, publicKey: bytes('05'.repeat(65))});
+  assert.deepEqual(state.removals, removals);
+  assert.deepEqual(state.rowIndexes(), []);
+
+  next.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  state.scans
+    .at(-1)
+    .reject(Object.assign(new Error('Cancelled'), {code: 'CANCELLED'}));
+  await state.finished;
+  state.render();
+  assert.equal(state.scans.length, 3);
+  assert.equal(state.menuButton().props.disabled, false);
   assert.deepEqual(state.errors, []);
 });
 
@@ -647,11 +779,12 @@ test('an acknowledged companion deletion survives a failed root deletion and reo
   const remove = state.applet.remove;
   let failed = false;
   state.applet.remove = async request => {
-    await remove(request);
+    const result = await remove(request);
     if (Buffer.from(request.index).toString('hex') === INDEX && !failed) {
       failed = true;
       throw new Error('Card removed');
     }
+    return result;
   };
   state.select(INDEX);
   state.confirmDelete()();
@@ -692,6 +825,11 @@ test('two confirmation clicks before rerender start only one deletion scan', asy
 
   await state.tap();
   state.scans[0].resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(state.scans.length, 2);
+  state.scans[1].reject(
+    Object.assign(new Error('Cancelled'), {code: 'CANCELLED'}),
+  );
   await finished;
   assert.deepEqual(state.removals, [metadata(INDEX, [wallet(0)]).index, INDEX]);
   assert.deepEqual(state.card.items, []);
@@ -702,15 +840,16 @@ test('dismissing an in-flight delete keeps actions blocked until its ACK is publ
   const release = deferred();
   const remove = state.applet.remove;
   state.applet.remove = async request => {
-    await remove(request);
+    const result = await remove(request);
     await release.promise;
+    return result;
   };
   state.select(INDEX);
   const clickDelete = state.confirmDelete();
   clickDelete();
   const rejected = assert.rejects(
     state.tap(),
-    error => error.code === 'CANCELLED',
+    error => error.name === 'AbortError' || error.code === 'CANCELLED',
   );
   assert.equal(state.removals.length, 1);
   assert.equal(state.progressUpdates.length, 1);
@@ -759,8 +898,9 @@ for (const cancellation of ['route leave', 'scan cancellation']) {
     const release = deferred();
     const remove = state.applet.remove;
     state.applet.remove = async request => {
-      await remove(request);
+      const result = await remove(request);
       await release.promise;
+      return result;
     };
     state.select(INDEX);
     state.select(SECOND_INDEX);
@@ -768,7 +908,7 @@ for (const cancellation of ['route leave', 'scan cancellation']) {
     const tapping = state.tap();
     const rejected = assert.rejects(
       tapping,
-      error => error.code === 'CANCELLED',
+      error => error.name === 'AbortError' || error.code === 'CANCELLED',
     );
     assert.equal(state.removals.length, 1);
 
@@ -934,7 +1074,7 @@ test('divergent derivations merge into the phone before offering the merged card
   assert.equal(state.visible('Update card'), true);
 
   state.click('Update card');
-  assert.equal(state.scans[0].label, 'Scan card to update');
+  assert.equal(state.scans[0].label, `Scan card ${state.card.id} to update`);
   await state.tap();
   await state.finish();
 
@@ -1018,7 +1158,7 @@ test('a sparse recorded list stays downloadable and reads only its missing addre
 
   state.click('Update');
   assert.equal(state.scans.length, 1);
-  assert.equal(state.scans[0].label, 'Scan card to import');
+  assert.equal(state.scans[0].label, `Scan card ${state.card.id} to import`);
   assert.deepEqual(toJS(state.storage.keys[0].wallets), [common]);
   await state.tap();
   await state.finish();
@@ -1276,6 +1416,7 @@ test('a single derived address remains at zero until its read finishes', async (
   };
   state.select(INDEX);
   state.click('Derive');
+  assert.equal(state.scans[0].label, `Scan card ${state.card.id} to derive`);
   const tapping = state.tap();
   assert.equal(state.progressUpdates.at(-1).props.current, 0);
   assert.equal(state.progressUpdates.at(-1).props.total, 1);
@@ -1722,9 +1863,12 @@ test('an acknowledged first import remains saved and the second can retry after 
   );
   assert.equal(state.visible('Back to Safe'), true);
   assert.ok(
-    state.scanOptions.every(
-      options => options.allowSetup && options.pinSession === state.pinSession,
-    ),
+    state.scanOptions
+      .filter(options => options.auth !== false)
+      .every(
+        options =>
+          options.allowSetup && options.pinSession === state.pinSession,
+      ),
   );
 });
 
@@ -1804,7 +1948,7 @@ for (const source of ['card', 'phone']) {
     }
     state.click('Update');
     assert.equal(state.scans.length, 1);
-    assert.equal(state.scans[0].label, 'Scan card to import');
+    assert.equal(state.scans[0].label, `Scan card ${state.card.id} to import`);
     assert.deepEqual(state.writes, []);
     await state.tap();
     await state.finish();
@@ -1950,6 +2094,7 @@ test('creating a key on an empty card reads it and adds the canonical and displa
   state.createKey();
   const scan = state.scans[0];
 
+  assert.equal(scan.label, `Scan card ${state.card.id} to create key`);
   assert.equal(state.menuButton().props.disabled, true);
   assert.equal(scan.options.retryOnError, false);
   assert.equal(scan.options.pinSession, state.pinSession);
@@ -1983,11 +2128,13 @@ test('creating a key on an empty card reads it and adds the canonical and displa
 
 for (const [label, request, addressType] of [
   ['seed', {type: 'seed', length: 64}, 'evm'],
-  ['ed25519', {type: 'ed25519'}, 'solana'],
 ]) {
   test(`creating ${label} reads its default address with the matching key type`, async () => {
     const state = mount({items: []});
-    const publicKey = addressType === 'solana' ? '12'.repeat(32) : PUBLIC_KEY;
+    const publicKey =
+      addressType === 'solana'
+        ? 'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a'
+        : PUBLIC_KEY;
     state.applet.viewKey = async input => {
       state.keyViews.push(input);
       return {publicKey: bytes(publicKey)};
@@ -2008,6 +2155,44 @@ for (const [label, request, addressType] of [
     assert.equal(state.storage.keys.length, 0);
   });
 }
+
+test('creating Ed25519 reads only its native public key and derives Solana only on request', async () => {
+  const state = mount({items: []});
+  const publicKey =
+    'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a';
+  state.applet.viewKey = async input => {
+    state.keyViews.push(input);
+    return {publicKey: bytes(publicKey)};
+  };
+  state.createKey('ed25519');
+  await state.tap();
+  await state.finish();
+  const created = state.card.items[0];
+  assert.equal(created.type, 'ed25519');
+  assert.equal(created.publicKey, publicKey);
+  assert.equal(created.ref, undefined);
+  assert.equal(state.item(CREATED_INDEX).props.addressType, undefined);
+  assert.equal(state.storage.keys.length, 0);
+  await state.click('Import');
+  assert.equal(state.storage.keys[0].rawPublicKey, publicKey);
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), []);
+  const scans = state.scans.length;
+  const keyReads = state.keyViews.length;
+  await state.click('Derive');
+  assert.equal(created.ref.addressType, 'solana');
+  assert.equal(created.ref.publicKey, publicKey);
+  assert.equal(
+    state.scans.length,
+    scans,
+    'the public key supplies the requested address without NFC',
+  );
+  assert.equal(state.keyViews.length, keyReads);
+  assert.deepEqual(
+    toJS(state.storage.keys[0].wallets),
+    [],
+    'a Card preview still requires explicit import',
+  );
+});
 
 test('adding a key preserves existing selections, the resource filter and a switched address preview', async () => {
   const existingIndex = '03010000000000000001';
@@ -2145,7 +2330,7 @@ test('cancelling during Create retains its eventual acknowledgement and skips fu
   state.createKey();
   const cancelled = assert.rejects(
     state.tap(),
-    error => error.code === 'CANCELLED',
+    error => error.name === 'AbortError' || error.code === 'CANCELLED',
   );
   const dismissed = state.dismiss();
   response.resolve({index: bytes(CREATED_INDEX)});
@@ -2161,9 +2346,9 @@ test('cancelling during Create retains its eventual acknowledgement and skips fu
   assert.equal(state.menuButton().props.disabled, false);
 });
 
-test('creating secp256r1 reads its public key and keeps it available as a card resource', async () => {
+test('creating secp256r1 offers Safe import without inventing a wallet derivation', async () => {
   const state = mount({items: []});
-  const publicKey = `04${'12'.repeat(64)}`;
+  const publicKey = Buffer.from(p256.getPublicKey(1n, false)).toString('hex');
   state.applet.viewKey = async request => {
     state.keyViews.push(request);
     return {publicKey: bytes(publicKey)};
@@ -2177,13 +2362,172 @@ test('creating secp256r1 reads its public key and keeps it available as a card r
     {type: 'secp256r1', index: bytes(CREATED_INDEX)},
   ]);
   assert.deepEqual(state.rowIndexes(), [CREATED_INDEX]);
-  assert.equal(state.item(CREATED_INDEX).type, 'resource-item');
+  assert.equal(state.item(CREATED_INDEX).type, 'key-item');
   assert.equal(state.card.items[0].publicKey, publicKey);
   assert.equal(state.item(CREATED_INDEX).props.selected, true);
-  assert.equal(state.visible('Import'), false);
+  assert.equal(state.visible('Import'), true);
   assert.equal(state.visible('Derive'), false);
   state.click('Copy');
   assert.deepEqual(state.copies[0].sourceIndexes, [CREATED_INDEX]);
+
+  state.click('Import');
+  await state.finish();
+  const imported = state.storage.indexToKeyMap.get(CREATED_INDEX);
+  assert.equal(imported.rawPublicKey, publicKey);
+  assert.deepEqual(toJS(imported.wallets), []);
+  assert.equal(
+    state.scans.length,
+    1,
+    'the already-read public key needs no new NFC operation',
+  );
+  assert.deepEqual(state.writes, []);
+  assert.equal(state.item(CREATED_INDEX).props.state, 'up-to-date');
+  assert.equal(state.visible('Back to Safe'), true);
+  assert.deepEqual(state.errors, []);
+});
+
+test('a scanned P-256 key imports its alias and public key without a card mutation', async () => {
+  const index = '03020000000000000001';
+  const publicKey = Buffer.from(p256.getPublicKey(2n, false)).toString('hex');
+  const state = mount({
+    items: [
+      {index, type: 'secp256r1', alias: 'SSH key', secret: true, publicKey},
+    ],
+  });
+  state.select(index);
+  assert.equal(state.visible('Derive'), false);
+  await state.click('Import');
+
+  assert.deepEqual(toJS(state.storage.indexToKeyMap.get(index)), {
+    index,
+    type: 'secp256r1',
+    alias: 'SSH key',
+    rawPublicKey: publicKey,
+    wallets: [],
+  });
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.writes, []);
+  assert.deepEqual(state.aliasWrites, []);
+  assert.equal(state.item(index).props.state, 'up-to-date');
+});
+
+test('a P-256 key whose public key has not been read cannot be imported or derived as a wallet', () => {
+  const index = '03020000000000000001';
+  const state = mount({items: [{index, type: 'secp256r1', secret: true}]});
+  state.select(index);
+  assert.equal(state.visible('Import'), false);
+  assert.equal(state.visible('Derive'), false);
+  assert.equal(state.visible('Copy'), true);
+});
+
+test('P-256 alias synchronization does not write a wallet derivation record', async () => {
+  const index = '03020000000000000001';
+  const publicKey = Buffer.from(p256.getPublicKey(2n, false)).toString('hex');
+  const state = mount({
+    items: [
+      {index, type: 'secp256r1', alias: 'Card alias', secret: true, publicKey},
+    ],
+    keys: [
+      {
+        index,
+        type: 'secp256r1',
+        alias: 'Phone alias',
+        rawPublicKey: publicKey,
+        wallets: [],
+      },
+    ],
+  });
+  state.select(index);
+  state.toggleDirection(index);
+  state.click('Update card');
+  await state.tap();
+  await state.finish();
+  assert.deepEqual(state.writes, []);
+  assert.equal(state.card.items[0].alias, 'Phone alias');
+  assert.equal(state.storage.indexToKeyMap.get(index).rawPublicKey, publicKey);
+  assert.equal(state.item(index).props.state, 'up-to-date');
+  assert.deepEqual(state.errors, []);
+});
+
+test('a Seed imports recovered derived keys even with an explicitly empty wallet list', async () => {
+  const derivation = {
+    type: 'monoid-001',
+    curve: 'secp256r1',
+    context: 'generic key',
+  };
+  const derivedKeys = [
+    {
+      publicKey: hex(p256.getPublicKey(1n, false)),
+      derivation,
+    },
+  ];
+  const state = mount({
+    items: [
+      {index: INDEX, type: 'seed', secret: true, derivedKeys},
+      metadata(INDEX, []),
+      {
+        index: getCardKeyDerivationItemIndex(INDEX),
+        type: 0x0f02,
+        secret: false,
+        metadata: INDEX,
+        keyDerivationRecord: {index: INDEX, derivations: [derivation]},
+      },
+    ],
+  });
+  state.select(INDEX);
+  await state.click('Import');
+  assert.deepEqual(
+    toJS(state.storage.indexToKeyMap.get(INDEX).derivedKeys),
+    derivedKeys,
+  );
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.writes, []);
+  assert.equal(state.item(INDEX).props.state, 'up-to-date');
+  assert.equal(state.visible('Back to Safe'), true);
+  assert.deepEqual(state.errors, []);
+});
+
+test('deleting a Seed removes wallet and key companions first but keeps phone records', async () => {
+  const keyRecordIndex = getCardKeyDerivationItemIndex(INDEX);
+  const derivation = {
+    type: 'monoid-001',
+    curve: 'secp256r1',
+    context: 'generic key',
+  };
+  const derivedKeys = [
+    {
+      publicKey: hex(p256.getPublicKey(1n, false)),
+      derivation,
+    },
+  ];
+  const state = mount({
+    items: [
+      ...cardItems(INDEX, [wallet(0)]),
+      {
+        index: keyRecordIndex,
+        type: 0x0f02,
+        secret: false,
+        metadata: INDEX,
+        keyDerivationRecord: {index: INDEX, derivations: [derivation]},
+      },
+    ],
+    keys: [{...key(INDEX, [wallet(0)]), derivedKeys}],
+  });
+  state.select(INDEX);
+  state.confirmDelete()();
+  await state.tap();
+  await state.finish();
+  assert.deepEqual(
+    new Set(state.removals.slice(0, -1)),
+    new Set([metadata(INDEX, [wallet(0)]).index, keyRecordIndex]),
+  );
+  assert.equal(state.removals.at(-1), INDEX);
+  assert.deepEqual(state.card.items, []);
+  assert.deepEqual(
+    toJS(state.storage.indexToKeyMap.get(INDEX).derivedKeys),
+    derivedKeys,
+  );
+  assert.deepEqual(state.errors, []);
 });
 
 test('returning to the same card reads new keys and address choices from the global store', async () => {
@@ -2224,5 +2568,198 @@ test('an unacknowledged creation stops without inventing an item or resending th
   await assert.rejects(state.tap(), /Creation not confirmed/);
   assert.equal(state.creations.length, 1);
   assert.deepEqual(state.card.snapshot().items, []);
+  assert.equal(state.cardStore.get(state.view.card), undefined);
   await state.dismiss();
+  assert.ok(state.menuButton(), 'the active page retains its working copy');
+  runInAction(() => {
+    state.view.$match.$exact.$active = false;
+  });
+  state.render();
+  runInAction(() => {
+    state.view.$match.$exact.$active = true;
+  });
+  assert.equal(state.menuButton(), undefined);
+  assert.ok(find(state.render(), node => node.type === 'placeholder'));
 });
+
+for (const alias of ['Travel 😀', '']) {
+  test(`card alias editing authenticates Secret and verifies ${alias || 'clearing'}`, async () => {
+    const state = mount({});
+    state.card.alias = state.hello.alias = alias ? false : 'Old';
+    state.answers.push(alias, 'Secret-42');
+    // The ID tag edits the alias whether or not one is set.
+    find(
+      state.render(),
+      node => node.props?.['aria-label'] === 'Edit card alias',
+    ).props.onClick();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(state.inputs[0].options.maxLength, undefined);
+    assert.equal(state.inputs[1].options.placeholder, 'Enter Secret PIN');
+    const scan = state.scans.at(-1);
+    assert.equal(
+      scan.label,
+      alias
+        ? 'Scan card aabbccdd to save alias'
+        : 'Scan card Old (aabbccdd) to save alias',
+    );
+    assert.equal(scan.options.auth, false);
+    assert.equal(scan.options.retryOnError, false);
+    assert.throws(
+      () =>
+        scan.validate({
+          ...state.hello,
+          publicKey: bytes(`04${'33'.repeat(64)}`),
+        }),
+      MonoidWrongCardError,
+    );
+    await state.tap();
+    await state.finish();
+    assert.deepEqual(state.authentications, [{secret: true, pin: 'Secret-42'}]);
+    assert.deepEqual(state.cardAliasWrites, [alias]);
+    assert.equal(state.card.alias, alias || false);
+    assert.equal(state.cardStore.get(state.view.card).alias, alias || false);
+    assert.deepEqual(state.errors, []);
+  });
+}
+
+test('an oversized UTF-8 alias stops before Secret PIN input or NFC', async () => {
+  const state = mount({});
+  state.answers.push('😀'.repeat(17));
+  find(
+    state.render(),
+    node => node.props?.['aria-label'] === 'Edit card alias',
+  ).props.onClick();
+  await state.finished;
+  assert.equal(state.inputs.length, 1);
+  assert.equal(state.scans.length, 0);
+  assert.match(state.errors[0].message, /64 UTF-8 bytes/);
+});
+
+test('Extend bundle follows the cached peer extension policy and alias follows the ID tag', () => {
+  const state = mount({});
+  state.card.bundle = '42'.repeat(32);
+  state.card.alias = 'Travel';
+  state.card.allowPeerExtension = false;
+  state.menuButton().props.onClick();
+  assert.equal(state.popupButton('Extend bundle'), undefined);
+  state.card.allowPeerExtension = true;
+  assert.ok(state.popupButton('Extend bundle'));
+  const tags = find(state.render(), node => node.type === 'header-tags').props
+    .children;
+  assert.equal(tags[0].props.identifier.type, 'card');
+  assert.equal(tags[1].props.children, 'Travel');
+  assert.equal(tags[2].props.identifier.type, 'bundle');
+});
+
+for (const [bundle, authority, visible] of [
+  [false, 'https://authority.monoid.app/', true],
+  [false, false, false],
+  ['11'.repeat(32), 'https://authority.monoid.app/', true],
+  ['11'.repeat(32), false, false],
+]) {
+  test(`Authority entry requires a trusted Authority regardless of bundle: ${bundle}/${authority}`, () => {
+    const state = mount({items: cardItems(INDEX, [wallet(0)])});
+    state.card.bundle = bundle;
+    state.card.authority = authority;
+    state.menuButton().props.onClick();
+    const join = state.popupButton('Join authority bundle');
+    assert.equal(!!join, visible);
+    if (join) {
+      join.props.onClick();
+      assert.deepEqual(state.setups, [
+        {
+          card: {id: state.card.id, publicKey: state.card.publicKey},
+          bundle: 'authority',
+        },
+      ]);
+      assert.deepEqual(state.scans, []);
+    }
+  });
+}
+
+for (const label of ['Sync cards', 'Create bundle', 'Join authority bundle']) {
+  test(`${label} leaves the card route before the page unmounts without reaction errors`, async context => {
+    const router = routra(ROUTE_SCHEMA, {});
+    await router.safe.$reset().$completed;
+    await router.safe
+      .card({card: {id: 'aabbccdd', publicKey: `04${'12'.repeat(64)}`}})
+      .$push().$completed;
+    const source = router.safe.card.$view();
+    const [view] = source.$entries;
+    const errors = [];
+    context.after(onReactionError(error => errors.push(error)));
+    const state = mount({items: cardItems(INDEX, [wallet(0)]), view, router});
+    state.card.authority = 'https://authority.monoid.app/';
+
+    state.menuButton().props.onClick();
+    state.popupButton(label).props.onClick();
+    await new Promise(resolve => setImmediate(resolve));
+
+    // Routra removed the view while the page's reactions are still mounted.
+    assert.equal(router.safe.card.$active, false);
+    assert.deepEqual(source.$entries, []);
+    assert.deepEqual(errors, []);
+  });
+}
+
+for (const outcome of ['correct', 'cancel', 'blocked', 'write-failure']) {
+  test(`alias wrong-PIN handling: ${outcome}, retaining the entered alias`, async () => {
+    const state = mount({});
+    const retry = deferred();
+    const alias = 'Keep this alias';
+    state.answers.push(alias, 'Wrong-42', retry.promise);
+    let attempts = 0;
+    const failure = new CBORAppletError({
+      code: 'INVALID_PIN',
+      tries: outcome === 'blocked' ? 0 : 4,
+    });
+    state.applet.authenticate = async request => {
+      state.authentications.push(request);
+      if (++attempts === 1 && outcome !== 'write-failure') throw failure;
+    };
+    if (outcome === 'write-failure') state.aliasError = failure;
+    find(
+      state.render(),
+      node => node.props?.['aria-label'] === 'Edit card alias',
+    ).props.onClick();
+    await new Promise(resolve => setImmediate(resolve));
+    await assert.rejects(state.tap(), error => {
+      state.scans.at(-1).reject(error);
+      return true;
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(attempts, 1);
+    assert.equal(state.scans.length, 1);
+    if (outcome === 'blocked' || outcome === 'write-failure') {
+      await state.finished;
+      assert.equal(state.inputs.length, 2);
+      assert.equal(state.errors.length, 1);
+      if (outcome === 'blocked')
+        assert.equal(state.errors[0].message, 'Secret PIN blocked');
+      assert.equal(
+        state.cardAliasWrites.length,
+        outcome === 'write-failure' ? 1 : 0,
+      );
+      return;
+    }
+    assert.deepEqual(state.cardAliasWrites, []);
+    assert.equal(
+      state.inputs.at(-1).options.description,
+      'Incorrect PIN, tries remaining: 4',
+    );
+    assert.equal(state.inputs.at(-1).options.placeholder, 'Enter Secret PIN');
+    retry.resolve(outcome === 'cancel' ? undefined : 'Correct-42');
+    await new Promise(resolve => setImmediate(resolve));
+    if (outcome === 'correct') {
+      assert.equal(state.scans.length, 2);
+      await state.tap();
+      await state.finish();
+      assert.deepEqual(state.cardAliasWrites, [alias]);
+      assert.equal(state.card.alias, alias);
+    } else {
+      await state.finished;
+      assert.equal(state.scans.length, 1);
+    }
+    assert.deepEqual(state.errors, []);
+  });
+}

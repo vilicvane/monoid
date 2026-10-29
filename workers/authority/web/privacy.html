@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en" class="ios">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="How Monoid Authority handles sign-in information, wallet proofs, bundle records and deletion requests."
+    />
+    <title>Privacy policy · Monoid Authority</title>
+    <link rel="stylesheet" href="/src/public.css" />
+  </head>
+  <body>
+    <div class="public-page">
+      <header class="public-header">
+        <img src="../../../src/@assets/monoid.svg" alt="" />
+        <a href="%BASE_URL%">Monoid Authority</a>
+      </header>
+      <main>
+        <h1>Privacy policy</h1>
+        <p class="public-secondary">Effective date: 28 October 2026</p>
+        <p>
+          Monoid operates Monoid Authority, an optional bundle and time-proof
+          service for Monoid cards. This policy explains the information this
+          service handles. For privacy or deletion requests, email
+          <a href="mailto:support@monoid.app">support@monoid.app</a>.
+        </p>
+
+        <h2>Google sign-in</h2>
+        <p>
+          We request the <code>openid email profile</code> scopes. We verify
+          Google's ID token and read your stable account identifier
+          (<code>sub</code>), whether your email is verified, your email and
+          your name. Your display name is your email only when Google marks it
+          verified; otherwise it is your name, or “Google account”. We do not
+          use your profile picture.
+        </p>
+        <p>
+          We use this information to identify the bundle owner, authorize access
+          to that owner's bundles and show who is signed in. Your identifier and
+          display name are held in the short-lived sign-in/session records
+          described below. Google ID and access tokens are not retained after
+          verification.
+        </p>
+        <p>
+          Signing in alone does not create a permanent profile. Your Google
+          identifier is retained with any bundle records you create. A display
+          label is kept until deletion only if you explicitly set one; the
+          default Google email or name is not automatically saved as a permanent
+          label.
+        </p>
+        <p>
+          We do not sell Google user data, use it for advertising or share it
+          for unrelated purposes. It is used in your Monoid app and handled by
+          the service providers described below as needed to operate the
+          service. Monoid Authority's use and transfer of information received
+          from Google APIs adheres to the
+          <a
+            href="https://developers.google.com/terms/api-services-user-data-policy"
+            >Google API Services User Data Policy</a
+          >, including the Limited Use requirements.
+        </p>
+
+        <h2>GitHub sign-in</h2>
+        <p>
+          We read your numeric GitHub user ID and login. With the
+          <code>read:org</code> scope, we read organization memberships to find
+          organizations where you are an active Owner. We use the organization's
+          numeric ID and login, and recheck your identity and membership when
+          you access organization bundles or labels.
+        </p>
+        <p>
+          Your GitHub OAuth token is encrypted in the sign-in flow, handoff code
+          and session records. It is used only for this sign-in and its
+          organization checks, never sent to the Monoid app, and is not kept as
+          a long-term credential. Expired copies are removed through the cleanup
+          process below. Organization memberships are not saved as a permanent
+          list.
+        </p>
+
+        <h2>Wallet sign-in</h2>
+        <p>
+          We receive your Ethereum address, a Sign-In with Ethereum (SIWE)
+          message and its signature to verify that you control the wallet. The
+          issued challenge, including the message and address when already
+          known, is stored temporarily. The submitted signature is processed but
+          not saved by the service.
+        </p>
+        <p>
+          Ordinary wallet signatures are checked by the service itself. When a
+          signature needs contract-wallet verification, the service queries the
+          configured Ethereum RPC provider, currently PublicNode. That request
+          can include the address, message hash, signature and
+          contract-verification data. No wallet private key is requested.
+        </p>
+        <p>
+          The wallet chooser loads Reown AppKit in your browser and can use
+          WalletConnect's relay to connect to your wallet. Reown is a
+          replaceable connection provider; it does not determine your owner ID.
+          Wallet software and connection providers may keep their own connection
+          information.
+        </p>
+
+        <h2>Bundle records and display labels</h2>
+        <p>
+          We keep each bundle's owner source and ID, chosen name (or an empty
+          name), fixed peer-extension policy and creation time. We also keep any
+          display label you explicitly set, keyed by its owner source and ID.
+          These records have no automatic expiry and remain until deletion.
+        </p>
+        <p>
+          Records are returned to your Monoid app when you are authorized to
+          access them. Organization labels and bundles are shared with its other
+          authorized Owners; wallet labels and bundles are available to anyone
+          who can prove control of that wallet.
+        </p>
+        <p>
+          Card public keys used to encrypt issued bundles and challenges used to
+          sign time proofs are processed for the response, but are not stored in
+          the service's database. The service does not store card private keys,
+          OTP secrets or funds. Individual bundle keys are derived when needed
+          from a service master secret, the owner, the name and the
+          peer-extension policy; they are not stored as individual keys.
+        </p>
+
+        <h2>Short-lived sign-in data</h2>
+        <ul>
+          <li>
+            Sign-in requests and browser flows expire ten minutes after the
+            request starts. OAuth state, nonce and PKCE records expire with that
+            flow.
+          </li>
+          <li>
+            A wallet challenge can be used for up to five minutes, or until the
+            flow expires, whichever comes first. The SIWE proof itself carries a
+            fifteen-minute expiry.
+          </li>
+          <li>
+            The one-use code returned to the app expires after sixty seconds, or
+            at the verified identity's expiry if earlier.
+          </li>
+          <li>
+            A session expires after five minutes without successful
+            authentication. Each authenticated request renews that window, but
+            never beyond fifteen minutes from identity verification or the
+            earlier provider/proof expiry. Signing out removes that session
+            record.
+          </li>
+        </ul>
+        <p>
+          Consumed requests, codes and challenges are removed when used;
+          Continue or Cancel removes the browser flow. Expired records cannot be
+          used, but may remain in storage until an hourly cleanup alarm runs.
+          Other outstanding attempt records can remain until their own expiry
+          and cleanup. Cleanup timing depends on the hosting platform; expiry is
+          enforced even if cleanup is delayed.
+        </p>
+        <p>
+          The browser uses a flow-specific, HttpOnly sign-in cookie with at most
+          the remaining ten-minute flow lifetime, and tab-scoped session storage
+          to resume the flow. Completion or cancellation clears the cookie and
+          that tab's flow reference. Wallet proofs are held in page memory and
+          discarded on return or cancellation, when wallet disconnect also
+          starts. This does not sign you out of Google, GitHub or your wallet
+          software; those browser sessions may persist.
+        </p>
+
+        <h2>Security, rate limits and diagnostics</h2>
+        <p>
+          The public service uses HTTPS. Verified identities, GitHub tokens and
+          OAuth attempt secrets are encrypted by the application before storage.
+          Random bearer tokens, handoff codes, flow lookups and browser-cookie
+          proofs use hashed lookup keys or proofs. Not every field is hashed or
+          separately encrypted: routing metadata, wallet challenges, owner IDs,
+          names and bundle policies are database fields. Cloudflare encrypts the
+          service's stored data at rest.
+        </p>
+        <p>
+          API requests use your IP address as a transient key in Cloudflare's
+          rate limiter. Bundle issuance also uses an account-based rate-limit
+          key. The service does not save IP addresses or those counters in its
+          database.
+        </p>
+        <p>
+          Stored request logging is disabled. The service emits limited
+          provider-error diagnostics for live troubleshooting: a provider,
+          status and bounded error fields with known credentials redacted, or
+          the category of a failed Google token check. It does not write these
+          diagnostics to its database. Operators can view live logs; the hosting
+          platform's request metadata may include request URLs. Disabling stored
+          request logs does not mean that Cloudflare or sign-in/connection
+          providers collect no operational data.
+        </p>
+
+        <h2>Service providers</h2>
+        <ul>
+          <li>
+            <strong>Cloudflare</strong> hosts the service, serves these pages,
+            stores service data and applies rate limits. It processes network
+            information such as IP addresses to deliver and protect the service.
+          </li>
+          <li>
+            <strong>Google or GitHub</strong> handles the sign-in you choose and
+            receives the authorization and token-exchange requests. GitHub also
+            handles organization-membership checks.
+          </li>
+          <li>
+            <strong>Reown/WalletConnect</strong> provides the browser
+            wallet-connection UI, wallet metadata and relay services when you
+            choose Connect wallet.
+          </li>
+          <li>
+            <strong>The Ethereum RPC provider</strong>, currently PublicNode,
+            processes contract-wallet verification queries.
+          </li>
+        </ul>
+        <p>
+          These providers process the information needed for their part of the
+          service under their own policies. We do not send your Google or GitHub
+          tokens to Reown/WalletConnect or the RPC provider. Public home and
+          policy pages load no sign-in or wallet SDK and no third-party
+          resources.
+        </p>
+
+        <h2>Deletion requests</h2>
+        <p>
+          Email <a href="mailto:support@monoid.app">support@monoid.app</a> to
+          request deletion of stored display labels and bundle records. We may
+          ask you to prove control of the account, organization or wallet so
+          that we do not delete another owner's records. Do not email passwords,
+          PINs, private keys or sign-in tokens.
+        </p>
+        <p>
+          Deletion removes the live records we hold for that owner. It does not
+          remove bundles or data already on cards. It also does not revoke those
+          bundles: the same owner, name and policy can produce the same bundle
+          key again while the service master secret is unchanged. Email
+          correspondence about your request is separate from the service's
+          sign-in records and is used to handle your request.
+        </p>
+
+        <h2>Children and policy changes</h2>
+        <p>This service is not directed to children under 13.</p>
+        <p>
+          We announce policy changes on this page by updating the effective
+          date. If we intend to use Google user data for a new purpose, we will
+          provide notice and obtain any required consent before doing so.
+        </p>
+      </main>
+      <footer class="legal-links" aria-label="Policies">
+        <a href="%BASE_URL%">Home</a><span aria-hidden="true"> · </span
+        ><a href="%BASE_URL%privacy" aria-current="page">Privacy</a
+        ><span aria-hidden="true"> · </span><a href="%BASE_URL%terms">Terms</a>
+      </footer>
+    </div>
+  </body>
+</html>

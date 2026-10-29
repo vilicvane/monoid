@@ -4,7 +4,7 @@ import {SigHash, p2pkh} from '@scure/btc-signer';
 
 import type {BitcoinTransactionPreview} from '../bitcoin-transaction.js';
 import {getBitcoinSigningTransaction} from '../bitcoin-transaction.js';
-import {CBORAppletError} from '../cbor-applet.js';
+import {CardItemNotFoundError} from '../cbor-applet.js';
 import {computeWalletAddress} from '../wallet-address.js';
 
 import {MonoidCardError} from './card-error.js';
@@ -126,7 +126,7 @@ export async function signBitcoinTransaction(
 }
 
 function handleSigningError(error: unknown): never {
-  if (error instanceof CBORAppletError && error.source.code === 'NOT_FOUND') {
+  if (error instanceof CardItemNotFoundError) {
     throw new MonoidCardError('Account not on this card', {cause: error});
   }
 

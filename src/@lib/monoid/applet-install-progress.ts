@@ -1,14 +1,37 @@
-import type {AppletInstallProgress} from './install.js';
+import type {
+  AppletInstallProgress,
+  AppletReplacementProgress,
+} from './install.js';
 
 export const APPLET_NAMES = {
   identity: 'Monoid Identity Applet',
+  library: 'Monoid Library',
   monoid: 'Monoid Applet',
+  'security-key': 'Monoid Security Key Applet',
+  otp: 'Monoid OTP Applet',
 };
 
-export function describeAppletInstallProgress(update: AppletInstallProgress): {
+export const APPLET_SHORT_NAMES = {
+  identity: 'Identity',
+  library: undefined,
+  monoid: 'Monoid',
+  'security-key': 'Security Key',
+  otp: 'OTP',
+};
+
+export function describeAppletInstallProgress(
+  update: AppletInstallProgress | AppletReplacementProgress,
+): {
   status: string;
   percentage?: number;
+  count?: {completed: number; total: number};
 } {
+  if (update.stage === 'deleting') {
+    return {
+      status: `Removing ${APPLET_NAMES[update.applet]}...`,
+      count: {completed: update.completed, total: update.total},
+    };
+  }
   if (!('phase' in update)) {
     return {
       status:

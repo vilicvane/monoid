@@ -1,19 +1,29 @@
 import {observable, runInAction} from 'mobx';
 
-import {MonoidPIN, PublicKey} from '../../../../@atomics.js';
-import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
 import {
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
+  MonoidIdHex,
+  MonoidPIN,
+  PublicKey,
+  PublicKeyHex,
+} from '../../../../@atomics.js';
+import {
+  type CardIdentity as BaseCardIdentity,
+  type CardDisplayData,
   type MonoidApplet,
   type MonoidAppletHello,
-  MonoidAppletInvalidPINError,
   MonoidCardError,
-  MonoidWrongCardError,
+  assertCardPINsNotBlocked,
+  assertSameCard,
+  authenticateCardPIN,
 } from '../../../../@lib/monoid/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 import type {ScannedCardData} from '../common.js';
 
-export type CardBundleIdentity = {id: string; publicKey: string};
-export type CardBundleCard = CardBundleIdentity & {
+type CardIdentity = BaseCardIdentity & Partial<CardDisplayData>;
+
+export type CardBundleCard = CardIdentity & {
   status: 'pending' | 'complete';
   /** Latest round-two observation or ACK, absent after uncertain creation. */
   bundle?: string | false;
@@ -24,13 +34,13 @@ type BundleState = {
   cards: readonly CardBundleCard[];
   phase: CardBundlePhase;
   bundle?: string;
-  creator?: CardBundleIdentity;
+  creator?: CardIdentity;
   generationUncertain: boolean;
 };
 
 function readIdentity(
-  card: CardBundleIdentity & {bundle: string | false},
-): CardBundleIdentity {
+  card: CardIdentity & {bundle: string | false},
+): CardIdentity {
   if (
     !/^[0-9a-f]{8}$/i.test(card.id) ||
     !/^04[0-9a-f]{128}$/i.test(card.publicKey) ||
@@ -38,21 +48,29 @@ function readIdentity(
   ) {
     throw new MonoidCardError('Invalid card identity');
   }
-  return {id: card.id.toLowerCase(), publicKey: card.publicKey.toLowerCase()};
+  return {
+    id: MonoidIdHex.satisfies(card.id.toLowerCase()),
+    publicKey: PublicKeyHex.satisfies(card.publicKey.toLowerCase()),
+    alias: card.alias,
+    allowPeerExtension: card.allowPeerExtension,
+    authority: card.authority,
+  };
 }
 
-function readCardIdentity(hello: MonoidAppletHello): CardBundleIdentity {
+function readCardIdentity(hello: MonoidAppletHello): CardIdentity {
   return readIdentity({
     id: uint8ArrayToHex(hello.id),
+    alias: hello.alias,
+    allowPeerExtension: hello.allowPeerExtension,
+    authority: hello.authority,
     publicKey: uint8ArrayToHex(hello.publicKey),
     bundle: hello.bundle === false ? false : uint8ArrayToHex(hello.bundle),
   });
 }
 
-function readCard(hello: MonoidAppletHello): CardBundleIdentity {
+function readCard(hello: MonoidAppletHello): CardIdentity {
   const identity = readCardIdentity(hello);
-  if (hello.pins.secret === 0) throw new MonoidCardError('Secret PIN blocked');
-  if (hello.pins.access === 0) throw new MonoidCardError('Access PIN blocked');
+  assertCardPINsNotBlocked(hello);
   if (hello.pins.secret === false || hello.pins.access === false) {
     throw new MonoidCardError('Set up the card first');
   }
@@ -89,7 +107,7 @@ export class CardBundleSession {
     return this.current.get().bundle;
   }
 
-  get creator(): CardBundleIdentity | undefined {
+  get creator(): CardIdentity | undefined {
     return this.current.get().creator;
   }
 
@@ -127,12 +145,13 @@ export class CardBundleSession {
     }
   }
 
-  private validateAdditionIdentity(card: CardBundleIdentity): void {
+  private validateAdditionIdentity(card: CardIdentity): void {
     if (this.cards.some(current => current.publicKey === card.publicKey)) {
       throw new MonoidCardError('Card already added');
     }
-    // Firmware accepts at most floor(8192 / (65 + 2)) members.
-    if (this.cards.length === 122) {
+    // All recipient packets share a signed-short-sized buffer in Identity:
+    // (members - 1) * (116 + 65 * members) must fit within 32767 bytes.
+    if (this.cards.length === 22) {
       throw new MonoidCardError('Too many cards');
     }
   }
@@ -143,7 +162,7 @@ export class CardBundleSession {
     this.validateAdditionIdentity(readCardIdentity(hello));
   }
 
-  private addIdentity(card: CardBundleIdentity, bundle: string | false): void {
+  private addIdentity(card: CardIdentity, bundle: string | false): void {
     this.requireCollecting();
     if (bundle !== false) {
       throw new MonoidCardError('Card already belongs to a bundle');
@@ -166,7 +185,8 @@ export class CardBundleSession {
 
   /** Seed collection from a Card scan that already checked initialization. */
   addPreparedCard(
-    card: Pick<ScannedCardData, 'id' | 'publicKey' | 'bundle'>,
+    card: Pick<ScannedCardData, 'id' | 'publicKey' | 'bundle'> &
+      Partial<CardDisplayData>,
   ): Promise<void> {
     return this.exclusive(() =>
       this.addIdentity(readIdentity(card), card.bundle),
@@ -214,7 +234,7 @@ export class CardBundleSession {
     const identity = readCardIdentity(hello);
     const card = this.cards.find(card => card.publicKey === identity.publicKey);
     if (!card) throw new MonoidCardError('Scan one of the added cards');
-    if (card.id !== identity.id) throw new MonoidWrongCardError(card.id);
+    assertSameCard(hello, card);
     if (card.status === 'complete') {
       throw new MonoidCardError('Card already configured');
     }
@@ -253,7 +273,12 @@ export class CardBundleSession {
   private markComplete(publicKey: string): void {
     const cards = this.cards.map(card =>
       card.publicKey === publicKey
-        ? {...card, status: 'complete' as const, bundle: this.bundle!}
+        ? {
+            ...card,
+            status: 'complete' as const,
+            bundle: this.bundle!,
+            allowPeerExtension: true,
+          }
         : card,
     );
     this.setState({
@@ -275,15 +300,13 @@ export class CardBundleSession {
     const members = this.cards.map(card => card.publicKey).sort();
     if (
       response.bundle.length !== 32 ||
-      response.packets.length !== recipients.length
+      response.data.length !== recipients.length
     ) {
       throw new MonoidCardError('Incomplete bundle response');
     }
     const packets = new Map<string, string>();
-    for (const [index, packet] of response.packets.entries()) {
-      const data = packet.data;
+    for (const [index, data] of response.data.entries()) {
       if (
-        uint8ArrayToHex(packet.publicKey) !== recipients[index].publicKey ||
         data.length !== 116 + 65 * members.length ||
         data[0] !== 1 ||
         ((data[1] << 8) | data[2]) !== members.length ||
@@ -312,31 +335,21 @@ export class CardBundleSession {
     hello: MonoidAppletHello,
     pin: string,
     signal: AbortSignal,
+    onAuthenticated?: () => void,
   ): Promise<void> {
     return this.exclusive(async () => {
       const card = this.validateCard(hello);
       if (!MonoidPIN.is(pin)) {
-        throw new MonoidCardError('Secret PIN must contain 6 to 16 characters');
+        throw new MonoidCardError(
+          `Secret PIN must contain ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} characters`,
+        );
       }
       throwIfCancelled(signal);
       const currentBundle =
         hello.bundle === false ? false : uint8ArrayToHex(hello.bundle);
       this.setCardBundle(card.publicKey, currentBundle);
-      try {
-        await applet.authenticate({secret: true, pin});
-      } catch (error) {
-        if (
-          error instanceof CBORAppletError &&
-          MonoidAppletInvalidPINError.is(error.source)
-        ) {
-          throw new MonoidCardError(
-            error.source.tries === 0
-              ? 'Secret PIN blocked'
-              : `Incorrect Secret PIN, tries remaining: ${error.source.tries}`,
-          );
-        }
-        throw error;
-      }
+      await authenticateCardPIN(applet, pin);
+      onAuthenticated?.();
       throwIfCancelled(signal);
 
       if (this.bundle === undefined) {
@@ -348,9 +361,11 @@ export class CardBundleSession {
         });
         try {
           const response = await applet.createBundle({
-            publicKeys: this.cards.map(card =>
-              PublicKey.satisfies(hexToUint8Array(card.publicKey)),
-            ),
+            publicKeys: this.cards
+              .filter(member => member.publicKey !== card.publicKey)
+              .map(member =>
+                PublicKey.satisfies(hexToUint8Array(member.publicKey)),
+              ),
           });
           this.acceptCreation(card, response);
         } catch {
@@ -360,7 +375,7 @@ export class CardBundleSession {
         }
       } else {
         const response = await applet.joinBundle({
-          senderPublicKey: PublicKey.satisfies(
+          publicKey: PublicKey.satisfies(
             hexToUint8Array(this.creator!.publicKey),
           ),
           data: hexToUint8Array(this.packets.get(card.publicKey)!),

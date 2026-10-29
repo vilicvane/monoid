@@ -51,8 +51,6 @@ export const WhiteTag = styled(Tag)`
   color: var(--color-address-tag-text, var(--ion-color-medium-shade));
 `;
 
-export const BlackTag = styled(Tag)`
-  background-color: black;
-  border-color: black;
-  color: white;
+export const DarkTag = styled(Tag)`
+  ${darkTagCSS}
 `;

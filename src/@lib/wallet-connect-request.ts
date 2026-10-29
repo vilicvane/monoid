@@ -4,6 +4,7 @@ import {getAddress, getBytes, hashMessage} from 'ethers';
 
 import type {WalletKitSession} from '../@services/index.js';
 
+import {formatEvmTransactionError} from './evm-transaction-error.js';
 import {parseEvmTransaction} from './evm-transaction.js';
 import {type EvmTypedData, parseEvmTypedData} from './evm-typed-data.js';
 import type {SolanaSendOptions} from './send-solana-transaction.js';
@@ -263,8 +264,11 @@ export function parseWalletConnectTransactionRequest(
 
   try {
     transaction = parseEvmTransaction(input, BigInt(chainId.split(':')[1]!));
-  } catch {
-    throw new WalletConnectRequestError('Invalid transaction request.', -32602);
+  } catch (error) {
+    throw new WalletConnectRequestError(
+      formatEvmTransactionError(error),
+      -32602,
+    );
   }
 
   return {method: payload.method, address, chainId, transaction};

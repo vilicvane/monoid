@@ -1,10 +1,8 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-import {
-  assertCardForUpdate,
-  writeCardAliases,
-} from '../.bld/app/@components/views/safe/card-alias-update.js';
+import {writeCardAliases} from '../.bld/app/@components/views/safe/card-alias-update.js';
+import {assertSameCard} from '../.bld/app/@lib/monoid/card-identity.js';
 import {MonoidWrongCardError} from '../.bld/app/@lib/monoid/index.js';
 
 const FIRST_INDEX = '00010000000000000001';
@@ -18,6 +16,7 @@ function hello(card = CARD) {
     id: bytes(card.id),
     publicKey: bytes(card.publicKey),
     bundle: false,
+    authority: false,
     pins: {access: 5, secret: 5},
   };
 }
@@ -44,7 +43,7 @@ test('writes selected aliases in order, including an explicit empty alias', asyn
     assert.equal(applet.requests.length, updates.length + 1);
   });
 
-  assertCardForUpdate(hello(), CARD);
+  assertSameCard(hello(), CARD);
   await writeCardAliases(applet, pending, controller.signal, (index, alias) =>
     updates.push([index, alias]),
   );
@@ -74,7 +73,7 @@ for (const [description, otherCard] of [
     const updates = [];
 
     await assert.rejects(async () => {
-      assertCardForUpdate(hello(otherCard), CARD);
+      assertSameCard(hello(otherCard), CARD);
       await writeCardAliases(applet, pending, controller.signal, (...update) =>
         updates.push(update),
       );

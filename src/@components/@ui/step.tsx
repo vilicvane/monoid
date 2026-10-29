@@ -3,6 +3,8 @@ import {Check as check} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
+import {popOutAnimationCSS} from '../@animations.js';
+
 import {AppIcon} from './app-icon.js';
 import {LoadingSpinner} from './loading-spinner.js';
 
@@ -14,12 +16,21 @@ export const Steps = styled.div`
   gap: var(--gap);
 `;
 
-const Container = styled.div`
+export const OperationSteps = styled(Steps)<{$exiting: boolean}>`
+  ${props => props.$exiting && popOutAnimationCSS}
+
+  @media (prefers-reduced-motion: reduce) {
+    animation-duration: 1ms;
+  }
+`;
+
+const Container = styled.div<{$color: 'primary' | 'warning'}>`
   --indicator-center-left-offset: 10px;
   --indicator-line-width: 1px;
   --indicator-size: 20px;
   --title-height: 20px;
-  --indicator-color: var(--ion-color-primary);
+  --indicator-color: var(--ion-color-${props => props.$color});
+  --indicator-contrast: var(--ion-color-primary-contrast);
   --indicator-line-color: var(--ion-color-light-shade);
 
   --indicator-line-left-offset: calc(
@@ -33,6 +44,10 @@ const Container = styled.div`
   padding-left: 32px;
 
   position: relative;
+
+  &.active {
+    --indicator-contrast: var(--ion-color-${props => props.$color}-contrast);
+  }
 
   &.done {
     --indicator-color: var(--ion-color-safe);
@@ -55,11 +70,11 @@ const Container = styled.div`
     background-color: var(--indicator-line-color);
   }
 
-  &.done:has(+ .active)::after {
+  .done:has(+ &.active)::after {
     background-image: linear-gradient(
       to bottom,
       var(--ion-color-safe),
-      var(--ion-color-primary)
+      var(--ion-color-${props => props.$color})
     );
   }
 
@@ -103,7 +118,7 @@ const Indicator = styled.div`
   border-radius: 50%;
 
   background-color: var(--indicator-color);
-  color: var(--ion-color-primary-contrast);
+  color: var(--indicator-contrast);
   font-size: 12px;
 
   transition: all 0.2s linear;
@@ -124,14 +139,18 @@ export const Step = ({
   title,
   numero,
   activeNumero,
+  color = 'primary',
   processing = false,
+  keepExpanded = false,
   summary,
   children,
 }: {
   title: ReactNode;
   numero: number;
   processing?: boolean;
+  keepExpanded?: boolean;
   activeNumero: number;
+  color?: 'primary' | 'warning';
   summary?: ReactNode;
   children?: ReactNode;
 }): ReactNode => {
@@ -160,6 +179,7 @@ export const Step = ({
 
   return (
     <Container
+      $color={color}
       className={classNames({
         [state]: true,
       })}
@@ -167,7 +187,9 @@ export const Step = ({
       <Indicator>{indicator}</Indicator>
       <Title>{title}</Title>
       {state === 'done' && summary && <Summary>{summary}</Summary>}
-      {state === 'active' && <Content>{children}</Content>}
+      {(state === 'active' || (state === 'done' && keepExpanded)) && (
+        <Content>{children}</Content>
+      )}
     </Container>
   );
 };

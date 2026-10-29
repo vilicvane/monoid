@@ -221,3 +221,42 @@ test('acknowledged address replacement keeps a recorded selection and clears rem
   item.setRecordedWallets([wallet(3)]);
   assert.equal(item.ref.path, wallet(3).path);
 });
+
+test('card aliases, Authority trust and extension policy survive snapshots and refresh from Hello', async () => {
+  const store = new CardStore();
+  const card = store.set({
+    ...IDENTITY,
+    alias: '旅行卡',
+    authority: 'https://authority.monoid.app/',
+    allowPeerExtension: false,
+    bundle: false,
+    items: [],
+  });
+  assert.equal(card.snapshot().alias, '旅行卡');
+  assert.equal(card.snapshot().authority, 'https://authority.monoid.app/');
+  assert.equal(card.snapshot().allowPeerExtension, false);
+  const hello = {
+    id: Uint8Array.from(Buffer.from(IDENTITY.id, 'hex')),
+    publicKey: Uint8Array.from(Buffer.from(IDENTITY.publicKey, 'hex')),
+    alias: 'Work',
+    authority: false,
+    allowPeerExtension: true,
+    bundle: new Uint8Array(32).fill(1),
+  };
+  const applet = store.observeApplet({hello: async () => hello}, hello);
+  assert.equal(card.alias, 'Work');
+  assert.equal(card.authority, false);
+  hello.alias = false;
+  hello.authority = 'https://authority.monoid.app/';
+  await applet.hello({});
+  assert.equal(card.alias, false);
+  assert.equal(card.snapshot().authority, hello.authority);
+  assert.equal(card.allowPeerExtension, true);
+  assert.equal(card.snapshot().bundle, '01'.repeat(32));
+  assert.equal(
+    store.set({...card.snapshot(), alias: 'New', authority: false}),
+    card,
+  );
+  assert.equal(card.alias, 'New');
+  assert.equal(card.authority, false);
+});

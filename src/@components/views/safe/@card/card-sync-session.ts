@@ -1,31 +1,41 @@
 import {computed, observable, runInAction} from 'mobx';
 
 import {
-  BIP39Path,
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
   MonoidIdHex,
   MonoidPIN,
   PublicKeyHex,
-  SafeIndexHex,
 } from '../../../../@atomics.js';
-import {AppletISOError} from '../../../../@lib/applet.js';
-import {CBORAppletError} from '../../../../@lib/cbor-applet.js';
+import {CardItemNotFoundError} from '../../../../@lib/cbor-applet.js';
 import {
+  type CardItem,
+  CardItemConflictError,
+  type CardItemIssue,
   type MonoidApplet,
   type MonoidAppletHello,
-  MonoidAppletInvalidPINError,
   MonoidCardError,
+  MultiCardSeries,
+  acceptMatchingItem,
+  assertCardPINNotBlocked,
+  assertSameCardWithBundle,
+  authenticateCardPIN,
+  cardItemIssue,
   monoidCommandDefinitions,
+  readBackupCardIdentity,
+  readCardContents,
 } from '../../../../@lib/monoid/index.js';
+import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
+import {
+  type CardMaintenanceBundleRecovery,
+  assertCardMaintenanceBundleRecovery,
+} from '../../../../@services/index.js';
 import {hexToUint8Array, uint8ArrayToHex} from '../../../../@utils/index.js';
 import {xCBOR} from '../../../../@x-value/index.js';
-import {
-  decodeCardDerivationRecord,
-  getCardDerivationItemIndex,
-  isCardDerivationItem,
-} from '../card-derivations.js';
+import {readOpaqueCardItem} from '../card-contents.js';
+import {mergeCardItemData} from '../card-item-merge.js';
 import type {ScannedCardData} from '../common.js';
 
-import {readBackupCardIdentity} from './card-backup-session.js';
 import {
   type CardSyncIdentity,
   type CardSyncItem,
@@ -57,6 +67,12 @@ type Execution = {
   pending?: CardSyncOperation;
 };
 
+/** Omit when the scan prompt has already authenticated Access PIN. */
+export type CardSyncSecretPIN = {
+  pin: string | undefined;
+  onAuthenticated?: () => void;
+};
+
 type ProgressCallback = (progress: CardSyncProgress) => void;
 
 function cancelled(signal: AbortSignal): void {
@@ -74,13 +90,11 @@ function snapshot(card: CardSyncSnapshot): ScannedCardData {
     id: MonoidIdHex.satisfies(card.id),
     publicKey: PublicKeyHex.satisfies(card.publicKey),
     bundle: card.bundle,
+    alias: card.alias ?? false,
+    allowPeerExtension: card.allowPeerExtension ?? false,
+    authority: card.authority ?? false,
     items: card.items.map(
-      ({
-        data: _data,
-        fingerprint: _fingerprint,
-        exported: _exported,
-        ...item
-      }) => item,
+      ({data: _data, exported: _exported, ...item}) => item,
     ),
   };
 }
@@ -101,79 +115,34 @@ function replaceItem(
   };
 }
 
-async function authenticate(
+export async function authenticateCardSync(
   applet: MonoidApplet,
   hello: MonoidAppletHello,
   pin: string | undefined,
   signal: AbortSignal,
+  onAuthenticated?: () => void,
 ): Promise<void> {
   if (hello.pins.secret === false)
     throw new MonoidCardError('Secret PIN not set');
-  if (hello.pins.secret === 0) throw new MonoidCardError('Secret PIN blocked');
+  assertCardPINNotBlocked(hello, 'secret');
   if (pin === undefined) throw new MonoidCardError('Enter Secret PIN');
   if (!MonoidPIN.is(pin)) {
-    throw new MonoidCardError('Secret PIN must contain 6 to 16 characters');
+    throw new MonoidCardError(
+      `Secret PIN must contain ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} characters`,
+    );
   }
 
   cancelled(signal);
 
-  try {
-    await applet.authenticate({secret: true, pin});
-  } catch (error) {
-    if (
-      error instanceof CBORAppletError &&
-      MonoidAppletInvalidPINError.is(error.source)
-    ) {
-      throw new MonoidCardError(
-        error.source.tries === 0
-          ? 'Secret PIN blocked'
-          : `Incorrect Secret PIN, ${error.source.tries} ${error.source.tries === 1 ? 'try' : 'tries'} left`,
-      );
-    }
-
-    throw error;
-  }
+  await authenticateCardPIN(applet, pin);
 
   cancelled(signal);
-}
-
-async function readFingerprint(
-  applet: MonoidApplet,
-  item: CardSyncItem,
-): Promise<string | undefined> {
-  const index = hexToUint8Array(item.index);
-  const prefix = item.index.slice(0, 4);
-  const type =
-    prefix === '0301'
-      ? 'secp256k1'
-      : prefix === '0302'
-        ? 'secp256r1'
-        : prefix === '0401'
-          ? 'ed25519'
-          : undefined;
-
-  if (type) {
-    const {publicKey} = await applet.viewKey({index, type});
-    return `${type}:${uint8ArrayToHex(publicKey)}`;
-  }
-
-  if (item.index.startsWith('02')) {
-    const {publicKey, chainCode} = await applet.viewKey({
-      index,
-      type: 'seed',
-      derivation: {type: 'bip32', path: BIP39Path.satisfies(new Uint8Array())},
-    });
-
-    if (!chainCode) throw new MonoidCardError('Seed chain code is missing');
-    return `seed:${uint8ArrayToHex(publicKey)}:${uint8ArrayToHex(chainCode)}`;
-  }
-
-  return undefined;
+  onAuthenticated?.();
 }
 
 function operationRequest(operation: CardSyncOperation): {
   index: Uint8Array;
-  key?: Uint8Array;
+  metadata?: Uint8Array;
   alias?: string;
   data?: Uint8Array;
   secret?: false;
@@ -182,12 +151,13 @@ function operationRequest(operation: CardSyncOperation): {
   const index = hexToUint8Array(after.index);
 
   switch (operation.kind) {
-    case 'import':
-    case 'verify': {
+    case 'import': {
       const exported = operation.exported!;
       return {
         index,
-        ...(exported.key !== undefined && {key: hexToUint8Array(exported.key)}),
+        ...(exported.metadata !== undefined && {
+          metadata: hexToUint8Array(exported.metadata),
+        }),
         ...(exported.alias !== undefined && {alias: exported.alias}),
         data: hexToUint8Array(exported.data),
       };
@@ -195,7 +165,9 @@ function operationRequest(operation: CardSyncOperation): {
     case 'create':
       return {
         index,
-        ...(after.key !== undefined && {key: hexToUint8Array(after.key)}),
+        ...(after.metadata !== undefined && {
+          metadata: hexToUint8Array(after.metadata),
+        }),
         ...(after.alias !== undefined && {alias: after.alias}),
         data: hexToUint8Array(after.data!),
         secret: false,
@@ -210,37 +182,46 @@ function operationRequest(operation: CardSyncOperation): {
 async function execute(
   applet: MonoidApplet,
   operation: CardSyncOperation,
+  signal: AbortSignal,
 ): Promise<void> {
-  // Use each command's schema to retain the original omitted/empty metadata.
   const request = operationRequest(operation);
+  const expected = {
+    ...operation.after,
+    index: hexToUint8Array(operation.after.index),
+    metadata:
+      operation.after.metadata === undefined
+        ? undefined
+        : hexToUint8Array(operation.after.metadata),
+    data:
+      operation.after.data === undefined
+        ? undefined
+        : hexToUint8Array(operation.after.data),
+  };
 
-  switch (operation.kind) {
-    case 'import':
-    case 'verify':
-      try {
+  try {
+    switch (operation.kind) {
+      case 'import':
         await applet.importItem(
           monoidCommandDefinitions.importItem.request.satisfies(request),
         );
-      } catch (error) {
-        if (error instanceof AppletISOError && error.sw === 0x6985) {
-          throw new MonoidCardError(
-            `Item ${operation.after.index}: conflicting Secret data`,
-          );
-        }
-        throw error;
+        break;
+      case 'create': {
+        const result = await applet.create(
+          monoidCommandDefinitions.create.request.satisfies(request),
+        );
+        if (uint8ArrayToHex(result.index) !== operation.after.index) changed();
+        break;
       }
-      break;
-    case 'create': {
-      const result = await applet.create(
-        monoidCommandDefinitions.create.request.satisfies(request),
-      );
-      if (uint8ArrayToHex(result.index) !== operation.after.index) changed();
-      break;
+      case 'data':
+      case 'alias':
+        await applet.set(
+          monoidCommandDefinitions.set.request.satisfies(request),
+        );
+        break;
     }
-    case 'data':
-    case 'alias':
-      await applet.set(monoidCommandDefinitions.set.request.satisfies(request));
-      break;
+  } catch (error) {
+    if (operation.kind !== 'import' && operation.kind !== 'create') throw error;
+    await acceptMatchingItem(applet, expected, error, signal);
   }
 }
 
@@ -268,6 +249,11 @@ export class CardSyncSession {
   get cards(): readonly CardSyncCard[] {
     return this.current.get().cards;
   }
+
+  get series(): MultiCardSeries {
+    return MultiCardSeries.from(this.cards);
+  }
+
   get phase(): 'collect' | 'write' | 'complete' {
     return this.current.get().phase;
   }
@@ -285,7 +271,9 @@ export class CardSyncSession {
     const preview = this.collectionPlan.get();
     return (
       'plans' in preview &&
-      preview.plans.every(plan => plan.operations.length === 0)
+      preview.plans.every(
+        plan => plan.operations.length === 0 && plan.issues.length === 0,
+      )
     );
   }
 
@@ -299,11 +287,14 @@ export class CardSyncSession {
   }
 
   private finish(cards: CardSyncCard[]): void {
-    if (cards.every(card => card.complete)) {
+    if (MultiCardSeries.from(cards).completedCount === cards.length) {
       this.executions.clear();
       this.update({
         phase: 'complete',
-        cards: cards.map(card => ({...card, items: snapshot(card).items})),
+        cards: cards.map(card => ({
+          ...card,
+          items: card.items.map(({exported: _exported, ...item}) => item),
+        })),
       });
     } else {
       this.update({cards, phase: 'write'});
@@ -329,80 +320,57 @@ export class CardSyncSession {
     callback?: ProgressCallback,
     listed?: Awaited<ReturnType<MonoidApplet['list']>>,
   ): Promise<CardSyncSnapshot> {
-    cancelled(signal);
-    const {items: entries} = listed ?? (await applet.list({}));
-    const items: CardSyncItem[] = [];
-    this.report({stage, current: 0, total: entries.length}, callback);
+    const issues: CardItemIssue[] = [];
+    const {items} = await readCardContents(
+      applet,
+      entry => readOpaqueCardItem(applet, entry),
+      {
+        listed,
+        onItemError: (item, error) => {
+          const issue = cardItemIssue(item.index, error);
+          if (!issue) throw error;
+          issues.push(issue);
+          return item;
+        },
+        check: () => cancelled(signal),
+        onProgress: (current, total) =>
+          this.report({stage, current, total}, callback),
+      },
+    );
 
-    for (const entry of entries) {
-      cancelled(signal);
-      const item: CardSyncItem = {
-        index: SafeIndexHex.satisfies(uint8ArrayToHex(entry.index)),
-        type: entry.type,
-        alias: entry.alias,
-        key: entry.key === undefined ? undefined : uint8ArrayToHex(entry.key),
-        secret: entry.secret,
-      };
-
-      if (item.secret) {
-        item.fingerprint = await readFingerprint(applet, item);
-      } else {
-        const {data} = await applet.get({index: entry.index});
-        item.data = uint8ArrayToHex(data);
-
-        if (isCardDerivationItem(item)) {
-          const record = decodeCardDerivationRecord(data);
-          if (
-            item.key !== record.index ||
-            item.index !== getCardDerivationItemIndex(record.index)
-          ) {
-            throw new MonoidCardError('Invalid address records');
-          }
-          item.derivationRecord = record;
-        }
-      }
-
-      if (isCardDerivationItem(item) && !item.derivationRecord) {
-        throw new MonoidCardError('Invalid address records');
-      }
-
-      items.push(item);
-      this.report(
-        {stage, current: items.length, total: entries.length},
-        callback,
-      );
-    }
-
-    cancelled(signal);
-    return {...identity, items};
+    return {...identity, items, issues};
   }
 
   async add(
     applet: MonoidApplet,
     hello: MonoidAppletHello,
     signal: AbortSignal,
-    secretPIN?: string,
+    secretPIN?: CardSyncSecretPIN,
     onProgress?: ProgressCallback,
   ): Promise<CardSyncCard> {
     return this.exclusive(async () => {
       if (this.phase !== 'collect')
         throw new MonoidCardError('Start sync again to add cards');
       const identity = readBackupCardIdentity(hello);
-      await authenticate(applet, hello, secretPIN, signal);
-      const listed = await applet.list({});
-      const secrets =
-        identity.bundle === false
-          ? []
-          : listed.items.filter(item => item.secret);
-
+      cancelled(signal);
+      if (secretPIN) {
+        await authenticateCardSync(
+          applet,
+          hello,
+          secretPIN.pin,
+          signal,
+          secretPIN.onAuthenticated,
+        );
+      }
       const read = await this.read(
         applet,
         identity,
         signal,
         'reading',
         onProgress,
-        listed,
       );
+      const secrets =
+        identity.bundle === false ? [] : read.items.filter(item => item.secret);
       let exported = 0;
 
       for (const item of read.items) {
@@ -412,16 +380,34 @@ export class CardSyncSession {
           {stage: 'exporting', current: exported, total: secrets.length},
           onProgress,
         );
-        const result = await applet.exportItem({
-          index: hexToUint8Array(item.index),
-        });
+        let result: Awaited<ReturnType<MonoidApplet['exportItem']>>;
+        try {
+          result = await applet.exportItem({
+            index: hexToUint8Array(item.index),
+          });
+        } catch (error) {
+          const issue = cardItemIssue(item.index, error);
+          if (!issue) throw error;
+          read.issues!.push(issue);
+          cancelled(signal);
+          this.report(
+            {stage: 'exporting', current: ++exported, total: secrets.length},
+            onProgress,
+          );
+          continue;
+        }
         const artifact = {
-          key:
-            result.key === undefined ? undefined : uint8ArrayToHex(result.key),
+          metadata:
+            result.metadata === undefined
+              ? undefined
+              : uint8ArrayToHex(result.metadata),
           alias: result.alias,
           data: uint8ArrayToHex(result.data),
         };
-        if (artifact.key !== item.key || artifact.alias !== item.alias)
+        if (
+          artifact.metadata !== item.metadata ||
+          artifact.alias !== item.alias
+        )
           changed();
         item.exported = artifact;
         this.report(
@@ -472,7 +458,7 @@ export class CardSyncSession {
       for (const operation of plan.operations) {
         const request = operationRequest(operation);
         const length =
-          operation.kind === 'import' || operation.kind === 'verify'
+          operation.kind === 'import'
             ? monoidCommandDefinitions.importItem.request.encode(
                 xCBOR,
                 monoidCommandDefinitions.importItem.request.satisfies(request),
@@ -487,9 +473,16 @@ export class CardSyncSession {
                   monoidCommandDefinitions.set.request.satisfies(request),
                 ).length;
         if (length > 8192) {
-          throw new MonoidCardError('Synced item exceeds card limits');
+          plan.issues.push({index: operation.after.index, reason: 'Too large'});
         }
       }
+    }
+
+    for (const plan of plans) {
+      plan.operations = plan.operations.filter(
+        operation =>
+          !plan.issues.some(issue => issue.index === operation.after.index),
+      );
     }
 
     this.executions = new Map(
@@ -504,6 +497,7 @@ export class CardSyncSession {
     );
     const cards = plans.map(plan => ({
       ...plan.card,
+      issues: plan.issues,
       total: new Set(plan.operations.map(operation => operation.after.index))
         .size,
       completed: 0,
@@ -515,9 +509,21 @@ export class CardSyncSession {
   private acknowledge(
     execution: Execution,
     operation: CardSyncOperation,
+    issue?: CardItemIssue,
   ): void {
-    execution.expected = replaceItem(execution.expected, operation.after);
+    if (!issue)
+      execution.expected = replaceItem(execution.expected, operation.after);
     execution.next++;
+    if (issue) {
+      execution.expected = {
+        ...execution.expected,
+        issues: [...(execution.expected.issues ?? []), issue],
+      };
+      execution.plan.operations = execution.plan.operations.filter(
+        (next, index) =>
+          index < execution.next || next.after.index !== issue.index,
+      );
+    }
     execution.pending = undefined;
     const remaining = new Set(
       execution.plan.operations
@@ -533,7 +539,12 @@ export class CardSyncSession {
     this.update({
       cards: this.cards.map(card =>
         card.publicKey === execution.expected.publicKey
-          ? {...card, items: execution.expected.items, completed: finished.size}
+          ? {
+              ...card,
+              items: execution.expected.items,
+              issues: issue ? [...(card.issues ?? []), issue] : card.issues,
+              completed: finished.size,
+            }
           : card,
       ),
       confirmedSnapshot: snapshot(execution.expected),
@@ -552,46 +563,44 @@ export class CardSyncSession {
     cancelled(signal);
     this.report({stage: 'checking', current: 0, total: 1}, onProgress);
 
-    if (pending.kind === 'import' || pending.kind === 'verify') {
-      // Import is idempotent: it checks the original authenticated contents if
-      // already present, or finishes the interrupted import if still absent.
-      await execute(applet, pending);
-      this.acknowledge(execution, pending);
-    } else {
-      const index = hexToUint8Array(pending.after.index);
-      let entry: Awaited<ReturnType<MonoidApplet['view']>> | undefined;
+    const index = hexToUint8Array(pending.after.index);
+    let entry: Awaited<ReturnType<MonoidApplet['view']>> | undefined;
 
-      try {
-        entry = await applet.view({index});
-      } catch (error) {
-        if (
-          !(error instanceof CBORAppletError) ||
-          error.source.code !== 'NOT_FOUND'
-        ) {
-          throw error;
-        }
+    try {
+      entry = await applet.view({index});
+    } catch (error) {
+      if (!(error instanceof CardItemNotFoundError)) {
+        throw error;
       }
-
-      cancelled(signal);
-      const found = entry
-        ? (
-            await this.read(
-              applet,
-              execution.expected,
-              signal,
-              'checking',
-              onProgress,
-              {items: [{index, ...entry}]},
-            )
-          ).items[0]
-        : undefined;
-
-      if (sameCardSyncItem(found, pending.after))
-        this.acknowledge(execution, pending);
-      else if (sameCardSyncItem(found, pending.before))
-        execution.pending = undefined;
-      else changed();
     }
+
+    cancelled(signal);
+    const found = entry
+      ? (
+          await this.read(
+            applet,
+            execution.expected,
+            signal,
+            'checking',
+            onProgress,
+            {
+              items: [
+                {
+                  index,
+                  ...entry,
+                  type: pending.after.type as CardItem['type'],
+                },
+              ],
+            },
+          )
+        ).items[0]
+      : undefined;
+
+    if (sameCardSyncItem(found, pending.after))
+      this.acknowledge(execution, pending);
+    else if (sameCardSyncItem(found, pending.before))
+      execution.pending = undefined;
+    else changed();
 
     this.report({stage: 'checking', current: 1, total: 1}, onProgress);
   }
@@ -600,7 +609,7 @@ export class CardSyncSession {
     applet: MonoidApplet,
     hello: MonoidAppletHello,
     signal: AbortSignal,
-    secretPIN?: string,
+    secretPIN?: CardSyncSecretPIN,
     onProgress?: ProgressCallback,
   ): Promise<CardSyncCard> {
     return this.exclusive(async () => {
@@ -611,11 +620,20 @@ export class CardSyncSession {
         item => item.publicKey === identity.publicKey,
       );
       if (!card) throw new MonoidCardError('Scan a card in this sync');
-      if (identity.id !== card.id || identity.bundle !== card.bundle) changed();
-      if (card.complete) return card;
+      assertSameCardWithBundle(hello, card, 'Card changed, start sync again');
+      if (this.series.hasFinished(identity.publicKey)) return card;
 
       const execution = this.executions.get(identity.publicKey)!;
-      await authenticate(applet, hello, secretPIN, signal);
+      cancelled(signal);
+      if (secretPIN) {
+        await authenticateCardSync(
+          applet,
+          hello,
+          secretPIN.pin,
+          signal,
+          secretPIN.onAuthenticated,
+        );
+      }
       await this.reconcilePending(applet, execution, signal, onProgress);
 
       while (execution.next < execution.plan.operations.length) {
@@ -629,7 +647,15 @@ export class CardSyncSession {
           onProgress,
         );
         execution.pending = operation;
-        await execute(applet, operation);
+        try {
+          await execute(applet, operation, signal);
+        } catch (error) {
+          const issue = cardItemIssue(operation.after.index, error);
+          if (!issue) throw error;
+          this.acknowledge(execution, operation, issue);
+          cancelled(signal);
+          continue;
+        }
         // Save the ACK before checking cancellation or issuing another APDU.
         this.acknowledge(execution, operation);
       }
@@ -649,6 +675,161 @@ export class CardSyncSession {
       this.update({confirmedSnapshot: snapshot(execution.expected)});
       this.finish(cards);
       return this.cards.find(item => item.publicKey === identity.publicKey)!;
+    });
+  }
+
+  /** The caller authenticates first; only the peer can issue the target's recovery envelopes. */
+  async exportRecovery(
+    applet: MonoidApplet,
+    hello: MonoidAppletHello,
+    target: CardSyncIdentity,
+    signal: AbortSignal,
+    onProgress?: ProgressCallback,
+    coverage: readonly CardSyncIdentity[] = [target],
+  ): Promise<CardMaintenanceBundleRecovery> {
+    return this.exclusive(async () => {
+      cancelled(signal);
+      const identity = readBackupCardIdentity(hello);
+      const source = this.cards.find(
+        card => card.publicKey === identity.publicKey,
+      );
+      const destination = this.cards.find(
+        card => card.publicKey === target.publicKey,
+      );
+      if (!source) throw new MonoidCardError('Scan a card in this sync');
+      assertSameCardWithBundle(hello, source, 'Card changed, start sync again');
+      if (!destination) changed();
+      assertSameCardWithBundle(
+        target,
+        destination,
+        'Card changed, start sync again',
+      );
+      if (!source.complete) throw new MonoidCardError('Sync the card first');
+      if (
+        identity.bundle === false ||
+        identity.bundle !== target.bundle ||
+        identity.publicKey === target.publicKey
+      )
+        throw new MonoidCardError('Scan another card in the same bundle');
+
+      // A peer archive must cover every original target item before deletion.
+      // A completed partial sync alone is not proof of a complete recovery.
+      for (const required of coverage) {
+        const member = this.cards.find(
+          card => card.publicKey === required.publicKey,
+        );
+        if (!member || member.bundle !== target.bundle) changed();
+        for (const item of member.items) {
+          const peer = source.items.find(
+            candidate => candidate.index === item.index,
+          );
+          try {
+            if (
+              !peer ||
+              (!item.secret && item.data === undefined) ||
+              mergeCardItemData(peer, item).data !== peer.data
+            )
+              throw new CardItemConflictError(item.index);
+          } catch (cause) {
+            throw new MonoidCardError(
+              `Item ${item.index}: incomplete recovery`,
+              {
+                cause,
+              },
+            );
+          }
+        }
+      }
+
+      const recovery: CardMaintenanceBundleRecovery = {
+        source: {
+          id: identity.id,
+          publicKey: identity.publicKey,
+          bundle: identity.bundle,
+        },
+        items: [],
+      };
+      assertCardMaintenanceBundleRecovery(target, recovery);
+      this.report(
+        {stage: 'exporting', current: 0, total: source.items.length},
+        onProgress,
+      );
+      const issues: CardItemIssue[] = [];
+      for (const [position, item] of source.items.entries()) {
+        cancelled(signal);
+        // Imported items may still cache the target's original envelopes. Fresh
+        // peer exports remain valid after the target's Monoid is replaced.
+        let exported: Awaited<ReturnType<MonoidApplet['exportItem']>>;
+        try {
+          exported = await applet.exportItem({
+            index: hexToUint8Array(item.index),
+          });
+        } catch (cause) {
+          cancelled(signal);
+          if (isOperationCancelled(cause, signal)) throw cause;
+          const issue = cardItemIssue(item.index, cause);
+          if (issue) {
+            issues.push(issue);
+            this.report(
+              {
+                stage: 'exporting',
+                current: position + 1,
+                total: source.items.length,
+              },
+              onProgress,
+            );
+            continue;
+          }
+          throw new MonoidCardError(
+            `Item ${item.index}: cannot export recovery`,
+            {cause},
+          );
+        }
+        const archived = {
+          index: item.index,
+          secret: item.secret,
+          key:
+            exported.metadata === undefined
+              ? undefined
+              : uint8ArrayToHex(exported.metadata),
+          alias: exported.alias,
+          data: uint8ArrayToHex(exported.data),
+          ...(item.data !== undefined && {plaintext: item.data}),
+        };
+        if (archived.key !== item.metadata || archived.alias !== item.alias)
+          changed();
+        try {
+          assertCardMaintenanceBundleRecovery(target, {
+            source: recovery.source,
+            items: [archived],
+          });
+        } catch (cause) {
+          throw new MonoidCardError(
+            `Item ${item.index}: invalid recovery export`,
+            {cause},
+          );
+        }
+        recovery.items.push(archived);
+        this.report(
+          {
+            stage: 'exporting',
+            current: position + 1,
+            total: source.items.length,
+          },
+          onProgress,
+        );
+      }
+      cancelled(signal);
+      if (issues.length)
+        throw new MonoidCardError(
+          issues
+            .map(
+              issue =>
+                `Item ${issue.index}: cannot export recovery (${issue.reason})`,
+            )
+            .join('; '),
+        );
+      return recovery;
     });
   }
 

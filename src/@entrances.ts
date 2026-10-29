@@ -9,11 +9,13 @@ import {BrowserHistory, BrowserRouterPlugin} from 'routra/browser';
 import {Keyboard} from './@keyboard.js';
 import {hasBitcoinWallet} from './@lib/bitcoin-wallet.js';
 import {createMonoidApplet} from './@lib/monoid/index.js';
+import {WALLET_CONNECT_SIGN_CONFIG} from './@lib/wallet-connect.js';
 import {Portals} from './@portals.js';
 import {ROUTE_SCHEMA, type ViewSwitchingState} from './@routes.js';
 import {
   AddressBookService,
   AppPreferencesService,
+  AuthorityService,
   BitcoinWalletService,
   CardBundleStore,
   CardMaintenanceService,
@@ -28,6 +30,8 @@ import {
   MonoidCredentialsStore,
   MonoidScanPromptPresenter,
   MonoidStorageService,
+  OTPStore,
+  SSHKeyStore,
   SiteLogoService,
   SolanaIdlService,
   SolanaTokenService,
@@ -112,7 +116,7 @@ export class Entrances {
 
   @entrance
   get monoidApplet() {
-    return createMonoidApplet();
+    return this.cardStore.observeApplet(createMonoidApplet());
   }
 
   @entrance
@@ -126,6 +130,11 @@ export class Entrances {
   }
 
   @entrance
+  get otpStore() {
+    return this.storageService.then(storage => OTPStore.create(storage));
+  }
+
+  @entrance
   get cardBundleStore() {
     return new CardBundleStore();
   }
@@ -134,6 +143,13 @@ export class Entrances {
   get cardMaintenanceService() {
     return this.storageService.then(storage =>
       CardMaintenanceService.create(storage),
+    );
+  }
+
+  @entrance
+  get authorityService() {
+    return this.storageService.then(storage =>
+      AuthorityService.create(storage),
     );
   }
 
@@ -150,6 +166,7 @@ export class Entrances {
   @entrance
   get walletKit() {
     return WalletKit.init({
+      signConfig: WALLET_CONNECT_SIGN_CONFIG,
       core: new Core({
         projectId: 'f1bac1f17e8531e322bd69250c6cc7b4',
       }),
@@ -173,16 +190,25 @@ export class Entrances {
       this.evmCallHistoryService,
       this.transactionHistoryService,
       this.solanaTransactionHistoryService,
-    ]).then(([walletKit, storage, addresses, calls, transactions, solana]) =>
-      WalletKitService.create(
-        walletKit,
-        storage,
-        addresses,
-        calls,
-        transactions,
-        solana,
-      ),
+      this.walletStorageService,
+    ]).then(
+      ([walletKit, storage, addresses, calls, transactions, solana, wallets]) =>
+        WalletKitService.create(
+          walletKit,
+          storage,
+          addresses,
+          calls,
+          transactions,
+          solana,
+          () => !!this.monoidScanPromptPresenter.current,
+          () => this.sshKeyStore.candidates(wallets.keys),
+        ),
     );
+  }
+
+  @entrance
+  get sshKeyStore() {
+    return new SSHKeyStore();
   }
 
   @entrance

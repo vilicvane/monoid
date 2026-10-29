@@ -1,5 +1,6 @@
 export * from './address-book-service.js';
 export * from './app-preferences-service.js';
+export * from './authority-service.js';
 export * from './bitcoin-wallet-service.js';
 export * from './card-bundle-store.js';
 export * from './card-store.js';
@@ -20,6 +21,10 @@ export * from './solana-idl-service.js';
 export * from './solana-token-service.js';
 export * from './solana-transaction-history-service.js';
 export * from './storage-service.js';
+export * from './otp-store.js';
 export * from './transaction-history-service.js';
 export * from './wallet-kit-service.js';
+export * from './wallet-connect-signing-lock.js';
 export * from './wallet-storage-service.js';
+export * from './ssh-key-store.js';
+export * from './ssh-wallet-service.js';

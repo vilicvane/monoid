@@ -3,17 +3,26 @@ import {observer} from 'mobx-react-lite';
 import {type ReactNode, useCallback, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 
-import {MonoidIdHex, MonoidPIN, PublicKeyHex} from '../../../../@atomics.js';
+import {
+  MONOID_PIN_MAX_LENGTH,
+  MONOID_PIN_MIN_LENGTH,
+  type MonoidIdHex,
+  MonoidPIN,
+} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
 import type {CardInformation} from '../../../../@lib/global-platform/card-information.js';
 import {
   MonoidAppletHello,
   MonoidCardError,
-  MonoidWrongCardError,
+  assertCardPINsNotBlocked,
+  assertSameCard,
+  authenticateCardPIN,
+  cardName,
   initializeMonoidCard,
+  readBackupCardIdentity,
 } from '../../../../@lib/monoid/index.js';
+import {isOperationCancelled} from '../../../../@lib/operation-cancelled.js';
 import type {Router} from '../../../../@routes.js';
-import {isCredentialRequestCancelled} from '../../../../@services/index.js';
 import {uint8ArrayToHex} from '../../../../@utils/index.js';
 import {
   CardGrid,
@@ -21,11 +30,9 @@ import {
   CardPreview,
   CardPreviewButton,
 } from '../../../@monoid/card-preview.js';
-import {MonoidScanStatePromptContentHighlight} from '../../../@monoid/monoid-scan-prompt.js';
-import {
-  PINKind,
-  getPINInputPlaceholder,
-} from '../../../@monoid/pin-input-placeholder.js';
+import {scanCardPrompt} from '../../../@monoid/monoid-scan-prompt.js';
+import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
+import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
 import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
 import {Button, Buttons} from '../../../@ui/button.js';
 import {ConfirmPopup} from '../../../@ui/confirm-popup.js';
@@ -36,9 +43,9 @@ import {
 } from '../../../@ui/info-section.js';
 import {WarningMessage} from '../../../@ui/message-content.js';
 import {OperationComplete} from '../../../@ui/operation-complete.js';
+import {SegmentedControl} from '../../../@ui/segmented-control.js';
 import {Step, Steps} from '../../../@ui/step.js';
 import {useToast} from '../../../@ui/toast.js';
-import {Toggle} from '../../../@ui/toggle.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 import {
   View,
@@ -49,18 +56,24 @@ import {
 } from '../../../@view/index.js';
 import type {ScannedCardData} from '../common.js';
 
+import {AuthorityBundleSession} from './authority-bundle-session.js';
+import {AuthorityBundleSetup} from './authority-bundle-setup.js';
 import {CardBundleSession} from './card-bundle-session.js';
 import {
   type CardResetIdentity,
   CardResetSession,
 } from './card-reset-session.js';
+import {CardSecretPINSession} from './card-secret-pin-session.js';
 import {CardSetupPIN} from './card-setup-pin.js';
 import {readCardForSetup} from './read-card-for-setup.js';
 
 type BundleCandidate =
   | {
       type: 'prepared';
-      card: Pick<ScannedCardData, 'id' | 'publicKey' | 'bundle'>;
+      card: Pick<
+        ScannedCardData,
+        'id' | 'publicKey' | 'bundle' | 'alias' | 'allowPeerExtension'
+      >;
     }
   | {type: 'scanned'; hello: MonoidAppletHello};
 
@@ -81,9 +94,7 @@ export const SetupCardView = observer(
     } = useEntrances();
     const [fromCopy] = useState(() => view.copyId !== undefined);
     const [fromCard] = useState(() => !fromCopy && view.card !== undefined);
-    const [bundleOnly] = useState(
-      () => !fromCopy && view.createBundle === true,
-    );
+    const [fixedBundle] = useState(() => (!fromCopy ? view.bundle : undefined));
     const [sourceCard] = useState(() =>
       !fromCopy && view.card ? cardStore.get(view.card) : undefined,
     );
@@ -93,22 +104,25 @@ export const SetupCardView = observer(
     const isViewActive = useViewActive(view);
     const scanPrompt = useIsoDepScanPrompt();
     const toast = useToast();
-    const [flow] = useState(() => {
-      const state = cardBundleStore.getOrCreate(
+    const [flow] = useState(() =>
+      cardBundleStore.getOrCreate(
         view.bundleId,
         () => new CardBundleSession(),
-      );
-      if (bundleOnly)
-        runInAction(() => {
-          state.bundleEnabled = true;
-        });
-      return state;
-    });
+        {
+          bundle: fixedBundle,
+          createAuthority:
+            fixedBundle === 'authority'
+              ? () => new AuthorityBundleSession(sourceCard)
+              : undefined,
+        },
+      ),
+    );
     const bundleSession = flow.session;
     const [pinSession] = useState(() =>
       monoidCredentialsStore.createPINSession(),
     );
-    const bundleEnabled = flow.bundleEnabled;
+    const [secretPINSession] = useState(() => new CardSecretPINSession());
+    const bundleEnabled = flow.bundle === 'card';
     const [pinInput, showPINInput] = useInputModal();
     const [selectedCard, setSelectedCard] = useState<string>();
     const [interruptedCard, setInterruptedCard] = useState<string>();
@@ -139,6 +153,9 @@ export const SetupCardView = observer(
             : {
                 id: uint8ArrayToHex(candidate.hello.id),
                 publicKey: uint8ArrayToHex(candidate.hello.publicKey),
+                alias: candidate.hello.alias,
+                allowPeerExtension: candidate.hello.allowPeerExtension,
+                authority: candidate.hello.authority,
                 bundle:
                   candidate.hello.bundle === false
                     ? (false as const)
@@ -173,15 +190,16 @@ export const SetupCardView = observer(
         mounted.current = false;
         cardOperation.current?.abort();
         pinSession.clear();
+        secretPINSession.clear();
       };
-    }, [pinSession]);
+    }, [pinSession, secretPINSession]);
 
     useEffect(
       () =>
         reaction(
           isViewActive,
           active => {
-            if (!active) return;
+            if (!active || flow.bundle === 'authority') return;
             if (view.cardInformation && !flow.informationForwarded) {
               runInAction(() => {
                 flow.informationForwarded = true;
@@ -209,11 +227,7 @@ export const SetupCardView = observer(
               errorService.catch(
                 requestBundleCard({
                   type: 'prepared',
-                  card: {
-                    id: card.id,
-                    publicKey: card.publicKey,
-                    bundle: card.bundle,
-                  },
+                  card,
                 }),
               );
           },
@@ -243,10 +257,11 @@ export const SetupCardView = observer(
               setPendingBundleCard(undefined);
               cardOperation.current?.abort();
               pinSession.clear();
+              secretPINSession.clear();
             }
           },
         ),
-      [isViewActive, pinSession],
+      [isViewActive, pinSession, secretPINSession],
     );
 
     const isActive = (): boolean => mounted.current && isViewActive();
@@ -263,13 +278,13 @@ export const SetupCardView = observer(
             ...getPINInputPlaceholder('Secret', prefix),
             description,
             center: true,
-            maxLength: 16,
+            maxLength: MONOID_PIN_MAX_LENGTH,
           },
           signal,
         );
         if (input === undefined || signal.aborted || !isActive()) return;
         if (MonoidPIN.is(input)) return input;
-        description = 'Use 6 to 16 ASCII characters';
+        description = `Use ${MONOID_PIN_MIN_LENGTH} to ${MONOID_PIN_MAX_LENGTH} ASCII characters`;
       }
     };
 
@@ -284,6 +299,9 @@ export const SetupCardView = observer(
           (emptyCard
             ? cardStore.set({
                 ...identity,
+                alias: hello.alias,
+                allowPeerExtension: hello.allowPeerExtension,
+                authority: hello.authority,
                 bundle:
                   hello.bundle === false
                     ? false
@@ -307,6 +325,7 @@ export const SetupCardView = observer(
           await bundleSession.addCard(hello);
         } else {
           await copyFlow?.session.addTarget(hello);
+          secretPINSession.clear();
           if (mounted.current) setComplete(true);
         }
         if (mounted.current) setPendingPIN(undefined);
@@ -330,10 +349,7 @@ export const SetupCardView = observer(
       if (bundleEnabled) bundleSession.validateAddition(hello);
       // An enrolled card may be reset even when its old PINs are blocked.
       if (bundleEnabled && hello.bundle !== false) return;
-      if (hello.pins.secret === 0)
-        throw new MonoidCardError('Secret PIN blocked');
-      if (hello.pins.access === 0)
-        throw new MonoidCardError('Access PIN blocked');
+      assertCardPINsNotBlocked(hello);
     };
 
     const acceptScan = async (hello: MonoidAppletHello): Promise<void> => {
@@ -383,8 +399,7 @@ export const SetupCardView = observer(
         if (result.type === 'setup') openMaintenance(result.cardInformation);
         else if (!completed) await acceptScan(result.hello);
       } catch (error) {
-        if (!operation.signal.aborted && !isCredentialRequestCancelled(error))
-          throw error;
+        if (!isOperationCancelled(error, operation.signal)) throw error;
       } finally {
         try {
           // Keep a verified member when a queued signing request navigates away
@@ -406,86 +421,110 @@ export const SetupCardView = observer(
     const resetAndAdd = async (reset: CardResetSession): Promise<void> => {
       if (cardOperation.current || !isActive()) return;
       const operation = new AbortController();
+      const pinSignal = secretPINSession.signal;
       cardOperation.current = operation;
       runInAction(() => {
         flow.pendingReset = reset;
       });
       setBusy(true);
       let pin: MonoidPIN | undefined;
+      let accessPIN: MonoidPIN | undefined;
       let initialized: MonoidAppletHello | undefined;
       let completed: MonoidAppletHello | undefined;
       let accessPINId: MonoidIdHex | undefined;
       try {
         if (!reset.attempted) {
-          pin = await requestSecretPIN(
-            'Set',
-            <>
-              Will be used as initial <PINKind kind="Access" /> PIN
-            </>,
-            operation.signal,
-          );
-          if (pin === undefined) return;
-          // One vault authorization covers removing the old ID and saving the new ID.
+          // One vault authorization covers removing and replacing this card's PIN.
           await pinSession.authenticate(operation.signal);
           operation.signal.throwIfAborted();
           if (!isActive()) return;
+          const requested = await requestCardPINs(
+            showPINInput,
+            {secretSet: false, accessSet: false},
+            operation.signal,
+          );
+          if (!requested) return;
+          pin = requested.secret;
+          accessPIN = requested.access;
+          operation.signal.throwIfAborted();
+          if (!isActive()) return;
         }
-        await scanPrompt(
-          <>
-            Scan card{' '}
-            <MonoidScanStatePromptContentHighlight>
-              {reset.replacement
-                ? uint8ArrayToHex(reset.replacement.id)
-                : reset.card.id}
-            </MonoidScanStatePromptContentHighlight>
-          </>,
-          async (sessionId, setState, scanSignal) => {
-            const signal = AbortSignal.any([scanSignal, operation.signal]);
-            signal.throwIfAborted();
-            const applet = await monoidApplet.openSession(sessionId);
-            signal.throwIfAborted();
-            const current = MonoidAppletHello.satisfies(await applet.hello({}));
-            setState(
-              reset.attempted
-                ? 'Checking card, hold tight...'
-                : 'Resetting card, hold tight...',
-            );
-            let hello = await reset.readOrReset(
-              applet,
-              current,
-              () => pinSession.removePIN(reset.card.id, undefined, signal),
-              () =>
-                runInAction(() => {
-                  const cached = cardStore.get(reset.card);
-                  if (cached) {
-                    cached.items = [];
-                    cached.bundle = false;
-                    cached.requiresPINSetup = true;
-                  }
-                }),
-              signal,
-            );
-            cacheSetup(
-              hello,
-              hello.pins.secret === false && hello.pins.access === false,
-            );
-            if (pin !== undefined) {
-              setState('Setting Secret PIN, hold tight...');
-              hello = await initializeMonoidCard(applet, hello, pin, signal);
-              cacheSetup(hello);
-              completed = hello;
-              setState('Authenticating, hold tight...');
-              await applet.authenticate({pin});
-              signal.throwIfAborted();
-              accessPINId = uint8ArrayToHex(hello.id);
-            }
-            initialized = hello;
-            if (hasInitializedPINs(hello)) completed = hello;
-          },
+        await reset.run(
+          pinSession,
+          AbortSignal.any([operation.signal, pinSignal]),
+          removePIN =>
+            scanPrompt(
+              scanCardPrompt(reset.replacement ?? reset.card),
+              async (sessionId, setState, scanSignal) => {
+                const signal = AbortSignal.any([
+                  scanSignal,
+                  operation.signal,
+                  pinSignal,
+                ]);
+                signal.throwIfAborted();
+                const applet = await monoidApplet.openSession(sessionId);
+                signal.throwIfAborted();
+                const current = MonoidAppletHello.satisfies(
+                  await applet.hello({}),
+                );
+                setState(
+                  reset.attempted
+                    ? 'Checking card, hold tight...'
+                    : 'Resetting card, hold tight...',
+                );
+                const cached = cardStore.get(reset.card);
+                let hello = await reset.readOrReset(
+                  applet,
+                  current,
+                  () => removePIN(signal),
+                  () =>
+                    runInAction(() => {
+                      if (cached) {
+                        cached.items = [];
+                        cached.bundle = false;
+                        cached.allowPeerExtension = false;
+                        cached.requiresPINSetup = true;
+                      }
+                    }),
+                  signal,
+                );
+                cacheSetup(
+                  hello,
+                  hello.pins.secret === false && hello.pins.access === false,
+                );
+                if (pin !== undefined) {
+                  signal.throwIfAborted();
+                  const rememberPIN = secretPINSession.onAuthenticated(
+                    readBackupCardIdentity(hello),
+                    pin,
+                  );
+                  setState('Setting Secret PIN, hold tight...');
+                  hello = await initializeMonoidCard(
+                    applet,
+                    hello,
+                    pin,
+                    signal,
+                    accessPIN,
+                  );
+                  rememberPIN();
+                  cacheSetup(hello);
+                  completed = hello;
+                  setState('Authenticating, hold tight...');
+                  await authenticateCardPIN(applet, accessPIN!, {
+                    kind: 'Access',
+                    retryable: false,
+                  });
+                  signal.throwIfAborted();
+                  accessPINId = uint8ArrayToHex(hello.id);
+                }
+                initialized = hello;
+                if (hasInitializedPINs(hello)) completed = hello;
+              },
+            ),
         );
         if (accessPINId && pin && isActive() && !operation.signal.aborted) {
           try {
-            await pinSession.setPIN(accessPINId, pin, operation.signal);
+            await pinSession.setPIN(accessPINId, accessPIN!, operation.signal);
           } catch {
             toast({
               message: 'Access PIN was not saved on this device',
@@ -499,10 +538,10 @@ export const SetupCardView = observer(
           flow.pendingReset = undefined;
         });
       } catch (error) {
-        if (!operation.signal.aborted && !isCredentialRequestCancelled(error))
-          throw error;
+        if (!isOperationCancelled(error, operation.signal)) throw error;
       } finally {
         pin = undefined;
+        accessPIN = undefined;
         pinSession.clear();
         try {
           if (completed) {
@@ -534,66 +573,83 @@ export const SetupCardView = observer(
       const operation = new AbortController();
       cardOperation.current = operation;
       setBusy(true);
-      let pin: MonoidPIN | undefined;
       let scannedPublicKey: string | undefined;
       try {
-        pin = await requestSecretPIN(
-          'Enter',
-          selected ? <>Card {selected.id}</> : 'For the card you will scan',
-          operation.signal,
-        );
-        if (pin === undefined) return;
-        await scanPrompt(
-          selected ? (
-            <>
-              Scan card{' '}
-              <MonoidScanStatePromptContentHighlight>
-                {selected.id}
-              </MonoidScanStatePromptContentHighlight>
-            </>
-          ) : bundleSession.configuredCount ? (
-            'Scan next card'
-          ) : (
-            'Scan a card'
-          ),
-          async (sessionId, setState, scanSignal) => {
-            const signal = AbortSignal.any([scanSignal, operation.signal]);
-            signal.throwIfAborted();
-            const applet = await monoidApplet.openSession(sessionId);
-            signal.throwIfAborted();
-            const hello = MonoidAppletHello.satisfies(await applet.hello({}));
-            signal.throwIfAborted();
-            if (
-              selected &&
-              (uint8ArrayToHex(hello.id) !== selected.id ||
-                uint8ArrayToHex(hello.publicKey) !== selected.publicKey)
-            ) {
-              throw new MonoidWrongCardError(selected.id);
-            }
-            const member = bundleSession.validateCard(hello);
-            scannedPublicKey = member.publicKey;
-            setInterruptedCard(undefined);
-            setState(
-              bundleSession.bundle
-                ? 'Joining bundle, hold tight...'
-                : 'Creating bundle, hold tight...',
-            );
-            try {
-              await bundleSession.configureCard(applet, hello, pin!, signal);
-            } finally {
-              // An ACK remains authoritative even if navigation follows it.
-              runInAction(() => {
-                for (const member of bundleSession.cards) {
-                  if (member.bundle === undefined) continue;
-                  const cached = cardStore.get({
-                    id: MonoidIdHex.satisfies(member.id),
-                    publicKey: PublicKeyHex.satisfies(member.publicKey),
+        const candidates = selected
+          ? [selected]
+          : bundleSession.cards.filter(card => card.status !== 'complete');
+        await secretPINSession.run(
+          candidates.map(card => ({...card, bundle: card.bundle ?? false})),
+          (card, signal, message) =>
+            requestSecretPIN(
+              'Enter',
+              message ??
+                (card ? (
+                  <>Card {cardName(card)}</>
+                ) : (
+                  'For the card you will scan'
+                )),
+              AbortSignal.any([signal, operation.signal]),
+            ),
+          (credentials, pinSignal) =>
+            scanPrompt(
+              selected
+                ? scanCardPrompt(selected)
+                : bundleSession.configuredCount
+                  ? 'Scan next card'
+                  : 'Scan a card',
+              async (sessionId, setState, scanSignal) => {
+                const signal = AbortSignal.any([
+                  scanSignal,
+                  operation.signal,
+                  pinSignal,
+                ]);
+                signal.throwIfAborted();
+                const applet = await monoidApplet.openSession(sessionId);
+                signal.throwIfAborted();
+                const hello = MonoidAppletHello.satisfies(
+                  await applet.hello({}),
+                );
+                signal.throwIfAborted();
+                if (selected) assertSameCard(hello, selected);
+                const member = bundleSession.validateCard(hello);
+                const {pin, onAuthenticated} = credentials(
+                  readBackupCardIdentity(hello),
+                );
+                scannedPublicKey = member.publicKey;
+                setInterruptedCard(undefined);
+                setState(
+                  bundleSession.bundle
+                    ? 'Joining bundle, hold tight...'
+                    : 'Creating bundle, hold tight...',
+                );
+                const cached = cardStore.get({
+                  id: uint8ArrayToHex(hello.id),
+                  publicKey: uint8ArrayToHex(hello.publicKey),
+                });
+                try {
+                  await bundleSession.configureCard(
+                    applet,
+                    hello,
+                    pin,
+                    signal,
+                    onAuthenticated,
+                  );
+                } finally {
+                  // An ACK remains authoritative even if navigation follows it.
+                  runInAction(() => {
+                    const confirmed = bundleSession.cards.find(
+                      card => card.publicKey === member.publicKey,
+                    );
+                    if (cached && confirmed?.status === 'complete') {
+                      cached.bundle = confirmed.bundle!;
+                      cached.allowPeerExtension = true;
+                      cardStore.set(cached);
+                    }
                   });
-                  if (cached) cached.bundle = member.bundle;
                 }
-              });
-            }
-          },
+              },
+            ),
         );
       } catch (error) {
         if (
@@ -603,10 +659,10 @@ export const SetupCardView = observer(
             ?.status !== 'complete'
         )
           setInterruptedCard(scannedPublicKey);
-        if (!operation.signal.aborted && !isCredentialRequestCancelled(error))
-          throw error;
+        if (!isOperationCancelled(error, operation.signal)) throw error;
       } finally {
-        pin = undefined;
+        if (bundleSession.configuredCount === bundleSession.cards.length)
+          secretPINSession.clear();
         if (cardOperation.current === operation)
           cardOperation.current = undefined;
         if (mounted.current) setBusy(false);
@@ -661,6 +717,7 @@ export const SetupCardView = observer(
             >
               <CardPreview
                 id={card.id}
+                alias={card.alias}
                 description={
                   card.status === 'complete'
                     ? 'complete'
@@ -670,7 +727,13 @@ export const SetupCardView = observer(
                         ? 'pending'
                         : 'ready'
                 }
-                $pending={configuring && card.status !== 'complete'}
+                $scan={
+                  configuring
+                    ? card.status === 'complete'
+                      ? 'ready'
+                      : 'pending'
+                    : undefined
+                }
                 $interrupted={interruptedCard === card.publicKey}
               />
             </CardPreviewButton>
@@ -699,165 +762,178 @@ export const SetupCardView = observer(
       </>
     );
 
+    const bundleMode = !fromCopy && !fixedBundle && (
+      <SegmentedControl
+        aria-label="Bundle"
+        value={flow.bundle ?? 'none'}
+        options={[
+          {value: 'none', label: 'None'},
+          {value: 'card', label: 'Cards'},
+          {value: 'authority', label: 'Authority'},
+        ]}
+        disabled={
+          collectionBusy ||
+          !!flow.authority?.busy ||
+          (flow.bundle === 'authority'
+            ? !!flow.authority?.joinedCount
+            : bundleSession.cards.length > 0 || configuring)
+        }
+        onChange={errorService.catch(async mode => {
+          if (mode === 'card' && sourceCard) {
+            await requestBundleCard({type: 'prepared', card: sourceCard});
+          }
+          runInAction(() => {
+            if (mode === 'authority')
+              flow.authority ??= new AuthorityBundleSession(sourceCard);
+            flow.bundle = mode === 'none' ? undefined : mode;
+            flow.sourceConsumed = mode === 'card';
+          });
+        })}
+      />
+    );
+
     return (
       <View>
         <ViewHeader>
           <ViewHeaderTitle>
             {fromCopy
               ? 'Setup card'
-              : bundleOnly
-                ? 'Setup card bundle'
-                : 'Setup cards'}
+              : fixedBundle === 'authority'
+                ? 'Authority bundle'
+                : fixedBundle === 'card'
+                  ? 'Create bundle'
+                  : 'Setup cards'}
           </ViewHeaderTitle>
         </ViewHeader>
-        <ViewContent
-          footer={
-            complete ? (
-              back && (
-                <Button color="neutral" onClick={() => back()}>
-                  {backLabel}
-                </Button>
-              )
-            ) : configuring ? (
-              generationFailed ? (
+        {flow.bundle === 'authority' ? (
+          <AuthorityBundleSetup view={view} session={flow.authority!}>
+            {bundleMode}
+          </AuthorityBundleSetup>
+        ) : (
+          <ViewContent
+            footer={
+              complete ? (
                 back && (
                   <Button color="neutral" onClick={() => back()}>
                     {backLabel}
                   </Button>
                 )
-              ) : (
-                <Button
-                  disabled={!hasPendingCard || !!pendingBundleCard}
-                  loading={busy}
-                  onClick={errorService.catch(() => configureCard())}
-                >
-                  {bundleSession.configuredCount
-                    ? 'Scan next card'
-                    : 'Scan a card'}
-                </Button>
-              )
-            ) : (
-              <Buttons>
-                {bundleEnabled &&
-                  !collectionBusy &&
-                  bundleSession.cards.length >= 2 && (
-                    <Button
-                      color="primary"
-                      onClick={errorService.catch(() =>
-                        bundleSession.beginRoundTwo(),
-                      )}
-                    >
-                      Continue
+              ) : configuring ? (
+                generationFailed ? (
+                  back && (
+                    <Button color="neutral" onClick={() => back()}>
+                      {backLabel}
                     </Button>
-                  )}
-                {pendingPIN ? (
-                  <Button onClick={() => setShowPINSetup(true)}>
-                    {pendingPIN.pins.secret === false
-                      ? 'Set Secret PIN'
-                      : pendingPIN.pins.access === false
-                        ? 'Set Access PIN'
-                        : 'Continue'}
-                  </Button>
+                  )
                 ) : (
                   <Button
-                    color={
-                      bundleEnabled && bundleSession.cards.length >= 2
-                        ? 'neutral'
-                        : 'primary'
-                    }
-                    disabled={!!pendingBundleCard}
+                    disabled={!hasPendingCard || !!pendingBundleCard}
                     loading={busy}
-                    onClick={errorService.catch(() =>
-                      flow.pendingReset?.replacement
-                        ? resetAndAdd(flow.pendingReset)
-                        : scan(),
-                    )}
+                    onClick={errorService.catch(() => configureCard())}
                   >
-                    {flow.pendingReset?.replacement
-                      ? 'Check card'
-                      : bundleSession.cards.length
-                        ? 'Add another card'
-                        : 'Add a card'}
+                    {bundleSession.configuredCount
+                      ? 'Scan next card'
+                      : 'Scan a card'}
                   </Button>
-                )}
-              </Buttons>
-            )
-          }
-        >
-          {complete ? (
-            <OperationComplete />
-          ) : (
-            <>
-              {!fromCopy && !bundleOnly && (
-                <Toggle
-                  checked={bundleEnabled}
-                  disabled={
-                    collectionBusy ||
-                    bundleSession.cards.length > 0 ||
-                    configuring
-                  }
-                  onChange={errorService.catch(async enabled => {
-                    if (enabled && sourceCard) {
-                      await requestBundleCard({
-                        type: 'prepared',
-                        card: {
-                          id: sourceCard.id,
-                          publicKey: sourceCard.publicKey,
-                          bundle: sourceCard.bundle,
-                        },
-                      });
-                    }
-                    runInAction(() => {
-                      flow.bundleEnabled = enabled;
-                      flow.sourceConsumed = true;
-                    });
-                  })}
-                >
-                  Create bundle
-                </Toggle>
-              )}
-              <Steps>
-                {bundleEnabled ? (
-                  <>
-                    <Step
-                      title="Add cards"
-                      numero={1}
-                      activeNumero={configuring ? 2 : 1}
-                      processing={busy && !configuring}
-                    >
-                      {bundleCards}
-                    </Step>
-                    <Step
-                      title={
-                        <InfoSectionHeader>
-                          <span>Create bundle</span>
-                          {configuring && (
-                            <InfoSectionItemLabel>
-                              {bundleSession.configuredCount}/
-                              {bundleSession.cards.length}
-                            </InfoSectionItemLabel>
-                          )}
-                        </InfoSectionHeader>
+                )
+              ) : (
+                <Buttons>
+                  {bundleEnabled &&
+                    !collectionBusy &&
+                    bundleSession.cards.length >= 2 && (
+                      <Button
+                        color="primary"
+                        onClick={errorService.catch(() =>
+                          bundleSession.beginRoundTwo(),
+                        )}
+                      >
+                        Continue
+                      </Button>
+                    )}
+                  {pendingPIN ? (
+                    <Button onClick={() => setShowPINSetup(true)}>
+                      {pendingPIN.pins.secret === false
+                        ? 'Set Secret PIN'
+                        : pendingPIN.pins.access === false
+                          ? 'Set Access PIN'
+                          : 'Continue'}
+                    </Button>
+                  ) : (
+                    <Button
+                      color={
+                        bundleEnabled && bundleSession.cards.length >= 2
+                          ? 'neutral'
+                          : 'primary'
                       }
-                      numero={2}
-                      activeNumero={configuring ? 2 : 1}
-                      processing={busy && configuring}
+                      disabled={!!pendingBundleCard}
+                      loading={busy}
+                      onClick={errorService.catch(() =>
+                        flow.pendingReset?.replacement
+                          ? resetAndAdd(flow.pendingReset)
+                          : scan(),
+                      )}
                     >
-                      {bundleCards}
+                      {flow.pendingReset?.replacement
+                        ? 'Check card'
+                        : bundleSession.cards.length
+                          ? 'Add another card'
+                          : 'Add a card'}
+                    </Button>
+                  )}
+                </Buttons>
+              )
+            }
+          >
+            {complete ? (
+              <OperationComplete />
+            ) : (
+              <>
+                <Steps>
+                  {bundleEnabled ? (
+                    <>
+                      <Step
+                        title="Add cards"
+                        numero={1}
+                        activeNumero={configuring ? 2 : 1}
+                        processing={busy && !configuring}
+                      >
+                        {bundleMode}
+                        {bundleCards}
+                      </Step>
+                      <Step
+                        title={
+                          <InfoSectionHeader>
+                            <span>Create bundle</span>
+                            {configuring && (
+                              <InfoSectionItemLabel>
+                                {bundleSession.configuredCount}/
+                                {bundleSession.cards.length}
+                              </InfoSectionItemLabel>
+                            )}
+                          </InfoSectionHeader>
+                        }
+                        numero={2}
+                        activeNumero={configuring ? 2 : 1}
+                        processing={busy && configuring}
+                      >
+                        {bundleCards}
+                      </Step>
+                    </>
+                  ) : (
+                    <Step
+                      title="Set up card"
+                      numero={1}
+                      activeNumero={1}
+                      processing={busy}
+                    >
+                      {bundleMode}
                     </Step>
-                  </>
-                ) : (
-                  <Step
-                    title="Set up card"
-                    numero={1}
-                    activeNumero={1}
-                    processing={busy}
-                  />
-                )}
-              </Steps>
-            </>
-          )}
-        </ViewContent>
+                  )}
+                </Steps>
+              </>
+            )}
+          </ViewContent>
+        )}
         {selectedCard && !configuring && (
           <DetailsPopup
             aria-label="Card actions"
@@ -877,6 +953,7 @@ export const SetupCardView = observer(
         {showPINSetup && pendingPIN && isActive() && (
           <CardSetupPIN
             hello={pendingPIN}
+            secretPINSession={secretPINSession}
             onFinished={errorService.catch(async (initialized, current) => {
               if (!isActive()) return;
               setShowPINSetup(false);
@@ -909,11 +986,13 @@ export const SetupCardView = observer(
               await resetAndAdd(new CardResetSession(pendingBundleCard.card));
             })}
           >
-            <p>Card {pendingBundleCard.card.id} already belongs to a bundle.</p>
+            <p>
+              Card {cardName(pendingBundleCard.card)} already belongs to a
+              bundle.
+            </p>
             <ol>
               <li>
-                Adding this card will erase its stored items and both PINs, and
-                change its Card ID.
+                Adding this card will erase its stored items and both PINs.
               </li>
               <li>
                 This card will no longer be able to receive data from other

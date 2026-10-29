@@ -8,7 +8,14 @@ export type MonoidId = x.TypeOf<typeof MonoidId>;
 export const MonoidIdHex = x.string.nominal<'monoid id hex'>();
 export type MonoidIdHex = x.TypeOf<typeof MonoidIdHex>;
 
-export const MonoidPIN = x.pattern(/^[\x20-\x7E]{6,16}$/);
+export const MONOID_PIN_MIN_LENGTH = 6;
+export const MONOID_PIN_MAX_LENGTH = 32;
+
+export const MonoidPIN = x.pattern(
+  new RegExp(
+    `^[\\x20-\\x7E]{${MONOID_PIN_MIN_LENGTH},${MONOID_PIN_MAX_LENGTH}}$`,
+  ),
+);
 export type MonoidPIN = x.TypeOf<typeof MonoidPIN>;
 
 export const SafeIndex = XUint8Array.nominal<'safe index'>();

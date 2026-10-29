@@ -26,10 +26,10 @@ test('Bundle setup opens distinct flows from Card in HTTP WebViews and retains a
 
   const ids = [];
   for (let i = 0; i < 2; i++) {
-    await router.safe.setupCard({card, createBundle: true}).$push().$completed;
+    await router.safe.setupCard({card, bundle: 'card'}).$push().$completed;
     assert.equal(router.safe.setupCard.$exact.$active, true);
     assert.deepEqual({...router.$state.card}, card);
-    assert.equal(router.$state.createBundle, true);
+    assert.equal(router.$state.bundle, 'card');
     assert.equal(typeof router.$state.bundleId, 'string');
     assert.ok(router.$state.bundleId.length > 0);
     ids.push(router.$state.bundleId);
@@ -38,9 +38,8 @@ test('Bundle setup opens distinct flows from Card in HTTP WebViews and retains a
   }
   assert.notEqual(ids[0], ids[1]);
 
-  await router.safe
-    .setupCard({card, createBundle: true, bundleId: ids[0]})
-    .$push().$completed;
+  await router.safe.setupCard({card, bundle: 'card', bundleId: ids[0]}).$push()
+    .$completed;
   assert.equal(router.$state.bundleId, ids[0]);
 });
 
@@ -71,12 +70,54 @@ test('Card sync creates distinct HTTP-safe flows and preserves the card and supp
   assert.deepEqual({...router.$state.card}, card);
 });
 
+test('Bundle extension opens without randomUUID and returns through Card Applets to the same flow', async t => {
+  const webCrypto = globalThis.crypto;
+  t.mock.getter(globalThis, 'crypto', () => ({
+    getRandomValues: webCrypto.getRandomValues.bind(webCrypto),
+  }));
+  const router = await createRouter();
+  const card = {
+    id: '01020304',
+    publicKey: `04${'01'.repeat(64)}`,
+    bundle: 'ab'.repeat(32),
+  };
+  await router.safe.card({card}).$push().$completed;
+  await router.safe.extendBundle({card}).$push().$completed;
+  const extensionId = router.$state.extensionId;
+  assert.ok(extensionId);
+  assert.equal(router.safe.extendBundle.$exact.$active, true);
+  assert.deepEqual({...router.$state.card}, card);
+
+  await router.cardApplets({returnTo: 'bundleExtension', extensionId}).$push()
+    .$completed;
+  const backToExtension = router.$backTo(router.safe.extendBundle.$exact);
+  assert.equal(typeof backToExtension, 'function');
+  await backToExtension().$completed;
+  assert.equal(router.$state.extensionId, extensionId);
+  assert.deepEqual({...router.$state.card}, card);
+  await router.$backTo(router.safe.card.$exact)().$completed;
+  await router.safe.extendBundle({card}).$push().$completed;
+  assert.notEqual(router.$state.extensionId, extensionId);
+});
+
+test('Security Key keeps its card identity across the Card Applets installation detour', async () => {
+  const router = await createRouter();
+  const card = {id: '01020304', publicKey: `04${'01'.repeat(64)}`};
+  await router.securityKey({card}).$push().$completed;
+  await router.cardApplets({returnTo: 'securityKey'}).$push().$completed;
+  const back = router.$backTo(router.securityKey.$exact);
+  assert.equal(typeof back, 'function');
+  await back().$completed;
+  assert.deepEqual({...router.$state.card}, card);
+});
+
 for (const feature of [
   'sessions',
   'ethereum',
   'solana',
   'bitcoin',
   'cardApplets',
+  'securityKey',
 ]) {
   test(`opening ${feature} from the hub preserves a return to the hub`, async () => {
     const router = await createRouter();

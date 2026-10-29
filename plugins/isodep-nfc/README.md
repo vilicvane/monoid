@@ -101,6 +101,9 @@ reader with `app-paused` / `APP_INACTIVE`. Transient inactivity caused by native
 UI does not itself terminate the reader.
 Reloading the WebView revokes the old reader and drops its pending replies;
 new-document calls still wait for native cleanup before opening another reader.
+The existing hook observes the public `WKWebView.isLoading` property through
+Capacitor's `bridge.webView`. Document checks discard old bridge calls, events
+and APDU replies; Core NFC's invalidation callback releases the old reader.
 
 Except after a final successful `closeSession({message})`, `stopScan` waits for
 Core NFC's invalidation callback. PIN handoffs, application errors, cancellation
@@ -161,7 +164,8 @@ one scan and one connecting or connected session can exist at a time. Each newly
 discovered ISO-DEP tag is connected automatically, with a fixed 30-second
 connection deadline. Scanning itself has no idle timeout. A successful connection
 emits `sessionOpened` with a native-generated `sessionId`. Tags discovered while
-a session or its cleanup is in progress are discarded, not queued for later.
+a session or its cleanup is in progress are not queued for another session in
+that scan. Reader Mode still tracks the latest handle for a later scan or full stop.
 
 Closing a session leaves scanning active. Without `waitForRemoval`, another
 session requires only a new tag discovery; there is no UID filtering or
@@ -187,7 +191,8 @@ finishes before `sessionOpened`; the caller still selects its applet explicitly.
 
 Stopping the scan cancels pending removal waits with `CANCELLED`. NFC disable,
 activity pause and destruction reject them with the corresponding lifecycle
-error instead of reporting removal. There is no idle timeout or automatic retry.
+error instead of reporting removal. An active scan or removal wait has no idle
+timeout or automatic retry.
 API 23 rejects this mode with `UNSUPPORTED`. If Android cannot register removal
 detection (`ignore` returns false), it rejects with `IO_ERROR` and stops the scan;
 this can also happen if the card has already left, but is not assumed to prove
@@ -201,28 +206,68 @@ unknown ID is retired until the plugin reloads, preventing a late `startScan` fo
 that ID. Reusing an ended scan ID rejects with `SCAN_CLOSED`. Await `stopScan`
 before starting a new scan. Starting while another scan or its cleanup is active
 rejects with `BUSY`.
-Both methods wait for native connection closure and previous work to exit.
-Disabling NFC, pausing or destroying the host activity stops the scan. Returning
-to the foreground or enabling NFC does not automatically restart it.
+Both methods wait for the relevant native connection closure and previous work
+to exit. `stopScan` also waits for any retained-tag probe to finish cleanup.
+Session cleanup failures still reject with `IO_ERROR`.
+A successful ordinary `stopScan` then leaves Reader Mode lingering;
+its Promise does not wait for linger to end. Disabling NFC, pausing or destroying
+the host activity stops both scanning and lingering. Returning to the foreground
+or enabling NFC does not automatically restart Reader Mode.
 
-When the activity is still in the foreground, `stopScan` completes all transport
-cleanup before returning tag discovery to Android. On Android 7 / API 24 and
-later, it first calls
+The plugin registers a Capacitor `WebViewListener` with the bridge's public
+`addWebViewListener` API in `load()`. Each main-frame `onPageStarted` ends the old
+scan and connection on the main thread with `page-reloaded` / `APP_INACTIVE`,
+and also ends lingering Reader Mode. This includes the initial page load, which
+does nothing to NFC when Reader Mode is already disabled. Destruction removes
+the listener and prevents further page handling.
+The controller closes transport work before disabling Reader Mode;
+starting a fresh scan during that cleanup can still reject with `BUSY`.
+Old scan IDs remain retired, and calls queued by the old document, its events
+and pending native results cannot be delivered to the new document. A sent APDU
+keeps its `unknown` outcome internally; no command or scan is replayed.
+
+After an ordinary `stopScan` completes transport cleanup in the foreground,
+Reader Mode stays enabled for up to five minutes without a new scan. No scan
+accepts tags during this linger, but the controller retains the latest
+discovered tag, including a tag tapped while a PIN modal is open. Entering
+linger does not call `ignore` or disable Reader Mode. Keeping Reader Mode
+enabled suppresses the system NFC chooser without making a card left in place
+unavailable to the next scan.
+
+A new `startScan` during linger reuses Reader Mode without a disable/enable
+cycle. If a retained tag exists, the plugin probes it on its NFC I/O worker by
+connecting and closing it without sending an APDU. Any probe failure silently
+drops that tag: it produces no session event or JS error, and the scan keeps
+waiting for a real tap. The probe has the same 30-second deadline as a connection;
+its timeout also drops the tag silently after cleanup. Cancelling a scan during
+the probe preserves the candidate for the next scan because cancellation does
+not prove removal. A fresh discovery takes precedence after probe cleanup.
+A successful probe offers the tag through the normal
+discovery and connection path with a new session ID. The caller still performs
+its usual applet selection, Hello and identity checks; neither commands nor
+previous session results are replayed. Discoveries during linger do not extend
+the five-minute deadline, and an active scan has no idle timeout.
+
+Linger ends after five minutes, when NFC is disabled, on activity pause or
+backgrounding, on WebView page reload, or on plugin destruction. These paths
+perform a full stop after pending transport cleanup: on Android 7 / API 24 and
+later, the plugin first calls
 [`NfcAdapter.ignore`](<https://developer.android.com/reference/android/nfc/NfcAdapter#ignore(android.nfc.Tag,int,android.nfc.NfcAdapter.OnTagRemovedListener,android.os.Handler)>)
-for the latest discovered tag, then disables Reader Mode. The tag is retained
-after `closeSession` so this also covers closing the connection before stopping
-the scan. The 1,000 ms debounce is the minimum time out of range before normal
+for the latest retained tag, if any and the adapter is enabled, then disables
+Reader Mode. The 1,000 ms debounce is the minimum time out of range before normal
 system dispatch resumes; it is not a fixed delay added to `stopScan`.
 
 This requests suppression of the system NFC chooser for a card left in place.
 Android can reject the request when the tag is already gone or unavailable;
 Logcat's `IsoDepNfc` entry records whether the request was accepted without
 logging tag identifiers or payloads. API 23 has no `ignore` support. Android's
-documented RF and random-UID limitations still apply, and activity pause can
-disable Reader Mode independently of plugin cleanup.
+documented RF and random-UID limitations still apply. Activity pause also clears
+the controller's enabled state, since Android can disable Reader Mode
+independently of plugin cleanup. Only a new `startScan` enables it again.
 
-The explicit removal wait uses the same 1,000 ms debounce with a callback while
-Reader Mode remains enabled. Android may also report removal when a different
+The explicit removal wait still calls `ignore` with the same 1,000 ms debounce
+and a callback while Reader Mode remains enabled. Confirmed removal clears the
+retained tag. Android may also report removal when a different
 tag enters the field. This supplies an application-level rescan gate, subject to
 Android's documented RF and random-UID limitations; it is not an absolute
 physical-movement guarantee.
@@ -323,8 +368,9 @@ session.
 | `scanEnded`     | `{scanId, reason, code?}`                                                                         |
 
 Session end reasons are `closed`, `connect-timeout`, `transceive-timeout`, `scan-timeout`,
-`tag-lost`, `io-error`, `scan-stopped`, `nfc-disabled`, `app-paused` and `destroyed`.
-Scan end reasons are `stopped`, `nfc-disabled`, `app-paused`, `destroyed` and
+`tag-lost`, `io-error`, `scan-stopped`, `nfc-disabled`, `app-paused`, `page-reloaded`
+and `destroyed`.
+Scan end reasons are `stopped`, `nfc-disabled`, `app-paused`, `page-reloaded`, `destroyed` and
 `io-error`, plus `cancelled` and `timeout` on iOS. Failures include an `IsoDepNfcErrorCode`; normal `closed`,
 `scan-stopped` and `stopped` events omit it. A failed connection also emits
 `sessionEnded`, even though it never emitted `sessionOpened`. An end event marks

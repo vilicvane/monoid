@@ -14,6 +14,7 @@ function hello(number) {
     id: Uint8Array.of(0, 0, 0, number),
     publicKey: Uint8Array.of(4, ...new Uint8Array(64).fill(number)),
     bundle: false,
+    authority: false,
     pins: {access: 5, secret: 5},
   };
 }
@@ -57,7 +58,7 @@ test('returning through Routra retains only the originating sync flow and its re
   const first = views.$entries[0];
   const firstKey = first.$key;
   const flow = getFlow(store, first.syncId, source);
-  await flow.session.add(emptyCard, hello(1), signal(), PIN);
+  await flow.session.add(emptyCard, hello(1), signal(), {pin: PIN});
   flow.consumeSource();
   flow.markInterrupted(source.publicKey, true);
 
@@ -87,9 +88,9 @@ test('Start over clears collected data and progress only for the current sync fl
   const store = new SyncCardsStore();
   const flow = getFlow(store, 'restart', source);
   const other = getFlow(store, 'other', source);
-  await flow.session.add(emptyCard, hello(1), signal(), PIN);
-  await flow.session.add(emptyCard, hello(2), signal(), PIN);
-  await other.session.add(emptyCard, hello(3), signal(), PIN);
+  await flow.session.add(emptyCard, hello(1), signal(), {pin: PIN});
+  await flow.session.add(emptyCard, hello(2), signal(), {pin: PIN});
+  await other.session.add(emptyCard, hello(3), signal(), {pin: PIN});
   const otherCards = other.session.cards;
   flow.consumeSource();
   flow.markInterrupted(source.publicKey, true);

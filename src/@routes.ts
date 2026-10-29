@@ -10,17 +10,38 @@ import {createFlowId} from './@utils/index.js';
 
 export const ROUTE_SCHEMA = {
   features: true,
+  otp: {
+    account: {$state: (state: {index: SafeIndexHex}) => state},
+    $state: (
+      state:
+        | {card?: Pick<ScannedCardData, 'id' | 'publicKey'>; importId?: string}
+        | undefined,
+    ) => state ?? {},
+  },
+  securityKey: {
+    $state: (
+      state: {card?: Pick<ScannedCardData, 'id' | 'publicKey'>} | undefined,
+    ) => state ?? {},
+  },
   cardApplets: {
     $state: (
       state:
         | {
             cardInformation?: CardInformation;
-            returnTo?: 'safe' | 'copy' | 'bundle';
+            returnTo?:
+              | 'safe'
+              | 'copy'
+              | 'bundle'
+              | 'bundleExtension'
+              | 'securityKey'
+              | 'otp';
             copyId?: string;
             bundleId?: string;
+            extensionId?: string;
+            maintenanceSyncId?: string;
           }
         | undefined,
-    ) => state ?? {},
+    ) => ({...state, maintenanceSyncId: state?.maintenanceSyncId}),
   },
   bitcoin: {
     wallet: {
@@ -94,6 +115,7 @@ export const ROUTE_SCHEMA = {
       $state: undefined! as {
         index: SafeIndexHex;
       },
+      derive: true,
     },
     derivableKey: {
       $state: ({index}: {index: SafeIndexHex}) => ({
@@ -120,13 +142,27 @@ export const ROUTE_SCHEMA = {
       $state: (state: {
         cardInformation?: CardInformation;
         card?: Pick<ScannedCardData, 'id' | 'publicKey'>;
-        createBundle?: boolean;
+        bundle?: 'card' | 'authority';
         copyId?: string;
         bundleId?: string;
       }) => ({
         ...state,
         bundleId: state.bundleId ?? createFlowId(),
       }),
+    },
+    extendBundle: {
+      $state: (state: {
+        card: Pick<
+          ScannedCardData,
+          | 'id'
+          | 'publicKey'
+          | 'bundle'
+          | 'alias'
+          | 'allowPeerExtension'
+          | 'authority'
+        >;
+        extensionId?: string;
+      }) => ({...state, extensionId: state.extensionId ?? createFlowId()}),
     },
     card: {
       $state: undefined! as {

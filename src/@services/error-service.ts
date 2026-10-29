@@ -1,9 +1,8 @@
 import type {UseIonAlertResult, UseIonToastResult} from '@ionic/react';
 import {Bug as bug} from 'lucide-react';
 
+import {isOperationCancelled} from '../@lib/operation-cancelled.js';
 import {renderIcon} from '../@lib/render-icon.js';
-
-import {isCredentialRequestCancelled} from './monoid-credentials-store.js';
 
 const ERROR_TOAST_DURATION = 5000;
 
@@ -46,7 +45,7 @@ export class ErrorService {
   }
 
   private handleError(error: unknown, message?: string): void {
-    if (isCredentialRequestCancelled(error)) {
+    if (isOperationCancelled(error)) {
       return;
     }
 

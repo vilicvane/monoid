@@ -9,12 +9,21 @@ backup/restore progress, and operation errors use the shared NFC presentation.
 
 - A card with missing Monoid components shows Card versions and Checklist.
   Installation skips existing components.
+- Installing Identity or choosing Fresh install offers an optional Authority and
+  an editable Authority URL using the shared toggle and popup input. The URL is
+  the site root; API paths are added by APP. Resolve its public key before PIN or
+  NFC prompts, and retain that exact pair if Fresh install needs to resume.
+  Installing optional applets, updating and ordinary reinstall preserve Identity's
+  existing Authority configuration and do not show these settings.
 - Known applets remain visible when their basic information cannot be read. A
   failed read is not evidence that an applet or a capability is absent.
 - An unrecognized card manager or explicitly incompatible management protocols
   can show Card not supported. An interrupted communication remains retryable.
-- Secret PIN input precedes the installation scan. First initialization also sets
-  the initial Access PIN; reinstalling Monoid retains the Identity's Secret PIN.
+- PIN input precedes the installation scan. New Secret and Access PINs each
+  require confirmation. The Secret PIN prompt defaults to a checked "Set a
+  different Access PIN" checkbox; unchecking uses the confirmed Secret PIN as
+  Access PIN without another input. Reinstalling Monoid retains Identity's
+  Secret PIN and restores the saved Access PIN when this device has it.
 - Completion is shown only after PIN setup. Copy and bundle setup pass their flow
   ID into the Card Applets route. The verified card is added to that flow before returning,
   without another discovery scan.
@@ -36,9 +45,90 @@ exports separately for each recipient public key.
 
 ## Update, reinstall, and fresh install
 
+Hello exposes the Identity alias as text or `false` when empty, and the flat
+`allowPeerExtension` boolean (`false` without a Bundle). `bundle` remains the
+Bundle hash. Scanned card snapshots cache these fields. Card previews show the
+alias in place of the card ID (ellipsized when long); the subtitle and status
+lines stay as they are. Where a card already opens its details on tap, the popup
+header shows the ID with the alias tucked under it; the big Card Applets card and
+cards without a tap action switch between alias and ID when their name is tapped. The Card header
+shows the ID, the alias, then the Bundle tag; tapping the ID or the alias edits
+it. **Extend bundle** is available only when peer extension is allowed.
+
+Card aliases use `0x27 Set Alias {alias: string}` with Secret PIN authentication.
+The shared validator counts UTF-8 bytes (at most 64), without trimming or a
+character limit; an empty string clears the alias. Editing prompts for the alias
+and Secret PIN before scanning the named card, then verifies Hello. An uncertain
+write stops without replay. First Identity installation offers an **Alias** switch
+that reveals the alias field, like **Authority**; the alias is set in the same scan
+as PIN setup.
+
+Specific-card text uses the shared `cardName` formatter. Scan prompts and retry
+messages show the alias with the Card ID in parentheses, or only the ID when no
+alias is known; `scanCardPrompt` highlights only the name. Identity-only callers
+use the existing card cache for aliases, without another scan. The Security Key
+header keeps its card ID and bound Seed alias.
+
 Update and Reinstall replace **Monoid only**. Identity, its Secret PIN, and bundle
 membership remain. Fresh install is a separate, explicitly confirmed action that
-replaces Identity as well and therefore changes the card identity.
+replaces Identity as well and generates new cryptographic keys. It preserves the
+original four-byte Card ID when available from Hello or a retained maintenance
+record for that physical card. The ID is persisted before deletion, supplied to
+Identity installation alongside optional Authority settings, and checked after
+installation, including verify-only resumes. If no original ID can be read or
+recovered, Identity generates an ID. Preserving the display ID does not retain
+PINs, items, keys or Bundle membership.
+
+The alias survives Reset and Monoid replacement. Fresh installation also retains
+the previous alias from Hello or maintenance records before deleting Identity.
+After PIN setup it authenticates Secret, sets the exact saved alias, and verifies
+Hello before removing the maintenance record. A failed alias write retains that
+record; an explicit retry checks Hello before writing again. Started Fresh operations,
+including those without an alias, remain saved until both PINs and the alias
+are verified. A generated Card ID on a previously blank card is saved too.
+
+**Start over** is available for every single-card Fresh install, Update and
+Reinstall operation. A ready plan with no checkpoint that has never been
+restarted is untouched: Start over calls `discardPrepared` and shows "Discard
+this preparation. Changes already written to cards will remain." An untouched
+Fresh plan is also discarded if its first run fails before persisting any
+checkpoint, or when loading saved preparations after an app restart.
+
+Any checkpoint, a phase after ready (including legacy setup), or a previous
+restart means the operation has started. Start over resets that same operation
+to ready with no checkpoint and marks it as restarted. This marker survives app
+restart and preflight failures, so the plan cannot become discardable again.
+The next run begins at the first removal step and reinstalls every selected
+replacement applet using the current bundled images. Its primary action is
+**Fresh install**, **Continue update**, or **Continue installation**.
+
+Fresh retains its Card ID, alias, optional selections and Identity Authority
+settings, clears attempt-specific recovery/grant state and held procedure PINs,
+then installs and sets new PINs before restoring the saved alias. Update and
+Reinstall retain their recovery archive byte-for-byte, including peer recovery
+source, grants, checksums and previous grant token hashes; only replacement
+progress and an earlier item-omission offer are cleared. They pass through
+replacing and restore again, using that same recovery. Since Identity and its
+Secret PIN are retained, a held procedure Secret PIN and saved Access PIN can
+still be reused. Optional-only operations keep their selected stages and grant
+recovery; they do not erase Monoid or require an item archive.
+Empty recovery tasks also stay saved through PIN setup and restore verification,
+so a failure between installation and setup cannot lose Start over.
+
+Update/Reinstall never rebind recovery to an incomplete installation's Hello.
+They retain the original full public key, Card ID, Bundle, caller AID and physical
+fingerprint. A restarted plan with Monoid absent can be found by its fingerprint
+even while ready, and can start removal without Hello. A readable Hello must
+still match before removal; the original Identity instance must exist, and the
+installed Hello and restore each verify the original identity again. A changed
+Identity never matches by fingerprint when Hello is available. This checkout
+forbids Identity in an Update/Reinstall replacement plan ("Identity requires
+Fresh install"); restart preserves that boundary rather than attempting to
+import an archive encrypted for a different public key.
+
+Start over is hidden for batches and the restart service refuses every batch,
+including untouched ones. `discardPrepared` retains its existing ability to
+discard a whole untouched batch; it cannot discard one after any target starts.
 
 Initial inspection uses the public GP registry. If the card requires authentication
 (`6982`) but Monoid still answers Hello, Update and Reinstall open the GP secure
@@ -48,26 +138,126 @@ Monoid is selected and its Secret PIN authenticated again after this query.
 
 For an unbundled card, ordinary replacement first exports every resource from
 `list({})`, including data and address records hidden from the normal resource
-view. The archive contains card-encrypted envelopes and the original index, key,
+view. The archive contains card-encrypted envelopes and the original index, metadata,
 alias, and secret flag. It is bound to the complete Identity public key and
 complete caller Applet AID. The persisted archive is read back and checked before
 deletion begins.
 
-Restoration imports the complete archive, then verifies identity and the complete
-inventory. Only that successful verification removes the matching archive.
+The persisted recovery format keeps its existing `key` field for item metadata
+so saved archives and their checksums remain intact. The card protocol uses
+`metadata`; the maintenance service maps it at the storage boundary.
+
+During maintenance, Card Applets replaces the catalogue with the card preview and
+three shared operation steps: **Save recovery**, **Update applets** / **Reinstall
+applets** / **Fresh install**, and **Restore**. A batch instead shows two steps
+like Sync: **Save recovery** (the card count), then **Update applets** /
+**Reinstall applets** holding the card grid. The next card has the scan ring
+("scan to install" or "scan to restore"); later cards read "install later",
+finished ones "complete" and are dimmed, and cards still holding a recovery
+archive are yellow. The
+footer names the next action, not a card ID. Recovery shows the archive item count; the active
+installation or restore step shows processing while the scan runs. Restore covers
+items and applet access in the same scan.
+
+Restoration imports the complete archive and lists skipped items inside Restore,
+using the same type, alias and index rows as Card and Sync. Each reason follows
+under a divider labelled with a warning icon, after the normal list in Sync's
+card details and under the grid in a batch. Dropped applet
+access appears below these groups. The omission report stays in Restore before
+**Finish without N items**. On completion, the card preview and steps animate out,
+then only the shared completion display and neutral back button remain, as in
+the other flows. A batch exits its steps once the whole batch completes.
+After a complete pass containing only deterministic card rejections (for example
+INVALID_PARAMETER) or conflicts, **Finish without N items** asks for explicit
+confirmation. It verifies identity and the inventory against the archive minus
+the confirmed omissions, restores original grants whose required Seed/Key items
+were restored, and lists grants dropped because they required an omitted item.
+Type-only grants still restore. Existing conflicting items stay on the card but
+cannot supply a restored grant. Only successful item and grant verification removes
+the archive. Transport, PIN, cancellation and uncertain writes never enable this
+finish path; they retain recovery and require an explicit retry that reconciles
+actual card state. A failed attempt clears an earlier finish offer. The header
+Back action always exits to the previous page without discarding unfinished work;
+Card Applets can resume it.
 Interrupted work survives navigation and application restart. Physical production
 information locates an interrupted installation while Monoid is absent; it does
 not authorize importing an archive into another Identity.
+On load, the retention filter discards operations whose phases are no longer
+current and rewrites storage. Started legacy setup tasks remain available for
+Start over; malformed Fresh setup tasks carrying recovery still fail validation.
+Recovery archive, grant and batch validation remain strict.
 
-Bundle members cannot recover their own exported envelopes. Ordinary replacement
-therefore requires confirmation that the user has copied data to another member.
-The app retains a reminder to restore from that member afterward. This workflow
-does not automate bundle data recovery.
+Bundle members cannot recover their own exported envelopes. Update and Reinstall
+open maintenance Sync, with the starting card always selected. Each added bundle
+card offers Update too (selected when its recorded installed hash differs from
+the bundled hash) or Reinstall too (initially unselected). Unknown installed
+hashes remain unknown. Fresh install remains single-card.
+
+Sync saves complete recovery archives for every target before any replacement.
+A non-target holding the merged result can export for all targets; when every
+card is a target, two members first receive the merged result and export for each
+other. This needs at most two complete export scans. Remaining targets defer
+their writes until restoration. Every archive covers all participating cards,
+including opaque items; conflicts, missing content or failed exports block
+replacement. An explicit retry may use another processed member.
+
+Maintenance Sync calls its second step **Save recovery**. Only the next export
+card has the scan ring; other cards show **recovery saved** or **recovery
+pending**.
+Another eligible card may still supply the archive. Once all recoveries are saved,
+the steps stay visible with **Continue to installation**. This explicit action
+returns to Card Applets, where installation proceeds one card at a time.
+
+Verified Secret PINs can be reused in memory across Sync and
+installation/restoration, keyed by card public key. All held PINs expire after
+five minutes without a read or write to their holder, or immediately when the app
+is hidden: `document.visibilityState === 'hidden'` on all platforms, plus
+Android's `appStateChange` with `isActive: false` (Activity `onStop`, including
+lock, home and app switching). Android can leave the document visible while
+stopped. Resume or a visible event resets the Android stopped state. Activity on
+any card refreshes the whole holder. Each scan still authenticates the card. Wrong PINs are dropped
+without an automatic retry. Saving
+recovery retains only target PINs; leaving Sync before saving or starting over
+drops its PINs. Completing or discarding an operation drops that card's PIN.
+App restart retains no Secret PINs. Fresh install and other actions still prompt
+as before.
+
+The same expiry rule covers page-owned Access PIN snapshots and typed PINs,
+page-owned Secret PINs in Copy/Sync/Setup/Extend bundle, and procedure-owned
+maintenance Secret PINs. There is no in-flight exemption: each PIN read or write
+refreshes the idle clock, and a drop invalidates late writes.
+Reads check wall time even if a suspended WebView missed its timer. Expiry drops
+credentials, not recovery archives or progress: the next operation uses the
+existing PIN/unlock prompt, including after **Continue to installation**.
+iOS/web Capacitor inactivity alone does not clear PINs; Face ID and NFC overlays
+must not end their lifetime. One shared Android listener serves all holders,
+which subscribe only while holding data. The existing inactive handlers
+still close OTP secret/QR popups and abort active scans for privacy. Vault access
+alone has no JavaScript expiry; its native lifetime and background revocation
+remain in effect.
+
+Card Applets displays the persisted target batch. Cards are dimmed once their
+installation, item restoration and original grant verification finish (including
+explicitly confirmed omissions). Each target reinstalls its own original optional
+applet list and restores its own grants, independently of the starting card. The
+service permits only the first unfinished target to proceed, including after
+navigation or restart. An interrupted card must finish restoration before the
+next can be emptied. All archives are written and read back together. Completed
+cards retain their batch status, while their recovery material is removed only
+after verification. Batch restart remains unavailable. Fresh install cannot
+bypass an unfinished batch.
+
+Optional OTP and Security Key installation stays per card through **Install
+applets**. Optional-only updates and reinstalls also stay per card. Monoid and
+its library remain installed, so no items move. Grant recovery reconciles scopes
+and the previous public token hash before repeating a write. Set a newly
+installed Security Key's FIDO PIN again through a FIDO client.
 
 Fresh install does not delete an existing recovery archive. An archive belonging
 to the former Identity cannot be restored into the new Identity. Unknown APDU
-outcomes stop the current operation. A subsequent explicit retry reads the
-registry and resumes its saved checkpoint instead of restarting deletion.
+outcomes stop the current operation. **Resume** reads the registry and continues
+the saved checkpoint. **Start over** explicitly resets replacement progress as
+described above.
 
 The resource cache is invalidated when replacement begins. The phone's imported
 keys and addresses are not removed by this cache invalidation.
@@ -109,3 +299,33 @@ identity checks, uncertain outcomes, PIN sequencing, route handoff, and bundle
 collection. They do not establish compatibility or NFC reliability on physical
 cards. Installation and Hello success also do not constitute a cryptographic
 self-test of every Monoid operation.
+
+## PIN setup and recovery
+
+The shared PIN input flow is used by Safe scanning, Card Applets installation,
+Fresh install, Copy destination initialization and Create/Extend bundle card
+initialization or Reset. Unlock the Access PIN vault before manual input. Collect
+all new credentials before starting the write scan. Each confirmation is local
+input matching, not another on-card authentication attempt.
+
+- Both PINs unset or an explicit Reset/Fresh install: confirm the new Secret PIN
+  twice and, by default, the new Access PIN twice. Old stored Access PINs are not
+  reused. Fresh replacement removes the obsolete local PIN after installation.
+- Existing Secret PIN with missing Access PIN: enter the Secret PIN once. Restore
+  the saved Access PIN without input; if none exists, enter the new Access PIN
+  twice. Never silently replace Access PIN with Secret PIN.
+- Both PINs already set: do not set either again. Ask existing Secret PIN only
+  for operations requiring that authorization; ordinary Access authentication
+  uses the saved PIN or one manual entry. Verified Secret PINs are reused only
+  within their owning visible flow, subject to the five-minute idle/hidden rule,
+  and are never persistently stored.
+- Update Secret PIN: enter the current Secret PIN once, then the new Secret PIN
+  twice. Access PIN is unchanged and the separate-PIN checkbox is absent.
+- Update Access PIN: enter the current Secret PIN once, then the new Access PIN
+  twice. Secret PIN is unchanged.
+
+An interrupted flow reads current PIN state rather than replaying writes. A
+new Secret PIN initially sets the same Access PIN in firmware; selecting a
+different Access PIN then authenticates with Secret PIN and writes the selected
+Access PIN on the same NFC connection. Only the successfully verified Access PIN
+is saved. A lost response is not permission to retry a PIN mutation automatically.
