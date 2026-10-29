@@ -39,8 +39,10 @@ import {
 } from '../@key/expandable-key-group.js';
 import {KeyList, KeyListItemContent} from '../@key/key-list.js';
 import {KeyDerivationBadge, KeyTags} from '../@key/key-tags.js';
+import {CardHeaderTags} from '../@monoid/card-header-tags.js';
 import {
   type MonoidScanAuthentication,
+  MonoidScanCardAppletsRequiredError,
   type MonoidScanPromptCallback,
   type MonoidScanPromptValidateCard,
   scanCardPrompt,
@@ -58,7 +60,6 @@ import {
   DetailsPopupTitle,
 } from '../@ui/details-popup.js';
 import {ListItemName} from '../@ui/list.js';
-import {InfoMessage} from '../@ui/message-content.js';
 import {RippleEffect} from '../@ui/ripple-effect.js';
 import {
   SwipeAction,
@@ -69,6 +70,7 @@ import {Tag, WhiteTag} from '../@ui/tag.js';
 import {useInputModal} from '../@ui/use-input-modal.js';
 import {
   View,
+  ViewActionButton,
   ViewContent,
   ViewHeader,
   ViewHeaderButton,
@@ -182,6 +184,7 @@ export const OTPView = observer(
     const [scanInput, scan] = useMonoidScanPrompt({
       auth: 'access',
       ensureSetup: false,
+      cardAppletsReturnTo: 'otp',
       pinSession,
     });
     const {busy, run: runOperation} = useCardOperation({
@@ -263,6 +266,10 @@ export const OTPView = observer(
           signal.throwIfAborted();
           if (!active()) return;
 
+          // Reading or enabling sends a card that needs setup to Card Applets;
+          // account changes keep reporting it as an error.
+          const redirect =
+            operation.type === 'read' || operation.type === 'authorize';
           const scanned = new Set<string>();
           const process: MonoidScanPromptCallback = async (
             applet,
@@ -299,6 +306,8 @@ export const OTPView = observer(
             } else {
               setState('Reading accounts, hold tight...');
               next = await readOTPCard(applet, hello, signal, accounts);
+              if (redirect && !next.installed)
+                throw new MonoidScanCardAppletsRequiredError();
             }
             scanned.add(identity.publicKey);
             signal.throwIfAborted();
@@ -311,6 +320,11 @@ export const OTPView = observer(
             (card: typeof expected): MonoidScanPromptValidateCard =>
             hello => {
               if (card) assertSameCard(hello, card);
+              if (
+                redirect &&
+                (hello.pins.access === false || hello.pins.secret === false)
+              )
+                throw new MonoidScanCardAppletsRequiredError();
               assertCardPINs(hello);
             };
           const authentication: MonoidScanAuthentication | undefined =
@@ -354,10 +368,13 @@ export const OTPView = observer(
       errorService.catch(run(operation, target));
     };
 
+    const canEnable = !!card?.installed && !card.authorized;
+
     return (
       <View>
         <ViewHeader>
-          <ViewHeaderTitle>One-time Password</ViewHeaderTitle>
+          <ViewHeaderTitle>OTP</ViewHeaderTitle>
+          {card && <CardHeaderTags card={card} />}
           <ViewHeaderButton
             aria-label="OTP menu"
             disabled={busy}
@@ -368,17 +385,16 @@ export const OTPView = observer(
         </ViewHeader>
         <ViewContent
           footer={
-            <Buttons>
-              {card?.installed && !card.authorized && (
-                <Button
-                  disabled={busy}
-                  onClick={() => execute({type: 'authorize'}, card)}
-                >
-                  Enable OTP on card
-                </Button>
-              )}
+            <>
+              <ViewActionButton
+                visible={canEnable}
+                disabled={busy}
+                onClick={() => execute({type: 'authorize'}, card)}
+              >
+                Enable OTP on card
+              </ViewActionButton>
               <Button
-                color="neutral"
+                color={canEnable ? 'neutral' : 'primary'}
                 disabled={busy}
                 onClick={() =>
                   errorService.catch(
@@ -388,14 +404,11 @@ export const OTPView = observer(
               >
                 Scan a card
               </Button>
-            </Buttons>
+            </>
           }
         >
           {!otpStore.accounts.length && (
             <ViewPlaceholder>No OTP accounts</ViewPlaceholder>
-          )}
-          {card?.installed === false && (
-            <InfoMessage>OTP is not installed on this card</InfoMessage>
           )}
           <Accounts>
             {Array.from(groups, ([groupId, {provider, accounts}]) => (
@@ -577,7 +590,7 @@ export const OTPView = observer(
             aria-label="OTP menu"
             onDismiss={() => setPopup(undefined)}
           >
-            <DetailsPopupTitle>One-time Password</DetailsPopupTitle>
+            <DetailsPopupTitle>OTP</DetailsPopupTitle>
             <DetailsPopupDivider />
             <Buttons data-popup-animation-group>
               <Button
@@ -587,12 +600,6 @@ export const OTPView = observer(
                 }}
               >
                 Enter manually
-              </Button>
-              <Button
-                color="neutral"
-                onClick={() => execute({type: 'authorize'}, card)}
-              >
-                Enable OTP on card
               </Button>
             </Buttons>
           </DetailsPopup>

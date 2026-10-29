@@ -55,6 +55,7 @@ import {Toggle} from '../../../@ui/toggle.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 import {
   View,
+  ViewActionButton,
   ViewContent,
   ViewHeader,
   ViewHeaderButton,
@@ -811,26 +812,30 @@ export const SyncCardsView = observer(
                 )
               ) : collecting ? (
                 <>
-                  {session.cards.length >= 2 &&
-                    (session.noSyncRequired && !maintenance ? (
-                      back && (
-                        <Button
-                          color="neutral"
-                          disabled={busy}
-                          onClick={() => back()}
-                        >
-                          {backLabel}
-                        </Button>
-                      )
-                    ) : (
-                      <Button
-                        color={maintenance ? 'warning' : 'primary'}
-                        disabled={busy}
-                        onClick={prepare}
-                      >
-                        Continue
-                      </Button>
-                    ))}
+                  <ViewActionButton
+                    visible={
+                      session.cards.length >= 2 &&
+                      session.noSyncRequired &&
+                      !maintenance &&
+                      !!back
+                    }
+                    color="neutral"
+                    disabled={busy}
+                    onClick={() => back?.()}
+                  >
+                    {backLabel}
+                  </ViewActionButton>
+                  <ViewActionButton
+                    visible={
+                      session.cards.length >= 2 &&
+                      (!session.noSyncRequired || !!maintenance)
+                    }
+                    color={maintenance ? 'warning' : 'primary'}
+                    disabled={busy}
+                    onClick={prepare}
+                  >
+                    Continue
+                  </ViewActionButton>
                   <Button
                     color={session.cards.length >= 2 ? 'neutral' : 'primary'}
                     disabled={busy}

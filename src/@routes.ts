@@ -4,6 +4,7 @@ import type {SafeIndexHex} from './@atomics.js';
 import type {ScannedCardData} from './@components/views/safe/index.js';
 import type {EvmTransactionReplacementKind} from './@lib/evm-transaction-replacement.js';
 import type {CardInformation} from './@lib/global-platform/card-information.js';
+import type {MonoidAppletInstallation} from './@lib/monoid/index.js';
 import type {AddressChain} from './@lib/wallet-address.js';
 import type {WalletConnectAuthentication} from './@lib/wallet-connect-authentication.js';
 import {createFlowId} from './@utils/index.js';
@@ -28,6 +29,8 @@ export const ROUTE_SCHEMA = {
       state:
         | {
             cardInformation?: CardInformation;
+            /** Read during the scan that opened Card Applets for this card. */
+            installation?: MonoidAppletInstallation;
             returnTo?:
               | 'safe'
               | 'copy'

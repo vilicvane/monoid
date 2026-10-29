@@ -294,6 +294,8 @@ const {useViewActive} = await import(
 mock.module('../.bld/app/@components/@view/index.js', {
   namedExports: {
     View: 'view',
+    // Footer actions render as buttons; `visible: false` means absent.
+    ViewActionButton: 'button',
     ViewContent: 'content',
     ViewHeader: 'header',
     ViewHeaderButton: 'header-button',
@@ -380,6 +382,8 @@ function deferred() {
 
 function find(node, predicate) {
   if (node === null || node === undefined) return;
+  // A hidden footer action is absent.
+  if (node.props?.visible === false) return;
   if (predicate(node)) return node;
   const children = Array.isArray(node)
     ? node
@@ -392,6 +396,7 @@ function find(node, predicate) {
 
 function count(node, predicate) {
   if (node === null || node === undefined) return 0;
+  if (node.props?.visible === false) return 0;
   const children = Array.isArray(node)
     ? node
     : [node.props?.children, node.props?.footer];
@@ -1635,9 +1640,12 @@ test('bundle collection waits for scan cleanup and PIN setup before counting the
   assert.equal(state.button('Add a card').props.color, 'primary');
   const initialFooter = find(state.tree, node => node.type === 'content').props
     .footer;
-  assert.deepEqual(initialFooter.props.children.filter(Boolean).map(textOf), [
-    'Add a card',
-  ]);
+  assert.deepEqual(
+    initialFooter.props.children
+      .filter(button => button && button.props.visible !== false)
+      .map(textOf),
+    ['Add a card'],
+  );
   state.existingHello = bundleCard(1, {pins: {access: false, secret: false}});
   state.click('Add a card');
   await state.connect();
@@ -1670,7 +1678,7 @@ test('bundle collection waits for scan cleanup and PIN setup before counting the
     .footer;
   assert.deepEqual(
     readyFooter.props.children
-      .filter(Boolean)
+      .filter(button => button && button.props.visible !== false)
       .map(button => [textOf(button), button.props.color]),
     [
       ['Continue', 'primary'],

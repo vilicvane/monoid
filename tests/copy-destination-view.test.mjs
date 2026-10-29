@@ -242,7 +242,10 @@ for (const [path, names] of [
   mock.module(`../.bld/app/@components/${path}.js`, {
     namedExports: {
       ...Object.fromEntries(names.map(name => [name, name])),
-      ...(path === '@view/index' ? {useViewActive} : {}),
+      // Footer actions render as buttons; `visible: false` means absent.
+      ...(path === '@view/index'
+        ? {useViewActive, ViewActionButton: 'Button'}
+        : {}),
     },
   });
 }
@@ -347,7 +350,10 @@ function mount({
     click(label) {
       const button = find(
         state.render(),
-        node => node.type === 'Button' && node.props.children === label,
+        node =>
+          node.type === 'Button' &&
+          node.props.visible !== false &&
+          node.props.children === label,
       );
       assert.ok(button, `Expected button ${label}`);
       button.props.onClick();
@@ -471,7 +477,9 @@ test('an uninstalled destination opens Setup only after scan cleanup and preserv
     find(
       state.tree,
       node =>
-        node.type === 'Button' && node.props.children === 'Continue to export',
+        node.type === 'Button' &&
+        node.props.visible !== false &&
+        node.props.children === 'Continue to export',
     ).props.loading,
     true,
   );
@@ -515,7 +523,9 @@ test('an uninstalled destination opens Setup only after scan cleanup and preserv
     find(
       state.tree,
       node =>
-        node.type === 'Button' && node.props.children === 'Continue to export',
+        node.type === 'Button' &&
+        node.props.visible !== false &&
+        node.props.children === 'Continue to export',
     ).props.loading,
     false,
   );

@@ -30,6 +30,7 @@ import {TransactionDetailsPanel} from '../@ui/transaction-details-panel.js';
 import {TransactionHeaderStatus} from '../@ui/transaction-status.js';
 import {
   View,
+  ViewActionButton,
   ViewContent,
   ViewHeader,
   ViewHeaderTitle,
@@ -222,15 +223,14 @@ export const BitcoinTransactionView = observer(
         <ViewContent
           footer={
             <>
-              {submission && !confirmed && (
-                <Button
-                  disabled={!active || sending}
-                  loading={sending}
-                  onClick={() => void retry()}
-                >
-                  Retry broadcast
-                </Button>
-              )}
+              <ViewActionButton
+                visible={!!submission && !confirmed}
+                disabled={!active || sending}
+                loading={sending}
+                onClick={() => void retry()}
+              >
+                Retry broadcast
+              </ViewActionButton>
               <Button
                 color="neutral"
                 disabled={!active || sending}

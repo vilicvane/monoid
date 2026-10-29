@@ -34,7 +34,7 @@ import {scanCardPrompt} from '../../../@monoid/monoid-scan-prompt.js';
 import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js';
 import {requestCardPINs} from '../../../@monoid/request-card-pins.js';
 import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
-import {Button, Buttons} from '../../../@ui/button.js';
+import {Button} from '../../../@ui/button.js';
 import {ConfirmPopup} from '../../../@ui/confirm-popup.js';
 import {DetailsPopup} from '../../../@ui/details-popup.js';
 import {
@@ -49,6 +49,7 @@ import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 import {
   View,
+  ViewActionButton,
   ViewContent,
   ViewHeader,
   ViewHeaderTitle,
@@ -837,19 +838,20 @@ export const SetupCardView = observer(
                   </Button>
                 )
               ) : (
-                <Buttons>
-                  {bundleEnabled &&
-                    !collectionBusy &&
-                    bundleSession.cards.length >= 2 && (
-                      <Button
-                        color="primary"
-                        onClick={errorService.catch(() =>
-                          bundleSession.beginRoundTwo(),
-                        )}
-                      >
-                        Continue
-                      </Button>
+                <>
+                  <ViewActionButton
+                    visible={
+                      bundleEnabled &&
+                      !collectionBusy &&
+                      bundleSession.cards.length >= 2
+                    }
+                    color="primary"
+                    onClick={errorService.catch(() =>
+                      bundleSession.beginRoundTwo(),
                     )}
+                  >
+                    Continue
+                  </ViewActionButton>
                   {pendingPIN ? (
                     <Button onClick={() => setShowPINSetup(true)}>
                       {pendingPIN.pins.secret === false
@@ -880,7 +882,7 @@ export const SetupCardView = observer(
                           : 'Add a card'}
                     </Button>
                   )}
-                </Buttons>
+                </>
               )
             }
           >

@@ -174,7 +174,10 @@ export const CardManagementView = observer(
       () =>
         (maintenanceSyncId
           ? syncCardsStore.get(maintenanceSyncId)?.maintenanceCardSnapshot
-          : undefined) ?? {information: view.cardInformation},
+          : undefined) ?? {
+          information: view.cardInformation,
+          installation: view.installation,
+        },
     );
     const [complete, setComplete] = useState(false);
     const [discardOperation, setDiscardOperation] =
@@ -949,8 +952,12 @@ export const CardManagementView = observer(
       });
     }
 
-    function requestInstall(fresh = false): void {
-      setSelectedOptional(installedOptional);
+    function requestInstall(fresh = false, stage?: AppletStage): void {
+      setSelectedOptional(
+        stage && !installedOptional.includes(stage)
+          ? [...installedOptional, stage]
+          : installedOptional,
+      );
       setPopup(fresh ? 'fresh' : 'install');
     }
 
@@ -1045,6 +1052,13 @@ export const CardManagementView = observer(
       context.returnTo === 'safe'
         ? router.$backTo(router.safe.$exact)
         : undefined;
+    // The feature page that sent this card here, if it lacks that applet.
+    const requestedStage: AppletStage | undefined =
+      context.returnTo === 'otp'
+        ? 'otp'
+        : context.returnTo === 'securityKey'
+          ? 'security-key'
+          : undefined;
     const backToSecurityKey =
       context.returnTo === 'securityKey'
         ? router.$backTo(router.securityKey.$exact)
@@ -1149,7 +1163,7 @@ export const CardManagementView = observer(
             footer={
               restoreReport?.canFinish && !restoreReport.result.complete ? (
                 // A card rejection repeats on retry, so finishing leads.
-                <Buttons>
+                <>
                   <Button
                     color="warning"
                     disabled={busy}
@@ -1164,7 +1178,7 @@ export const CardManagementView = observer(
                   >
                     Retry
                   </Button>
-                </Buttons>
+                </>
               ) : batch ? (
                 <Button
                   color={batchComplete ? 'neutral' : 'warning'}
@@ -1238,6 +1252,16 @@ export const CardManagementView = observer(
                   onClick={() => requestMaintenance('update', updateStages)}
                 >
                   Update applets
+                </Button>
+              ) : requestedStage &&
+                installation?.monoid.installed &&
+                !installation.optional?.[requestedStage]?.installed ? (
+                // Opened from a feature page for a card without its applet.
+                <Button
+                  disabled={!canStartMaintenance || !hasAppletBundle}
+                  onClick={() => requestInstall(false, requestedStage)}
+                >
+                  Install applets
                 </Button>
               ) : (
                 <Button
@@ -1405,6 +1429,35 @@ export const CardManagementView = observer(
             <DetailsPopupTitle>Card applets</DetailsPopupTitle>
             <DetailsPopupDivider />
             <Buttons data-popup-animation-group>
+              {optionalApplets.some(
+                applet => !installation?.optional?.[applet.stage]?.installed,
+              ) && (
+                <Button
+                  color="primary"
+                  disabled={!canStartMaintenance || !hasAppletBundle}
+                  onClick={() => requestInstall()}
+                >
+                  Install applets
+                </Button>
+              )}
+              {canRestart && (
+                <Button
+                  color="neutral"
+                  disabled={busy}
+                  onClick={() => setPopup('restart')}
+                >
+                  Start over
+                </Button>
+              )}
+              {!updateAvailable && (
+                <Button
+                  color="neutral"
+                  disabled={!canMaintain || !hello}
+                  onClick={() => requestMaintenance('reinstall')}
+                >
+                  Reinstall Monoid Applet
+                </Button>
+              )}
               {superseded && (
                 <Button
                   color="danger"
@@ -1417,35 +1470,6 @@ export const CardManagementView = observer(
                   {superseded.archive
                     ? 'Discard old recovery'
                     : 'Discard old maintenance'}
-                </Button>
-              )}
-              {canRestart && (
-                <Button
-                  color="neutral"
-                  disabled={busy}
-                  onClick={() => setPopup('restart')}
-                >
-                  Start over
-                </Button>
-              )}
-              {optionalApplets.some(
-                applet => !installation?.optional?.[applet.stage]?.installed,
-              ) && (
-                <Button
-                  color="primary"
-                  disabled={!canStartMaintenance || !hasAppletBundle}
-                  onClick={() => requestInstall()}
-                >
-                  Install applets
-                </Button>
-              )}
-              {!updateAvailable && (
-                <Button
-                  color="neutral"
-                  disabled={!canMaintain || !hello}
-                  onClick={() => requestMaintenance('reinstall')}
-                >
-                  Reinstall Monoid Applet
                 </Button>
               )}
               <Button

@@ -27,13 +27,13 @@ import {
   scanCardPrompt,
   useMonoidScanPrompt,
 } from '../../../../@monoid/monoid-scan-prompt.js';
-import {Button} from '../../../../@ui/button.js';
 import {ResettableInput} from '../../../../@ui/input.js';
 import {InteractiveAddress} from '../../../../@ui/interactive-address.js';
 import {SegmentedControl} from '../../../../@ui/segmented-control.js';
 import {Step, Steps} from '../../../../@ui/step.js';
 import {
   View,
+  ViewActionButton,
   ViewContent,
   ViewHeader,
   ViewHeaderIdentifier,
@@ -366,24 +366,24 @@ const DeriveWalletView = observer(
             footerReveal="end"
             footer={
               <>
-                {step === 1 && (
-                  <Button
-                    disabled={busy !== undefined || effectivePath === undefined}
-                    loading={busy === 'derive'}
-                    onClick={errorService.catch(onScanCardButtonClick)}
-                  >
-                    {knownWallet ? 'Continue' : 'Scan card'}
-                  </Button>
-                )}
-                {step === 2 && (
-                  <Button
-                    disabled={busy !== undefined}
-                    loading={busy === 'import'}
-                    onClick={errorService.catch(onImportButtonClick)}
-                  >
-                    Import
-                  </Button>
-                )}
+                <ViewActionButton
+                  visible={step === 1}
+                  footerReveal="end"
+                  disabled={busy !== undefined || effectivePath === undefined}
+                  loading={busy === 'derive'}
+                  onClick={errorService.catch(onScanCardButtonClick)}
+                >
+                  {knownWallet ? 'Continue' : 'Scan a card'}
+                </ViewActionButton>
+                <ViewActionButton
+                  visible={step === 2}
+                  footerReveal="end"
+                  disabled={busy !== undefined}
+                  loading={busy === 'import'}
+                  onClick={errorService.catch(onImportButtonClick)}
+                >
+                  Import
+                </ViewActionButton>
               </>
             }
           >

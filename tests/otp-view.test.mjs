@@ -6,6 +6,8 @@ import {observable, runInAction} from 'mobx';
 
 import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 
+class MonoidScanCardAppletsRequiredError extends Error {}
+
 const {parseOTPURI, validateOTPAccountLabel} = await import(
   '../.bld/app/@lib/otp.js'
 );
@@ -233,6 +235,7 @@ mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
     MonoidScanRedirectError: class extends Error {
       code = 'CANCELLED';
     },
+    MonoidScanCardAppletsRequiredError,
     useMonoidScanPrompt(options) {
       const owner = fixture;
       return [
@@ -260,7 +263,7 @@ const {useViewActive} = await import(
 );
 for (const [path, names] of [
   ['@key/key-list', ['KeyList', 'KeyListItemContent']],
-  ['@key/key-tags', ['KeyDerivationBadge', 'KeyTags']],
+  ['@key/key-tags', ['KeyAliasTag', 'KeyDerivationBadge', 'KeyTags']],
   ['@ui/app-icon', ['AppIcon']],
   ['@ui/button', ['Button', 'Buttons']],
   ['@ui/confirm-popup', ['ConfirmPopup']],
@@ -299,6 +302,7 @@ for (const [path, names] of [
       'ViewFab',
       'ViewHeader',
       'ViewHeaderButton',
+      'ViewHeaderIdentifier',
       'ViewHeaderTitle',
       'ViewHeaderTags',
       'ViewPlaceholder',
@@ -309,7 +313,10 @@ for (const [path, names] of [
   mock.module(`../.bld/app/@components/${path}.js`, {
     namedExports: {
       ...Object.fromEntries(names.map(name => [name, name])),
-      ...(path === '@view/index' ? {useViewActive, viewHeaderTagCSS: ''} : {}),
+      // Footer actions render as buttons; `visible: false` means absent.
+      ...(path === '@view/index'
+        ? {useViewActive, viewHeaderTagCSS: '', ViewActionButton: 'Button'}
+        : {}),
     },
   });
 }
@@ -353,6 +360,15 @@ function find(node, predicate) {
     const result = find(child, predicate);
     if (result) return result;
   }
+}
+function findAll(node, predicate, found = []) {
+  if (node == null) return found;
+  if (predicate(node)) found.push(node);
+  for (const child of Array.isArray(node)
+    ? node
+    : [node.props?.children, node.props?.footer, node.props?.actions])
+    findAll(child, predicate, found);
+  return found;
 }
 function accountRow(tree, label) {
   return find(
@@ -409,7 +425,10 @@ function mount(cards = [cachedCard(1)], context = {}, importURI, cached = []) {
     click(label) {
       const button = find(
         state.render(),
-        node => node.type === 'Button' && node.props.children === label,
+        node =>
+          node.type === 'Button' &&
+          node.props.visible !== false &&
+          node.props.children === label,
       );
       assert(button, `Expected ${label}`);
       assert.notEqual(button.props.disabled, true);
@@ -434,7 +453,8 @@ function mount(cards = [cachedCard(1)], context = {}, importURI, cached = []) {
         id: bytes(card.id),
         publicKey: bytes(card.publicKey),
         authority: card.authority ?? false,
-        pins: {access: 5, secret: 5},
+        alias: card.alias ?? false,
+        pins: card.pins ?? {access: 5, secret: 5},
         bundle: false,
         version: 1,
       };
@@ -506,6 +526,9 @@ function mount(cards = [cachedCard(1)], context = {}, importURI, cached = []) {
     },
   };
   state.entrances = {
+    monoidApplet: {
+      aid: Uint8Array.from(Buffer.from('f06d6f6e6f69640201', 'hex')),
+    },
     cardStore: {
       get: identity =>
         cached.find(
@@ -948,24 +971,38 @@ test('Get code accepts a backup even when the page was opened from another card'
   assert(find(state.tree, node => node.type === 'CopyButton'));
 });
 
-test('Enable OTP remains an explicit action without a cached card identity', async () => {
+test('Enable OTP is offered only after a scan finds OTP installed but not enabled', async () => {
   const first = cachedCard(1);
   const state = mount([first]);
-  find(
-    state.render(),
-    node => node.type === 'ViewHeaderButton',
-  ).props.onClick();
+  const enableButtons = () =>
+    findAll(
+      state.render(),
+      node =>
+        node.type === 'Button' &&
+        node.props.visible !== false &&
+        node.props.children === 'Enable OTP on card',
+    );
+  const openMenu = () =>
+    find(
+      state.render(),
+      node => node.type === 'ViewHeaderButton',
+    ).props.onClick();
+  openMenu();
+  assert.equal(enableButtons().length, 0);
+  state.click('Scan a card');
+  await state.flush();
+  const disabled = {...cachedCard(2), authorized: false};
+  await state.tap(disabled);
+  assert.equal(enableButtons().length, 1);
+  openMenu();
+  assert.equal(enableButtons().length, 1, 'Enable stays a footer action');
+  state.events.length = 0;
   state.click('Enable OTP on card');
   await state.flush();
-  await state.tap({...cachedCard(2), accounts: first.accounts});
-  assert.deepEqual(state.events, [
-    'unlock',
-    'scan',
-    'authenticate',
-    'authorize',
-    'cache',
-  ]);
+  await state.tap(disabled);
+  assert(state.events.includes('authorize'));
   assert.deepEqual(state.errors, []);
+  assert.equal(enableButtons().length, 0);
 });
 
 test('Forget removes only the cached entry without NFC', async () => {
@@ -1386,7 +1423,7 @@ test('Card Applets context does not partition the cached account list or its men
   assert.equal(
     find(state.render(), node => node.type === 'DetailsPopupTitle').props
       .children,
-    'One-time Password',
+    'OTP',
   );
 });
 
@@ -1529,4 +1566,89 @@ test('leaving while the rename input is open prevents a late scan', async () => 
   await state.flush();
   assert.equal(state.scans.length, 1);
   assert.deepEqual(state.errors, []);
+});
+
+function visibleButton(tree, label) {
+  return find(
+    tree,
+    node =>
+      node.type === 'Button' &&
+      node.props.visible !== false &&
+      node.props.children === label,
+  );
+}
+
+test('the header names the scanned card only after a scan', async () => {
+  const state = mount([]);
+  assert.equal(
+    find(state.render(), node => node.type?.name === 'CardHeaderTags'),
+    undefined,
+  );
+  state.click('Scan a card');
+  await state.flush();
+  await state.tap({...cachedCard(1), alias: 'daily'});
+  const tags = find(
+    state.render(),
+    node => node.type?.name === 'CardHeaderTags',
+  );
+  const {id, alias} = tags.props.card;
+  assert.deepEqual({id, alias}, {id: cachedCard(1).id, alias: 'daily'});
+});
+
+test('Scan a card leads until another footer action does', async () => {
+  const state = mount([]);
+  assert.equal(
+    visibleButton(state.render(), 'Scan a card').props.color,
+    'primary',
+  );
+  state.click('Scan a card');
+  await state.flush();
+  await state.tap({...cachedCard(1), authorized: false});
+  assert.equal(
+    visibleButton(state.render(), 'Scan a card').props.color,
+    'neutral',
+  );
+  assert.equal(
+    visibleButton(state.render(), 'Enable OTP on card').props.color,
+    undefined,
+  );
+});
+
+test('a card without PINs or OTP is handed to Card Applets by the scan prompt', async () => {
+  const noPINs = mount([]);
+  assert.equal(noPINs.scans.length, 0);
+  noPINs.click('Scan a card');
+  await noPINs.flush();
+  assert.equal(noPINs.scans.at(-1).options.cardAppletsReturnTo, 'otp');
+  await noPINs.tap({...cachedCard(1), pins: {access: false, secret: 5}});
+  assert.ok(noPINs.errors[0] instanceof MonoidScanCardAppletsRequiredError);
+  assert.ok(!noPINs.events.includes('authenticate'));
+
+  const noOTP = mount([]);
+  noOTP.click('Scan a card');
+  await noOTP.flush();
+  await noOTP.tap({...cachedCard(2), installed: false});
+  assert.ok(noOTP.errors[0] instanceof MonoidScanCardAppletsRequiredError);
+  assert.ok(!noOTP.events.includes('cache'));
+  assert.equal(
+    find(noOTP.render(), node => node.type?.name === 'CardHeaderTags'),
+    undefined,
+  );
+});
+
+test('the menu only offers manual entry', () => {
+  const state = mount([]);
+  find(
+    state.render(),
+    node => node.type === 'ViewHeaderButton',
+  ).props.onClick();
+  assert.deepEqual(
+    findAll(
+      state.render(),
+      node => node.type === 'Button' && node.props.visible === undefined,
+    )
+      .map(button => button.props.children)
+      .sort(),
+    ['Enter manually', 'Scan a card'],
+  );
 });

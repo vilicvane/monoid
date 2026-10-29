@@ -5,7 +5,7 @@ description: Monoid NFC card sessions, Access/Safe PIN ownership, biometric vaul
 
 # Monoid card sessions
 
-Source: `../records.md`, especially records 29–32, 34, 38–41, 47–50, 63, 83, 90–92, 98, 103 and 105–109, and `../29.md`, `../48.md` and `../50.md`. Treat records
+Source: `../records.md`, especially records 29–32, 34, 38–41, 47–50, 63, 83, 90–92, 98, 103 and 105–110, and `../29.md`, `../48.md` and `../50.md`. Treat records
 as authoritative and keep them up to date. Records 19–24 describe an older WIP;
 do not reintroduce their plain-storage design or assume those TODOs still exist.
 
@@ -13,6 +13,11 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   credential saving. `useIsoDepScanPrompt` handles raw card operations such as
   GlobalPlatform setup. Both await native stop, app presentation exit and their
   existing credential work before returning.
+- Feature pages (OTP, Security Key) pass `cardAppletsReturnTo`: a missing
+  Monoid, or `MonoidScanCardAppletsRequiredError` thrown from validation or the
+  callback, reads card information and installation on the open connection and
+  pushes Card Applets on that card. Throw it only for read/enable, never inside
+  a mutation (record 109).
 - On iOS, a successful scan finishes for the app when the native reader begins
   its success indication; its remaining sheet dismissal must not block the
   normal flow. A healthy final `closeSession.message` (including `''`) reserves
@@ -80,7 +85,7 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
 - `useCardOperation` uses iOS `pause` for actual background cancellation and
   sensitive-content cleanup. Never abort it on iOS `appStateChange(false)`,
   which also covers NFC and biometric panels. Keep Android's `appStateChange`
-  and document-hidden cancellation, with no automatic scan restart (record 109).
+  and document-hidden cancellation, with no automatic scan restart (record 110).
 - iOS Core NFC covers the WebView and has a system session limit. Errors close
   the sheet and return to the caller; no automatic iOS retry hides the error or
   replays an uncertain mutation. Cancellation and iOS timeout before any card

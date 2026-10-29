@@ -27,7 +27,7 @@ import {hexToUint8Array} from '../../../@utils/index.js';
 import {fadeInAnimationCSS, popOutAnimationCSS} from '../../@animations.js';
 import {useMonoidScanPrompt} from '../../@monoid/monoid-scan-prompt.js';
 import {useCardOperation} from '../../@monoid/use-card-operation.js';
-import {Button, Buttons} from '../../@ui/button.js';
+import {Button} from '../../@ui/button.js';
 import {CopyButton} from '../../@ui/copy-button.js';
 import {WhiteTag} from '../../@ui/tag.js';
 import {useInputModal} from '../../@ui/use-input-modal.js';
@@ -401,15 +401,13 @@ export const OTPAccountView = observer(
         <ViewContent
           footer={
             account && (
-              <Buttons>
-                <Button
-                  color={state?.current ? 'neutral' : 'primary'}
-                  disabled={busy}
-                  onClick={() => errorService.catch(run())}
-                >
-                  Scan again
-                </Button>
-              </Buttons>
+              <Button
+                color={state?.current ? 'neutral' : 'primary'}
+                disabled={busy}
+                onClick={() => errorService.catch(run())}
+              >
+                Scan again
+              </Button>
             )
           }
         >
