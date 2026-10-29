@@ -66,6 +66,10 @@ public final class IsoDepNfcPlugin extends Plugin {
         NfcManager manager = (NfcManager) getContext().getSystemService(Context.NFC_SERVICE);
         adapter = manager == null ? null : manager.getDefaultAdapter();
         resumed = getActivity().getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED);
+        SessionController.Scheduler scheduler = (delayMs, action) -> {
+            main.postDelayed(action, delayMs);
+            return () -> main.removeCallbacks(action);
+        };
         sessions = new SessionController(new ReaderModeController<>(new ReaderModeController.Platform<Tag>() {
             @Override
             public void enable(ReaderModeController.TagCallback<Tag> onTag) {
@@ -106,10 +110,7 @@ public final class IsoDepNfcPlugin extends Plugin {
             public void disable() {
                 adapter.disableReaderMode(getActivity());
             }
-        }), main::post, io, closer, (delayMs, action) -> {
-            main.postDelayed(action, delayMs);
-            return () -> main.removeCallbacks(action);
-        }, new SessionController.Listener() {
+        }, scheduler), main::post, io, closer, scheduler, new SessionController.Listener() {
             @Override
             public void opened(String scanId, String sessionId, SessionController.TagInfo info) {
                 if (!page.isCurrent(scanDocument)) {

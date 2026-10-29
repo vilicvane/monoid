@@ -29,7 +29,7 @@ public class SessionControllerTest {
         assertEquals(1, fixture.reader.startCalls);
 
         assertSuccess(fixture.stop("scan"));
-        assertEquals(1, fixture.reader.stopCalls);
+        assertEquals(1, fixture.reader.lingerCalls);
         assertEvent(fixture.events.scans.get(0), "scan", null, "stopped", null);
         assertFailure(fixture.start("scan"), "SCAN_CLOSED", null);
     }
@@ -281,7 +281,8 @@ public class SessionControllerTest {
                 fixture.controller.terminate(termination[0], termination[1]);
             }
             assertFailure(waiting, termination[1], null);
-            assertEquals(1, fixture.reader.stopCalls);
+            assertEquals(termination[0].equals("stopped") ? 1 : 0, fixture.reader.lingerCalls);
+            assertEquals(termination[0].equals("stopped") ? 0 : 1, fixture.reader.stopCalls);
 
             assertSuccess(fixture.start("next"));
             fixture.connect(new FakeTransport());
@@ -411,7 +412,7 @@ public class SessionControllerTest {
         assertEquals(1, fixture.events.ended.size());
         assertEvent(fixture.events.ended.get(0), "scan", fixture.events.ended.get(0).sessionId,
             "scan-stopped", null);
-        assertEquals(1, fixture.reader.stopCalls);
+        assertEquals(1, fixture.reader.lingerCalls);
         assertSuccess(fixture.start("next"));
     }
 
@@ -461,13 +462,13 @@ public class SessionControllerTest {
         assertEquals(0, transport.transceiveCalls);
         assertEquals(0, dropped.connectCalls);
         assertEquals(2, transport.closeCalls);
-        assertEquals(1, fixture.reader.stopCalls);
+        assertEquals(1, fixture.reader.lingerCalls);
         assertSuccess(fixture.stop("scan"));
-        assertEquals(1, fixture.reader.stopCalls);
+        assertEquals(1, fixture.reader.lingerCalls);
     }
 
     @Test
-    public void stoppingAfterSessionCleanupStillStopsTheReaderExactlyOnce() {
+    public void stoppingAfterSessionCleanupEntersLingerExactlyOnce() {
         Fixture fixture = new Fixture();
         FakeTransport transport = new FakeTransport();
         String sessionId = fixture.startAndConnect(transport);
@@ -478,7 +479,8 @@ public class SessionControllerTest {
 
         assertSuccess(fixture.stop("scan"));
         assertSuccess(fixture.stop("scan"));
-        assertEquals(1, fixture.reader.stopCalls);
+        assertEquals(1, fixture.reader.lingerCalls);
+        assertEquals(0, fixture.reader.stopCalls);
         assertEquals(1, transport.closeCalls);
         assertEquals(1, fixture.events.ended.size());
         assertEquals(1, fixture.events.scans.size());
@@ -795,7 +797,7 @@ public class SessionControllerTest {
             assertEquals(1, fixture.events.ended.size());
             assertEquals("scan-stopped", fixture.events.ended.get(0).reason);
             assertNotSame(transport.workerThread, transport.firstCloseThread);
-            assertEquals(1, fixture.reader.stopCalls);
+            assertEquals(1, fixture.reader.lingerCalls);
         }
     }
 
@@ -839,7 +841,7 @@ public class SessionControllerTest {
 
             assertFailure(exchange, "CANCELLED", "unknown");
             assertSuccess(stopping);
-            assertEquals(1, fixture.reader.stopCalls);
+            assertEquals(1, fixture.reader.lingerCalls);
             RecordingResult<Void> next = new RecordingResult<>();
             fixture.onControl(() -> fixture.controller.startScan("next", 1000, next));
             assertSuccess(next);
@@ -911,7 +913,7 @@ public class SessionControllerTest {
             fixture.onControl(() -> {});
 
             assertSuccess(stopping);
-            assertEquals(1, fixture.reader.stopCalls);
+            assertEquals(1, fixture.reader.lingerCalls);
             assertEquals(2, transport.closeCalls);
             assertFalse(transport.connected);
             assertTrue(fixture.events.opened.isEmpty());
@@ -925,6 +927,224 @@ public class SessionControllerTest {
             await(fixture.events.firstOpened);
             assertEquals(0, stale.connectCalls);
             assertEquals("next", fixture.events.opened.get(0).scanId);
+        }
+    }
+
+    @Test
+    public void retainedTagIsProbedBeforeTheNormalDiscoveryAndConnectionPath() {
+        Fixture fixture = new Fixture();
+        FakeTransport retained = new FakeTransport();
+        fixture.reader.retained = retained;
+        assertSuccess(fixture.start("next"));
+        assertEquals(0, retained.connectCalls);
+        assertTrue(fixture.events.opened.isEmpty());
+        fixture.control.runAll();
+        ScheduledAction probeDeadline = fixture.scheduler.latest();
+        fixture.io.runAll();
+        assertEquals(1, retained.connectCalls);
+        assertEquals(1, retained.closeCalls);
+        assertTrue(fixture.events.opened.isEmpty());
+        fixture.control.runAll();
+        assertEquals(1, fixture.io.tasks.size());
+        fixture.finishExchange();
+        assertEquals(2, retained.connectCalls);
+        assertEquals(1, fixture.events.opened.size());
+        assertEquals("next", fixture.events.opened.get(0).scanId);
+        assertTrue(fixture.events.ended.isEmpty());
+        assertEquals(0, fixture.reader.discarded);
+        // Even a timeout already dequeued by Android cannot close the session.
+        probeDeadline.action.run();
+        fixture.finishCleanup();
+        assertEquals(1, retained.closeCalls);
+    }
+
+    @Test
+    public void everyRetainedProbeFailureIsSilentAndTheScanKeepsWaiting() {
+        for (String failure : Arrays.asList("TAG_LOST", "IO_ERROR", "close", "runtime")) {
+            Fixture fixture = new Fixture();
+            FakeTransport retained = new FakeTransport() {
+                @Override
+                public void connect() throws SessionController.TransportException {
+                    if (failure.equals("runtime")) {
+                        throw new IllegalStateException("Stale native handle");
+                    }
+                    super.connect();
+                }
+            };
+            retained.connectFailure = failure.equals("TAG_LOST") || failure.equals("IO_ERROR") ? failure : null;
+            retained.closeFailure = failure.equals("close");
+            fixture.reader.retained = retained;
+            assertSuccess(fixture.start("scan"));
+            fixture.control.runAll();
+            fixture.finishExchange();
+            assertEquals(1, fixture.reader.discarded);
+            assertTrue(fixture.events.opened.isEmpty());
+            assertTrue(fixture.events.ended.isEmpty());
+            assertTrue(fixture.events.scans.isEmpty());
+            FakeTransport fresh = new FakeTransport();
+            fixture.connect(fresh);
+            assertEquals(1, fresh.connectCalls);
+            assertEquals(1, fixture.events.opened.size());
+        }
+    }
+
+    @Test
+    public void freshDiscoveryDuringAProbeWaitsForItsCleanupAndThenConnects() {
+        Fixture fixture = new Fixture();
+        FakeTransport retained = new FakeTransport();
+        FakeTransport fresh = new FakeTransport();
+        fixture.reader.retained = retained;
+        assertSuccess(fixture.start("scan"));
+        fixture.control.runAll();
+        fixture.reader.onTag.accept(fresh);
+        fixture.control.runAll();
+        fixture.finishCleanup();
+        assertTrue(fixture.events.opened.isEmpty());
+        assertEquals(0, fresh.connectCalls);
+        fixture.finishExchange();
+        assertEquals(0, retained.connectCalls);
+        assertEquals(2, retained.closeCalls);
+        assertEquals(0, fresh.connectCalls);
+        fixture.finishExchange();
+        assertEquals(1, fresh.connectCalls);
+        assertEquals(1, fixture.events.opened.size());
+        assertTrue(fixture.events.ended.isEmpty());
+    }
+
+    @Test
+    public void freshDiscoveryBeforeTheProbeStartsAvoidsTheProbeEntirely() {
+        Fixture fixture = new Fixture();
+        FakeTransport retained = new FakeTransport();
+        FakeTransport fresh = new FakeTransport();
+        fixture.reader.retained = retained;
+        assertSuccess(fixture.start("scan"));
+        fixture.reader.onTag.accept(fresh);
+        fixture.control.runAll();
+        fixture.finishExchange();
+        assertEquals(0, retained.connectCalls);
+        assertEquals(0, retained.closeCalls);
+        assertEquals(1, fresh.connectCalls);
+        assertEquals(1, fixture.events.opened.size());
+    }
+
+    @Test
+    public void probeTimeoutIsSilentAndCannotReleaseRfWorkBeforeCleanup() {
+        Fixture fixture = new Fixture();
+        FakeTransport retained = new FakeTransport();
+        fixture.reader.retained = retained;
+        assertSuccess(fixture.start("scan"));
+        fixture.control.runAll();
+        assertEquals(30_000, fixture.scheduler.latest().delayMs);
+        fixture.scheduler.latest().fire();
+        fixture.finishCleanup();
+        FakeTransport fresh = new FakeTransport();
+        fixture.reader.onTag.accept(fresh);
+        fixture.control.runAll();
+        assertEquals(0, fresh.connectCalls);
+        fixture.finishExchange();
+        assertTrue(fixture.events.opened.isEmpty());
+        fixture.finishExchange();
+        assertEquals(1, fresh.connectCalls);
+        assertTrue(fixture.events.ended.isEmpty());
+        assertTrue(fixture.events.scans.isEmpty());
+    }
+
+    @Test
+    public void stoppingDuringAProbeWaitsForBothWorkersAndNeverOpensASession() {
+        Fixture fixture = new Fixture();
+        FakeTransport retained = new FakeTransport();
+        fixture.reader.retained = retained;
+        assertSuccess(fixture.start("scan"));
+        fixture.control.runAll();
+        ScheduledAction probeDeadline = fixture.scheduler.latest();
+        RecordingResult<Void> stopping = fixture.stop("scan");
+        probeDeadline.action.run(); // A dequeued deadline cannot turn cancellation into absence.
+        fixture.finishCleanup();
+        assertEquals(0, stopping.settlements);
+        assertFailure(fixture.start("next"), "BUSY", null);
+        fixture.finishExchange();
+        assertSuccess(stopping);
+        assertEquals(1, fixture.reader.lingerCalls);
+        assertEquals(0, fixture.reader.stopCalls);
+        assertEquals(0, retained.connectCalls);
+        assertTrue(fixture.events.opened.isEmpty());
+        assertTrue(fixture.events.ended.isEmpty());
+        assertEvent(fixture.events.scans.get(0), "scan", null, "stopped", null);
+        assertEquals(0, fixture.reader.discarded);
+        assertSame(retained, fixture.reader.retained);
+        assertSuccess(fixture.start("next"));
+        fixture.control.runAll();
+        fixture.finishExchange();
+        fixture.finishExchange();
+        assertEquals(2, retained.connectCalls);
+        assertEquals(1, fixture.events.opened.size());
+        assertEquals("next", fixture.events.opened.get(0).scanId);
+    }
+
+    @Test
+    public void lifecycleTerminationEndsLingerOnceWithoutAnotherScanEvent() {
+        for (String reason : Arrays.asList("app-paused", "nfc-disabled", "page-reloaded", "destroyed")) {
+            Fixture fixture = new Fixture();
+            assertSuccess(fixture.start("scan"));
+            assertSuccess(fixture.stop("scan"));
+            if (reason.equals("page-reloaded")) {
+                fixture.page.pageStarted();
+                fixture.page.pageStarted();
+            } else if (reason.equals("destroyed")) {
+                fixture.page.destroy();
+                fixture.page.destroy();
+            } else {
+                fixture.controller.terminate(reason, reason.equals("nfc-disabled") ? "NFC_DISABLED" : "APP_INACTIVE");
+                fixture.controller.terminate(reason, reason.equals("nfc-disabled") ? "NFC_DISABLED" : "APP_INACTIVE");
+            }
+            assertEquals(1, fixture.reader.lingerCalls);
+            assertEquals(1, fixture.reader.stopCalls);
+            assertFalse(fixture.reader.enabled);
+            assertEquals(1, fixture.reader.startCalls);
+            assertEquals(1, fixture.events.scans.size());
+        }
+    }
+
+    @Test
+    public void lifecycleTerminationDuringStopCleanupPromotesLingerToFullStop() {
+        for (String reason : Arrays.asList("app-paused", "nfc-disabled", "page-reloaded", "destroyed")) {
+            Fixture fixture = new Fixture();
+            fixture.startAndConnect(new FakeTransport());
+            RecordingResult<Void> stopping = fixture.stop("scan");
+            fixture.controller.terminate(reason, "APP_INACTIVE");
+            assertEquals(0, fixture.reader.lingerCalls);
+            assertEquals(0, fixture.reader.stopCalls);
+            fixture.finishCleanup();
+            assertSuccess(stopping);
+            assertEquals(0, fixture.reader.lingerCalls);
+            assertEquals(1, fixture.reader.stopCalls);
+            assertEquals(1, fixture.events.scans.size());
+        }
+    }
+
+    @Test
+    public void probeUsesIoAndIndependentCloseThreadsAndCannotResurrectAfterDestroy() throws Exception {
+        try (ThreadedFixture fixture = new ThreadedFixture()) {
+            BlockingTransport retained = new BlockingTransport(true);
+            fixture.reader.retained = retained;
+            RecordingResult<Void> started = new RecordingResult<>();
+            fixture.onControl(() -> fixture.controller.startScan("scan", 1000, started));
+            assertSuccess(started);
+            await(retained.entered);
+            RecordingResult<Void> stopped = new RecordingResult<>();
+            fixture.onControl(() -> {
+                fixture.controller.stopScan("scan", stopped);
+                fixture.controller.terminate("destroyed", "APP_INACTIVE");
+            });
+            await(stopped.completed);
+            fixture.onControl(() -> {});
+            assertSuccess(stopped);
+            assertNotSame(Thread.currentThread(), retained.workerThread);
+            assertNotSame(retained.workerThread, retained.firstCloseThread);
+            assertEquals(0, fixture.reader.lingerCalls);
+            assertEquals(1, fixture.reader.stopCalls);
+            assertTrue(fixture.events.opened.isEmpty());
+            assertTrue(fixture.events.ended.isEmpty());
         }
     }
 
@@ -1078,6 +1298,11 @@ public class SessionControllerTest {
         volatile SessionController.TagCallback onTag;
         int startCalls;
         int stopCalls;
+        int lingerCalls;
+        boolean enabled;
+        SessionController.Transport removedTransport;
+        SessionController.Transport retained;
+        int discarded;
         boolean startFailure;
         boolean stopFailure;
         Runnable onStop = () -> {};
@@ -1087,9 +1312,16 @@ public class SessionControllerTest {
         @Override
         public void start(SessionController.TagCallback onTag) {
             startCalls++;
+            enabled = true;
             this.onTag = onTag;
             if (startFailure) {
                 throw new IllegalStateException("Unable to start reader mode");
+            }
+            if (retained != null) {
+                onTag.acceptRetained(retained, () -> {
+                    discarded++;
+                    retained = null;
+                });
             }
         }
 
@@ -1100,12 +1332,36 @@ public class SessionControllerTest {
         }
 
         @Override
+        public void tagRemoved(SessionController.Transport transport) {
+            removedTransport = transport;
+        }
+
+        @Override
+        public void linger() {
+            lingerCalls++;
+            finishCallback();
+            if (stopFailure) {
+                throw new IllegalStateException("Unable to linger reader mode");
+            }
+        }
+
+        @Override
         public void stop() {
+            if (!enabled) {
+                return;
+            }
+            enabled = false;
             stopCalls++;
-            onStop.run();
+            finishCallback();
             if (stopFailure) {
                 throw new IllegalStateException("Unable to stop reader mode");
             }
+        }
+
+        private void finishCallback() {
+            Runnable callback = onStop;
+            onStop = () -> {};
+            callback.run();
         }
     }
 
