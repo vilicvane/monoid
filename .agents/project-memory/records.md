@@ -214,3 +214,7 @@
 ## c7e136a
 
 109. [agent] OTP's `useCardOperation` must use Capacitor `pause` (`didEnterBackground`) on iOS to abort an active scan and clear sensitive page content. Its old `appStateChange(false)` handler also ran for `willResignActive`, including NFC and biometric panels, and silently cancelled OTP scans. Android keeps `appStateChange(false)` (`onStop`); hidden-document, route-exit and unmount cancellation remain intact. This corrects record 83's inactive-scan behavior for iOS. The user reported that tapping the card made the OTP system window disappear and confirmed normal reading on the installed fix. iOS OTP lifecycle.
+
+## 52b91c2
+
+110. [agent] After the user approved fixing the related Bitcoin QR boundary, the popup preserves an accepted result through temporary iOS inactivity while still stopping the camera. Deliver it once after the cover, successful camera cleanup and foreground readiness; do not restart scanning or show Resume for that result. Actual iOS `pause`, a hidden document, dismissal, unmount and native failures still cancel pending delivery; Android inactivity keeps its previous cancellation behavior. `QrScanForeground.waitForForeground` neither consumes nor checks the per-foreground camera-retry allowance, so a result from an automatically resumed camera can finish in the same foreground. QR accepted-result ownership.

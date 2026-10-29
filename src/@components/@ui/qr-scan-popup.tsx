@@ -233,6 +233,7 @@ export function QrScanPopup({
       crypto.getRandomValues(new Uint32Array(4)),
       value => value.toString(16),
     ).join('-');
+    const isIOS = Capacitor.getPlatform() === 'ios';
     const listeners: PluginListenerHandle[] = [];
     let disposed = false;
     let finished = false;
@@ -271,15 +272,59 @@ export function QrScanPopup({
       }
       return stopped;
     };
+    const complete = (): void => {
+      if (disposed || finished || accepted === undefined) return;
+      finished = true;
+      const value = accepted;
+      const canComplete = (): boolean =>
+        !disposed &&
+        !dismissing &&
+        !paused &&
+        !document.hidden &&
+        accepted === value;
+      const deliver = (): void => {
+        if (!canComplete()) return;
+        accepted = undefined;
+        try {
+          callbacks.current.onScan(value);
+        } catch (error) {
+          setStatus('error');
+          errorService.catch(Promise.reject(error));
+        }
+      };
+      const ready = Promise.all([covered, stop()])
+        .then(() => undefined)
+        .catch(error => {
+          accepted = undefined;
+          cancelResume?.();
+          if (!disposed) setStatus('error');
+          throw error;
+        });
+      if (isIOS) {
+        cancelResume = foregroundRef.current!.waitForForeground(
+          ready,
+          canComplete,
+          deliver,
+        );
+        errorService.catch(ready);
+      } else {
+        errorService.catch(ready.then(deliver));
+      }
+    };
     const pause = (resumeOnForeground = true): void => {
       if (disposed || paused) return;
-      const resumable = !finished && !dismissing && accepted === undefined;
+      const hadResult = accepted !== undefined;
+      const resumable = !finished && !dismissing && !hadResult;
       paused = true;
       finished = true;
+      if (hadResult) {
+        cancelResume?.();
+        accepted = undefined;
+      }
       const stopping = stop();
       errorService.catch(stopping.finally(resolveCovered));
       if (!resumable) {
-        if (accepted !== undefined && !dismissing) {
+        if (hadResult && !dismissing) {
           setValidationError(undefined);
           setStatus('paused');
         }
@@ -295,8 +340,16 @@ export function QrScanPopup({
         () => setAttempt(value => value + 1),
       );
     };
+    const inactive = (): void => {
+      // A system overlay can stop the camera without cancelling its result.
+      if (isIOS && accepted !== undefined && !paused && !dismissing) {
+        complete();
+      } else {
+        pause();
+      }
+    };
     const fail = (error: unknown, fromNativeEnd = false): void => {
-      if (disposed || finished) return;
+      if (disposed || (finished && accepted === undefined)) return;
       const {code} = error as QrScannerError;
       // Preview updates can observe native teardown before its scanEnded event.
       // That event determines whether this is a recoverable pause or a failure.
@@ -305,10 +358,11 @@ export function QrScanPopup({
         return;
       }
       if (code === 'CANCELLED' || code === 'APP_INACTIVE') {
-        pause();
+        inactive();
         return;
       }
       finished = true;
+      cancelResume?.();
       accepted = undefined;
       setValidationError(undefined);
       setStatus(
@@ -377,21 +431,7 @@ export function QrScanPopup({
     };
     completeRef.current = () => {
       resolveCovered();
-      if (disposed || finished || accepted === undefined) return;
-      finished = true;
-      const value = accepted;
-      errorService.catch(
-        stop()
-          .then(() => {
-            if (!disposed && !dismissing && !paused && !document.hidden) {
-              callbacks.current.onScan(value);
-            }
-          })
-          .catch(error => {
-            if (!disposed) setStatus('error');
-            throw error;
-          }),
-      );
+      complete();
     };
     const visibilityChanged = (): void => {
       if (document.hidden) pause();
@@ -426,10 +466,14 @@ export function QrScanPopup({
       }
       listeners.push(
         await App.addListener('appStateChange', ({isActive}) => {
-          if (!isActive) pause();
+          if (!isActive) inactive();
         }),
       );
       if (disposed || finished) return;
+      if (isIOS) {
+        listeners.push(await App.addListener('pause', () => pause()));
+        if (disposed || finished) return;
+      }
 
       listeners.push(
         await QrScanner.addListener('codesScanned', event => {
@@ -463,10 +507,11 @@ export function QrScanPopup({
         await QrScanner.addListener('scanEnded', event => {
           if (event.scanId !== scanId || disposed) return;
           if (event.reason === 'app-paused') {
-            pause();
+            inactive();
             return;
           }
-          if (finished) return;
+          if (finished && (event.reason !== 'error' || accepted === undefined))
+            return;
           if (event.reason === 'error') {
             fail(
               Object.assign(new Error(event.message), {code: event.code}),

@@ -103,6 +103,93 @@ test('a stale active snapshot permits one recovery, then waits for a new foregro
   }
 });
 
+test('foreground completion works after camera recovery without consuming or resetting its allowance', async () => {
+  for (const recovered of [false, true]) {
+    const state = await setup();
+    let deliveries = 0;
+    try {
+      if (recovered) {
+        state.request();
+        await setImmediate();
+        assert.equal(state.resumes, 1);
+      }
+      state.coordinator.waitForForeground(
+        Promise.resolve(),
+        () => true,
+        () => deliveries++,
+      );
+      await setImmediate();
+      assert.equal(deliveries, 1);
+      state.request();
+      await setImmediate();
+      assert.equal(state.resumes, 1);
+      state.activate(true);
+      assert.equal(deliveries, 1);
+      state.activate(false);
+      state.activate(true);
+      assert.equal(state.resumes, recovered ? 2 : 1);
+      assert.equal(deliveries, 1);
+    } finally {
+      state.coordinator.dispose();
+    }
+  }
+});
+
+for (const cleanupFirst of [true, false]) {
+  test(`foreground completion waits for ${cleanupFirst ? 'activation after cleanup' : 'cleanup after activation'}`, async () => {
+    const state = await setup({active: false});
+    const cleanup = deferred();
+    let deliveries = 0;
+    try {
+      state.coordinator.waitForForeground(
+        cleanup.promise,
+        () => true,
+        () => deliveries++,
+      );
+      if (cleanupFirst) cleanup.resolve();
+      else state.activate(true);
+      await setImmediate();
+      assert.equal(deliveries, 0);
+      if (cleanupFirst) state.activate(true);
+      else cleanup.resolve();
+      await setImmediate();
+      assert.equal(deliveries, 1);
+      state.activate(false);
+      state.activate(true);
+      assert.equal(deliveries, 1);
+    } finally {
+      state.coordinator.dispose();
+    }
+  });
+}
+
+test('foreground completion is suppressed by cancellation, disposal, lost eligibility or failed cleanup', async () => {
+  for (const action of ['cancel', 'dispose', 'ineligible', 'failure']) {
+    const state = await setup({active: false});
+    const cleanup = deferred();
+    let deliveries = 0;
+    let eligible = true;
+    try {
+      const cancel = state.coordinator.waitForForeground(
+        cleanup.promise,
+        () => eligible,
+        () => deliveries++,
+      );
+      if (action === 'cancel') cancel();
+      else if (action === 'dispose') state.coordinator.dispose();
+      else if (action === 'ineligible') eligible = false;
+      if (action === 'failure') cleanup.reject(new Error('Camera still owned'));
+      else cleanup.resolve();
+      await setImmediate();
+      state.activate(true);
+      assert.equal(deliveries, 0);
+      assert.deepEqual(state.errors, []);
+    } finally {
+      state.coordinator.dispose();
+    }
+  }
+});
+
 test('document visibility and native activation must both be ready', async () => {
   const state = await setup({active: false, hidden: true});
   try {

@@ -9,7 +9,7 @@ let application;
 mock.module('@capacitor/core', {
   namedExports: {
     Capacitor: {
-      getPlatform: () => 'ios',
+      getPlatform: () => application.platform,
       isPluginAvailable: () => true,
     },
   },
@@ -19,8 +19,8 @@ mock.module('@capacitor/app', {
     App: {
       getState: async () => ({isActive: application.active}),
       addListener: async (name, callback) => {
-        assert.equal(name, 'appStateChange');
         const listener = {
+          name,
           callback,
           removals: 0,
           async remove() {
@@ -195,7 +195,7 @@ class Element {
   }
 }
 
-function fixture(t, overrides = {}) {
+function fixture(t, overrides = {}, platform = 'ios') {
   const body = new Element();
   const content = new Element();
   const popup = new Element();
@@ -233,7 +233,7 @@ function fixture(t, overrides = {}) {
       frames.delete(id);
     },
   });
-  application = {active: true, listeners: []};
+  application = {platform, active: true, listeners: []};
   native = {
     starts: [],
     stops: [],
@@ -331,7 +331,14 @@ function fixture(t, overrides = {}) {
     appActive(active) {
       application.active = active;
       for (const listener of application.listeners) {
-        if (!listener.removals) listener.callback({isActive: active});
+        if (listener.name === 'appStateChange' && !listener.removals)
+          listener.callback({isActive: active});
+      }
+    },
+    pause() {
+      for (const listener of application.listeners) {
+        if (listener.name === 'pause' && !listener.removals)
+          listener.callback();
       }
     },
     hidden(hidden) {
@@ -452,6 +459,33 @@ test('foreground recovery waits for camera cleanup and creates only one fresh sc
   await state.flush();
   assert.equal(native.starts.length, 2);
   assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.errors, []);
+});
+
+test('a recovered camera delivers its result in the same foreground without another activation', async t => {
+  const {state, native} = fixture(t);
+  await state.flush();
+  state.appActive(false);
+  state.appActive(true);
+  await state.flush();
+  assert.equal(native.starts.length, 2);
+  assert.equal(state.status, 'scanning');
+  state.nativeEvent('codesScanned', {
+    scanId: native.starts[1].scanId,
+    values: ['bitcoin:recipient'],
+  });
+  await state.flush();
+  assert.equal(state.status, 'completing');
+  assert.deepEqual(state.scans, []);
+  state.cover();
+  await state.flush();
+  assert.deepEqual(state.scans, ['bitcoin:recipient']);
+  state.cover();
+  state.appActive(true);
+  await state.flush();
+  assert.deepEqual(state.scans, ['bitcoin:recipient']);
+  assert.equal(native.starts.length, 2);
+  assert.equal(native.permissionRequests, 1);
   assert.deepEqual(state.errors, []);
 });
 
@@ -586,6 +620,7 @@ test('a native failure cancels an accepted result without a later pause overwrit
   state.nativeEvent('codesScanned', {scanId, values: ['bitcoin:recipient']});
   await state.flush();
   assert.equal(state.status, 'completing');
+  state.appActive(false);
   state.nativeEvent('scanEnded', {
     scanId,
     reason: 'error',
@@ -661,35 +696,173 @@ test('dismissal cancels pending foreground recovery while native cleanup finishe
   );
 });
 
-test('an accepted result cannot restart or reach the form after an interruption', async t => {
-  const {state, native} = fixture(t);
+test('an iOS accepted result survives native pause before inactivity and still waits for the cover', async t => {
+  const stopped = deferred();
+  const {state, native} = fixture(t, {stopScan: () => stopped.promise});
+  await state.flush();
+  const scanId = native.starts[0].scanId;
+  state.nativeEvent('codesScanned', {scanId, values: ['bitcoin:recipient']});
+  state.nativeEvent('scanEnded', {scanId, reason: 'app-paused'});
+  state.appActive(false);
+  await state.flush();
+  assert.equal(state.status, 'completing');
+  assert.equal(
+    state.find(
+      node => node.type === 'button' && node.props.children === 'Resume',
+    ),
+    undefined,
+  );
+  state.nativeEvent('scanEnded', {scanId, reason: 'stopped'});
+  stopped.resolve();
+  await state.flush();
+  assert.deepEqual(state.scans, []);
+  state.appActive(true);
+  await state.flush();
+  assert.deepEqual(state.scans, []);
+  state.cover();
+  await state.flush();
+  assert.deepEqual(state.scans, ['bitcoin:recipient']);
+  state.cover();
+  state.nativeEvent('scanEnded', {scanId, reason: 'app-paused'});
+  state.appActive(false);
+  state.appActive(true);
+  await state.flush();
+  assert.deepEqual(state.scans, ['bitcoin:recipient']);
+  assert.equal(native.starts.length, 1);
+  assert.equal(native.permissionRequests, 0);
+  assert.deepEqual(state.errors, []);
+});
+
+test('iOS inactivity during native cleanup waits for cleanup even after foreground and a late pause', async t => {
+  const stopped = deferred();
+  const {state, native} = fixture(t, {
+    stopScan: ({scanId}) => {
+      native.stops.push(scanId);
+      return stopped.promise;
+    },
+  });
+  await state.flush();
+  const scanId = native.starts[0].scanId;
+  state.nativeEvent('codesScanned', {scanId, values: ['bitcoin:recipient']});
+  await state.flush();
+  state.cover();
+  await state.flush();
+  assert.equal(native.stops.length, 1);
+  state.appActive(false);
+  await state.flush();
+  assert.equal(state.status, 'completing');
+  assert.deepEqual(state.scans, []);
+  state.appActive(true);
+  state.appActive(true);
+  state.nativeEvent('scanEnded', {scanId, reason: 'app-paused'});
+  await state.flush();
+  assert.deepEqual(state.scans, []);
+  assert.equal(
+    state.find(
+      node => node.type === 'button' && node.props.children === 'Resume',
+    ),
+    undefined,
+  );
+  stopped.resolve();
+  await state.flush();
+  assert.deepEqual(state.scans, ['bitcoin:recipient']);
+  state.cover();
+  state.appActive(true);
+  await state.flush();
+  assert.deepEqual(state.scans, ['bitcoin:recipient']);
+  assert.equal(native.starts.length, 1);
+  assert.deepEqual(state.errors, []);
+});
+
+for (const interruption of [
+  'iOS pause',
+  'document hidden',
+  'Android inactive',
+]) {
+  test(`an accepted result cannot reach the form after ${interruption}`, async t => {
+    const stopped = deferred();
+    const {state, native} = fixture(
+      t,
+      {stopScan: () => stopped.promise},
+      interruption === 'Android inactive' ? 'android' : 'ios',
+    );
+    await state.flush();
+    state.nativeEvent('codesScanned', {
+      scanId: native.starts[0].scanId,
+      values: ['bitcoin:recipient'],
+    });
+    await state.flush();
+    state.cover();
+    state.appActive(false);
+    if (interruption === 'iOS pause') state.pause();
+    if (interruption === 'document hidden') state.hidden(true);
+    await state.flush();
+    assert.equal(state.status, 'paused');
+    stopped.resolve();
+    await state.flush();
+    assert.deepEqual(state.scans, []);
+    state.hidden(false);
+    state.appActive(true);
+    state.cover();
+    await state.flush();
+    assert.equal(native.starts.length, 1);
+    assert.deepEqual(state.scans, []);
+    state.dismiss();
+    await state.flush();
+    assert.equal(state.dismissals, 1);
+  });
+}
+
+for (const departure of ['dismiss', 'cleanup']) {
+  test(`${departure} discards a result retained through iOS inactivity`, async t => {
+    const stopped = deferred();
+    const {state, native, application, visibilityListeners} = fixture(t, {
+      stopScan: () => stopped.promise,
+    });
+    await state.flush();
+    state.nativeEvent('codesScanned', {
+      scanId: native.starts[0].scanId,
+      values: ['bitcoin:recipient'],
+    });
+    await state.flush();
+    state.appActive(false);
+    state.cover();
+    await state.flush();
+    state[departure]();
+    state.appActive(true);
+    stopped.resolve();
+    await state.flush();
+    assert.deepEqual(state.scans, []);
+    assert.equal(native.starts.length, 1);
+    if (departure === 'dismiss') assert.equal(state.dismissals, 1);
+    else {
+      assert.equal(visibilityListeners.size, 0);
+      assert.ok(
+        application.listeners.every(listener => listener.removals === 1),
+      );
+    }
+  });
+}
+
+test('native cleanup failure cannot deliver a result retained through iOS inactivity', async t => {
+  const stopped = deferred();
+  const failure = new Error('Camera cleanup failed');
+  const {state, native} = fixture(t, {stopScan: () => stopped.promise});
   await state.flush();
   state.nativeEvent('codesScanned', {
     scanId: native.starts[0].scanId,
     values: ['bitcoin:recipient'],
   });
   await state.flush();
-  assert.equal(state.status, 'completing');
-  assert.equal(
-    state.find('qr-scan-preview').props.showProcessingSpinner,
-    false,
-  );
-  state.appActive(false);
-  await state.flush();
-  assert.equal(state.status, 'paused');
-  assert.ok(
-    state.find(
-      node => node.type === 'button' && node.props.children === 'Resume',
-    ),
-  );
-  state.appActive(true);
   state.cover();
+  state.appActive(false);
+  state.appActive(true);
+  stopped.reject(failure);
   await state.flush();
-  assert.equal(native.starts.length, 1);
+  assert.equal(state.status, 'error');
   assert.deepEqual(state.scans, []);
-  state.dismiss();
-  await state.flush();
-  assert.equal(state.dismissals, 1);
+  assert.equal(native.starts.length, 1);
+  assert.ok(state.errors.includes(failure));
 });
 
 test('successful scanning waits for the cover and delivers its result once without a spinner', async t => {
