@@ -71,11 +71,18 @@ const KeyED25519 = x.intersection([
     x.object({type: x.literal('ed25519')}),
     x.object({
       type: x.literal('seed'),
-      derivation: x.object({
-        type: x.literal('slip10'),
-        curve: x.literal('ed25519'),
-        path: BIP39Path,
-      }),
+      derivation: x.union([
+        x.object({
+          type: x.literal('slip10'),
+          curve: x.literal('ed25519'),
+          path: BIP39Path,
+        }),
+        x.object({
+          type: x.literal('monoid-001'),
+          curve: x.literal('ed25519'),
+          context: XUint8Array,
+        }),
+      ]),
     }),
   ]),
 ]);
@@ -88,6 +95,7 @@ const KeySECP256R1 = x.intersection([
       type: x.literal('seed'),
       derivation: x.object({
         type: x.literal('monoid-001'),
+        curve: x.literal('secp256r1').optional(),
         context: XUint8Array,
       }),
     }),

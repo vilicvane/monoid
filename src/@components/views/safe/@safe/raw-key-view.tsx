@@ -4,6 +4,8 @@ import type {RouteComponentProps} from 'routra-react';
 
 import {useEntrances} from '../../../../@entrances.js';
 import type {Router} from '../../../../@routes.js';
+import {KeyList} from '../../../@key/key-list.js';
+import {KeyPublicKeyItem} from '../../../@key/key-public-key-item.js';
 import {KeyWalletList} from '../../../@key/key-wallet-list.js';
 import {Button} from '../../../@ui/button.js';
 import {View, ViewContent} from '../../../@view/index.js';
@@ -25,24 +27,48 @@ export const RawKeyView = observer(
     if (!key) {
       return null;
     }
+    const canDeriveAddress =
+      key.type === 'ed25519' &&
+      !!key.rawPublicKey &&
+      !key.wallets.some(
+        wallet => wallet.addressType === 'solana' && wallet.path === undefined,
+      );
 
     return (
       <View>
         <KeyHeader data={key} />
         <ViewContent
           footer={
-            key.wallets.length === 0 && (
-              <Button
-                color="neutral"
-                onClick={() => router.safe.scanCard.$push()}
-              >
-                Scan card
-              </Button>
+            canDeriveAddress ? (
+              <Button onClick={() => view.$match.derive.$push()}>Derive</Button>
+            ) : (
+              key.wallets.length === 0 &&
+              (key.type !== 'secp256r1' || !key.rawPublicKey) && (
+                <Button
+                  color="neutral"
+                  onClick={() => router.safe.scanCard.$push()}
+                >
+                  Scan card
+                </Button>
+              )
             )
           }
           footerRef={buttonsRef}
         >
-          <KeyWalletList data={key} emptyFocusRef={buttonsRef} />
+          <div>
+            {key.rawPublicKey && (
+              <KeyList>
+                <KeyPublicKeyItem
+                  curve={key.type}
+                  publicKey={key.rawPublicKey}
+                />
+              </KeyList>
+            )}
+            {key.type !== 'secp256r1' &&
+              (key.wallets.length > 0 || !key.rawPublicKey) && (
+                <KeyWalletList data={key} emptyFocusRef={buttonsRef} />
+              )}
+          </div>
         </ViewContent>
       </View>
     );

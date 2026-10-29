@@ -95,9 +95,10 @@ export function WalletConnectApproveButton({
     // Validate session capabilities before asking the user to sign anything.
     buildWalletConnectNamespaces(proposal, addresses);
     assertPending();
-    onStateChange('signing');
+    const releaseSigning = walletKitService.signingLock.acquire();
 
     try {
+      onStateChange('signing');
       const signed = new Map<
         WalletConnectAuthentication,
         WalletConnectAuthenticationResult
@@ -175,6 +176,7 @@ export function WalletConnectApproveButton({
       }
 
       assertPending();
+      releaseSigning();
       onStateChange('connecting');
       const session = await walletKitService.approve(
         view.id,
@@ -191,6 +193,7 @@ export function WalletConnectApproveButton({
         router.sessions.$reset();
       }
     } finally {
+      releaseSigning();
       onStateChange(undefined);
     }
   };

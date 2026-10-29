@@ -2,7 +2,7 @@ import type {ScannedCardItemData} from './common.js';
 
 type CardResourceData = Pick<
   ScannedCardItemData,
-  'index' | 'type' | 'derivationRecord'
+  'index' | 'type' | 'derivationRecord' | 'keyDerivationRecord'
 >;
 
 export type CardResourceGroup<T> = {
@@ -28,8 +28,13 @@ export function getCardResourceGroups<T extends CardResourceData>(
   const groups: CardResourceGroup<T>[] = [];
 
   for (const item of items) {
-    const sourceIndex = item.derivationRecord?.index;
-    const source = sourceIndex ? roots.get(sourceIndex) : undefined;
+    const sourceIndex =
+      item.derivationRecord?.index ?? item.keyDerivationRecord?.index;
+    const candidate = sourceIndex ? roots.get(sourceIndex) : undefined;
+    const source =
+      item.keyDerivationRecord && candidate?.item.type !== 'seed'
+        ? undefined
+        : candidate;
 
     if (source) {
       source.items.push(item);

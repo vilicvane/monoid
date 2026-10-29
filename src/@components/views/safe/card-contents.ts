@@ -1,5 +1,12 @@
 import {InvalidCardItemError} from '../../../@lib/card-item-error.js';
-import type {CardItem, MonoidApplet} from '../../../@lib/monoid/index.js';
+import {
+  type CardItem,
+  type MonoidApplet,
+  decodeCardKeyDerivationRecord,
+  getCardKeyDerivationItemIndex,
+  isCardKeyDerivationItem,
+  readCardKeyDerivationItem,
+} from '../../../@lib/monoid/index.js';
 import {
   SECURITY_KEY_ITEM_TYPE,
   decodeSecurityKeyCredentialItem,
@@ -18,6 +25,7 @@ import type {ScannedCardItemData} from './common.js';
 export function isCardRecord(item: CardItem): boolean {
   return (
     isCardDerivationItem(item) ||
+    isCardKeyDerivationItem(item) ||
     isCardCredentialItem(item) ||
     isCardOTPItem(item)
   );
@@ -27,7 +35,7 @@ function isCardCredentialItem(item: CardItem): boolean {
   return Number.parseInt(item.index.slice(0, 4), 16) === SECURITY_KEY_ITEM_TYPE;
 }
 
-/** Transfer reads preserve bytes; only a usable wallet list gets a merge rule. */
+/** Transfer reads preserve bytes; only validated derivation records can merge. */
 export async function readOpaqueCardItem(
   applet: MonoidApplet,
   item: ScannedCardItemData,
@@ -41,6 +49,27 @@ export async function readOpaqueCardItem(
 export function withCardDerivationRecord<
   T extends ScannedCardItemData & {data?: string},
 >(item: T): T {
+  if (isCardKeyDerivationItem(item)) {
+    const opaque = {...item};
+    delete opaque.keyDerivationRecord;
+    if (!item.secret && item.data !== undefined) {
+      try {
+        const keyDerivationRecord = decodeCardKeyDerivationRecord(
+          hexToUint8Array(item.data),
+        );
+        if (
+          keyDerivationRecord.index === item.metadata &&
+          getCardKeyDerivationItemIndex(keyDerivationRecord.index) ===
+            item.index
+        )
+          return {...opaque, keyDerivationRecord};
+      } catch (error) {
+        if (!(error instanceof InvalidCardItemError)) throw error;
+      }
+    }
+    return opaque;
+  }
+
   if (!item.secret && item.data !== undefined && isCardDerivationItem(item)) {
     try {
       const derivationRecord = decodeCardDerivationRecord(
@@ -74,6 +103,18 @@ export async function decodeCardRecord(
       ...item,
       derivationRecord: record.derivationRecord,
     };
+  }
+
+  if (isCardKeyDerivationItem(item)) {
+    try {
+      const record = await readCardKeyDerivationItem(applet, item);
+      return {...item, keyDerivationRecord: record.keyDerivationRecord};
+    } catch (error) {
+      if (!(error instanceof InvalidCardItemError)) throw error;
+      // Keep unknown or malformed records visible and opaque. They must never
+      // be treated as a missing slot that a later derivation may overwrite.
+      return item;
+    }
   }
 
   if (item.secret) {

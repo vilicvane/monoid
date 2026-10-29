@@ -14,6 +14,8 @@ export function getPendingActionTitle(action: PendingAction): string {
     case 'personal_sign':
     case 'solana_signMessage':
       return 'Sign message';
+    case 'monoid_sshSign':
+      return 'Sign with SSH key';
     case 'eth_signTypedData_v4':
       return 'Sign typed data';
     case 'eth_sendTransaction':

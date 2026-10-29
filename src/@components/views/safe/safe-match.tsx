@@ -14,6 +14,7 @@ import {
 import {
   DerivableKeyView,
   DeriveKeyView,
+  DeriveNativeAddressView,
   RawKeyView,
   SafeView,
 } from './@safe/index.js';
@@ -34,6 +35,10 @@ export const SafeMatch = ({
         component={DeriveKeyView}
       />
       <Route view={route.rawKey.$exact.$view()} component={RawKeyView} />
+      <Route
+        view={route.rawKey.derive.$view()}
+        component={DeriveNativeAddressView}
+      />
       <Route view={route.scanCard.$view()} component={ScanCardView} />
       <Route view={route.copyItems.$view()} component={CopyItemsView} />
       <Route view={route.syncCards.$view()} component={SyncCardsView} />

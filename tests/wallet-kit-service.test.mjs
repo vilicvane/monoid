@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {generateKeyPairSync, sign as signBytes} from 'node:crypto';
 import {EventEmitter, getEventListeners} from 'node:events';
 import {mock, test} from 'node:test';
+import {setImmediate} from 'node:timers/promises';
 
 import {base58} from '@scure/base';
 import {buildAuthObject, formatMessage} from '@walletconnect/utils';
@@ -21,6 +22,8 @@ const SOLANA_CHAIN = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
 const SOLANA_DEVNET = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
 const SOLANA_ADDRESS = `Ab${'1'.repeat(41)}`;
 const OTHER_SOLANA_ADDRESS = `AB${'1'.repeat(41)}`;
+const SSH_ACCOUNT =
+  'monoid:ssh:ed25519.d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a';
 const uri = (topic = TOPIC) =>
   `wc:${topic}@2?relay-protocol=irn&symKey=${'b'.repeat(64)}`;
 const proposal = (topic = TOPIC, id = 1) => ({
@@ -49,7 +52,7 @@ const proposal = (topic = TOPIC, id = 1) => ({
 function createKit(sessions = {}, requests = []) {
   const events = new EventEmitter();
   const kit = Object.assign(new EventEmitter(), {
-    core: {pairing: {events: new EventEmitter()}},
+    core: {pairing: {events: new EventEmitter()}, relayer: new EventEmitter()},
     engine: {signClient: {events}},
     getActiveSessions: mock.fn(() => ({...sessions})),
     getPendingSessionProposals: mock.fn(() => []),
@@ -2079,4 +2082,130 @@ test('a retained typed signature cannot answer a request that changes before ret
   );
   assert.equal(kit.respondSessionRequest.mock.callCount(), 1);
   assert.equal(service.requests.has(1), true);
+});
+
+function firstSSHRequest(f, connection) {
+  const request = {
+    id: 99,
+    topic: TOPIC,
+    verifyContext: connection.verifyContext,
+    params: {
+      chainId: 'monoid:ssh',
+      request: {
+        method: 'monoid_sshSign',
+        expiryTimestamp: Math.floor(Date.now() / 1000) + 300,
+        params: {
+          account: SSH_ACCOUNT,
+          algorithm: 'ssh-ed25519',
+          data: 'aGVsbG8=',
+          expiresAt: Math.floor(Date.now() / 1000) + 90,
+        },
+      },
+    },
+  };
+  f.requests.push(request);
+  f.kit.emit('session_request', request);
+  return request;
+}
+
+async function approvingSSH() {
+  const f = setup();
+  const connection = proposal();
+  connection.params.requiredNamespaces = {
+    monoid: {
+      chains: ['monoid:ssh'],
+      methods: ['monoid_sshSign'],
+      events: ['accountsChanged'],
+    },
+  };
+  await receiveProposal(f, connection);
+  const approval = Promise.withResolvers();
+  let request;
+  f.kit.approveSession.mock.mockImplementationOnce(({namespaces}) => {
+    f.sessions[TOPIC] = {
+      topic: TOPIC,
+      pairingTopic: connection.params.pairingTopic,
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      namespaces,
+    };
+    // The peer can use the published settlement before approveSession returns.
+    request = firstSSHRequest(f, connection);
+    return approval.promise.then(() => f.sessions[TOPIC]);
+  });
+  const connecting = f.service.approve(connection.id, [SSH_ACCOUNT]);
+  return {...f, approval, connecting, request};
+}
+
+test('a first SSH request waits for both SDK approval and durable local authorization', async () => {
+  const f = await approvingSSH();
+  await setImmediate();
+  assert.equal(f.kit.respondSessionRequest.mock.callCount(), 0);
+  assert.equal(f.service.requests.size, 0);
+  assert.equal(f.service.ssh.pending.size, 0);
+
+  const saved = Promise.withResolvers();
+  const set = f.storage.set;
+  f.storage.set = async (key, value) => {
+    if (key === 'sshWalletState') await saved.promise;
+    await set(key, value);
+  };
+  f.approval.resolve();
+  await setImmediate();
+  assert.equal(f.kit.respondSessionRequest.mock.callCount(), 0);
+  assert.equal(f.service.ssh.pending.size, 0);
+  saved.resolve();
+  await f.connecting;
+  await setImmediate();
+  assert.equal(f.service.ssh.pending.size, 1);
+  const value = [...f.service.ssh.pending.values()][0];
+  assert.equal(value.request.id, f.request.id);
+  assert.equal(f.service.requests.get(f.request.id), value.request);
+  const stored = await f.storage.get('sshWalletState');
+  assert.equal(stored.ledger[JSON.stringify([TOPIC, 99])].state, 'pending');
+  await f.service.ssh.reject(value);
+});
+
+test('failed SDK approval releases a delayed first request without granting SSH authority', async () => {
+  const f = await approvingSSH();
+  f.approval.reject(new Error('Approval publication failed'));
+  await assert.rejects(f.connecting, /Approval publication failed/);
+  await setImmediate();
+  assert.equal(f.service.ssh.pending.size, 0);
+  assert.equal(f.service.ssh.getDesiredAccounts(TOPIC), undefined);
+  assert.equal(
+    f.kit.respondSessionRequest.mock.calls[0].arguments[0].response.error.code,
+    -32001,
+  );
+});
+
+test('first SSH request cannot escape failed authorization persistence', async () => {
+  const f = await approvingSSH();
+  const set = f.storage.set;
+  f.storage.set = async (key, value) => {
+    if (key === 'sshWalletState') throw new Error('Storage failed');
+    await set(key, value);
+  };
+  f.approval.resolve();
+  await assert.rejects(f.connecting, /Storage failed/);
+  await setImmediate();
+  assert.equal(f.kit.disconnectSession.mock.callCount(), 1);
+  assert.equal(f.service.ssh.pending.size, 0);
+  assert.equal(f.service.sessions.has(TOPIC), false);
+});
+
+test('a first SSH request that expires during approval is never presented', async context => {
+  const f = await approvingSSH();
+  context.mock.method(
+    Date,
+    'now',
+    () => (f.request.params.request.params.expiresAt + 1) * 1000,
+  );
+  f.approval.resolve();
+  await f.connecting;
+  await setImmediate();
+  assert.equal(f.service.ssh.pending.size, 0);
+  assert.equal(
+    f.kit.respondSessionRequest.mock.calls[0].arguments[0].response.error.code,
+    -32004,
+  );
 });

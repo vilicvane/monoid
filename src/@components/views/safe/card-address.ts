@@ -1,5 +1,6 @@
 import type {BIP39PathString, PublicKeyHex} from '../../../@atomics.js';
 import {parseDerivationPath} from '../../../@lib/bip39.js';
+import {normalizeKeyPublicKey} from '../../../@lib/key-derivation.js';
 import type {MonoidApplet} from '../../../@lib/monoid/index.js';
 import {getAppletKey} from '../../../@lib/monoid/index.js';
 import type {AddressType} from '../../../@lib/wallet-address.js';
@@ -39,6 +40,24 @@ export function getCardKeyAddressTypes(type: string): readonly AddressType[] {
     default:
       return [];
   }
+}
+
+/** Compute an explicitly requested native address without reading a private key. */
+export function getLocalNativeKeyAddress(
+  type: string,
+  publicKey: PublicKeyHex | undefined,
+  addressType: AddressType,
+): ScannedCardKeyData['ref'] | undefined {
+  if (type !== 'ed25519' || addressType !== 'solana' || !publicKey) return;
+  const normalized = normalizeKeyPublicKey(
+    'ed25519',
+    hexToUint8Array(publicKey),
+  );
+  return {
+    addressType,
+    publicKey: normalized,
+    address: computeWalletAddress(addressType, hexToUint8Array(normalized)),
+  };
 }
 
 export async function readCardKeyAddress(

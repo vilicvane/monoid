@@ -90,6 +90,12 @@ mock.module('../.bld/app/@components/views/safe/card-derivations.js', {
     writeCardDerivationRecord: (...args) => fixture.write(...args),
   },
 });
+mock.module(
+  '../.bld/app/@components/views/safe/@safe/derivable-key/derive-seed-key-view.js',
+  {
+    namedExports: {DeriveSeedKeyView: () => null},
+  },
+);
 const {useViewActive} = await import(
   '../.bld/app/@components/@view/use-view-active.js'
 );
@@ -98,6 +104,7 @@ for (const [path, exports] of [
   ['@ui/button', {Button: 'button'}],
   ['@ui/input', {ResettableInput: 'input'}],
   ['@ui/interactive-address', {InteractiveAddress: 'address'}],
+  ['@ui/segmented-control', {SegmentedControl: 'purpose-selector'}],
   ['@ui/step', {Steps: 'steps', Step: 'step'}],
   [
     '@view/index',
@@ -193,7 +200,8 @@ function mount() {
       fixture = state;
       rendering = state;
       state.index = 0;
-      state.tree = DeriveKeyView({view: state.view});
+      const selection = DeriveKeyView({view: state.view});
+      state.tree = selection.type(selection.props);
       rendering = undefined;
       return state.tree;
     },

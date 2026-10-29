@@ -39,8 +39,11 @@ function scope(card: CardSyncSnapshot, item: CardSyncItem): string {
   // Only a decoded association inherits its root's scope. All other records
   // stay opaque; arbitrary metadata is never interpreted as a key reference.
   const root =
-    card.items.find(source => source.index === item.derivationRecord?.index) ??
-    item;
+    card.items.find(
+      source =>
+        source.index ===
+        (item.derivationRecord?.index ?? item.keyDerivationRecord?.index),
+    ) ?? item;
 
   return root.secret
     ? card.bundle === false
@@ -119,8 +122,12 @@ export function createCardSyncPlans(
       )
       .sort(
         (left, right) =>
-          Number(!!left.item.derivationRecord) -
-          Number(!!right.item.derivationRecord),
+          Number(
+            !!(left.item.derivationRecord ?? left.item.keyDerivationRecord),
+          ) -
+          Number(
+            !!(right.item.derivationRecord ?? right.item.keyDerivationRecord),
+          ),
       );
     const operations: CardSyncOperation[] = [];
     const issues = new Map(
@@ -174,6 +181,7 @@ export function createCardSyncPlans(
           ...current,
           data: desired.data,
           derivationRecord: desired.derivationRecord,
+          keyDerivationRecord: desired.keyDerivationRecord,
         };
         operations.push({kind: 'data', before: current, after});
         current = after;

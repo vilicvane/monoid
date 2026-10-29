@@ -8,8 +8,10 @@ import {buildWalletConnectAuthentication} from '../../@lib/wallet-connect-authen
 import {
   buildWalletConnectNamespaces,
   getWalletConnectProposalAddressTypes,
+  requestsSSHAccounts,
 } from '../../@lib/wallet-connect.js';
 import type {Router} from '../../@routes.js';
+import {SSHAccountList} from '../@key/ssh-account-list.js';
 import {WalletAccountList} from '../@key/wallet-account-list.js';
 import {AsyncButton, Button} from '../@ui/button.js';
 import {ErrorMessage} from '../@ui/message-content.js';
@@ -26,7 +28,8 @@ import {WalletConnectSite} from './@scan/wallet-connect-site.js';
 
 export const WalletConnectView = observer(
   ({view}: RouteComponentProps<Router['scan']['connection']>): ReactNode => {
-    const {router, walletKitService, walletStorageService} = useEntrances();
+    const {router, walletKitService, walletStorageService, sshKeyStore} =
+      useEntrances();
     const [connecting, setConnecting] = useState(false);
     const active = !view.$leaving && view.$match.$exact.$active;
     const {proposal, available} = useWalletConnectProposal(
@@ -39,6 +42,7 @@ export const WalletConnectView = observer(
     const addressTypes = proposal
       ? getWalletConnectProposalAddressTypes(proposal)
       : [];
+    const ssh = proposal && requestsSSHAccounts(proposal);
     const selectedAddresses = useMemo(
       () => new Set(addresses.map(normalizeWalletAddress)),
       [addresses],
@@ -71,6 +75,18 @@ export const WalletConnectView = observer(
       setConnecting(true);
 
       try {
+        const sshAccounts = new Set(
+          sshKeyStore
+            .candidates(walletStorageService.keys)
+            .map(key => key.account),
+        );
+        if (
+          addresses.some(
+            address =>
+              address.startsWith('monoid:ssh:') && !sshAccounts.has(address),
+          )
+        )
+          throw new Error('Selected SSH keys are no longer available.');
         const session = await walletKitService.approve(view.id, addresses);
         if (session && !view.$leaving && view.$match.$exact.$active) {
           router.sessions.$reset();
@@ -130,21 +146,35 @@ export const WalletConnectView = observer(
           )}
           {available ? (
             <>
-              <WalletAccountList
-                selectionLabel="Choose accounts"
-                keys={walletStorageService.keys}
-                addressType={addressTypes}
-                selectedAddresses={selectedAddresses}
-                disabled={connecting}
-                onToggle={address => {
-                  const identity = normalizeWalletAddress(address);
-                  view.addresses = selectedAddresses.has(identity)
-                    ? addresses.filter(
-                        item => normalizeWalletAddress(item) !== identity,
-                      )
-                    : [...addresses, address];
-                }}
-              />
+              {addressTypes.length > 0 && (
+                <WalletAccountList
+                  selectionLabel="Choose accounts"
+                  keys={walletStorageService.keys}
+                  addressType={addressTypes}
+                  selectedAddresses={selectedAddresses}
+                  disabled={connecting}
+                  onToggle={address => {
+                    const identity = normalizeWalletAddress(address);
+                    view.addresses = selectedAddresses.has(identity)
+                      ? addresses.filter(
+                          item => normalizeWalletAddress(item) !== identity,
+                        )
+                      : [...addresses, address];
+                  }}
+                />
+              )}
+              {ssh && (
+                <SSHAccountList
+                  selectionLabel="Choose SSH keys"
+                  selected={selectedAddresses}
+                  disabled={connecting}
+                  onToggle={account => {
+                    view.addresses = selectedAddresses.has(account)
+                      ? addresses.filter(value => value !== account)
+                      : [...addresses, account];
+                  }}
+                />
+              )}
               {authentication.error && (
                 <ErrorMessage role="alert">{authentication.error}</ErrorMessage>
               )}

@@ -271,7 +271,7 @@ function mount() {
     },
     configure(create = false) {
       state.click('Enable Security Key on card');
-      if (create) state.click('Create dedicated Seed');
+      if (create) state.click('Create dedicated seed');
       else
         find(
           state.render(),

@@ -24,7 +24,7 @@ export const appletBundle: readonly BundledApplet[] | undefined = [
     appletAid: 'f06d6f6e6f69640201',
     dependencies: ['identity', 'library'],
     codeURL: new URL('../../@assets/applets/monoid.bin', import.meta.url),
-    sha256: '3602b380d6d087abe04043e41a5b3d67fb4cf49535189fa56338363638167898',
+    sha256: '373554af7607f5e89153960e5d5e4d22ddabc4b4e216e1caea71708512142f34',
   },
   {
     stage: 'security-key',

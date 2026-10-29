@@ -8,6 +8,7 @@ import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
 import {getAppletKey} from '../.bld/app/@lib/monoid/get-applet-key.js';
 import {buildWalletConnectAuthentication} from '../.bld/app/@lib/wallet-connect-authentication.js';
 import {parseWalletConnectRequest} from '../.bld/app/@lib/wallet-connect-request.js';
+import {WalletConnectSigningLock} from '../.bld/app/@services/wallet-connect-signing-lock.js';
 import {
   getKeyWallets,
   matchesWalletReference,
@@ -137,6 +138,7 @@ function mount(kind, {separateCards = false} = {}) {
     view: {id: 1, $leaving: false, $match: {$exact: {$active: true}}},
   };
   const service = {
+    signingLock: new WalletConnectSigningLock(),
     requests: new Map(),
     sessions: new Map(),
     proposals: new Map(),
@@ -401,3 +403,31 @@ test('authentication carries completed count to the next card', async () => {
   assert.equal(state.responses[0][2].length, 2);
   assert.equal(state.resets, 1);
 });
+
+for (const kind of [
+  'evm-message',
+  'solana-message',
+  'solana-batch',
+  'authentication',
+]) {
+  test(`${kind} cannot start a scan while another WalletConnect approval owns the signer`, async () => {
+    const state = mount(kind);
+    const lock = state.entrances.walletKitService.signingLock;
+    const release = lock.acquire();
+    await state.start();
+    await assert.rejects(state.finished, error => error.code === -32006);
+    assert.equal(state.scans.length, 0);
+    assert.equal(state.signatures.length, 0);
+    release();
+
+    await state.start();
+    assert.equal(state.scans.length, 1);
+    assert.throws(
+      () => lock.acquire(),
+      error => error.code === -32006,
+    );
+    state.signatures.at(-1).reject(new Error('Card cancelled'));
+    await assert.rejects(state.finished, /Card cancelled/);
+    lock.acquire()();
+  });
+}

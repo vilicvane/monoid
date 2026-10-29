@@ -10,6 +10,7 @@
   },
   "scripts": {
     "3": "npm install && npm dedupe && npm install",
+    "update:ssh-protocol": "node scripts/update-ssh-protocol.mjs",
     "postinstall": "npm --prefix plugins/isodep-nfc run build && npm --prefix plugins/biometric-vault run build && npm --prefix plugins/qr-scanner run build",
     "prepare:applets": "node scripts/prepare-applets.mjs ../monoid-javacard/build/javacard && prettier --write src/@lib/monoid/@applet-bundle.ts src/@assets/applets/manifest.json",
     "build": "rimraf ./.bld && tsc --build",
@@ -42,6 +43,7 @@
     "@ionic/react": "^8.6.5",
     "@ionic/react-router": "^8.6.5",
     "@ionic/storage": "^4.0.0",
+    "@monoid/ssh-protocol": "file:vendor/monoid-ssh-protocol-0.1.0.tgz",
     "@noble/curves": "1.9.7",
     "@reown/walletkit": "1.6.0",
     "@scure/base": "1.2.6",
@@ -91,6 +93,7 @@
     "@types/react-dom": "19.1.6",
     "@vitejs/plugin-legacy": "^7.1.0",
     "@vitejs/plugin-react": "^4.7.0",
+    "@walletconnect/sign-client": "2.25.0",
     "eslint": "^8.57.1",
     "fflate": "0.8.3",
     "prettier": "^3.6.2",

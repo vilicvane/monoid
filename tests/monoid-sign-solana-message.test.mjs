@@ -209,7 +209,7 @@ test('rejects card responses that are not 64-byte Ed25519 signatures', async () 
 
     await assert.rejects(
       signSolanaMessage(applet, rawKey, message, address),
-      /Invalid Ed25519 signature length/,
+      /Invalid ed25519 signature length/,
     );
   }
 });

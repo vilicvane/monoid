@@ -115,6 +115,7 @@ export const ROUTE_SCHEMA = {
       $state: undefined! as {
         index: SafeIndexHex;
       },
+      derive: true,
     },
     derivableKey: {
       $state: ({index}: {index: SafeIndexHex}) => ({

@@ -347,7 +347,7 @@ export const SecurityKeyView = observer(
     };
     const needsInstall = missingMonoid || snapshot?.installed === false;
     const configureLabel = configured
-      ? 'Configure Seed'
+      ? 'Configure seed'
       : 'Enable Security Key on card';
     return (
       <View>
@@ -548,20 +548,20 @@ export const SecurityKeyView = observer(
               </>
             )}
             <Button color="neutral" onClick={() => configure('create')}>
-              Create dedicated Seed
+              Create dedicated seed
             </Button>
           </DetailsPopup>
         )}
         {selection && (
           <ConfirmPopup
-            title="Change Seed?"
+            title="Change seed?"
             confirmColor="warning"
-            confirmText="Change Seed"
+            confirmText="Change seed"
             onCancel={() => setSelection(undefined)}
             onConfirm={() => configure(selection, true)}
           >
-            Accounts registered with the current Seed stop working, including
-            ones not listed here. Select the current Seed again to restore them.
+            Accounts registered with the current seed stop working, including
+            ones not listed here. Select the current seed again to restore them.
           </ConfirmPopup>
         )}
         {detail && (

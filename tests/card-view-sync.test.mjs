@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {afterEach, mock, test} from 'node:test';
 
+import {p256} from '@noble/curves/nist';
 import {observable, onReactionError, runInAction, toJS} from 'mobx';
 import {routra} from 'routra';
 
@@ -14,6 +15,7 @@ import {
   MonoidWrongCardError,
 } from '../.bld/app/@lib/monoid/card-error.js';
 import {assertSameCard} from '../.bld/app/@lib/monoid/card-identity.js';
+import {getCardKeyDerivationItemIndex} from '../.bld/app/@lib/monoid/card-key-derivations.js';
 import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 import {
   CardPINError,
@@ -47,6 +49,7 @@ const PUBLIC_KEY =
 const OTHER_PUBLIC_KEY =
   '02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5';
 const bytes = value => Uint8Array.from(Buffer.from(value, 'hex'));
+const hex = value => Buffer.from(value).toString('hex');
 
 mock.method(console, 'info', () => {});
 mock.module('react', {
@@ -434,11 +437,12 @@ function mount({items = [], keys = [], view, router}) {
       return find(state.render(), node => node.type === 'popup');
     },
     popupButton(label) {
+      const displayLabel = label === 'seed' ? 'Seed' : label;
       return find(
         state.popup(),
         node =>
           node.type === 'popup-button' &&
-          (node.props['aria-label'] ?? textContent(node)) === label,
+          (node.props['aria-label'] ?? textContent(node)) === displayLabel,
       );
     },
     confirmDelete() {
@@ -2124,11 +2128,13 @@ test('creating a key on an empty card reads it and adds the canonical and displa
 
 for (const [label, request, addressType] of [
   ['seed', {type: 'seed', length: 64}, 'evm'],
-  ['ed25519', {type: 'ed25519'}, 'solana'],
 ]) {
   test(`creating ${label} reads its default address with the matching key type`, async () => {
     const state = mount({items: []});
-    const publicKey = addressType === 'solana' ? '12'.repeat(32) : PUBLIC_KEY;
+    const publicKey =
+      addressType === 'solana'
+        ? 'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a'
+        : PUBLIC_KEY;
     state.applet.viewKey = async input => {
       state.keyViews.push(input);
       return {publicKey: bytes(publicKey)};
@@ -2149,6 +2155,44 @@ for (const [label, request, addressType] of [
     assert.equal(state.storage.keys.length, 0);
   });
 }
+
+test('creating Ed25519 reads only its native public key and derives Solana only on request', async () => {
+  const state = mount({items: []});
+  const publicKey =
+    'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a';
+  state.applet.viewKey = async input => {
+    state.keyViews.push(input);
+    return {publicKey: bytes(publicKey)};
+  };
+  state.createKey('ed25519');
+  await state.tap();
+  await state.finish();
+  const created = state.card.items[0];
+  assert.equal(created.type, 'ed25519');
+  assert.equal(created.publicKey, publicKey);
+  assert.equal(created.ref, undefined);
+  assert.equal(state.item(CREATED_INDEX).props.addressType, undefined);
+  assert.equal(state.storage.keys.length, 0);
+  await state.click('Import');
+  assert.equal(state.storage.keys[0].rawPublicKey, publicKey);
+  assert.deepEqual(toJS(state.storage.keys[0].wallets), []);
+  const scans = state.scans.length;
+  const keyReads = state.keyViews.length;
+  await state.click('Derive');
+  assert.equal(created.ref.addressType, 'solana');
+  assert.equal(created.ref.publicKey, publicKey);
+  assert.equal(
+    state.scans.length,
+    scans,
+    'the public key supplies the requested address without NFC',
+  );
+  assert.equal(state.keyViews.length, keyReads);
+  assert.deepEqual(
+    toJS(state.storage.keys[0].wallets),
+    [],
+    'a Card preview still requires explicit import',
+  );
+});
 
 test('adding a key preserves existing selections, the resource filter and a switched address preview', async () => {
   const existingIndex = '03010000000000000001';
@@ -2302,9 +2346,9 @@ test('cancelling during Create retains its eventual acknowledgement and skips fu
   assert.equal(state.menuButton().props.disabled, false);
 });
 
-test('creating secp256r1 reads its public key and keeps it available as a card resource', async () => {
+test('creating secp256r1 offers Safe import without inventing a wallet derivation', async () => {
   const state = mount({items: []});
-  const publicKey = `04${'12'.repeat(64)}`;
+  const publicKey = Buffer.from(p256.getPublicKey(1n, false)).toString('hex');
   state.applet.viewKey = async request => {
     state.keyViews.push(request);
     return {publicKey: bytes(publicKey)};
@@ -2318,13 +2362,172 @@ test('creating secp256r1 reads its public key and keeps it available as a card r
     {type: 'secp256r1', index: bytes(CREATED_INDEX)},
   ]);
   assert.deepEqual(state.rowIndexes(), [CREATED_INDEX]);
-  assert.equal(state.item(CREATED_INDEX).type, 'resource-item');
+  assert.equal(state.item(CREATED_INDEX).type, 'key-item');
   assert.equal(state.card.items[0].publicKey, publicKey);
   assert.equal(state.item(CREATED_INDEX).props.selected, true);
-  assert.equal(state.visible('Import'), false);
+  assert.equal(state.visible('Import'), true);
   assert.equal(state.visible('Derive'), false);
   state.click('Copy');
   assert.deepEqual(state.copies[0].sourceIndexes, [CREATED_INDEX]);
+
+  state.click('Import');
+  await state.finish();
+  const imported = state.storage.indexToKeyMap.get(CREATED_INDEX);
+  assert.equal(imported.rawPublicKey, publicKey);
+  assert.deepEqual(toJS(imported.wallets), []);
+  assert.equal(
+    state.scans.length,
+    1,
+    'the already-read public key needs no new NFC operation',
+  );
+  assert.deepEqual(state.writes, []);
+  assert.equal(state.item(CREATED_INDEX).props.state, 'up-to-date');
+  assert.equal(state.visible('Back to Safe'), true);
+  assert.deepEqual(state.errors, []);
+});
+
+test('a scanned P-256 key imports its alias and public key without a card mutation', async () => {
+  const index = '03020000000000000001';
+  const publicKey = Buffer.from(p256.getPublicKey(2n, false)).toString('hex');
+  const state = mount({
+    items: [
+      {index, type: 'secp256r1', alias: 'SSH key', secret: true, publicKey},
+    ],
+  });
+  state.select(index);
+  assert.equal(state.visible('Derive'), false);
+  await state.click('Import');
+
+  assert.deepEqual(toJS(state.storage.indexToKeyMap.get(index)), {
+    index,
+    type: 'secp256r1',
+    alias: 'SSH key',
+    rawPublicKey: publicKey,
+    wallets: [],
+  });
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.writes, []);
+  assert.deepEqual(state.aliasWrites, []);
+  assert.equal(state.item(index).props.state, 'up-to-date');
+});
+
+test('a P-256 key whose public key has not been read cannot be imported or derived as a wallet', () => {
+  const index = '03020000000000000001';
+  const state = mount({items: [{index, type: 'secp256r1', secret: true}]});
+  state.select(index);
+  assert.equal(state.visible('Import'), false);
+  assert.equal(state.visible('Derive'), false);
+  assert.equal(state.visible('Copy'), true);
+});
+
+test('P-256 alias synchronization does not write a wallet derivation record', async () => {
+  const index = '03020000000000000001';
+  const publicKey = Buffer.from(p256.getPublicKey(2n, false)).toString('hex');
+  const state = mount({
+    items: [
+      {index, type: 'secp256r1', alias: 'Card alias', secret: true, publicKey},
+    ],
+    keys: [
+      {
+        index,
+        type: 'secp256r1',
+        alias: 'Phone alias',
+        rawPublicKey: publicKey,
+        wallets: [],
+      },
+    ],
+  });
+  state.select(index);
+  state.toggleDirection(index);
+  state.click('Update card');
+  await state.tap();
+  await state.finish();
+  assert.deepEqual(state.writes, []);
+  assert.equal(state.card.items[0].alias, 'Phone alias');
+  assert.equal(state.storage.indexToKeyMap.get(index).rawPublicKey, publicKey);
+  assert.equal(state.item(index).props.state, 'up-to-date');
+  assert.deepEqual(state.errors, []);
+});
+
+test('a Seed imports recovered derived keys even with an explicitly empty wallet list', async () => {
+  const derivation = {
+    type: 'monoid-001',
+    curve: 'secp256r1',
+    context: 'generic key',
+  };
+  const derivedKeys = [
+    {
+      publicKey: hex(p256.getPublicKey(1n, false)),
+      derivation,
+    },
+  ];
+  const state = mount({
+    items: [
+      {index: INDEX, type: 'seed', secret: true, derivedKeys},
+      metadata(INDEX, []),
+      {
+        index: getCardKeyDerivationItemIndex(INDEX),
+        type: 0x0f02,
+        secret: false,
+        metadata: INDEX,
+        keyDerivationRecord: {index: INDEX, derivations: [derivation]},
+      },
+    ],
+  });
+  state.select(INDEX);
+  await state.click('Import');
+  assert.deepEqual(
+    toJS(state.storage.indexToKeyMap.get(INDEX).derivedKeys),
+    derivedKeys,
+  );
+  assert.deepEqual(state.scans, []);
+  assert.deepEqual(state.writes, []);
+  assert.equal(state.item(INDEX).props.state, 'up-to-date');
+  assert.equal(state.visible('Back to Safe'), true);
+  assert.deepEqual(state.errors, []);
+});
+
+test('deleting a Seed removes wallet and key companions first but keeps phone records', async () => {
+  const keyRecordIndex = getCardKeyDerivationItemIndex(INDEX);
+  const derivation = {
+    type: 'monoid-001',
+    curve: 'secp256r1',
+    context: 'generic key',
+  };
+  const derivedKeys = [
+    {
+      publicKey: hex(p256.getPublicKey(1n, false)),
+      derivation,
+    },
+  ];
+  const state = mount({
+    items: [
+      ...cardItems(INDEX, [wallet(0)]),
+      {
+        index: keyRecordIndex,
+        type: 0x0f02,
+        secret: false,
+        metadata: INDEX,
+        keyDerivationRecord: {index: INDEX, derivations: [derivation]},
+      },
+    ],
+    keys: [{...key(INDEX, [wallet(0)]), derivedKeys}],
+  });
+  state.select(INDEX);
+  state.confirmDelete()();
+  await state.tap();
+  await state.finish();
+  assert.deepEqual(
+    new Set(state.removals.slice(0, -1)),
+    new Set([metadata(INDEX, [wallet(0)]).index, keyRecordIndex]),
+  );
+  assert.equal(state.removals.at(-1), INDEX);
+  assert.deepEqual(state.card.items, []);
+  assert.deepEqual(
+    toJS(state.storage.indexToKeyMap.get(INDEX).derivedKeys),
+    derivedKeys,
+  );
+  assert.deepEqual(state.errors, []);
 });
 
 test('returning to the same card reads new keys and address choices from the global store', async () => {

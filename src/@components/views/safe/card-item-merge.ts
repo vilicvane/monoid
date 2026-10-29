@@ -1,4 +1,9 @@
-import {CardItemConflictError} from '../../../@lib/monoid/index.js';
+import {
+  CardItemConflictError,
+  type CardKeyDerivationRecord,
+  encodeCardKeyDerivationRecord,
+  mergeCardKeyDerivations,
+} from '../../../@lib/monoid/index.js';
 import {uint8ArrayToHex} from '../../../@utils/index.js';
 
 import {
@@ -14,6 +19,7 @@ export type CardItemMergeData = {
   metadata?: string;
   data?: string;
   derivationRecord?: CardDerivationRecord;
+  keyDerivationRecord?: CardKeyDerivationRecord;
 };
 
 /** Merge one shared index; separate credential indices remain separate items. */
@@ -31,6 +37,26 @@ export function mergeCardItemData<T extends CardItemMergeData>(
   }
 
   if (first.data === next.data) return first;
+
+  if (
+    !first.secret &&
+    first.keyDerivationRecord &&
+    next.keyDerivationRecord &&
+    first.keyDerivationRecord.index === next.keyDerivationRecord.index
+  ) {
+    const keyDerivationRecord = {
+      index: first.keyDerivationRecord.index,
+      derivations: mergeCardKeyDerivations(
+        first.keyDerivationRecord.derivations,
+        next.keyDerivationRecord.derivations,
+      ),
+    };
+    return {
+      ...first,
+      keyDerivationRecord,
+      data: uint8ArrayToHex(encodeCardKeyDerivationRecord(keyDerivationRecord)),
+    };
+  }
 
   if (
     !first.secret &&

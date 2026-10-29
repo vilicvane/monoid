@@ -39,7 +39,13 @@ import type {ScannedCardData, ScannedCardItemData} from '../common.js';
 
 export type CardBackupItem = Pick<
   ScannedCardItemData,
-  'index' | 'type' | 'alias' | 'secret' | 'metadata' | 'derivationRecord'
+  | 'index'
+  | 'type'
+  | 'alias'
+  | 'secret'
+  | 'metadata'
+  | 'derivationRecord'
+  | 'keyDerivationRecord'
 > & {
   selected: boolean;
   issue?: CardItemIssue;
@@ -88,7 +94,16 @@ function createBackup(
   const selectedIndexes =
     sourceIndexes === undefined ? undefined : new Set(sourceIndexes);
   const backupItems = items.map(
-    ({index, type, alias, secret, metadata, derivationRecord, issue}) => {
+    ({
+      index,
+      type,
+      alias,
+      secret,
+      metadata,
+      derivationRecord,
+      keyDerivationRecord,
+      issue,
+    }) => {
       if (!/^[0-9a-f]{20}$/i.test(index)) {
         throw new MonoidCardError('The card returned an invalid item index.');
       }
@@ -102,6 +117,14 @@ function createBackup(
           derivationRecord: {
             index: derivationRecord.index,
             wallets: derivationRecord.wallets.map(wallet => ({...wallet})),
+          },
+        }),
+        ...(keyDerivationRecord !== undefined && {
+          keyDerivationRecord: {
+            index: keyDerivationRecord.index,
+            derivations: keyDerivationRecord.derivations.map(value => ({
+              ...value,
+            })),
           },
         }),
         secret,

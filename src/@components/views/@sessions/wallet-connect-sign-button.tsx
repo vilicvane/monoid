@@ -162,6 +162,7 @@ export function WalletConnectSignButton({
         ? Transaction.from(submission.signedTransaction).signature!.serialized
         : undefined);
 
+    const releaseSigning = walletKitService.signingLock.acquire();
     try {
       if ('transactions' in payload) {
         const submission = walletKitService.getSolanaTransactionSubmission(
@@ -388,6 +389,7 @@ export function WalletConnectSignButton({
         setRetry(true);
       throw error;
     } finally {
+      releaseSigning();
       if (mounted.current && !view.$leaving && view.$match.$exact.$active) {
         setState(undefined);
       }

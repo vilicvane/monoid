@@ -30,6 +30,7 @@ import {
 import {Button} from '../../../../@ui/button.js';
 import {ResettableInput} from '../../../../@ui/input.js';
 import {InteractiveAddress} from '../../../../@ui/interactive-address.js';
+import {SegmentedControl} from '../../../../@ui/segmented-control.js';
 import {Step, Steps} from '../../../../@ui/step.js';
 import {
   View,
@@ -47,12 +48,40 @@ import {
 import {writeCardDerivationRecord} from '../../card-derivations.js';
 import type {ScannedCardData} from '../../common.js';
 
-export const DeriveKeyView = observer(
+import {DeriveSeedKeyView} from './derive-seed-key-view.js';
+
+type DeriveViewProps = RouteComponentProps<
+  Router['safe']['derivableKey']['derive']
+>;
+
+export function DeriveKeyView(props: DeriveViewProps): ReactNode {
+  const [purpose, setPurpose] = useState<'wallet' | 'key'>('wallet');
+  const purposeSelector = (disabled: boolean): ReactNode => (
+    <SegmentedControl
+      aria-label="Derivation purpose"
+      value={purpose}
+      options={[
+        {value: 'wallet', label: 'Wallet'},
+        {value: 'key', label: 'Key'},
+      ]}
+      disabled={disabled}
+      onChange={setPurpose}
+    />
+  );
+  return purpose === 'key' ? (
+    <DeriveSeedKeyView {...props} purposeSelector={purposeSelector} />
+  ) : (
+    <DeriveWalletView {...props} purposeSelector={purposeSelector} />
+  );
+}
+
+const DeriveWalletView = observer(
   ({
     view,
-  }: RouteComponentProps<
-    Router['safe']['derivableKey']['derive']
-  >): ReactNode => {
+    purposeSelector,
+  }: RouteComponentProps<Router['safe']['derivableKey']['derive']> & {
+    purposeSelector: (disabled: boolean) => ReactNode;
+  }): ReactNode => {
     const {
       router,
       cardStore,
@@ -365,6 +394,7 @@ export const DeriveKeyView = observer(
                 activeNumero={step}
                 summary={effectivePath}
               >
+                {purposeSelector(busy !== undefined)}
                 <div inert={busy !== undefined}>
                   <AddressTypeSelector
                     value={addressType}

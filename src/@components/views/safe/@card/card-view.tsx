@@ -5,8 +5,13 @@ import {type ReactNode, useEffect, useRef, useState} from 'react';
 import type {RouteComponentProps} from 'routra-react';
 import {styled} from 'styled-components';
 
-import {type SafeIndexHex, SafeKnownType} from '../../../../@atomics.js';
+import {
+  type PublicKeyHex,
+  type SafeIndexHex,
+  SafeKnownType,
+} from '../../../../@atomics.js';
 import {useEntrances} from '../../../../@entrances.js';
+import type {DerivedKeyPublicKeyData} from '../../../../@lib/key-derivation.js';
 import {
   type MonoidApplet,
   assertSameCard,
@@ -36,6 +41,7 @@ import {createFlowId} from '../../../../@utils/index.js';
 import {ADDRESS_CHAIN_OPTIONS} from '../../../@key/address-type-selector.js';
 import {KeyListPlaceholder} from '../../../@key/key-list.js';
 import {KeyAliasTag, keyTypeColorsCSS} from '../../../@key/key-tags.js';
+import {getKeyTypeName} from '../../../@key/key-type.js';
 import {
   type MonoidScanPromptSetStateContentCallback,
   MonoidScanStatePromptProgress,
@@ -75,6 +81,7 @@ import {
   getCardKeyAddressTypes,
   getLocalCardKeyAddress,
   getLocalCardWalletDerivation,
+  getLocalNativeKeyAddress,
   readCardKeyAddress,
   readCardWalletDerivations,
 } from '../card-address.js';
@@ -188,8 +195,11 @@ export const CardView = observer(
 );
 
 type CardKeySelection = {
-  key: Pick<ScannedCardKeyData, 'type' | 'index' | 'alias'>;
-  addressType: AddressType;
+  key: Pick<ScannedCardKeyData, 'type' | 'index' | 'alias'> & {
+    publicKey?: PublicKeyHex;
+    derivedKeys?: DerivedKeyPublicKeyData[];
+  };
+  addressType: AddressType | undefined;
   refs: Partial<Record<AddressType, ScannedCardKeyData['ref']>>;
   derivations: WalletKeyPublicKeyData[];
 };
@@ -197,14 +207,23 @@ type CardKeySelection = {
 function getCardKeySelection(item: CardItem): CardKeySelection | undefined {
   if (typeof item.type !== 'string') return;
 
-  const addressType = item.addressType ?? getCardKeyAddressTypes(item.type)[0];
-  if (!addressType) return;
+  const addressType =
+    item.addressType ??
+    (item.type === 'ed25519'
+      ? undefined
+      : getCardKeyAddressTypes(item.type)[0]);
+  if (!addressType && item.type !== 'secp256r1' && item.type !== 'ed25519')
+    return;
 
   return {
     key: {
       type: SafeKnownType.satisfies(item.type),
       index: item.index,
       alias: item.alias,
+      ...(item.publicKey && {publicKey: item.publicKey}),
+      ...(item.derivedKeys !== undefined && {
+        derivedKeys: item.derivedKeys,
+      }),
     },
     addressType,
     refs: item.refs,
@@ -419,9 +438,10 @@ const CardContent = observer(
     };
 
     const keyItems = items.map(item => {
-      const ref =
-        item.refs[item.addressType] ??
-        getSafeAddress(item.key, item.addressType);
+      const ref = item.addressType
+        ? (item.refs[item.addressType] ??
+          getSafeAddress(item.key, item.addressType))
+        : undefined;
       const existingKey = indexToKeyMap.get(item.key.index);
       const cardDerivations = card.items.find(
         resource => resource.derivationRecord?.index === item.key.index,
@@ -463,10 +483,28 @@ const CardContent = observer(
       // A row represents its recorded list first. Only a later, separate
       // import can add an unrecorded address currently being previewed.
       const previewData =
-        !empty && ref ? getCardKeyData({...source, ref}) : undefined;
+        !empty && ref
+          ? getCardKeyData(
+              {...source, ref},
+              item.key.type === 'ed25519' && previewIndexes.has(item.key.index)
+                ? [
+                    {
+                      addressType: ref.addressType,
+                      seed: ref.seed,
+                      curve: ref.curve,
+                      path: ref.path,
+                      publicKey: ref.publicKey,
+                    },
+                  ]
+                : undefined,
+            )
+          : undefined;
       const incoming = needsRecordDownload
         ? recordData
-        : (previewData ?? (recorded ? recordData : undefined));
+        : (previewData ??
+          (recorded || item.key.publicKey || item.key.derivedKeys?.length
+            ? recordData
+            : undefined));
       const canDownload =
         needsRecordDownload ||
         (!!incoming &&
@@ -479,7 +517,11 @@ const CardContent = observer(
       const canWriteAlias =
         !!existingKey && (existingKey.alias ?? '') !== (item.key.alias ?? '');
       const canWriteDerivations =
+        item.key.type !== 'secp256r1' &&
         !!existingKey &&
+        (item.key.type !== 'ed25519' ||
+          cardDerivations !== undefined ||
+          existingKey.wallets.length > 0) &&
         (cardDerivations === undefined ||
           cardDerivations.length !== existingKey.wallets.length ||
           existingKey.wallets.some(
@@ -547,10 +589,20 @@ const CardContent = observer(
       resourceFilter === 'keys'
         ? selectedResources.filter(item => !isCardKeyItem(item)).length
         : 0;
-    const missingPreviews = keyItems.filter(({ref, empty}) => !ref && !empty);
+    const missingPreviews = keyItems.filter(
+      ({item, ref, empty}) =>
+        (item.addressType || item.key.type === 'ed25519') &&
+        !ref &&
+        (!empty || item.key.type === 'ed25519'),
+    );
     const missing = selectedKeys.filter(
-      ({ref, empty, needsRecordDownload, direction}) =>
-        !ref && !empty && !needsRecordDownload && direction !== 'upload',
+      ({item, ref, empty, needsRecordDownload, direction}) =>
+        !ref &&
+        !item.key.publicKey &&
+        !item.key.derivedKeys?.length &&
+        !empty &&
+        !needsRecordDownload &&
+        direction !== 'upload',
     );
     const writableKeys = selectedKeys.filter(({canWrite}) => canWrite);
     const downloadableKeys = selectedKeys.filter(
@@ -657,38 +709,57 @@ const CardContent = observer(
       const derivedRefs = new Map<SafeIndexHex, ScannedCardKeyData['ref']>();
 
       try {
-        await scanPrompt(
-          scanCardPrompt(card, 'to derive'),
-          async (applet, setStateContent, _hello, signal) => {
-            const showProgress = (current: number): void => {
-              if (signal.aborted || !mounted.current || !isViewActive()) return;
-              setStateContent(
-                <MonoidScanStatePromptProgress
-                  current={current}
-                  total={missingPreviews.length}
-                >
-                  Deriving addresses
-                </MonoidScanStatePromptProgress>,
-              );
-            };
-            showProgress(0);
-            for (const [index, {item}] of missingPreviews.entries()) {
-              if (signal.aborted || !mounted.current || !isViewActive()) return;
-              derivedRefs.set(
-                item.key.index,
-                await readCardKeyAddress(applet, item.key, item.addressType),
-              );
-              showProgress(index + 1);
-            }
-          },
-          hello => assertSameCard(hello, card),
-        );
+        const unread = missingPreviews.filter(({item}) => {
+          const ref = getLocalNativeKeyAddress(
+            item.key.type,
+            item.key.publicKey,
+            item.addressType ?? 'solana',
+          );
+          if (ref) derivedRefs.set(item.key.index, ref);
+          return !ref;
+        });
+        if (unread.length)
+          await scanPrompt(
+            scanCardPrompt(card, 'to derive'),
+            async (applet, setStateContent, _hello, signal) => {
+              const showProgress = (current: number): void => {
+                if (signal.aborted || !mounted.current || !isViewActive())
+                  return;
+                setStateContent(
+                  <MonoidScanStatePromptProgress
+                    current={current}
+                    total={unread.length}
+                  >
+                    Deriving addresses
+                  </MonoidScanStatePromptProgress>,
+                );
+              };
+              showProgress(0);
+              for (const [index, {item}] of unread.entries()) {
+                if (signal.aborted || !mounted.current || !isViewActive())
+                  return;
+                derivedRefs.set(
+                  item.key.index,
+                  await readCardKeyAddress(
+                    applet,
+                    item.key,
+                    item.addressType ?? 'solana',
+                  ),
+                );
+                showProgress(index + 1);
+              }
+            },
+            hello => assertSameCard(hello, card),
+          );
 
         if (mounted.current && isViewActive()) {
           runInAction(() => {
             for (const item of card.items) {
               const ref = derivedRefs.get(item.index);
-              if (ref) item.ref = ref;
+              if (ref) {
+                item.ref = ref;
+                previewIndexes.add(item.index);
+              }
             }
           });
         }
@@ -1127,8 +1198,10 @@ const CardContent = observer(
           scanCardPrompt(card, 'to delete'),
           (applet, setStateContent, _hello, signal) =>
             deleteFromCard(applet, setStateContent, signal, pending, index => {
-              const sourceIndex = card.items.find(item => item.index === index)
-                ?.derivationRecord?.index;
+              const removed = card.items.find(item => item.index === index);
+              const sourceIndex =
+                removed?.derivationRecord?.index ??
+                removed?.keyDerivationRecord?.index;
 
               runInAction(() => {
                 card.items = card.items.filter(item => item.index !== index);
@@ -1136,7 +1209,10 @@ const CardContent = observer(
                 const source = card.items.find(
                   item => item.index === sourceIndex,
                 );
-                if (source) source.derivations = [];
+                if (source) {
+                  if (removed?.keyDerivationRecord) source.derivedKeys = [];
+                  else source.derivations = [];
+                }
                 cardStore.set(card);
               });
             }),
@@ -1252,7 +1328,7 @@ const CardContent = observer(
                 visible={
                   !imported &&
                   selectedResources.length > 0 &&
-                  missing.length === 0
+                  missing.every(({item}) => !item.addressType)
                 }
                 color="neutral"
                 disabled={busy}
@@ -1361,7 +1437,7 @@ const CardContent = observer(
             </ViewPlaceholder>
           )}
         </ViewContent>
-        {editing && (
+        {editing?.addressType && (
           <AddressTypePicker
             value={editing.addressType}
             addressTypes={getCardKeyAddressTypes(editing.key.type)}
@@ -1481,10 +1557,10 @@ const CardContent = observer(
                       key={type}
                       className={type}
                       color="neutral"
-                      aria-label={type}
+                      aria-label={getKeyTypeName(type)}
                       onClick={errorService.catch(() => createKey(type))}
                     >
-                      {type}
+                      {getKeyTypeName(type)}
                     </CreateKeyButton>
                   ))}
                 </Buttons>

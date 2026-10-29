@@ -24,4 +24,7 @@ export * from './storage-service.js';
 export * from './otp-store.js';
 export * from './transaction-history-service.js';
 export * from './wallet-kit-service.js';
+export * from './wallet-connect-signing-lock.js';
 export * from './wallet-storage-service.js';
+export * from './ssh-key-store.js';
+export * from './ssh-wallet-service.js';

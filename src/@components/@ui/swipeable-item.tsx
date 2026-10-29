@@ -52,7 +52,7 @@ const Actions = styled.div<{$count: number}>`
 
   > * {
     transform: scale(0);
-    transform-origin: center calc(50% + 4px);
+    transform-origin: center calc(50% + 4 * var(--swipe-action-unit, 1px));
     will-change: var(--swipe-will-change, auto);
   }
 
@@ -88,16 +88,19 @@ const Actions = styled.div<{$count: number}>`
 
 export const SwipeAction = styled.button<{$color?: string}>`
   --swipe-action-color: ${({$color = 'var(--ion-color-primary)'}) => $color};
+  /* The original 70px layout scales as a whole when the row is shorter. */
+  --swipe-action-unit: min(1px, calc(var(--swipe-row-height, 70px) / 70));
 
   width: ${ACTION_WIDTH}px;
   flex-shrink: 0;
-  padding: 12px 0 4px;
+  padding: calc(12 * var(--swipe-action-unit)) 0
+    calc(4 * var(--swipe-action-unit));
   border: none;
   border-radius: 0;
   background: transparent;
   color: var(--color-text-secondary);
-  font-size: 11px;
-  line-height: 14px;
+  font-size: calc(11 * var(--swipe-action-unit));
+  line-height: calc(14 * var(--swipe-action-unit));
   white-space: nowrap;
   -webkit-tap-highlight-color: transparent;
 
@@ -105,7 +108,7 @@ export const SwipeAction = styled.button<{$color?: string}>`
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: calc(4 * var(--swipe-action-unit));
 
   &:focus-visible {
     outline: 2px solid var(--swipe-action-color);
@@ -115,8 +118,8 @@ export const SwipeAction = styled.button<{$color?: string}>`
 
 export const SwipeActionIcon = styled.span`
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
+  width: calc(36 * var(--swipe-action-unit));
+  height: calc(36 * var(--swipe-action-unit));
   border-radius: 50%;
   background: var(--swipe-action-color);
   color: var(--ion-color-primary-contrast);
@@ -142,8 +145,8 @@ export const SwipeActionIcon = styled.span`
   }
 
   .lucide {
-    width: 18px;
-    height: 18px;
+    width: calc(18 * var(--swipe-action-unit));
+    height: calc(18 * var(--swipe-action-unit));
   }
 `;
 
@@ -234,6 +237,10 @@ export const SwipeableItem = ({
     const updateLayout = (): void => {
       setActionsWidth(actions.offsetWidth);
       setActionCount(actions.childElementCount);
+      containerRef.current!.style.setProperty(
+        '--swipe-row-height',
+        `${contentRef.current!.offsetHeight}px`,
+      );
     };
     const observer = new ResizeObserver(updateLayout);
 

@@ -1,6 +1,7 @@
 # General
 .DS_Store
 *.tgz
+!vendor/monoid-ssh-protocol-*.tgz
 node_modules/
 
 # Swift package build and local IDE state

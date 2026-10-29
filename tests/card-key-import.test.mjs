@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
+import {p256} from '@noble/curves/nist';
 import {toJS} from 'mobx';
 
 import {
@@ -12,6 +13,7 @@ import {
   WalletStorageService,
   getDefaultWallet,
   getKeyWallets,
+  getWalletData,
 } from '../.bld/app/@services/wallet-storage-service.js';
 
 const INDEX = '00000001';
@@ -34,9 +36,9 @@ const TAPROOT_REF = {
 };
 const SOLANA_REF = {
   addressType: 'solana',
-  publicKey: '00'.repeat(32),
-  address: '1'.repeat(32),
+  publicKey: 'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a',
 };
+SOLANA_REF.address = getWalletData(SOLANA_REF).address;
 
 function scannedKey(ref, type = 'secp256k1') {
   return {type, index: INDEX, alias: 'Test key', ref};
@@ -44,6 +46,105 @@ function scannedKey(ref, type = 'secp256k1') {
 
 test('master keys cannot be imported as wallet keys', () => {
   assert.throws(() => getCardKeyData(scannedKey(EVM_REF, 'master')));
+});
+
+test('a native P-256 public key imports and reloads without inventing a wallet address', async context => {
+  context.mock.method(console, 'info', () => {});
+  const publicKey = Buffer.from(p256.getPublicKey(1n, false)).toString('hex');
+  const compressed = Buffer.from(p256.getPublicKey(1n, true)).toString('hex');
+  const incoming = getCardKeyData({
+    ...scannedKey(undefined, 'secp256r1'),
+    publicKey: compressed,
+  });
+  const storage = createStorage();
+  const service = await WalletStorageService.create(storage);
+  importCardKey(service, incoming);
+  const reloaded = await WalletStorageService.create(storage);
+
+  assert.equal(reloaded.keys[0].type, 'secp256r1');
+  assert.equal(reloaded.keys[0].rawPublicKey, publicKey);
+  assert.deepEqual(reloaded.keys[0].wallets, []);
+  assert.deepEqual(getKeyWallets(reloaded.keys[0]), []);
+  assert.equal(getDefaultWallet(reloaded.keys[0]), undefined);
+  assert.equal(Object.hasOwn(reloaded.keys[0], 'publicKey'), false);
+  assert.equal(isWalletKeyUpToDate(incoming, reloaded.keys[0]), true);
+  assert.equal(
+    isWalletKeyUpToDate(incoming, {
+      ...reloaded.keys[0],
+      rawPublicKey: undefined,
+    }),
+    false,
+  );
+  assert.equal(
+    storage.writes.length,
+    1,
+    'reload must not migrate the native key away',
+  );
+});
+
+test('P-256 import rejects malformed points and conflicting native keys before changing an alias', async context => {
+  context.mock.method(console, 'info', () => {});
+  assert.throws(() =>
+    getCardKeyData({
+      ...scannedKey(undefined, 'secp256r1'),
+      publicKey: `04${'00'.repeat(64)}`,
+    }),
+  );
+  const key = getCardKeyData({
+    ...scannedKey(undefined, 'secp256r1'),
+    publicKey: Buffer.from(p256.getPublicKey(1n, false)).toString('hex'),
+  });
+  const service = await WalletStorageService.create(createStorage([key]));
+  const original = toJS(service.keys);
+  const incoming = getCardKeyData({
+    ...scannedKey(undefined, 'secp256r1'),
+    alias: 'Changed alias',
+    publicKey: Buffer.from(p256.getPublicKey(2n, false)).toString('hex'),
+  });
+  assert.throws(
+    () => importCardKey(service, incoming),
+    /public key does not match/,
+  );
+  assert.deepEqual(toJS(service.keys), original);
+});
+
+test('deleting the last Solana address preserves an imported native Ed25519 key', async context => {
+  context.mock.method(console, 'info', () => {});
+  const incoming = getCardKeyData(scannedKey(SOLANA_REF, 'ed25519'), [
+    SOLANA_REF,
+  ]);
+  const storage = createStorage();
+  const service = await WalletStorageService.create(storage);
+  importCardKey(service, incoming);
+  assert.equal(service.keys[0].rawPublicKey, SOLANA_REF.publicKey);
+  service.deleteWallet(INDEX, incoming.wallets[0]);
+  assert.deepEqual(getKeyWallets(service.keys[0]), []);
+  assert.equal(service.keys[0].rawPublicKey, SOLANA_REF.publicKey);
+  await service.flush();
+  const reloaded = await WalletStorageService.create(storage);
+  assert.equal(reloaded.keys[0].rawPublicKey, SOLANA_REF.publicKey);
+  assert.deepEqual(getKeyWallets(reloaded.keys[0]), []);
+  const explicitEmpty = getCardKeyData(
+    {
+      ...scannedKey(undefined, 'ed25519'),
+      publicKey: SOLANA_REF.publicKey,
+    },
+    [],
+  );
+  assert.equal(explicitEmpty.rawPublicKey, SOLANA_REF.publicKey);
+  assert.deepEqual(explicitEmpty.wallets, []);
+});
+
+test('an Ed25519 public key or old preview imports as a native key without adding a Solana wallet', () => {
+  for (const key of [
+    {...scannedKey(undefined, 'ed25519'), publicKey: SOLANA_REF.publicKey},
+    scannedKey(SOLANA_REF, 'ed25519'),
+  ]) {
+    const incoming = getCardKeyData(key);
+    assert.equal(incoming.rawPublicKey, SOLANA_REF.publicKey);
+    assert.deepEqual(incoming.wallets, []);
+    assert.equal(incoming.defaultWallet, undefined);
+  }
 });
 
 function displayedAddresses(key) {
@@ -89,7 +190,7 @@ for (const [ref, type] of [
     context.mock.method(console, 'info', () => {});
     const storage = createStorage();
     const service = await WalletStorageService.create(storage);
-    const incoming = getCardKeyData(scannedKey(ref, type));
+    const incoming = getCardKeyData(scannedKey(ref, type), [ref]);
     importCardKey(service, incoming);
     const reloaded = await WalletStorageService.create(storage);
 

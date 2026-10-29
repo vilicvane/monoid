@@ -1,5 +1,6 @@
 import {SafeKnownType} from '../../../@atomics.js';
 import {CBORAppletError} from '../../../@lib/cbor-applet.js';
+import {readSeedDerivedKeys} from '../../../@lib/key-derivation.js';
 import {
   type MonoidApplet,
   readCardContents,
@@ -115,10 +116,22 @@ export async function readCardAddressPreviews(
     const record = records.get(item.index);
     const readDefault =
       item.type === 'secp256r1' ||
-      (!localWallet && record?.wallets.length !== 0);
-    return {item, localKey, localWallet, record, readDefault};
+      (item.type !== 'ed25519' && !localWallet && record?.wallets.length !== 0);
+    const readNative = item.type === 'ed25519' || item.type === 'secp256r1';
+    return {item, localKey, localWallet, record, readDefault, readNative};
   });
-  const total = previews.filter(preview => preview.readDefault).length;
+  const derivedSources = scannedItems.flatMap(item => {
+    if (item.type !== 'seed') return [];
+    delete item.derivedKeys;
+    const record = scannedItems.find(
+      value => value.keyDerivationRecord?.index === item.index,
+    )?.keyDerivationRecord;
+    return record ? [{item, record}] : [];
+  });
+  const total =
+    previews.filter(preview => preview.readDefault || preview.readNative)
+      .length +
+    derivedSources.filter(({record}) => record.derivations.length > 0).length;
   let completed = 0;
 
   if (total > 0) {
@@ -126,7 +139,14 @@ export async function readCardAddressPreviews(
     onProgress(0, total);
   }
 
-  for (const {item, localKey, localWallet, record, readDefault} of previews) {
+  for (const {
+    item,
+    localKey,
+    localWallet,
+    record,
+    readDefault,
+    readNative,
+  } of previews) {
     assertActive();
     const type = SafeKnownType.satisfies(item.type);
     const key = {type, index: item.index};
@@ -152,24 +172,39 @@ export async function readCardAddressPreviews(
     delete item.derivations;
     delete item.publicKey;
 
-    if (type === 'secp256r1') {
+    if (type === 'secp256r1' || type === 'ed25519') {
       const publicKey =
         known?.publicKey ??
         uint8ArrayToHex(
           (
             await applet.viewKey({
-              type: 'secp256r1',
+              type: type === 'ed25519' ? 'ed25519' : 'secp256r1',
               index: hexToUint8Array(item.index),
             })
           ).publicKey,
         );
       assertActive();
       item.publicKey = publicKey;
-      onProgress(++completed, total);
-      continue;
+      if (type === 'secp256r1') {
+        onProgress(++completed, total);
+        continue;
+      }
+      knownWallets.unshift({
+        addressType: 'solana',
+        seed: undefined,
+        curve: undefined,
+        path: undefined,
+        publicKey,
+      });
     }
 
-    let preview = localWallet;
+    let preview =
+      type === 'ed25519' && localWallet && item.publicKey
+        ? {...localWallet, publicKey: item.publicKey}
+        : (localWallet ??
+          (type === 'ed25519' && record?.wallets[0]
+            ? getLocalCardWalletDerivation(knownWallets, record.wallets[0])
+            : undefined));
     if (readDefault) {
       const addressType = getCardKeyAddressTypes(type)[0];
       const options = ADDRESS_TYPES[addressType];
@@ -222,7 +257,19 @@ export async function readCardAddressPreviews(
     } else if (type === 'seed') {
       item.derivations = [];
     }
-    if (readDefault) onProgress(++completed, total);
+    if (readDefault || readNative) onProgress(++completed, total);
+  }
+
+  for (const {item, record} of derivedSources) {
+    assertActive();
+    item.derivedKeys = await readSeedDerivedKeys(
+      applet,
+      item.index,
+      record.derivations,
+      signal ?? new AbortController().signal,
+    );
+    assertActive();
+    if (record.derivations.length) onProgress(++completed, total);
   }
 
   assertActive();

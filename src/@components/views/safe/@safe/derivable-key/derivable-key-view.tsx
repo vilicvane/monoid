@@ -5,9 +5,10 @@ import type {RouteComponentProps} from 'routra-react';
 
 import {useEntrances} from '../../../../../@entrances.js';
 import type {Router} from '../../../../../@routes.js';
+import {DerivedKeyList} from '../../../../@key/derived-key-list.js';
 import {KeyWalletList} from '../../../../@key/key-wallet-list.js';
 import {Button} from '../../../../@ui/button.js';
-import {View, ViewContent} from '../../../../@view/index.js';
+import {View, ViewContent, ViewPlaceholder} from '../../../../@view/index.js';
 import {KeyHeader} from '../@key-header.js';
 
 export const DerivableKeyView = observer(
@@ -36,6 +37,8 @@ export const DerivableKeyView = observer(
       return null;
     }
 
+    const derivedKeys = key.derivedKeys ?? [];
+
     return (
       <View>
         <KeyHeader data={key} />
@@ -45,11 +48,32 @@ export const DerivableKeyView = observer(
           }
           footerRef={buttonsRef}
         >
-          <KeyWalletList
-            data={key}
-            defaultExpandedChain={view.expandedChain}
-            emptyFocusRef={buttonsRef}
-          />
+          {key.wallets.length === 0 && derivedKeys.length === 0 && (
+            <ViewPlaceholder>No derived wallets or keys</ViewPlaceholder>
+          )}
+          {(key.wallets.length > 0 || derivedKeys.length > 0) && (
+            <div>
+              {key.wallets.length > 0 && (
+                <KeyWalletList
+                  data={key}
+                  defaultExpandedChain={view.expandedChain}
+                  emptyFocusRef={buttonsRef}
+                />
+              )}
+              {derivedKeys.length > 0 && (
+                <DerivedKeyList
+                  keys={derivedKeys}
+                  emptyFocusRef={buttonsRef}
+                  onDelete={derived =>
+                    walletStorageService.deleteDerivedKey(
+                      index,
+                      derived.derivation,
+                    )
+                  }
+                />
+              )}
+            </div>
+          )}
         </ViewContent>
       </View>
     );

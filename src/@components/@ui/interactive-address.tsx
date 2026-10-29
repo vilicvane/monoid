@@ -22,11 +22,13 @@ const Address = styled(Address_)`
 export const InteractiveAddress = ({
   clickable = false,
   copyable = false,
+  copyLabel = 'Copy address',
   children: address,
   ...props
 }: HTMLAttributes<HTMLDivElement> & {
   clickable?: boolean;
   copyable?: boolean;
+  copyLabel?: string;
   children: string;
 }): ReactNode => {
   return (
@@ -43,7 +45,7 @@ export const InteractiveAddress = ({
       >
         {address}
       </Address>
-      {copyable && <CopyButton value={address} label="Copy address" />}
+      {copyable && <CopyButton value={address} label={copyLabel} />}
     </Container>
   );
 };

@@ -37,7 +37,7 @@ export async function signSolanaMessage(
   assertActive?.();
 
   if (signature.length !== 64) {
-    throw new Error('Invalid Ed25519 signature length.');
+    throw new Error('Invalid ed25519 signature length.');
   }
 
   const result = base58.encode(signature);

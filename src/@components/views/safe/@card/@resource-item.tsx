@@ -3,6 +3,7 @@ import type {ReactNode} from 'react';
 import {styled} from 'styled-components';
 
 import {useEntrances} from '../../../../@entrances.js';
+import {isCardKeyDerivationItem} from '../../../../@lib/monoid/index.js';
 import {SECURITY_KEY_ITEM_TYPE} from '../../../../@lib/security-key.js';
 import {
   ADDRESS_TYPES,
@@ -89,11 +90,16 @@ export const CardResourceItem = observer(
   }: {
     data: Pick<
       ScannedCardItemData,
-      'index' | 'type' | 'alias' | 'publicKey' | 'derivationRecord'
+      | 'index'
+      | 'type'
+      | 'alias'
+      | 'publicKey'
+      | 'derivationRecord'
+      | 'keyDerivationRecord'
     >;
     resources?: readonly Pick<
       ScannedCardItemData,
-      'index' | 'type' | 'alias' | 'derivationRecord'
+      'index' | 'type' | 'alias' | 'derivationRecord' | 'keyDerivationRecord'
     >[];
     selected?: boolean;
     disabled?: boolean;
@@ -112,14 +118,19 @@ export const CardResourceItem = observer(
         : parseInt(item.index.slice(0, 4), 16);
     const type = isCardDerivationItem(item)
       ? 'addresses'
-      : typeof item.type === 'string'
-        ? item.type
-        : (RESOURCE_TYPE_LABELS[typeCode] ??
-          `0x${typeCode.toString(16).padStart(4, '0')}`);
+      : isCardKeyDerivationItem(item)
+        ? 'keys'
+        : typeof item.type === 'string'
+          ? item.type
+          : (RESOURCE_TYPE_LABELS[typeCode] ??
+            `0x${typeCode.toString(16).padStart(4, '0')}`);
     const sourceIndex = (
       item.derivationRecord ??
+      item.keyDerivationRecord ??
       resources?.find(resource => resource.index === item.index)
-        ?.derivationRecord
+        ?.derivationRecord ??
+      resources?.find(resource => resource.index === item.index)
+        ?.keyDerivationRecord
     )?.index;
     const source = sourceIndex
       ? (resources?.find(resource => resource.index === sourceIndex) ??

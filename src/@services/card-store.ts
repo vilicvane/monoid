@@ -27,6 +27,8 @@ export class CardItem implements ScannedCardItemData {
   publicKey: PublicKeyHex | undefined;
   derivationRecord: ScannedCardItemData['derivationRecord'];
   derivations: ScannedCardItemData['derivations'];
+  keyDerivationRecord: ScannedCardItemData['keyDerivationRecord'];
+  derivedKeys: ScannedCardItemData['derivedKeys'];
   addressType: AddressType | undefined;
   refs: Partial<Record<AddressType, ScannedCardKeyData['ref']>> = {};
 
@@ -59,6 +61,8 @@ export class CardItem implements ScannedCardItemData {
     this.publicKey = item.publicKey;
     this.derivationRecord = item.derivationRecord;
     this.derivations = item.derivations;
+    this.keyDerivationRecord = item.keyDerivationRecord;
+    this.derivedKeys = item.derivedKeys;
 
     for (const wallet of item.derivations ?? []) {
       this.refs[wallet.addressType] ??= {
@@ -161,6 +165,12 @@ export class CardState implements ScannedCardData {
         }),
         ...(item.derivationRecord !== undefined && {
           derivationRecord: toJS(item.derivationRecord),
+        }),
+        ...(item.derivedKeys !== undefined && {
+          derivedKeys: toJS(item.derivedKeys),
+        }),
+        ...(item.keyDerivationRecord !== undefined && {
+          keyDerivationRecord: toJS(item.keyDerivationRecord),
         }),
       })),
     };

@@ -88,7 +88,7 @@ export async function createCardKey(
   onUpdated(item);
   throwIfCancelled(signal);
 
-  if (type === 'secp256r1') {
+  if (type === 'secp256r1' || type === 'ed25519') {
     const {publicKey} = await applet.viewKey({type, index});
     item.publicKey = uint8ArrayToHex(publicKey);
   } else {
