@@ -5,6 +5,25 @@ import {InteractiveAddress} from '../@ui/interactive-address.js';
 import {KeyListAddress, KeyListItem, KeyListItemContent} from './key-list.js';
 import {KeyParameterTag, KeyTags, KeyTypeTag} from './key-tags.js';
 
+export function KeyPublicKeyTags({
+  curve,
+  context,
+}: {
+  curve: string;
+  context?: string;
+}): ReactNode {
+  return (
+    <>
+      <KeyTypeTag>{curve}</KeyTypeTag>
+      {context !== undefined && context !== '' && (
+        <KeyParameterTag title={context} aria-label={`Context: ${context}`}>
+          {context}
+        </KeyParameterTag>
+      )}
+    </>
+  );
+}
+
 export function KeyPublicKeyItem({
   curve,
   publicKey,
@@ -20,12 +39,7 @@ export function KeyPublicKeyItem({
     <KeyListItem>
       <KeyListItemContent>
         <KeyTags>
-          <KeyTypeTag>{curve}</KeyTypeTag>
-          {context !== undefined && context !== '' && (
-            <KeyParameterTag title={context} aria-label={`Context: ${context}`}>
-              {context}
-            </KeyParameterTag>
-          )}
+          <KeyPublicKeyTags curve={curve} context={context} />
         </KeyTags>
         <KeyListAddress
           as={InteractiveAddress}

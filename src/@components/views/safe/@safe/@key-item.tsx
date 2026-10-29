@@ -12,6 +12,7 @@ import {
   KeyListItemContent,
   KeyListPlaceholder,
 } from '../../../@key/key-list.js';
+import {KeyPublicKeyTags} from '../../../@key/key-public-key-item.js';
 import {
   KeyAliasTag,
   KeyDerivationBadge,
@@ -27,6 +28,10 @@ export const KeyItem = observer(
     const {type, alias} = data;
     const wallets = getKeyWallets(data);
     const wallet = getDefaultWallet(data, wallets);
+    const derivedKeys = data.derivedKeys ?? [];
+    // Wallets come first; a seed with only derived keys shows its first key.
+    const derivedKey = wallet ? undefined : derivedKeys[0];
+    const total = wallets.length + derivedKeys.length;
 
     return (
       <ListItemButton
@@ -39,27 +44,34 @@ export const KeyItem = observer(
           <KeyTags>
             <KeyTypeTag className={type}>{type}</KeyTypeTag>
             {alias && <KeyAliasTag>{alias}</KeyAliasTag>}
-            {wallet && (
-              <>
-                <KeyDerivationTag
-                  chain={ADDRESS_TYPES[wallet.addressType].chain}
-                >
-                  {wallet.path ?? ADDRESS_TYPE_LABELS[wallet.addressType]}
-                </KeyDerivationTag>
-                {wallets.length > 1 && (
-                  <KeyDerivationBadge $primary>
-                    {wallets.length}
-                  </KeyDerivationBadge>
-                )}
-              </>
+            {wallet ? (
+              <KeyDerivationTag chain={ADDRESS_TYPES[wallet.addressType].chain}>
+                {wallet.path ?? ADDRESS_TYPE_LABELS[wallet.addressType]}
+              </KeyDerivationTag>
+            ) : (
+              derivedKey && (
+                <KeyPublicKeyTags
+                  curve={derivedKey.derivation.curve}
+                  context={derivedKey.derivation.context}
+                />
+              )
+            )}
+            {(wallet || derivedKey) && total > 1 && (
+              <KeyDerivationBadge $primary>{total}</KeyDerivationBadge>
             )}
           </KeyTags>
           {wallet ? (
             <KeyListAddress>{wallet.address}</KeyListAddress>
+          ) : derivedKey ? (
+            <KeyListAddress>{derivedKey.publicKey}</KeyListAddress>
           ) : data.rawPublicKey ? (
             <KeyListAddress>{data.rawPublicKey}</KeyListAddress>
           ) : (
-            <KeyListPlaceholder>No derived addresses</KeyListPlaceholder>
+            <KeyListPlaceholder>
+              {type === 'seed'
+                ? 'No derived wallets or keys'
+                : 'No derived addresses'}
+            </KeyListPlaceholder>
           )}
         </KeyListItemContent>
         <RippleEffect />
