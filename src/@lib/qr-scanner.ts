@@ -9,14 +9,13 @@ export const qrScanLifecycle: {closing: Promise<void>} = import.meta.hot?.data
 if (import.meta.hot) {
   import.meta.hot.data.qrScanLifecycle = qrScanLifecycle;
 }
-type ForegroundRequest = {
+type ResumeRequest = {
   ready: boolean;
-  oncePerForeground: boolean;
-  canRun: () => boolean;
-  run: () => void;
+  canResume: () => boolean;
+  resume: () => void;
 };
 
-/** Coordinates camera recovery and accepted results with foreground readiness. */
+/** Coordinates fresh camera attempts after a native scan is paused. */
 export class QrScanForeground {
   private disposed = false;
   private listener?: PluginListenerHandle;
@@ -24,7 +23,7 @@ export class QrScanForeground {
   private foreground = false;
   private generation = 0;
   private resumedGeneration = -1;
-  private pending?: ForegroundRequest;
+  private pending?: ResumeRequest;
 
   constructor(private readonly onError: (error: unknown) => void) {
     document.addEventListener('visibilitychange', this.update);
@@ -55,28 +54,11 @@ export class QrScanForeground {
     canResume: () => boolean,
     resume: () => void,
   ): () => void {
-    return this.request(ready, canResume, resume, true);
-  }
-
-  waitForForeground(
-    ready: Promise<void>,
-    canRun: () => boolean,
-    run: () => void,
-  ): () => void {
-    return this.request(ready, canRun, run, false);
-  }
-
-  private request(
-    ready: Promise<void>,
-    canRun: () => boolean,
-    run: () => void,
-    oncePerForeground: boolean,
-  ): () => void {
-    const request = {ready: false, oncePerForeground, canRun, run};
+    const request = {ready: false, canResume, resume};
     this.pending = request;
 
-    // Recovery and result delivery both require successful camera cleanup,
-    // even when the shared closing queue absorbs its failure for other callers.
+    // A fresh scan must wait for this camera's actual cleanup, even when the
+    // shared closing queue has absorbed its failure for other callers.
     void ready.then(
       () => {
         if (this.pending !== request) return;
@@ -111,16 +93,15 @@ export class QrScanForeground {
     if (
       !foreground ||
       !request?.ready ||
-      (request.oncePerForeground &&
-        this.resumedGeneration === this.generation) ||
-      !request.canRun()
+      this.resumedGeneration === this.generation ||
+      !request.canResume()
     )
       return;
 
     // Native scanEnded can arrive after the foreground notification. Permit
     // that recovery, but never loop on APP_INACTIVE with a stale active state.
-    if (request.oncePerForeground) this.resumedGeneration = this.generation;
+    this.resumedGeneration = this.generation;
     this.pending = undefined;
-    request.run();
+    request.resume();
   };
 }
