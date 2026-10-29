@@ -4,7 +4,7 @@ import {styled} from 'styled-components';
 import {FEATURE_VISUALS} from '../../@features.js';
 import {TypewriterText} from '../../@ui/typewriter-text.js';
 
-const KEYWORDS = ['WalletConnect', 'One-time Password'] as const;
+const KEYWORDS = ['WalletConnect', 'OTP'] as const;
 const COLORS = [FEATURE_VISUALS.sessions.color, FEATURE_VISUALS.otp.color];
 
 const Keyword = styled.strong`

@@ -236,7 +236,7 @@ export const DeriveSeedKeyView: (props: DeriveSeedKeyViewProps) => ReactNode =
                 loading={busy !== undefined}
                 onClick={errorService.catch(step === 1 ? derive : save)}
               >
-                {step === 1 ? 'Scan card' : 'Import'}
+                {step === 1 ? 'Scan a card' : 'Import'}
               </Button>
             }
           >

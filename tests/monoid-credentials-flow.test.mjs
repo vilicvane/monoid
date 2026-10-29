@@ -196,6 +196,12 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
     MonoidWrongCardError,
     MonoidAppletInvalidPINError: {is: source => source?.code === 'INVALID_PIN'},
     MonoidAppletHello,
+    async readMonoidAppletInstallation(sessionId, _signal, options) {
+      const state = fixture;
+      assert.equal(state.scans.at(-1).stopRequested, false);
+      state.installationReads.push({sessionId, options});
+      return state.installation;
+    },
   },
 });
 const {MonoidPINSession} = await import(
@@ -209,8 +215,12 @@ const {MonoidScanPromptPresenter} = await import(
   '../.bld/app/@services/monoid-scan-prompt-presenter.js'
 );
 const {ErrorService} = await import('../.bld/app/@services/error-service.js');
-const {useMonoidScanPrompt, MonoidScanRedirectError, scanCardPrompt} =
-  await import('../.bld/app/@components/@monoid/monoid-scan-prompt.js');
+const {
+  useMonoidScanPrompt,
+  MonoidScanCardAppletsRequiredError,
+  MonoidScanRedirectError,
+  scanCardPrompt,
+} = await import('../.bld/app/@components/@monoid/monoid-scan-prompt.js');
 
 function promptText(node) {
   if (typeof node === 'string') return node;
@@ -369,6 +379,10 @@ function mount(overrides = {}) {
           assertMutationReady();
           state.navigations.push({route: 'cardApplets', options});
         },
+        $push: () => {
+          assertMutationReady();
+          state.navigations.push({route: 'cardApplets', options, push: true});
+        },
       }),
     },
     monoidScanPromptPresenter: state.presenter,
@@ -457,7 +471,10 @@ function mount(overrides = {}) {
       },
     },
   };
+  state.installationReads = [];
+  state.installation ??= {monoid: {installed: true}, optional: {}};
   state.applet = {
+    activeSessionId: 'card-session',
     async useSession(source) {
       assert.equal(source, state.applet);
       state.cardCommands.push({command: 'select-monoid'});
@@ -507,6 +524,7 @@ function mount(overrides = {}) {
       allowSetup: state.allowSetup,
       ensureSetup: state.ensureSetup,
       allowInstallRedirect: state.allowInstallRedirect,
+      cardAppletsReturnTo: state.cardAppletsReturnTo,
       auth: state.auth,
       retryOnError: state.retryOnError,
       pinSession: state.pinSession,
@@ -2968,4 +2986,66 @@ test('prompt: wrong-card validation runs before client preparation and authentic
   assert.equal(state.authenticated.length, 0);
   assert.equal(state.businessCalls, 0);
   assert.equal(state.outcome, 'rejected');
+});
+
+test('prompt: a feature page opens Card Applets on a card without Monoid, keeping its applets', async () => {
+  const state = mount({auth: false, cardAppletsReturnTo: 'otp'});
+  await state.missingApplet();
+  await state.finishExit();
+  assert.deepEqual(state.installationReads, [
+    {sessionId: 'missing-applet-card', options: {authenticateRegistry: true}},
+  ]);
+  assert.deepEqual(state.navigations, [
+    {
+      route: 'cardApplets',
+      options: {
+        cardInformation: state.cardInformation,
+        installation: state.installation,
+        returnTo: 'otp',
+      },
+      push: true,
+    },
+  ]);
+  assert.ok(state.errors[0] instanceof MonoidScanRedirectError);
+});
+
+test('prompt: a card the page sends to Card Applets is read on the open connection', async () => {
+  const state = mount({
+    auth: false,
+    cardAppletsReturnTo: 'securityKey',
+    validateCard: () => {
+      throw new MonoidScanCardAppletsRequiredError();
+    },
+  });
+  const scan = await state.tap();
+  assert.equal(state.businessCalls, 0);
+  assert.equal(scan.waitingForRemoval, false);
+  await state.finishExit();
+  assert.deepEqual(state.cardInformationReads, ['card-session']);
+  assert.deepEqual(state.installationReads, [
+    {sessionId: 'card-session', options: {authenticateRegistry: true}},
+  ]);
+  assert.deepEqual(state.navigations, [
+    {
+      route: 'cardApplets',
+      options: {
+        cardInformation: state.cardInformation,
+        installation: state.installation,
+        returnTo: 'securityKey',
+      },
+      push: true,
+    },
+  ]);
+});
+
+test('prompt: without a return page the Card Applets error stays an ordinary failure', async () => {
+  const state = mount({
+    auth: false,
+    validateCard: () => {
+      throw new MonoidScanCardAppletsRequiredError();
+    },
+  });
+  await state.tap();
+  assert.deepEqual(state.navigations, []);
+  assert.deepEqual(state.installationReads, []);
 });

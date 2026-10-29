@@ -111,6 +111,8 @@ for (const [path, exports] of [
     {
       useViewActive,
       View: 'view',
+      // Footer actions render as buttons; `visible: false` means absent.
+      ViewActionButton: 'button',
       ViewContent: 'content',
       ViewHeader: 'header',
       ViewHeaderIdentifier: 'identifier',
@@ -208,7 +210,10 @@ function mount() {
     button(label) {
       return find(
         state.render(),
-        node => node.type === 'button' && node.props.children === label,
+        node =>
+          node.type === 'button' &&
+          node.props.visible !== false &&
+          node.props.children === label,
       );
     },
     click(label) {
@@ -284,7 +289,7 @@ function mount() {
 
 async function derive(state) {
   const importedCount = state.storage.keys[0].wallets.length;
-  state.click('Scan card');
+  state.click('Scan a card');
   await state.tap();
   await state.finish();
   assert.equal(state.storage.keys[0].wallets.length, importedCount);
@@ -568,7 +573,7 @@ test('a matching path still scans when its output needs the Taproot tweak', asyn
     'bitcoin-taproot',
     state.storage.keys[0].wallets[0].path,
   );
-  assert.ok(state.button('Scan card'));
+  assert.ok(state.button('Scan a card'));
   assert.equal(state.button('Continue'), undefined);
 });
 

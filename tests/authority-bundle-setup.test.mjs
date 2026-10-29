@@ -139,6 +139,8 @@ mock.module('../.bld/app/@components/@ui/step.js', {
 });
 mock.module('../.bld/app/@components/@view/index.js', {
   namedExports: {
+    // Footer actions render as buttons; `visible: false` means absent.
+    ViewActionButton: 'Button',
     ViewContent: 'ViewContent',
     useViewActive: () => current.isActive,
   },
@@ -229,7 +231,9 @@ const bundles = [
 ];
 function nodes(node) {
   if (Array.isArray(node)) return node.flatMap(nodes);
-  if (!node || typeof node !== 'object') return [];
+  // A hidden footer action is absent.
+  if (!node || typeof node !== 'object' || node.props?.visible === false)
+    return [];
   return [node, ...nodes(node.props?.children), ...nodes(node.props?.footer)];
 }
 function text(node) {
@@ -427,10 +431,10 @@ test('Setup is card-first, keeps mode capsules in Scan card and retains that car
   const placeholder = state.find('CardPlaceholder');
   assert.equal(placeholder.props.children.type, 'AppIcon');
   assert.equal(placeholder.props.children.props.icon, 'plus-icon');
-  assert.ok(state.find('Button', 'Scan card'));
+  assert.ok(state.find('Button', 'Scan a card'));
   assert.equal(state.find('Button', 'Sign in'), undefined);
   assert.deepEqual(state.selectedAuthorities, []);
-  await state.click('Button', 'Scan card');
+  await state.click('Button', 'Scan a card');
   assert.equal(state.flow.authority.authorityUrl, url);
   assert.equal(state.flow.authority.cards[0].publicKey, prepared().publicKey);
   assert.equal(state.pinPrompts, 0);
@@ -476,7 +480,7 @@ test('Card entry signs in, lists bundles and joins using its own normalized auth
   assert.equal(steps(state)[0].props.children, undefined);
   assert.equal(steps(state)[1].props.title, 'Choose bundle');
   assert.equal(steps(state)[1].props.activeNumero, 2);
-  assert.equal(state.find('Button', 'Scan card'), undefined);
+  assert.equal(state.find('Button', 'Scan a card'), undefined);
   assert.equal(state.scans, 0);
   assert.equal(
     text(nodes(steps(state)[1]).find(node => node.type === 'InfoMessage')),
@@ -528,7 +532,7 @@ test('Card entry signs in, lists bundles and joins using its own normalized auth
 test('Continue joins only the first scanned card once, after its Secret PIN', async t => {
   const state = fixture(t, {sourceCard: null});
   state.firstHello = scanned();
-  await state.click('Button', 'Scan card');
+  await state.click('Button', 'Scan a card');
   const session = state.flow.authority;
   session.addPrepared(prepared(2));
   const hash = new Uint8Array(32).fill(42);
@@ -647,7 +651,7 @@ test('a first card without authority is rejected before sign-in or PIN input', a
     authority: false,
     pins: {secret: false, access: false},
   });
-  await state.click('Button', 'Scan card');
+  await state.click('Button', 'Scan a card');
   assert.match(
     state.errors[0].message,
     /doesn't trust an authority\. Reinstall its applets with one\./,
@@ -661,7 +665,7 @@ test('a first card without authority is rejected before sign-in or PIN input', a
 test('first-card PIN setup waits for sign-in and bundle selection', async t => {
   const state = fixture(t, {sourceCard: null, signedIn: false});
   state.firstHello = scanned(1, {pins: {secret: false, access: false}});
-  await state.click('Button', 'Scan card');
+  await state.click('Button', 'Scan a card');
   assert.equal(state.pinPrompts, 0);
   assert.deepEqual(state.acceptedCards, []);
   state.authority.account = owners[0];
@@ -675,7 +679,7 @@ test('first-card PIN setup waits for sign-in and bundle selection', async t => {
 test('card-first setup resumes an installation detour using the returned card authority before sign-in', async t => {
   const state = fixture(t, {sourceCard: null, signedIn: false});
   state.firstScan = {type: 'setup', cardInformation: {id: 'chip'}};
-  await state.click('Button', 'Scan card');
+  await state.click('Button', 'Scan a card');
   assert.deepEqual(state.calls.at(-1), {
     cardInformation: {id: 'chip'},
     returnTo: 'bundle',

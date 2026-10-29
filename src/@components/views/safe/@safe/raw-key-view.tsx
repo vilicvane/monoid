@@ -48,7 +48,7 @@ export const RawKeyView = observer(
                   color="neutral"
                   onClick={() => router.safe.scanCard.$push()}
                 >
-                  Scan card
+                  Scan a card
                 </Button>
               )
             )

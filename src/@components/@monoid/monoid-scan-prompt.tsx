@@ -35,6 +35,7 @@ import {
   getAppletCatalog,
   initializeMonoidCard,
   readBackupCardIdentity,
+  readMonoidAppletInstallation,
 } from '../../@lib/monoid/index.js';
 import {isOperationCancelled} from '../../@lib/operation-cancelled.js';
 import {renderIcon} from '../../@lib/render-icon.js';
@@ -106,6 +107,11 @@ export type MonoidScanPromptOptions = {
   allowSetup?: boolean;
   ensureSetup?: boolean;
   allowInstallRedirect?: boolean;
+  /**
+   * Opens Card Applets on the tapped card, returning to this page, when it
+   * lacks Monoid or a callback throws `MonoidScanCardAppletsRequiredError`.
+   */
+  cardAppletsReturnTo?: 'otp' | 'securityKey';
   auth?: 'access' | false;
   retryOnError?: boolean;
   pinSession?: MonoidPINSession;
@@ -147,10 +153,22 @@ export class MonoidScanRedirectError extends Error {
   }
 }
 
+/**
+ * Thrown from validation or callbacks for a card that Card Applets must set up
+ * first (PINs, a missing feature applet). Needs `cardAppletsReturnTo`.
+ */
+export class MonoidScanCardAppletsRequiredError extends Error {
+  constructor() {
+    super('This card needs Card Applets first.');
+    this.name = new.target.name;
+  }
+}
+
 export function useMonoidScanPrompt({
   allowSetup = false,
   ensureSetup = true,
   allowInstallRedirect = false,
+  cardAppletsReturnTo,
   auth = false,
   retryOnError = false,
   pinSession,
@@ -434,252 +452,297 @@ export function useMonoidScanPrompt({
       setSessionId(undefined);
       stopping = undefined;
 
-      stop = monoidApplet.standby(
-        async applet => {
-          if (disposed || finishing || result) {
+      const openCardApplets = async (
+        sessionId: string,
+        withInstallation: boolean,
+      ): Promise<void> => {
+        if (disposed || finishing) return;
+
+        setStateContent('Reading card information, hold tight...');
+        const installation = withInstallation
+          ? await readMonoidAppletInstallation(
+              sessionId,
+              credentialsRequest.signal,
+              {authenticateRegistry: true},
+            )
+          : undefined;
+        const cardInformation = await readCardInformation(
+          sessionId,
+          credentialsRequest.signal,
+        );
+
+        if (disposed || finishing) return;
+
+        result = {
+          type: 'redirect',
+          navigate: () =>
+            cardAppletsReturnTo
+              ? router
+                  .cardApplets({
+                    cardInformation,
+                    installation,
+                    returnTo: cardAppletsReturnTo,
+                  })
+                  .$push()
+              : router
+                  .cardApplets({cardInformation, returnTo: 'safe'})
+                  .$replace(),
+        };
+      };
+
+      const connected = async (applet: MonoidApplet): Promise<void> => {
+        if (disposed || finishing || result) {
+          return;
+        }
+
+        setStateContent('Greeting to monoid, hold tight...');
+
+        let hello = await applet.hello({});
+
+        if (disposed) {
+          return;
+        }
+
+        // Verify the intended card before sending any credentials or redirecting.
+        validateCard?.(hello);
+
+        const id = uint8ArrayToHex(hello.id);
+
+        // A setup PIN belongs to the exact Identity seen before input.
+        if (setupPIN)
+          assertSameCardWithBundle(
+            hello,
+            readBackupCardIdentity(setupPIN.hello),
+          );
+
+        const setup = setupPIN;
+        setupPIN = undefined;
+
+        retryStateContent = scanCardPrompt(hello, 'again');
+
+        let initializedAccessPIN = false;
+
+        if (
+          ensureSetup &&
+          (hello.pins.access === false || hello.pins.secret === false)
+        ) {
+          if (!allowSetup) {
+            result = {type: 'uninitialized'};
             return;
           }
 
-          setStateContent('Greeting to monoid, hold tight...');
-
-          let hello = await applet.hello({});
-
-          if (disposed) {
+          try {
+            assertCardPINsNotBlocked(hello);
+          } catch (error) {
+            result = {type: 'error', error, retry: false};
             return;
           }
 
-          // Verify the intended card before sending any credentials or redirecting.
-          validateCard?.(hello);
+          const setupHello = hello;
 
-          const id = uint8ArrayToHex(hello.id);
-
-          // A setup PIN belongs to the exact Identity seen before input.
-          if (setupPIN)
-            assertSameCardWithBundle(
-              hello,
-              readBackupCardIdentity(setupPIN.hello),
-            );
-
-          const setup = setupPIN;
-          setupPIN = undefined;
-
-          retryStateContent = scanCardPrompt(hello, 'again');
-
-          let initializedAccessPIN = false;
-
+          // Re-prompt if another operation set the Secret PIN since input.
           if (
-            ensureSetup &&
-            (hello.pins.access === false || hello.pins.secret === false)
+            !setup ||
+            (setup.hello.pins.secret === false && hello.pins.secret !== false)
           ) {
-            if (!allowSetup) {
-              result = {type: 'uninitialized'};
-              return;
-            }
+            result = {
+              type: 'input',
+              request: {type: 'setup', hello: setupHello},
+            };
+            return;
+          }
 
-            try {
-              assertCardPINsNotBlocked(hello);
-            } catch (error) {
-              result = {type: 'error', error, retry: false};
-              return;
-            }
+          setStateContent(
+            hello.pins.secret === false
+              ? 'Setting Secret PIN, hold tight...'
+              : 'Setting Access PIN, hold tight...',
+          );
 
-            const setupHello = hello;
+          const needsAccessPIN = hello.pins.access === false;
 
-            // Re-prompt if another operation set the Secret PIN since input.
-            if (
-              !setup ||
-              (setup.hello.pins.secret === false && hello.pins.secret !== false)
-            ) {
+          try {
+            hello = await initializeMonoidCard(
+              applet,
+              setupHello,
+              setup.pins.secret,
+              credentialsRequest.signal,
+              setup.pins.access,
+            );
+          } catch (error) {
+            if (disposed) return;
+
+            if (error instanceof CardPINError) {
+              if (error.tries === 0 || !error.retryable) {
+                result = {
+                  type: 'error',
+                  error,
+                  retry: false,
+                };
+                return;
+              }
+
               result = {
                 type: 'input',
-                request: {type: 'setup', hello: setupHello},
+                request: {
+                  type: 'setup',
+                  hello: {
+                    ...setupHello,
+                    pins: {...setupHello.pins, secret: error.tries},
+                  },
+                  pins: setup.pins,
+                },
+                message: error.message,
               };
               return;
             }
 
-            setStateContent(
-              hello.pins.secret === false
-                ? 'Setting Secret PIN, hold tight...'
-                : 'Setting Access PIN, hold tight...',
-            );
-
-            const needsAccessPIN = hello.pins.access === false;
-
-            try {
-              hello = await initializeMonoidCard(
-                applet,
-                setupHello,
-                setup.pins.secret,
-                credentialsRequest.signal,
-                setup.pins.access,
-              );
-            } catch (error) {
-              if (disposed) return;
-
-              if (error instanceof CardPINError) {
-                if (error.tries === 0 || !error.retryable) {
-                  result = {
-                    type: 'error',
-                    error,
-                    retry: false,
-                  };
-                  return;
-                }
-
-                result = {
-                  type: 'input',
-                  request: {
-                    type: 'setup',
-                    hello: {
-                      ...setupHello,
-                      pins: {...setupHello.pins, secret: error.tries},
-                    },
-                    pins: setup.pins,
-                  },
-                  message: error.message,
-                };
-                return;
-              }
-
-              throw error;
-            }
-
-            if (disposed) return;
-
-            // Authenticate and save the Access PIN selected for this setup.
-            if (needsAccessPIN) {
-              enteredPIN = {id, pin: setup.pins.access!};
-              initializedAccessPIN = true;
-            }
+            throw error;
           }
 
-          if (auth === 'access' || initializedAccessPIN) {
-            const entered = enteredPIN?.id === id ? enteredPIN.pin : undefined;
+          if (disposed) return;
 
-            enteredPIN = undefined;
+          // Authenticate and save the Access PIN selected for this setup.
+          if (needsAccessPIN) {
+            enteredPIN = {id, pin: setup.pins.access!};
+            initializedAccessPIN = true;
+          }
+        }
 
-            const pin = entered ?? pins[id];
+        if (auth === 'access' || initializedAccessPIN) {
+          const entered = enteredPIN?.id === id ? enteredPIN.pin : undefined;
 
+          enteredPIN = undefined;
+
+          const pin = entered ?? pins[id];
+
+          if (disposed) {
+            return;
+          }
+
+          if (pin === undefined) {
+            result = {type: 'input', request: {type: 'access', id}};
+
+            return;
+          }
+
+          // Prepare on this connection before authenticating. Clients may
+          // also request an applet-specific single-use permission.
+          if (authentication) {
+            await authentication.prepare(
+              applet,
+              content => {
+                if (!disposed) setStateContent(content);
+              },
+              hello,
+              credentialsRequest.signal,
+            );
+            credentialsRequest.signal.throwIfAborted();
+            await applet.useSession(applet);
+          }
+
+          setStateContent('Authenticating, hold tight...');
+
+          try {
+            await applet.authenticate({
+              pin,
+              ...(authentication?.aid && {aid: authentication.aid}),
+            });
+          } catch (error) {
             if (disposed) {
               return;
-            }
-
-            if (pin === undefined) {
-              result = {type: 'input', request: {type: 'access', id}};
-
-              return;
-            }
-
-            // Prepare on this connection before authenticating. Clients may
-            // also request an applet-specific single-use permission.
-            if (authentication) {
-              await authentication.prepare(
-                applet,
-                content => {
-                  if (!disposed) setStateContent(content);
-                },
-                hello,
-                credentialsRequest.signal,
-              );
-              credentialsRequest.signal.throwIfAborted();
-              await applet.useSession(applet);
-            }
-
-            setStateContent('Authenticating, hold tight...');
-
-            try {
-              await applet.authenticate({
-                pin,
-                ...(authentication?.aid && {aid: authentication.aid}),
-              });
-            } catch (error) {
-              if (disposed) {
-                return;
-              }
-
-              if (
-                error instanceof CBORAppletError &&
-                MonoidAppletInvalidPINError.is(error.source)
-              ) {
-                if (initializedAccessPIN) {
-                  result = {
-                    type: 'error',
-                    error: new CardPINError(
-                      'Access',
-                      error.source.tries,
-                      false,
-                      error,
-                    ),
-                    retry: false,
-                  };
-                  return;
-                }
-                if (error.source.tries === 0) {
-                  throw new MonoidCardError('Access PIN blocked', {
-                    cause: error,
-                  });
-                }
-
-                if (entered === undefined) {
-                  delete pins[id];
-                  scanPINSession.forgetPIN(id, pin);
-                  update = {type: 'remove', id, pin};
-                }
-
-                result = {
-                  type: 'input',
-                  request: {type: 'access', id},
-                  message: `Incorrect PIN, tries remaining: ${error.source.tries}`,
-                };
-
-                return;
-              }
-
-              throw error;
-            }
-
-            if (disposed) {
-              return;
-            }
-
-            if (entered !== undefined) {
-              pins[id] = entered;
-              scanPINSession.rememberPIN(id, entered);
             }
 
             if (
-              entered !== undefined ||
-              scanPINSession.hasUnsavedPIN(id, pin)
+              error instanceof CBORAppletError &&
+              MonoidAppletInvalidPINError.is(error.source)
             ) {
-              update = {type: 'set', id, pin};
-            }
-          }
-
-          if (disposed) {
-            return;
-          }
-
-          const completion = await appletCallback(
-            applet,
-            content => {
-              if (
-                !disposed &&
-                !finishing &&
-                !credentialsRequest.signal.aborted
-              ) {
-                setStateContent(content);
+              if (initializedAccessPIN) {
+                result = {
+                  type: 'error',
+                  error: new CardPINError(
+                    'Access',
+                    error.source.tries,
+                    false,
+                    error,
+                  ),
+                  retry: false,
+                };
+                return;
               }
-            },
-            hello,
-            credentialsRequest.signal,
-          );
+              if (error.source.tries === 0) {
+                throw new MonoidCardError('Access PIN blocked', {
+                  cause: error,
+                });
+              }
+
+              if (entered === undefined) {
+                delete pins[id];
+                scanPINSession.forgetPIN(id, pin);
+                update = {type: 'remove', id, pin};
+              }
+
+              result = {
+                type: 'input',
+                request: {type: 'access', id},
+                message: `Incorrect PIN, tries remaining: ${error.source.tries}`,
+              };
+
+              return;
+            }
+
+            throw error;
+          }
 
           if (disposed) {
             return;
           }
 
-          result = {type: 'success', message: completion?.message};
-          setStateContent(completion?.message ?? '');
+          if (entered !== undefined) {
+            pins[id] = entered;
+            scanPINSession.rememberPIN(id, entered);
+          }
+
+          if (entered !== undefined || scanPINSession.hasUnsavedPIN(id, pin)) {
+            update = {type: 'set', id, pin};
+          }
+        }
+
+        if (disposed) {
+          return;
+        }
+
+        const completion = await appletCallback(
+          applet,
+          content => {
+            if (!disposed && !finishing && !credentialsRequest.signal.aborted) {
+              setStateContent(content);
+            }
+          },
+          hello,
+          credentialsRequest.signal,
+        );
+
+        if (disposed) {
+          return;
+        }
+
+        result = {type: 'success', message: completion?.message};
+        setStateContent(completion?.message ?? '');
+      };
+
+      stop = monoidApplet.standby(
+        async applet => {
+          try {
+            await connected(applet);
+          } catch (error) {
+            if (
+              !(error instanceof MonoidScanCardAppletsRequiredError) ||
+              !cardAppletsReturnTo
+            )
+              throw error;
+            // Read the card while it is still connected, then hand it over.
+            await openCardApplets(applet.activeSessionId, true);
+          }
         },
         error => {
           if (disposed) {
@@ -832,25 +895,10 @@ export function useMonoidScanPrompt({
 
           return {waitForRemoval: true};
         },
-        allowInstallRedirect
+        allowInstallRedirect || cardAppletsReturnTo
           ? async sessionId => {
-              if (disposed || finishing || result) return;
-
-              setStateContent('Reading card information, hold tight...');
-              const cardInformation = await readCardInformation(
-                sessionId,
-                credentialsRequest.signal,
-              );
-
-              if (disposed || finishing) return;
-
-              result = {
-                type: 'redirect',
-                navigate: () =>
-                  router
-                    .cardApplets({cardInformation, returnTo: 'safe'})
-                    .$replace(),
-              };
+              if (result) return;
+              await openCardApplets(sessionId, !!cardAppletsReturnTo);
             }
           : undefined,
       );
@@ -929,6 +977,7 @@ export function useMonoidScanPrompt({
     allowSetup,
     ensureSetup,
     allowInstallRedirect,
+    cardAppletsReturnTo,
     auth,
     retryOnError,
     router,

@@ -14,6 +14,8 @@ import {CardStore} from '../.bld/app/@services/card-store.js';
 
 import {credential} from './helpers/security-key-credential.mjs';
 
+class MonoidScanCardAppletsRequiredError extends Error {}
+
 let fixture;
 let rendering;
 const owners = [];
@@ -93,6 +95,7 @@ mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
     MonoidScanRedirectError: class extends Error {
       code = 'CANCELLED';
     },
+    MonoidScanCardAppletsRequiredError,
     useMonoidScanPrompt(options) {
       const state = fixture;
       return [
@@ -158,6 +161,7 @@ for (const [path, names] of [
       'ViewHeader',
       'ViewHeaderButton',
       'ViewHeaderIdentifier',
+      'ViewHeaderTags',
       'ViewHeaderTitle',
       'ViewPlaceholder',
       'viewHeaderTagCSS',
@@ -169,7 +173,10 @@ for (const [path, names] of [
   mock.module(`../.bld/app/@components/${path}.js`, {
     namedExports: {
       ...Object.fromEntries(names.map(name => [name, name])),
-      ...(path === '@view/index' ? {useViewActive} : {}),
+      // Footer actions render as buttons; `visible: false` means absent.
+      ...(path === '@view/index'
+        ? {useViewActive, ViewActionButton: 'Button'}
+        : {}),
     },
   });
 }
@@ -222,7 +229,11 @@ function card(number) {
     listAppletGrants: async () => ({grants: state.grants}),
     list: async () => ({items: state.items}),
     viewKey: async () => ({publicKey: p256.getPublicKey(1n, true)}),
-    select: async () => new TextEncoder().encode('FIDO_2_0'),
+    select: async () => {
+      if (state.securityKeyMissing)
+        throw new AppletNotFoundError(new Uint8Array(), new Uint8Array());
+      return new TextEncoder().encode('FIDO_2_0');
+    },
     createRandomKey: async () => {
       state.writes.push('create');
       if (state.createFailure) throw new Error('Unknown create result');
@@ -263,7 +274,10 @@ function mount() {
     click(label) {
       const button = find(
         state.render(),
-        node => node.type === 'Button' && node.props.children === label,
+        node =>
+          node.type === 'Button' &&
+          node.props.visible !== false &&
+          node.props.children === label,
       );
       assert.ok(button, `Expected ${label}`);
       assert.notEqual(button.props.disabled, true);
@@ -526,7 +540,10 @@ test('an unknown write requires a fresh read and never replays Seed creation', a
   assert.equal(
     find(
       state.tree,
-      node => node.type === 'Button' && node.props.children === 'Continue',
+      node =>
+        node.type === 'Button' &&
+        node.props.visible !== false &&
+        node.props.children === 'Continue',
     ),
     undefined,
   );
@@ -536,32 +553,30 @@ test('an unknown write requires a fresh read and never replays Seed creation', a
 });
 
 for (const kind of ['access', 'secret']) {
-  test(`a card without ${kind} PIN offers Card Applets before requesting authentication`, async () => {
+  test(`a card without ${kind} PIN is handed to Card Applets before authentication`, async () => {
     const state = mount();
     const first = card(1);
     first.hello.pins[kind] = false;
     await state.read(first);
+    assert.equal(state.scans.at(-1).options.cardAppletsReturnTo, 'securityKey');
     assert.deepEqual(first.authentications, []);
-    assert.ok(
-      find(
-        state.tree,
-        node =>
-          node.type === 'Button' && node.props.children === 'Open Card Applets',
-      ),
-    );
-    assert.ok(
-      find(
-        state.tree,
-        node =>
-          node.type === 'InfoMessage' &&
-          node.props.children === 'Set up PINs in Card Applets',
-      ),
-    );
-    assert.deepEqual(state.errors, []);
+    assert.ok(state.errors[0] instanceof MonoidScanCardAppletsRequiredError);
   });
 }
 
-test('a missing optional applet is not mistaken for missing Monoid', async () => {
+test('a card without the Security Key applet is handed to Card Applets', async () => {
+  const state = mount();
+  const first = card(1);
+  first.securityKeyMissing = true;
+  await state.read(first);
+  assert.ok(state.errors[0] instanceof MonoidScanCardAppletsRequiredError);
+  assert.equal(
+    find(state.tree, node => node.type?.name === 'CardHeaderTags'),
+    undefined,
+  );
+});
+
+test('a scan error for another applet stays an ordinary error', async () => {
   const state = mount();
   state.click('Scan a card');
   await state.flush();
@@ -577,45 +592,6 @@ test('a missing optional applet is not mistaken for missing Monoid', async () =>
   state.scans.at(-1).finished.reject(failure);
   await state.flush();
   assert.deepEqual(state.errors, [failure]);
-  assert.equal(
-    find(
-      state.tree,
-      node =>
-        node.type === 'Button' && node.props.children === 'Open Card Applets',
-    ),
-    undefined,
-  );
-});
-
-test('a missing Monoid applet preserves an actionable Card Applets entry', async () => {
-  const state = mount();
-  state.click('Scan a card');
-  await state.flush();
-  state.scans.at(-1).finished.reject(
-    new MonoidCardError('Monoid not installed', {
-      cause: new AppletNotFoundError(
-        new Uint8Array(),
-        state.entrances.monoidApplet.aid,
-      ),
-    }),
-  );
-  await state.flush();
-  assert.ok(
-    find(
-      state.tree,
-      node =>
-        node.type === 'Button' && node.props.children === 'Open Card Applets',
-    ),
-  );
-  assert.ok(
-    find(
-      state.tree,
-      node =>
-        node.type === 'InfoMessage' &&
-        node.props.children === 'Install Monoid Applet in Card Applets',
-    ),
-  );
-  assert.deepEqual(state.errors, []);
 });
 
 for (const kind of ['access', 'secret']) {
@@ -692,5 +668,50 @@ test('deleting a credential removes it from this card, then further cards until 
     .at(-1)
     .finished.reject(Object.assign(new Error(), {code: 'CANCELLED'}));
   await state.flush();
+  assert.deepEqual(state.errors, []);
+});
+
+test('the header names the scanned card, the bound Seed has its own section, and Enable leaves once configured', async () => {
+  const state = mount();
+  const tree = () => state.render();
+  const visible = label =>
+    find(
+      tree(),
+      node =>
+        node.type === 'Button' &&
+        node.props.visible !== false &&
+        node.props.children === label,
+    );
+  const menuButton = () =>
+    find(tree(), node => node.type === 'ViewHeaderButton');
+  assert.equal(menuButton(), undefined);
+  assert.equal(
+    find(tree(), node => node.type?.name === 'CardHeaderTags'),
+    undefined,
+  );
+  const first = card(1);
+  await state.read(first);
+  assert.ok(find(tree(), node => node.type?.name === 'CardHeaderTags'));
+  const seedSection = () =>
+    find(
+      tree(),
+      node =>
+        node.type === 'ListSectionTitle' && node.props.children === 'Seed',
+    );
+  assert.equal(seedSection(), undefined);
+  assert.ok(visible('Enable Security Key on card'));
+  assert.equal(visible('Scan a card').props.color, 'neutral');
+  state.configure();
+  await state.flush();
+  await state.tap(first);
+  assert.ok(seedSection());
+  assert.ok(menuButton());
+  find(tree(), node => node.type === 'CardResourceItem').props.onOpen();
+  assert.equal(
+    find(tree(), node => node.type === 'DetailsPopupTitle').props.children,
+    'Change seed',
+  );
+  assert.equal(visible('Enable Security Key on card'), undefined);
+  assert.equal(visible('Scan a card').props.color, 'primary');
   assert.deepEqual(state.errors, []);
 });

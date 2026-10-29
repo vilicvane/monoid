@@ -10,7 +10,6 @@ import {styled} from 'styled-components';
 
 import {MonoidIdHex, type SafeIndexHex} from '../../@atomics.js';
 import {useEntrances} from '../../@entrances.js';
-import {AppletNotFoundError} from '../../@lib/applet.js';
 import {
   assertCardPINs,
   assertSameCard,
@@ -28,11 +27,11 @@ import {
 } from '../../@lib/security-key.js';
 import type {Router} from '../../@routes.js';
 import {uint8ArrayToHex} from '../../@utils/index.js';
-import {KeyAliasTag} from '../@key/key-tags.js';
+import {CardHeaderTags} from '../@monoid/card-header-tags.js';
 import {
+  MonoidScanCardAppletsRequiredError,
   type MonoidScanPromptCallback,
   type MonoidScanPromptValidateCard,
-  MonoidScanRedirectError,
   scanCardPrompt,
   useMonoidScanPrompt,
 } from '../@monoid/monoid-scan-prompt.js';
@@ -70,22 +69,17 @@ import {
 } from '../@ui/swipeable-item.js';
 import {
   View,
+  ViewActionButton,
   ViewContent,
   ViewHeader,
   ViewHeaderButton,
-  ViewHeaderIdentifier,
   ViewHeaderTitle,
   ViewPlaceholder,
   useViewActive,
-  viewHeaderTagCSS,
 } from '../@view/index.js';
 
 import {CardScanPlaceholder} from './card/card-management-content.js';
 import {CardResourceItem, CardResourceList} from './safe/index.js';
-
-const SeedAliasTag = styled(KeyAliasTag)`
-  ${viewHeaderTagCSS}
-`;
 
 const CredentialIcon = styled(AppIcon)`
   flex-shrink: 0;
@@ -155,12 +149,9 @@ function CredentialDetails({
 
 export const SecurityKeyView = observer(
   ({view}: RouteComponentProps<Router['securityKey']>): ReactNode => {
-    const {router, monoidApplet, monoidCredentialsStore, errorService} =
-      useEntrances();
+    const {monoidCredentialsStore, errorService} = useEntrances();
     const active = useViewActive(view);
     const [snapshot, setSnapshot] = useState<SecurityKeySnapshot>();
-    const [missingMonoid, setMissingMonoid] = useState(false);
-    const [needsPINSetup, setNeedsPINSetup] = useState(false);
     const [popup, setPopup] = useState<'menu' | 'configure'>();
     const [detail, setDetail] = useState<SecurityKeyCredentialItem>();
     const [deleting, setDeleting] = useState<SecurityKeyCredentialItem>();
@@ -174,6 +165,7 @@ export const SecurityKeyView = observer(
     const [scanContent, scan] = useMonoidScanPrompt({
       auth: 'access',
       ensureSetup: false,
+      cardAppletsReturnTo: 'securityKey',
       pinSession,
     });
     const {busy, run: runOperation} = useCardOperation({
@@ -188,8 +180,6 @@ export const SecurityKeyView = observer(
         setSelection(undefined);
         setConfiguration(undefined);
         setSnapshot(undefined);
-        setMissingMonoid(false);
-        setNeedsPINSetup(false);
       },
     });
     const configuredSeed = snapshot?.grant?.seed;
@@ -284,42 +274,23 @@ export const SecurityKeyView = observer(
               signal.throwIfAborted();
               setState('Reading credentials, hold tight...');
               const next = await readSecurityKeySnapshot(applet, hello, signal);
+              // Card Applets installs the missing applet on this card.
+              if (!config && !next.installed)
+                throw new MonoidScanCardAppletsRequiredError();
               if (active()) {
                 setSnapshot(next);
-                setMissingMonoid(false);
-                setNeedsPINSetup(false);
                 setConfiguration(undefined);
               }
             },
             hello => {
               if (identity) assertSameCard(hello, identity);
-              if (hello.pins.access === false || hello.pins.secret === false) {
-                setConfiguration(undefined);
-                setSnapshot(undefined);
-                setMissingMonoid(false);
-                setNeedsPINSetup(true);
-                throw new MonoidScanRedirectError();
-              }
+              // Card Applets sets up the PINs on this card.
+              if (hello.pins.access === false || hello.pins.secret === false)
+                throw new MonoidScanCardAppletsRequiredError();
               assertCardPINs(hello, {secret: true});
             },
             signal,
           );
-        } catch (error) {
-          if (
-            !config &&
-            active() &&
-            error instanceof Error &&
-            error.cause instanceof AppletNotFoundError &&
-            uint8ArrayToHex(error.cause.aid) ===
-              uint8ArrayToHex(monoidApplet.aid)
-          ) {
-            setMissingMonoid(true);
-            setNeedsPINSetup(false);
-            setSnapshot(undefined);
-            setConfiguration(undefined);
-            return;
-          }
-          throw error;
         } finally {
           if (config?.complete) pinSession.clear();
         }
@@ -342,29 +313,22 @@ export const SecurityKeyView = observer(
       errorService.catch(run(next));
     }
 
-    const applets = (): void => {
-      router.cardApplets({returnTo: 'securityKey'}).$push();
+    const headerCard = snapshot && {
+      id: MonoidIdHex.satisfies(uint8ArrayToHex(snapshot.hello.id)),
+      alias: snapshot.hello.alias,
     };
-    const needsInstall = missingMonoid || snapshot?.installed === false;
+    const canEnable = !!snapshot?.installed && !configured && !configuration;
+    const canContinue =
+      !!configuration && !configuration.complete && !configuration.uncertain;
     const configureLabel = configured
-      ? 'Configure seed'
+      ? 'Change seed'
       : 'Enable Security Key on card';
     return (
       <View>
         <ViewHeader>
           <ViewHeaderTitle>Security Key</ViewHeaderTitle>
-          {snapshot && (
-            <ViewHeaderIdentifier
-              identifier={{
-                type: 'card',
-                id: MonoidIdHex.satisfies(uint8ArrayToHex(snapshot.hello.id)),
-              }}
-            />
-          )}
-          {configured && boundSeed.alias && (
-            <SeedAliasTag>{boundSeed.alias}</SeedAliasTag>
-          )}
-          {snapshot && (
+          {headerCard && <CardHeaderTags card={headerCard} />}
+          {configured && (
             <ViewHeaderButton
               aria-label="Security Key menu"
               disabled={busy}
@@ -376,48 +340,52 @@ export const SecurityKeyView = observer(
         </ViewHeader>
         <ViewContent
           footer={
-            <Buttons>
-              {needsInstall || needsPINSetup ? (
-                <Button onClick={applets}>Open Card Applets</Button>
-              ) : snapshot?.installed && !configured && !configuration ? (
-                <Button disabled={busy} onClick={() => setPopup('configure')}>
-                  {configureLabel}
-                </Button>
-              ) : null}
-              {configuration &&
-                !configuration.complete &&
-                !configuration.uncertain && (
-                  <Button
-                    loading={busy}
-                    onClick={errorService.catch(() => run(configuration))}
-                  >
-                    Continue
-                  </Button>
-                )}
+            <>
+              <ViewActionButton
+                visible={canEnable}
+                disabled={busy}
+                onClick={() => setPopup('configure')}
+              >
+                {configureLabel}
+              </ViewActionButton>
+              <ViewActionButton
+                visible={canContinue}
+                loading={busy}
+                onClick={errorService.catch(() => run(configuration))}
+              >
+                Continue
+              </ViewActionButton>
               <Button
-                color={
-                  snapshot || needsInstall || needsPINSetup
-                    ? 'neutral'
-                    : 'primary'
-                }
+                color={canEnable || canContinue ? 'neutral' : 'primary'}
                 loading={busy}
                 onClick={errorService.catch(() => run())}
               >
                 Scan a card
               </Button>
-            </Buttons>
+            </>
           }
         >
           {snapshot ? (
             <>
-              {needsInstall && (
-                <InfoMessage>Install Monoid Security Key Applet</InfoMessage>
-              )}
               {configuration?.uncertain && (
                 <WarningMessage>
                   Scan card {cardNameWithId(configuration.snapshot.hello)} again
                   to check changes before continuing
                 </WarningMessage>
+              )}
+              {configured && (
+                <InfoSection>
+                  <InfoSectionHeader>
+                    <ListSectionTitle>Seed</ListSectionTitle>
+                  </InfoSectionHeader>
+                  <CardResourceList $contained>
+                    <CardResourceItem
+                      data={{...boundSeed, type: 'seed'}}
+                      disabled={busy || !!configuration}
+                      onOpen={() => setPopup('configure')}
+                    />
+                  </CardResourceList>
+                </InfoSection>
               )}
               {snapshot.credentials.length === 0 ? (
                 <ViewPlaceholder>No credentials</ViewPlaceholder>
@@ -485,16 +453,10 @@ export const SecurityKeyView = observer(
           ) : (
             <>
               <CardScanPlaceholder />
-              {missingMonoid && (
-                <InfoMessage>Install Monoid Applet in Card Applets</InfoMessage>
-              )}
-              {needsPINSetup && (
-                <InfoMessage>Set up PINs in Card Applets</InfoMessage>
-              )}
             </>
           )}
         </ViewContent>
-        {popup === 'menu' && (
+        {popup === 'menu' && configured && (
           <DetailsPopup
             onDismiss={() => setPopup(undefined)}
             aria-label="Security Key menu"
@@ -502,22 +464,11 @@ export const SecurityKeyView = observer(
             <DetailsPopupTitle>Security Key</DetailsPopupTitle>
             <DetailsPopupDivider />
             <Buttons data-popup-animation-group>
-              {snapshot?.installed && (
-                <Button
-                  disabled={!!configuration}
-                  onClick={() => setPopup('configure')}
-                >
-                  {configureLabel}
-                </Button>
-              )}
               <Button
-                color="neutral"
-                onClick={() => {
-                  setPopup(undefined);
-                  applets();
-                }}
+                disabled={!!configuration}
+                onClick={() => setPopup('configure')}
               >
-                Card Applets
+                {configureLabel}
               </Button>
             </Buttons>
           </DetailsPopup>

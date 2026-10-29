@@ -227,7 +227,10 @@ for (const [path, names] of [
   mock.module(`../.bld/app/@components/${path}.js`, {
     namedExports: {
       ...Object.fromEntries(names.map(name => [name, name])),
-      ...(path === '@view/index' ? {useViewActive} : {}),
+      // Footer actions render as buttons; `visible: false` means absent.
+      ...(path === '@view/index'
+        ? {useViewActive, ViewActionButton: 'Button'}
+        : {}),
     },
   });
 }
@@ -381,7 +384,10 @@ function mount({
     button(label) {
       return find(
         state.render(),
-        node => node.type === 'Button' && node.props.children === label,
+        node =>
+          node.type === 'Button' &&
+          node.props.visible !== false &&
+          node.props.children === label,
       );
     },
     click(label) {

@@ -37,7 +37,7 @@ import {getPINInputPlaceholder} from '../../../@monoid/pin-input-placeholder.js'
 import {useIsoDepScanPrompt} from '../../../@monoid/use-isodep-scan-prompt.js';
 import {AppIcon} from '../../../@ui/app-icon.js';
 import {AuthorityAccountInfo} from '../../../@ui/authority-account.js';
-import {Button, Buttons} from '../../../@ui/button.js';
+import {Button} from '../../../@ui/button.js';
 import {
   DetailsPopup,
   DetailsPopupDivider,
@@ -64,7 +64,11 @@ import {SegmentedControl} from '../../../@ui/segmented-control.js';
 import {OperationSteps, Step} from '../../../@ui/step.js';
 import {Toggle} from '../../../@ui/toggle.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
-import {ViewContent, useViewActive} from '../../../@view/index.js';
+import {
+  ViewActionButton,
+  ViewContent,
+  useViewActive,
+} from '../../../@view/index.js';
 
 import type {
   AuthorityBundleCard,
@@ -520,7 +524,7 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
             )
           ) : !authority ? (
             <Button loading={busy} onClick={errorService.catch(scanFirstCard)}>
-              Scan card
+              Scan a card
             </Button>
           ) : !account ? (
             <Button
@@ -558,7 +562,7 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
               Continue
             </Button>
           ) : (
-            <Buttons>
+            <>
               <Button
                 loading={busy}
                 onClick={errorService.catch(() =>
@@ -579,32 +583,29 @@ export const AuthorityBundleSetup = observer(function AuthorityBundleSetup({
                       ? 'Add another card'
                       : 'Add a card'}
               </Button>
-              {!session.joinedCount ? (
-                <Button
-                  disabled={busy}
-                  color="neutral"
-                  onClick={() => session.choose()}
-                >
-                  Change bundle
-                </Button>
-              ) : (
-                !session.nextCard && (
-                  <Button
-                    disabled={busy}
-                    color="neutral"
-                    onClick={() => {
-                      runInAction(() => {
-                        session.complete = true;
-                      });
-                      secretPINSession.clear();
-                      void authority.signOut();
-                    }}
-                  >
-                    Done
-                  </Button>
-                )
-              )}
-            </Buttons>
+              <ViewActionButton
+                visible={!session.joinedCount}
+                disabled={busy}
+                color="neutral"
+                onClick={() => session.choose()}
+              >
+                Change bundle
+              </ViewActionButton>
+              <ViewActionButton
+                visible={!!session.joinedCount && !session.nextCard}
+                disabled={busy}
+                color="neutral"
+                onClick={() => {
+                  runInAction(() => {
+                    session.complete = true;
+                  });
+                  secretPINSession.clear();
+                  void authority.signOut();
+                }}
+              >
+                Done
+              </ViewActionButton>
+            </>
           )
         }
       >

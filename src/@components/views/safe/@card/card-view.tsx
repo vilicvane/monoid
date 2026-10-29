@@ -181,11 +181,11 @@ export const CardView = observer(
                   visible
                   onClick={() => router.safe.scanCard.$replace()}
                 >
-                  Scan card
+                  Scan a card
                 </ViewActionButton>
               }
             >
-              <ViewPlaceholder>Scan card to view items</ViewPlaceholder>
+              <ViewPlaceholder>Scan a card to view items</ViewPlaceholder>
             </ViewContent>
           </>
         )}

@@ -70,6 +70,7 @@ import {useToast} from '../../../@ui/toast.js';
 import {useInputModal} from '../../../@ui/use-input-modal.js';
 import {
   View,
+  ViewActionButton,
   ViewContent,
   ViewHeader,
   ViewHeaderButton,
@@ -799,15 +800,14 @@ export const CopyItemsView = observer(
                   >
                     {primaryLabel}
                   </Button>
-                  {step === 2 && targets.length > 0 && (
-                    <Button
-                      color="neutral"
-                      disabled={busy}
-                      onClick={() => void run(addDestination)}
-                    >
-                      Scan another card
-                    </Button>
-                  )}
+                  <ViewActionButton
+                    visible={step === 2 && targets.length > 0}
+                    color="neutral"
+                    disabled={busy}
+                    onClick={() => void run(addDestination)}
+                  >
+                    Scan another card
+                  </ViewActionButton>
                 </>
               )
             }

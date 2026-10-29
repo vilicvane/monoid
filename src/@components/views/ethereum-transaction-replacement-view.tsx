@@ -48,6 +48,7 @@ import {InfoFieldset, InfoLegend} from '../@ui/info-section.js';
 import {InfoMessage} from '../@ui/message-content.js';
 import {
   View,
+  ViewActionButton,
   ViewContent,
   ViewHeader,
   ViewHeaderTitle,
@@ -408,18 +409,17 @@ const TransactionReplacementContent = observer(
                           ? 'Cancel transaction'
                           : 'Speed up'}
                 </AsyncButton>
-                {prepared?.error && (
-                  <Button
-                    color="neutral"
-                    footerReveal="always"
-                    onClick={() => {
-                      signature.current = undefined;
-                      setAttempt(value => value + 1);
-                    }}
-                  >
-                    Refresh
-                  </Button>
-                )}
+                <ViewActionButton
+                  visible={!!prepared?.error}
+                  color="neutral"
+                  footerReveal="always"
+                  onClick={() => {
+                    signature.current = undefined;
+                    setAttempt(value => value + 1);
+                  }}
+                >
+                  Refresh
+                </ViewActionButton>
               </>
             )
           }

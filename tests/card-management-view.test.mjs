@@ -329,7 +329,12 @@ function installed(hello, optional = []) {
     hello,
   };
 }
-function mount({returnTo, cardInformation = true, bundle = false} = {}) {
+function mount({
+  returnTo,
+  cardInformation = true,
+  bundle = false,
+  installation,
+} = {}) {
   const state = {
     slots: [],
     index: 0,
@@ -430,6 +435,7 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
     copyId: returnTo === 'copy' ? 'copy' : undefined,
     bundleId: returnTo === 'bundle' ? 'bundle-flow' : undefined,
     cardInformation: cardInformation ? state.information : undefined,
+    installation,
   });
   state.view.$match.$view = () => ({$entries: [state.view]});
   state.applet = {
@@ -3688,3 +3694,30 @@ for (const stage of ['prepare', 'restore']) {
     });
   }
 }
+
+test('a card handed over from a feature page opens with its applets and offers the missing one', async () => {
+  const state = mount({
+    returnTo: 'securityKey',
+    installation: installed(hello()),
+  });
+  await state.flush();
+  state.click('Install applets');
+  await state.flush();
+  const popup = state.node('AppletSelectionPopup');
+  assert.ok(popup);
+  assert.deepEqual(popup.props.selected, ['security-key']);
+});
+
+test('a card handed over without PINs opens on Secret PIN setup', async () => {
+  const state = mount({
+    returnTo: 'securityKey',
+    installation: installed(hello(false)),
+  });
+  await state.flush();
+  assert.ok(
+    find(
+      state.render(),
+      node => node.type === 'Button' && text(node) === 'Set Secret PIN',
+    ),
+  );
+});

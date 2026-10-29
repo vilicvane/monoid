@@ -49,6 +49,7 @@ import {
 import {ErrorMessage, MessageContent} from '../@ui/message-content.js';
 import {
   View,
+  ViewActionButton,
   ViewContent,
   ViewHeader,
   ViewHeaderTitle,
@@ -639,14 +640,13 @@ const WalletConnectWalletRequestView = observer(
                         : 'Sign'}
                     </Button>
                   ))}
-                {available && solanaReview?.error && (
-                  <Button
-                    footerReveal="always"
-                    onClick={() => setSolanaReviewAttempt(value => value + 1)}
-                  >
-                    Retry
-                  </Button>
-                )}
+                <ViewActionButton
+                  visible={available && !!solanaReview?.error}
+                  footerReveal="always"
+                  onClick={() => setSolanaReviewAttempt(value => value + 1)}
+                >
+                  Retry
+                </ViewActionButton>
                 {available &&
                   signingPayload &&
                   (active ? (
@@ -677,16 +677,16 @@ const WalletConnectWalletRequestView = observer(
                         : 'Sign'}
                     </Button>
                   ))}
-                {available && currentPreparation?.error && (
-                  <Button
-                    onClick={() => {
-                      setPreparation(undefined);
-                      setPreparationAttempt(value => value + 1);
-                    }}
-                  >
-                    Retry
-                  </Button>
-                )}
+                <ViewActionButton
+                  visible={available && !!currentPreparation?.error}
+                  footerReveal="end"
+                  onClick={() => {
+                    setPreparation(undefined);
+                    setPreparationAttempt(value => value + 1);
+                  }}
+                >
+                  Retry
+                </ViewActionButton>
                 {available && !submission && !solanaSubmission && (
                   <AsyncButton
                     footerReveal="always"
