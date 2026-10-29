@@ -242,6 +242,7 @@ for (const [path, names] of [
       'CardMaintenanceBatchContent',
       'CardMaintenanceCards',
       'CardMaintenanceContent',
+      'CardSupersededMaintenanceNotice',
     ],
   ],
   ['views/card/applet-selection-popup', ['AppletSelectionPopup']],
@@ -475,6 +476,15 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
       state.heldPINs.set(card.publicKey, pin, owner),
     dropSecretPIN: card => state.heldPINs.delete(card.publicKey),
     matchOperation: () => state.pending,
+    findSupersededOperation: () => state.superseded?.[0],
+    discardSuperseded: async (id, snapshot) => {
+      state.events.push({type: 'discard-superseded', id, snapshot});
+      if (state.discardError) throw state.discardError;
+      await state.discardGate?.promise;
+      state.superseded = state.superseded.filter(
+        operation => operation.id !== id,
+      );
+    },
     get: () => state.pending,
     discardPrepared: async id => {
       state.events.push({type: 'discard-prepared', id});
@@ -631,6 +641,262 @@ function mount({returnTo, cardInformation = true, bundle = false} = {}) {
   return state;
 }
 afterEach(() => owners.splice(0).forEach(owner => owner.unmount()));
+
+function oldMaintenance({
+  id = 'old-recovery',
+  alias = false,
+  archive = true,
+} = {}) {
+  return {
+    id,
+    mode: 'reinstall',
+    phase: 'restore',
+    checkpoint: 'verify',
+    card: {
+      id: 'd33490cd',
+      alias,
+      publicKey: 'old-public-key',
+      fingerprint: '1234',
+      bundle: false,
+      appletAid: AID,
+    },
+    archive: archive
+      ? {items: [{index: '01', alias: 'dev', secret: true}, {index: '02'}]}
+      : undefined,
+  };
+}
+
+for (const update of [false, true]) {
+  test(`superseded recovery disables ${update ? 'update' : 'reinstall'}, install and fresh actions while ordinary applet use remains available`, async () => {
+    const state = mount({cardInformation: false});
+    state.installation = installed(state.initialized, ['security-key']);
+    state.installation.optional['security-key'].installed = false;
+    state.maintenance.isUpdateAvailable = () => update;
+    state.superseded = [oldMaintenance()];
+    state.click('Scan a card');
+    await state.tap();
+    assert.equal(
+      state.node('CardSupersededMaintenanceNotice').props.operation,
+      state.superseded[0],
+    );
+    assert.equal(state.node('CardMaintenanceContent'), undefined);
+    if (update)
+      assert.equal(
+        find(
+          state.render(),
+          node => node.type === 'Button' && text(node) === 'Update applets',
+        ).props.disabled,
+        true,
+      );
+    state.click('Card menu');
+    const stack = find(
+      state.node('DetailsPopup'),
+      node => node.type === 'Buttons',
+    );
+    assert.equal(stack.props['data-popup-animation-group'], true);
+    assert.ok(
+      find(
+        stack,
+        node => node.type === 'Button' && text(node) === 'Discard old recovery',
+      ),
+    );
+    for (const label of [
+      'Install applets',
+      'Fresh install',
+      ...(!update ? ['Reinstall Monoid Applet'] : []),
+    ])
+      assert.equal(
+        find(stack, node => node.type === 'Button' && text(node) === label)
+          .props.disabled,
+        true,
+      );
+    state.node('DetailsPopup').props.onDismiss();
+    state.node('CardAppletsContent').props.onSelectApplet('security-key');
+    const ordinary = find(
+      state.node('DetailsPopup'),
+      node => node.type === 'Button' && text(node) === 'Open Security Key',
+    );
+    assert.ok(!ordinary.props.disabled);
+    assert.equal(
+      find(
+        state.node('DetailsPopup'),
+        node => node.type === 'Button' && text(node) === 'Reinstall applet',
+      ).props.disabled,
+      true,
+    );
+  });
+}
+
+test('discard confirms the old aliases and unnamed count, removes one recovery without NFC, then exposes the next', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.click('Scan a card');
+  await state.tap();
+  const older = oldMaintenance({id: 'older', alias: 'Older'});
+  const newest = oldMaintenance({alias: 'Old card'});
+  state.superseded = [newest, older];
+  state.pending = {
+    ...oldMaintenance({id: 'current'}),
+    card: {...readCardIdentity(state.initialized), appletAid: AID},
+  };
+  const ownOperation = state.pending;
+  const scans = state.scans.length;
+  const inputs = state.inputs.length;
+  state.click('Card menu');
+  state.click('Discard old recovery');
+  let confirmation = state.node('ConfirmPopup');
+  assert.equal(confirmation.props.title, 'Discard recovery of Old card?');
+  assert.equal(confirmation.props.confirmColor, 'danger');
+  assert.equal(confirmation.props.confirmText, 'Discard old recovery');
+  assert.equal(
+    text(confirmation),
+    'dev and 1 unnamed item will be lost. This cannot be undone.',
+  );
+  confirmation.props.onCancel();
+  assert.deepEqual(state.superseded, [newest, older]);
+  state.click('Card menu');
+  state.click('Discard old recovery');
+  state.discardGate = deferred();
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.flush();
+  assert.deepEqual(state.superseded, [newest, older]);
+  assert.equal(
+    find(state.render(), node => node.props?.['aria-label'] === 'Card menu')
+      .props.disabled,
+    true,
+  );
+  state.discardGate.resolve();
+  await state.flush();
+  assert.deepEqual(state.superseded, [older]);
+  assert.equal(state.pending, ownOperation);
+  assert.equal(
+    state.node('CardSupersededMaintenanceNotice').props.operation,
+    older,
+  );
+  assert.equal(
+    state.node('CardMaintenanceContent').props.operation,
+    ownOperation,
+  );
+  assert.equal(state.scans.length, scans);
+  assert.equal(state.inputs.length, inputs);
+  assert.deepEqual(
+    state.events.filter(event => event.type === 'discard-superseded'),
+    [
+      {
+        type: 'discard-superseded',
+        id: newest.id,
+        snapshot: {
+          hello: state.initialized,
+          cardInformation: state.information,
+        },
+      },
+    ],
+  );
+  state.click('Card menu');
+  state.click('Discard old recovery');
+  confirmation = state.node('ConfirmPopup');
+  assert.equal(confirmation.props.title, 'Discard recovery of Older?');
+  confirmation.props.onConfirm();
+  await state.flush();
+  assert.deepEqual(state.superseded, []);
+  assert.equal(state.node('CardSupersededMaintenanceNotice'), undefined);
+  state.click('Card menu');
+  assert.equal(
+    find(
+      state.node('DetailsPopup'),
+      node => node.type === 'Button' && text(node) === 'Discard old recovery',
+    ),
+    undefined,
+  );
+  assert.equal(state.pending, ownOperation);
+  assert.deepEqual(state.errors, []);
+});
+
+test('a Monoid-absent card exposes old maintenance without an archive and disables installation until discard', async () => {
+  const state = mount({cardInformation: false});
+  state.superseded = [oldMaintenance({archive: false})];
+  state.click('Scan a card');
+  await state.tap();
+  assert.ok(state.node('CardSupersededMaintenanceNotice'));
+  assert.equal(
+    find(
+      state.render(),
+      node => node.type === 'Button' && text(node) === 'Install applets',
+    ).props.disabled,
+    true,
+  );
+  state.click('Card menu');
+  state.click('Discard old maintenance');
+  const confirmation = state.node('ConfirmPopup');
+  assert.equal(confirmation.props.title, 'Discard maintenance of d33490cd?');
+  assert.equal(confirmation.props.confirmText, 'Discard old maintenance');
+  assert.equal(
+    text(confirmation),
+    'The saved maintenance progress will be discarded. This cannot be undone.',
+  );
+  confirmation.props.onConfirm();
+  await state.flush();
+  assert.deepEqual(state.superseded, []);
+  assert.equal(
+    state.events.find(event => event.type === 'discard-superseded').snapshot
+      .hello,
+    undefined,
+  );
+  assert.equal(state.scans.length, 1);
+  assert.equal(
+    find(
+      state.render(),
+      node => node.type === 'Button' && text(node) === 'Install applets',
+    ).props.disabled,
+    false,
+  );
+});
+
+test('a refused stale discard keeps recovery visible and surfaces the service error', async () => {
+  const state = mount({cardInformation: false});
+  state.installation = installed(state.initialized);
+  state.superseded = [oldMaintenance()];
+  state.click('Scan a card');
+  await state.tap();
+  state.click('Card menu');
+  state.click('Discard old recovery');
+  state.discardError = new MonoidCardError(
+    'This card maintenance is not superseded',
+  );
+  state.node('ConfirmPopup').props.onConfirm();
+  await state.flush();
+  assert.equal(state.superseded.length, 1);
+  assert.ok(state.node('CardSupersededMaintenanceNotice'));
+  assert.deepEqual(state.errors, [state.discardError]);
+  assert.equal(state.scans.length, 1);
+});
+
+test('superseded lookup waits for a scanned identity or confirmed Monoid absence', async () => {
+  const state = mount();
+  let lookups = 0;
+  state.maintenance.findSupersededOperation = () => {
+    lookups++;
+    return oldMaintenance();
+  };
+  state.render();
+  assert.equal(lookups, 0);
+  assert.equal(state.node('CardSupersededMaintenanceNotice'), undefined);
+
+  const unreadable = mount({cardInformation: false});
+  unreadable.installation = {
+    ...installed(unreadable.initialized),
+    hello: undefined,
+    helloError: new Error('Read failed'),
+  };
+  unreadable.maintenance.findSupersededOperation = () => {
+    lookups++;
+    return oldMaintenance();
+  };
+  unreadable.click('Scan a card');
+  await unreadable.tap();
+  assert.equal(lookups, 0);
+  assert.equal(unreadable.node('CardSupersededMaintenanceNotice'), undefined);
+});
 
 test('Authority install returns the verified card and holds its newly set Secret PIN for joining', async () => {
   const state = mount({returnTo: 'bundle'});

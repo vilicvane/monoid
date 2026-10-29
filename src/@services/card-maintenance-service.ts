@@ -28,6 +28,7 @@ import {
   acceptMatchingItem,
   assertSameCardWithBundle,
   cardItemIssue,
+  cardName,
   createMonoidApplet,
   getAppletCatalog,
   getAppletDependents,
@@ -163,6 +164,11 @@ type PrepareOptions = {
   replaceStages?: readonly AppletStage[];
   onProgress?: (progress: CardMaintenanceProgress) => void;
   signal?: AbortSignal;
+};
+
+type ScannedMaintenanceCard = {
+  hello?: MonoidAppletHello;
+  cardInformation?: CardInformation;
 };
 
 /** Only card-encrypted item envelopes and public metadata are persisted here. */
@@ -323,10 +329,7 @@ export class CardMaintenanceService {
   matchOperation({
     hello,
     cardInformation,
-  }: {
-    hello?: MonoidAppletHello;
-    cardInformation?: CardInformation;
-  }): CardMaintenanceOperation | undefined {
+  }: ScannedMaintenanceCard): CardMaintenanceOperation | undefined {
     const publicKey = hello && uint8ArrayToHex(hello.publicKey);
     const fingerprint =
       cardInformation?.cplc && cardFingerprint(cardInformation);
@@ -335,14 +338,34 @@ export class CardMaintenanceService {
       operations.find(
         operation => publicKey && operation.card.publicKey === publicKey,
       ) ??
-      operations.find(
-        operation =>
-          fingerprint === operation.card.fingerprint &&
-          (operation.mode === 'fresh' ||
-            (!publicKey &&
-              (operation.phase === 'replacing' || operation.restarted))),
+      operations.find(operation =>
+        matchesMaintenanceFingerprint(operation, fingerprint, publicKey),
       )
     );
+  }
+
+  findSupersededOperation(
+    card: ScannedMaintenanceCard,
+  ): CardMaintenanceOperation | undefined {
+    return [...this.operations]
+      .reverse()
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .find(operation => isSupersededOperation(operation, card));
+  }
+
+  /** Discard only recovery whose original identity no longer matches this chip. */
+  async discardSuperseded(
+    operationId: string,
+    card: ScannedMaintenanceCard,
+  ): Promise<void> {
+    return this.exclusive(async () => {
+      const operation = this.require(operationId);
+      if (operation.batchId)
+        throw new MonoidCardError('Finish the maintenance batch first');
+      if (!isSupersededOperation(operation, card))
+        throw new MonoidCardError('This card maintenance is not superseded');
+      await this.remove(operationId);
+    });
   }
 
   /** The caller authenticates Secret PIN before this method; it is never stored. */
@@ -364,7 +387,11 @@ export class CardMaintenanceService {
         );
       }
       const fingerprint = cardFingerprint(options.cardInformation);
-      this.assertNoPending(hello, options.cardInformation);
+      this.assertNoPending(
+        {publicKey: uint8ArrayToHex(hello.publicKey), fingerprint},
+        undefined,
+        false,
+      );
       if (hello.pins.secret === false) {
         throw new Error('Set Secret PIN before updating this card');
       }
@@ -508,17 +535,7 @@ export class CardMaintenanceService {
       ) {
         throw new MonoidCardError('This card recovery cannot be replaced');
       }
-      if (
-        this.operations.some(
-          item =>
-            item.card.publicKey === operation.card.publicKey ||
-            item.card.fingerprint === operation.card.fingerprint,
-        )
-      ) {
-        throw new MonoidCardError(
-          'Continue the existing card maintenance first',
-        );
-      }
+      this.assertNoPending(operation.card);
       return this.savePrepared(withBundleRecovery(operation, recovery), signal);
     });
   }
@@ -541,24 +558,33 @@ export class CardMaintenanceService {
       const fingerprints = new Set<string>();
       const operations = preparations.map(({operation, recovery}) => {
         const {publicKey, fingerprint} = operation.card;
-        if (
-          !publicKey ||
-          !bundle ||
-          operation.card.bundle !== bundle ||
-          !isPreparedOnly(operation) ||
-          operation.mode === 'fresh' ||
-          !replacesMonoid(operation) ||
-          operation.archive ||
-          operation.batchId ||
-          keys.has(publicKey) ||
-          fingerprints.has(fingerprint) ||
-          this.operations.some(
-            saved =>
-              saved.card.publicKey === publicKey ||
-              saved.card.fingerprint === fingerprint,
-          )
-        )
-          throw new MonoidCardError('Invalid maintenance batch');
+        if (!publicKey)
+          throw new MonoidCardError(
+            'A maintenance target has no card identity',
+          );
+        if (!bundle || operation.card.bundle !== bundle)
+          throw new MonoidCardError(
+            'Maintenance targets must belong to the same Bundle',
+          );
+        if (operation.batchId)
+          throw new MonoidCardError('Finish the maintenance batch first');
+        if (!isPreparedOnly(operation))
+          throw new MonoidCardError('Card maintenance has already started');
+        if (operation.mode === 'fresh')
+          throw new MonoidCardError(
+            'Fresh installation cannot be part of a maintenance batch',
+          );
+        if (!replacesMonoid(operation))
+          throw new MonoidCardError(
+            'A maintenance batch must replace card storage',
+          );
+        if (operation.archive)
+          throw new MonoidCardError('This card recovery cannot be replaced');
+        if (keys.has(publicKey) || fingerprints.has(fingerprint))
+          throw new MonoidCardError(
+            'The same card cannot be added to a maintenance batch twice',
+          );
+        this.assertNoPending(operation.card);
         keys.add(publicKey);
         fingerprints.add(fingerprint);
         return withBundleRecovery({...operation, batchId: id}, recovery);
@@ -590,36 +616,19 @@ export class CardMaintenanceService {
   ): Promise<CardMaintenanceOperation> {
     return this.exclusive(async () => {
       signal?.throwIfAborted();
-      if (
-        this.operations.some(
-          operation =>
-            operation.batchId &&
-            operation.card.fingerprint === cardFingerprint(cardInformation),
-        )
-      )
-        throw new MonoidCardError('Finish the maintenance batch first');
+      const fingerprint = cardFingerprint(cardInformation);
       const existing = this.operations.find(
         operation =>
           operation.mode === 'fresh' &&
-          operation.card.fingerprint === cardFingerprint(cardInformation),
+          !operation.batchId &&
+          operation.card.fingerprint === fingerprint,
+      );
+      this.assertNoPending(
+        {publicKey: hello && uint8ArrayToHex(hello.publicKey), fingerprint},
+        existing?.id,
       );
       if (existing) return existing;
-      const operation = newOperation(
-        'fresh',
-        cardFingerprint(cardInformation),
-        hello,
-      );
-      // A previous interrupted replacement can know the ID while Monoid is absent.
-      operation.card.id ??= this.operations.find(
-        previous =>
-          previous.card.fingerprint === operation.card.fingerprint &&
-          previous.card.id,
-      )?.card.id;
-      operation.card.alias ??= this.operations.find(
-        previous =>
-          previous.card.fingerprint === operation.card.fingerprint &&
-          previous.card.alias !== undefined,
-      )?.card.alias;
+      const operation = newOperation('fresh', fingerprint, hello);
       operation.selectedOptionalStages = [...selectedOptionalStages];
       if (
         identityOptions.authorityUrl !== undefined ||
@@ -1123,21 +1132,33 @@ export class CardMaintenanceService {
   }
 
   private assertNoPending(
-    hello: MonoidAppletHello | undefined,
-    information: CardInformation,
+    card: Pick<CardMaintenanceOperation['card'], 'publicKey' | 'fingerprint'>,
+    resumedId?: string,
+    matchBatchByFingerprint = true,
   ): void {
-    const fingerprint = cardFingerprint(information);
-    if (
-      this.operations.some(operation =>
-        hello
-          ? operation.card.publicKey === uint8ArrayToHex(hello.publicKey) ||
-            (operation.mode === 'fresh' &&
-              operation.card.fingerprint === fingerprint)
-          : operation.card.fingerprint === fingerprint,
-      )
-    ) {
-      throw new Error('Continue the existing card maintenance first');
-    }
+    const pending = this.operations.filter(
+      operation =>
+        operation.id !== resumedId &&
+        ((card.publicKey && operation.card.publicKey === card.publicKey) ||
+          (operation.card.fingerprint === card.fingerprint &&
+            (!operation.batchId ||
+              matchBatchByFingerprint ||
+              operation.mode === 'fresh'))),
+    );
+    if (pending.some(operation => operation.batchId))
+      throw new MonoidCardError('Finish the maintenance batch first');
+    const operation = pending.at(-1);
+    if (operation)
+      throw new MonoidCardError(
+        (card.publicKey && operation.card.publicKey === card.publicKey) ||
+        matchesMaintenanceFingerprint(
+          operation,
+          card.fingerprint,
+          card.publicKey,
+        )
+          ? 'Continue the existing card maintenance first'
+          : `This card still has unfinished maintenance of card ${cardName({...operation.card, id: operation.card.id ?? 'unknown'})}. Discard it in Card Applets first.`,
+      );
   }
 
   private async save(operation: CardMaintenanceOperation): Promise<void> {
@@ -1230,6 +1251,35 @@ export class CardMaintenanceService {
 
 export function cardFingerprint(information: CardInformation): string {
   return getCardMaintenanceFingerprint(information);
+}
+
+function matchesMaintenanceFingerprint(
+  operation: CardMaintenanceOperation,
+  fingerprint: string | undefined,
+  publicKey: string | undefined,
+): boolean {
+  return (
+    fingerprint !== undefined &&
+    fingerprint === operation.card.fingerprint &&
+    (operation.mode === 'fresh' ||
+      (!publicKey &&
+        (operation.phase === 'replacing' || !!operation.restarted)))
+  );
+}
+
+function isSupersededOperation(
+  operation: CardMaintenanceOperation,
+  {hello, cardInformation}: ScannedMaintenanceCard,
+): boolean {
+  const fingerprint = cardInformation?.cplc && cardFingerprint(cardInformation);
+  const publicKey = hello && uint8ArrayToHex(hello.publicKey);
+  return (
+    !operation.batchId &&
+    fingerprint !== undefined &&
+    fingerprint === operation.card.fingerprint &&
+    !(publicKey && operation.card.publicKey === publicKey) &&
+    !matchesMaintenanceFingerprint(operation, fingerprint, publicKey)
+  );
 }
 
 function isPreparedOnly(operation: CardMaintenanceOperation): boolean {

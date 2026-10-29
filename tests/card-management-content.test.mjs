@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {mock, test} from 'node:test';
 
-import {cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
+import {cardName, cardNameWithId} from '../.bld/app/@lib/monoid/card-name.js';
 
 mock.module('react/jsx-runtime', {
   namedExports: {
@@ -64,6 +64,7 @@ mock.module('../.bld/app/@lib/monoid/index.js', {
   namedExports: {
     APPLET_NAMES,
     APPLET_SHORT_NAMES,
+    cardName,
     cardNameWithId,
     getAppletCatalog: () => [{stage: 'otp', instanceAid: 'F06D6F6E6F69640501'}],
   },
@@ -73,6 +74,7 @@ const {
   CardMaintenanceBatchContent,
   CardMaintenanceCards,
   CardMaintenanceContent,
+  CardSupersededMaintenanceNotice,
 } = await import(
   '../.bld/app/@components/views/card/card-management-content.js'
 );
@@ -102,6 +104,26 @@ const operation = {
   selectedOptionalStages: ['security-key', 'otp'],
   archive: {items: [{index: 'f2010000000000000001', alias: 'Example OTP'}]},
 };
+
+test('superseded maintenance is a plain warning notice with the old card name and unrestored item count', () => {
+  for (const alias of [false, 'Travel']) {
+    for (const count of [undefined, 0, 1, 2]) {
+      const tree = CardSupersededMaintenanceNotice({
+        operation: {
+          ...operation,
+          card: {...operation.card, id: 'd33490cd', alias},
+          archive:
+            count === undefined ? undefined : {items: Array(count).fill({})},
+        },
+      });
+      assert.equal(tree.type, 'WarningMessage');
+      assert.equal(
+        text(tree),
+        `This card still holds unfinished maintenance of card ${alias || 'd33490cd'} from before it was set up again. ${count === undefined ? '' : `${count} ${count === 1 ? 'item was' : 'items were'} never restored. `}Discard it from the menu.`,
+      );
+    }
+  }
+});
 
 test('maintenance and catalogue heroes carry the alias, and batch cards retain their status', () => {
   const card = {...operation.card, alias: '旅行卡', bundle: 'bundle'};

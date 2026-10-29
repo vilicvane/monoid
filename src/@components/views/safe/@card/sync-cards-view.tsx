@@ -537,6 +537,23 @@ export const SyncCardsView = observer(
                 }
               }
             } catch (error) {
+              // Roll back newly collected cards when the session still permits it.
+              if (
+                collecting &&
+                maintenance &&
+                !scanned &&
+                session.phase === 'collect' &&
+                !session.busy &&
+                session.cards.some(
+                  card => card.publicKey === identity.publicKey,
+                )
+              ) {
+                try {
+                  session.remove(identity.publicKey);
+                } catch {
+                  // Cleanup must not replace the original scan failure.
+                }
+              }
               flow.markInterrupted(identity.publicKey, true);
               throw error;
             }

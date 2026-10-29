@@ -25,6 +25,7 @@ import {
   assertCardPINsNotBlocked,
   assertSameCard,
   authenticateCardPIN,
+  cardName,
   cardNameWithId,
   createMonoidApplet,
   getAppletCatalog,
@@ -93,6 +94,7 @@ import {
   CardMaintenanceBatchContent,
   CardMaintenanceContent,
   CardScanPlaceholder,
+  CardSupersededMaintenanceNotice,
 } from './card-management-content.js';
 type Action = CardMaintenanceMode | 'install' | 'resume' | 'restore' | 'setup';
 
@@ -175,6 +177,8 @@ export const CardManagementView = observer(
           : undefined) ?? {information: view.cardInformation},
     );
     const [complete, setComplete] = useState(false);
+    const [discardOperation, setDiscardOperation] =
+      useState<CardMaintenanceOperation>();
     const [operationSnapshot, setOperationSnapshot] =
       useState<CardMaintenanceOperation>();
     const [restoreReport, setRestoreReport] = useState<{
@@ -231,6 +235,7 @@ export const CardManagementView = observer(
           pinSession.clear();
           setPopup(undefined);
           setConfirm(undefined);
+          setDiscardOperation(undefined);
         }
       });
       return () => {
@@ -246,6 +251,13 @@ export const CardManagementView = observer(
       hello,
       cardInformation: card.information,
     });
+    const superseded =
+      hello || installation?.monoid.installed === false
+        ? maintenance.findSupersededOperation({
+            hello,
+            cardInformation: card.information,
+          })
+        : undefined;
     const [batchId, setBatchId] = useState<string>();
     const batch =
       (maintenance.batches ?? []).find(
@@ -269,6 +281,7 @@ export const CardManagementView = observer(
       (installation?.identity.installed &&
         installation.monoid.installed !== false) ||
       !!pending ||
+      !!superseded ||
       card.unsupported;
     const initialized =
       hello && hello.pins.secret !== false && hello.pins.access !== false;
@@ -996,6 +1009,28 @@ export const CardManagementView = observer(
       }
     }
 
+    async function discardOldMaintenance(): Promise<void> {
+      if (
+        !isActive() ||
+        busy ||
+        !discardOperation ||
+        (!hello && installation?.monoid.installed !== false)
+      )
+        return;
+      setBusy(true);
+      setDiscardOperation(undefined);
+      try {
+        await maintenance.discardSuperseded(discardOperation.id, {
+          hello,
+          cardInformation: card.information,
+        });
+      } catch (error) {
+        errorService.catch(Promise.reject(error));
+      } finally {
+        setBusy(false);
+      }
+    }
+
     const backToCopy =
       context.returnTo === 'copy'
         ? router.$backTo(router.safe.copyItems.$exact)
@@ -1033,12 +1068,13 @@ export const CardManagementView = observer(
           : backToOTP
             ? 'Back to OTP'
             : 'Back to Safe';
-    const canStartMaintenance = !busy && !pending;
+    const canStartMaintenance = !busy && !pending && !superseded;
     const canMaintain =
       canStartMaintenance && !!installation?.identity.installed;
     const canFreshInstall =
       !busy &&
-      pending?.mode !== 'fresh' &&
+      !pending &&
+      !superseded &&
       !!card.information &&
       !!installation?.identity.installed;
     const baseUpdateAvailable = hello && maintenance.isUpdateAvailable(hello);
@@ -1073,6 +1109,15 @@ export const CardManagementView = observer(
     const confirmationOperation = confirm?.operationId
       ? maintenance.get(confirm.operationId)
       : pending;
+    const lostItems = discardOperation?.archive?.items ?? [];
+    const lostItemNames = lostItems.flatMap(item =>
+      item.alias ? [item.alias] : [],
+    );
+    const unnamedItems = lostItems.length - lostItemNames.length;
+    if (unnamedItems)
+      lostItemNames.push(
+        `${unnamedItems} unnamed ${unnamedItems === 1 ? 'item' : 'items'}`,
+      );
 
     return (
       <>
@@ -1178,7 +1223,7 @@ export const CardManagementView = observer(
                 </Button>
               ) : !installation?.monoid.installed && card.information ? (
                 <Button
-                  disabled={busy || !hasAppletBundle}
+                  disabled={!canStartMaintenance || !hasAppletBundle}
                   onClick={() => requestInstall()}
                 >
                   Install applets
@@ -1189,7 +1234,7 @@ export const CardManagementView = observer(
                 </Button>
               ) : updateAvailable ? (
                 <Button
-                  disabled={busy}
+                  disabled={!canStartMaintenance}
                   onClick={() => requestMaintenance('update', updateStages)}
                 >
                   Update applets
@@ -1313,6 +1358,9 @@ export const CardManagementView = observer(
             ) : (
               <CardScanPlaceholder />
             )}
+            {superseded && (
+              <CardSupersededMaintenanceNotice operation={superseded} />
+            )}
           </ViewContent>
         </View>
         {pinContent}
@@ -1357,6 +1405,20 @@ export const CardManagementView = observer(
             <DetailsPopupTitle>Card applets</DetailsPopupTitle>
             <DetailsPopupDivider />
             <Buttons data-popup-animation-group>
+              {superseded && (
+                <Button
+                  color="danger"
+                  disabled={busy}
+                  onClick={() => {
+                    setPopup(undefined);
+                    setDiscardOperation(superseded);
+                  }}
+                >
+                  {superseded.archive
+                    ? 'Discard old recovery'
+                    : 'Discard old maintenance'}
+                </Button>
+              )}
               {canRestart && (
                 <Button
                   color="neutral"
@@ -1395,6 +1457,30 @@ export const CardManagementView = observer(
               </Button>
             </Buttons>
           </DetailsPopup>
+        )}
+        {discardOperation && (
+          <ConfirmPopup
+            title={`Discard ${discardOperation.archive ? 'recovery' : 'maintenance'} of ${cardName({id: discardOperation.card.id ?? 'unknown', alias: discardOperation.card.alias})}?`}
+            confirmText={
+              discardOperation.archive
+                ? 'Discard old recovery'
+                : 'Discard old maintenance'
+            }
+            confirmColor="danger"
+            onCancel={() => setDiscardOperation(undefined)}
+            onConfirm={() => void discardOldMaintenance()}
+          >
+            <ConfirmNotices
+              notices={[
+                lostItemNames.length
+                  ? `${new Intl.ListFormat('en').format(lostItemNames)} will be lost.`
+                  : discardOperation.archive
+                    ? 'The saved recovery archive will be discarded.'
+                    : 'The saved maintenance progress will be discarded.',
+                'This cannot be undone.',
+              ]}
+            />
+          </ConfirmPopup>
         )}
         {popup === 'restart' && (
           <ConfirmPopup

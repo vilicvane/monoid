@@ -13,6 +13,7 @@ import {
   APPLET_NAMES,
   APPLET_SHORT_NAMES,
   type AppletStage,
+  cardName,
   cardNameWithId,
   getAppletCatalog,
 } from '../../../@lib/monoid/index.js';
@@ -274,6 +275,27 @@ const Applets = styled(IconList)`
   flex: none;
   margin-top: 4px;
 `;
+
+export function CardSupersededMaintenanceNotice({
+  operation,
+}: {
+  operation: CardMaintenanceOperation;
+}): ReactNode {
+  const count = operation.archive?.items.length;
+  return (
+    <WarningMessage>
+      This card still holds unfinished maintenance of card{' '}
+      {cardName({
+        id: operation.card.id ?? 'unknown',
+        alias: operation.card.alias,
+      })}{' '}
+      from before it was set up again.{' '}
+      {count !== undefined &&
+        `${count} ${count === 1 ? 'item was' : 'items were'} never restored. `}
+      Discard it from the menu.
+    </WarningMessage>
+  );
+}
 
 const AppletRow = styled(ListItem)`
   align-items: center;

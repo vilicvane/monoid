@@ -9,6 +9,7 @@ import {
   CardItemExistsError,
   CardItemNotFoundError,
 } from '../.bld/app/@lib/cbor-applet.js';
+import {MonoidCardError} from '../.bld/app/@lib/monoid/card-error.js';
 
 import {pinClock} from './helpers/held-pins.mjs';
 
@@ -458,7 +459,10 @@ test('pending Bundle applet access cannot be overwritten by another maintenance 
   const operation = await service.prepare(card, options);
   await service.saveBundleRecovery(operation, bundleRecovery(card));
   const recovery = structuredClone(await storage.get());
-  await assert.rejects(service.prepare(card, options), /Continue the existing/);
+  await assert.rejects(
+    service.prepare(card, options),
+    /Continue the existing card maintenance first/,
+  );
   assert.deepEqual(await storage.get(), recovery);
   assert.equal(service.get(operation.id).phase, 'ready');
   assert.equal(service.get(operation.id).grants.length, 1);
@@ -1407,12 +1411,7 @@ for (const fromRecord of [false, true]) {
     let service = await CardMaintenanceService.create(storage);
     const card = cardFixture();
     card.state.alias = ' 旅行卡 😀 ';
-    if (fromRecord)
-      await service.prepare(card, {
-        mode: 'reinstall',
-        cardInformation: information,
-        appletAid: hex(aid),
-      });
+    if (fromRecord) await service.prepareFresh(information, card.state);
     const operation = await service.prepareFresh(
       information,
       fromRecord ? undefined : card.state,
@@ -1549,7 +1548,7 @@ for (const failure of ['installation record', 'operation removal']) {
   });
 }
 
-test('a new ordinary operation cannot overwrite an existing archive while Fresh preserves it', async () => {
+test('neither a new ordinary operation nor Fresh can orphan an existing archive', async () => {
   const service = await CardMaintenanceService.create(storageFixture());
   const original = await service.prepare(cardFixture(), {
     mode: 'update',
@@ -1562,14 +1561,17 @@ test('a new ordinary operation cannot overwrite an existing archive while Fresh 
       cardInformation: information,
       appletAid: hex(aid),
     }),
-    /existing card maintenance/,
+    /Continue the existing card maintenance first/,
   );
-  const fresh = await service.prepareFresh(information);
-  assert.notEqual(fresh.id, original.id);
+  await assert.rejects(
+    service.prepareFresh(information),
+    /unfinished maintenance of card 01020304/,
+  );
   assert.equal(service.get(original.id).archive.items.length, 3);
+  assert.equal(service.operations.length, 1);
 });
 
-test('Fresh retains its new Identity setup until completion without removing another recovery archive', async () => {
+test('Fresh cannot strand recovery after the original applets have been replaced', async () => {
   const storage = storageFixture();
   const service = await CardMaintenanceService.create(storage);
   const original = await service.prepare(cardFixture(), {
@@ -1578,39 +1580,18 @@ test('Fresh retains its new Identity setup until completion without removing ano
     appletAid: hex(aid),
   });
   await service.replace('session', original.id);
-  const fresh = await service.prepareFresh(information, hello);
-  const newHello = {
-    ...structuredClone(hello),
-    publicKey: bytes(`04${'33'.repeat(64)}`),
-  };
-  replacement = async (_session, options) => {
-    await options.onCheckpoint('verify');
-    return newHello;
-  };
-  assert.deepEqual(await service.replace('session', fresh.id), newHello);
-  assert.equal(service.get(fresh.id).checkpoint, 'verify');
-  await service.finishFreshAlias(fresh.id, newHello);
-  assert.equal(service.get(fresh.id), undefined);
-  assert.equal(
-    service.matchOperation({hello: newHello, cardInformation: information}),
-    undefined,
+  const before = await storage.get();
+  await assert.rejects(
+    service.prepareFresh(information, hello),
+    /Continue the existing card maintenance first/,
   );
-  assert.ok(service.get(original.id).archive);
+  assert.deepEqual(await storage.get(), before);
   const restarted = await CardMaintenanceService.create(storage);
-  assert.equal(
-    restarted.matchOperation({hello: newHello, cardInformation: information}),
-    undefined,
+  await assert.rejects(
+    restarted.prepareFresh(information),
+    /unfinished maintenance of card 01020304/,
   );
   assert.ok(restarted.get(original.id).archive);
-  assert.equal(restarted.isIdentityUpdateAvailable(newHello), false);
-  assert.equal(restarted.isUpdateAvailable(newHello), false);
-  const newCard = cardFixture();
-  newCard.state = newHello;
-  await service.prepare(newCard, {
-    mode: 'update',
-    cardInformation: information,
-    appletAid: hex(aid),
-  });
 });
 
 test('installation bookkeeping names each component and leaves retained or unknown packages unchanged', async () => {
@@ -1913,7 +1894,7 @@ for (const phase of ['ready', 'replacing', 'restore']) {
         {...draft, id: 'another-task'},
         bundleRecovery(card),
       ),
-      /existing card maintenance/,
+      /Continue the existing card maintenance first/,
     );
     assert.deepEqual(await storage.get(), previous);
   });
@@ -2902,6 +2883,438 @@ async function batchFixture(
     preparations.push({operation, recovery: bundleRecovery(card)});
   }
   return {cards, preparations};
+}
+
+async function supersededFixture(alias = false, cardInformation = information) {
+  const storage = storageFixture();
+  let service = await CardMaintenanceService.create(storage);
+  const oldCard = cardFixture();
+  oldCard.state.id = bytes('d33490cd');
+  oldCard.state.alias = alias;
+  oldCard.items = [{...sourceItems[0], alias: 'dev'}, sourceItems[1]];
+  const prepared = await service.prepare(oldCard, {
+    mode: 'reinstall',
+    cardInformation,
+    appletAid: hex(aid),
+  });
+  storage.mutate(state => {
+    state.operations[0].phase = 'restore';
+    state.operations[0].checkpoint = 'verify';
+  });
+  service = await CardMaintenanceService.create(storage);
+  const current = cardFixture();
+  current.state.id = bytes('08a3d7ed');
+  current.state.alias = '10sn';
+  current.state.publicKey = bytes(`04${'99'.repeat(64)}`);
+  current.state.bundle = new Uint8Array(32).fill(4);
+  return {
+    storage,
+    service,
+    current,
+    oldCard,
+    operation: (await storage.get()).operations.find(
+      item => item.id === prepared.id,
+    ),
+    scanned: {hello: current.state, cardInformation},
+  };
+}
+
+for (const alias of [false, 'Original']) {
+  test(`all maintenance preparations and recovery saves name superseded ${alias ? 'alias' : 'ID'} before any card writes`, async () => {
+    const drafts = await CardMaintenanceService.create(storageFixture());
+    const {preparations} = await batchFixture(drafts);
+    const cardInformation = {
+      ...information,
+      cplc: {icSerialNumber: 'card-0'},
+    };
+    const {service, storage, current} = await supersededFixture(
+      alias,
+      cardInformation,
+    );
+    const message = `This card still has unfinished maintenance of card ${alias || 'd33490cd'}. Discard it in Card Applets first.`;
+    const unchanged = await storage.get();
+    for (const prepare of [
+      () => service.prepareFresh(cardInformation, current.state),
+      () => service.prepareFresh(cardInformation),
+      ...['update', 'reinstall'].map(
+        mode => () =>
+          service.prepare(current, {
+            mode,
+            cardInformation,
+            appletAid: hex(aid),
+          }),
+      ),
+      () =>
+        service.saveBundleRecovery(
+          preparations[0].operation,
+          preparations[0].recovery,
+        ),
+      () => service.saveBundleRecoveryBatch(preparations),
+    ]) {
+      await assert.rejects(
+        prepare(),
+        error => error instanceof MonoidCardError && error.message === message,
+      );
+      assert.deepEqual(await storage.get(), unchanged);
+    }
+    assert.deepEqual(current.grantListCalls, []);
+    assert.deepEqual(current.listCalls, []);
+    assert.deepEqual(current.exports, []);
+    assert.deepEqual(current.imports, []);
+  });
+}
+
+for (const conflict of ['same public key', 'fresh fingerprint', 'batch']) {
+  test(`maintenance preparations and recovery saves distinguish a ${conflict} conflict from superseded recovery`, async () => {
+    const drafts = await CardMaintenanceService.create(storageFixture());
+    const {cards, preparations} = await batchFixture(drafts);
+    const card = cards[0];
+    const cardInformation = {
+      ...information,
+      cplc: {icSerialNumber: 'card-0'},
+    };
+    const {storage, operation} = await supersededFixture(
+      false,
+      cardInformation,
+    );
+    storage.mutate(state => {
+      const pending = state.operations[0];
+      if (conflict === 'fresh fingerprint') {
+        pending.mode = 'fresh';
+        pending.archive = undefined;
+      } else {
+        pending.card.publicKey = hex(card.state.publicKey);
+        if (conflict === 'same public key')
+          pending.card.fingerprint = 'another-fingerprint';
+        else {
+          pending.batchId = 'pending-batch';
+          // A newer superseded operation must not hide the batch conflict.
+          state.operations.push({...operation, id: 'superseded'});
+        }
+      }
+    });
+    const service = await CardMaintenanceService.create(storage);
+    const unchanged = await storage.get();
+    const writes = storage.writes.length;
+    const message =
+      conflict === 'batch'
+        ? 'Finish the maintenance batch first'
+        : 'Continue the existing card maintenance first';
+    for (const prepare of [
+      ...['update', 'reinstall'].map(
+        mode => () =>
+          service.prepare(card, {
+            mode,
+            cardInformation,
+            appletAid: hex(aid),
+          }),
+      ),
+      ...(conflict === 'fresh fingerprint'
+        ? []
+        : [() => service.prepareFresh(cardInformation, card.state)]),
+      () =>
+        service.saveBundleRecovery(
+          preparations[0].operation,
+          preparations[0].recovery,
+        ),
+      () => service.saveBundleRecoveryBatch(preparations),
+    ]) {
+      await assert.rejects(
+        prepare(),
+        error => error instanceof MonoidCardError && error.message === message,
+      );
+      assert.deepEqual(await storage.get(), unchanged);
+      assert.equal(storage.writes.length, writes);
+    }
+    if (conflict === 'fresh fingerprint') {
+      for (const hello of [card.state, undefined])
+        assert.equal(
+          (await service.prepareFresh(cardInformation, hello)).id,
+          operation.id,
+        );
+      assert.equal(storage.writes.length, writes);
+    }
+    assert.equal(card.grantListCalls.length, 1);
+    assert.deepEqual(card.listCalls, []);
+    assert.deepEqual(card.exports, []);
+    assert.deepEqual(card.imports, []);
+  });
+}
+
+test('superseded lookup keeps current identity matching and requires the scanned physical chip', async () => {
+  const {service, operation, scanned, oldCard} = await supersededFixture();
+  assert.equal(service.matchOperation(scanned), undefined);
+  assert.equal(service.findSupersededOperation(scanned).id, operation.id);
+  const original = {...scanned, hello: oldCard.state};
+  assert.equal(service.matchOperation(original).id, operation.id);
+  assert.equal(service.findSupersededOperation(original), undefined);
+  assert.equal(
+    service.findSupersededOperation({hello: scanned.hello}),
+    undefined,
+  );
+  assert.equal(
+    service.findSupersededOperation({
+      ...scanned,
+      cardInformation: {...information, cplc: {icSerialNumber: 'different'}},
+    }),
+    undefined,
+  );
+});
+
+for (const [phase, restarted, expected] of [
+  ['restore', false, true],
+  ['setup', false, true],
+  ['replacing', false, false],
+  ['ready', true, false],
+  ['restore', true, false],
+]) {
+  test(`Monoid absent ${phase}${restarted ? ' restarted' : ''} is ${expected ? '' : 'not '}superseded`, async () => {
+    const {storage, operation} = await supersededFixture();
+    storage.mutate(state =>
+      Object.assign(state.operations[0], {phase, restarted}),
+    );
+    const service = await CardMaintenanceService.create(storage);
+    const scanned = {cardInformation: information};
+    assert.equal(
+      service.findSupersededOperation(scanned)?.id,
+      expected ? operation.id : undefined,
+    );
+    assert.equal(
+      service.matchOperation(scanned)?.id,
+      expected ? undefined : operation.id,
+    );
+    const unchanged = await storage.get();
+    await assert.rejects(
+      service.prepareFresh(information),
+      error =>
+        error instanceof MonoidCardError &&
+        error.message ===
+          (expected
+            ? 'This card still has unfinished maintenance of card d33490cd. Discard it in Card Applets first.'
+            : 'Continue the existing card maintenance first'),
+    );
+    assert.deepEqual(await storage.get(), unchanged);
+  });
+}
+
+test('superseded lookup excludes fresh, batch and all current identity operations; discards newest one at a time', async () => {
+  const {storage, operation, scanned} = await supersededFixture();
+  const newest = {
+    ...operation,
+    id: 'newest',
+    createdAt: operation.createdAt + 100,
+  };
+  const current = {
+    ...operation,
+    id: 'current',
+    card: {...operation.card, publicKey: hex(scanned.hello.publicKey)},
+  };
+  const fresh = {...operation, id: 'fresh', mode: 'fresh', archive: undefined};
+  const batch = {...operation, id: 'batch', batchId: 'batch'};
+  storage.mutate(state => {
+    state.operations = [newest, operation, current, fresh, batch];
+  });
+  const service = await CardMaintenanceService.create(storage);
+  assert.equal(service.matchOperation(scanned).id, current.id);
+  assert.equal(service.findSupersededOperation(scanned).id, newest.id);
+  await service.discardSuperseded(newest.id, scanned);
+  assert.deepEqual(
+    service.operations.map(item => item.id),
+    [operation.id, current.id, fresh.id, batch.id],
+  );
+  assert.equal(service.findSupersededOperation(scanned).id, operation.id);
+  await service.discardSuperseded(operation.id, scanned);
+  assert.equal(service.findSupersededOperation(scanned), undefined);
+  assert.deepEqual(
+    (await storage.get()).operations.map(item => item.id),
+    [current.id, fresh.id, batch.id],
+  );
+  for (const item of [current, fresh, batch]) {
+    await assert.rejects(
+      service.discardSuperseded(item.id, scanned),
+      error =>
+        error instanceof MonoidCardError &&
+        error.message ===
+          (item.batchId
+            ? 'Finish the maintenance batch first'
+            : 'This card maintenance is not superseded'),
+    );
+  }
+});
+
+test('discard rechecks the supplied scan and refuses the current identity or another physical chip', async () => {
+  const {service, storage, operation, scanned, oldCard} =
+    await supersededFixture();
+  const unchanged = await storage.get();
+  for (const card of [
+    {...scanned, hello: oldCard.state},
+    {hello: scanned.hello},
+    {
+      ...scanned,
+      cardInformation: {...information, cplc: {icSerialNumber: 'different'}},
+    },
+  ]) {
+    await assert.rejects(
+      service.discardSuperseded(operation.id, card),
+      /not superseded/,
+    );
+    assert.deepEqual(await storage.get(), unchanged);
+  }
+  await service.discardSuperseded(operation.id, {cardInformation: information});
+  assert.equal(service.get(operation.id), undefined);
+});
+
+test('a resumed fresh operation still rejects another pending operation on its chip', async () => {
+  const storage = storageFixture();
+  let service = await CardMaintenanceService.create(storage);
+  const fresh = await service.prepareFresh(information, hello);
+  assert.equal((await service.prepareFresh(information, hello)).id, fresh.id);
+  const old = await supersededFixture();
+  storage.mutate(state => {
+    state.operations[0].checkpoint = 'verify';
+    state.operations.push({
+      ...old.operation,
+      card: {
+        ...old.operation.card,
+        publicKey: `04${'99'.repeat(64)}`,
+        fingerprint: fresh.card.fingerprint,
+      },
+    });
+  });
+  service = await CardMaintenanceService.create(storage);
+  await assert.rejects(
+    service.prepareFresh(information, hello),
+    /unfinished maintenance of card d33490cd/,
+  );
+  assert.equal(service.operations.length, 2);
+});
+
+test('discard without an archive changes only that operation and is exclusive until storage verifies it', async () => {
+  const {storage, operation, scanned} = await supersededFixture();
+  storage.mutate(state => {
+    state.operations[0].archive = undefined;
+    state.operations[0].replaceStages = ['security-key'];
+  });
+  const service = await CardMaintenanceService.create(storage);
+  let release;
+  let written;
+  const pending = new Promise(resolve => {
+    written = resolve;
+  });
+  storage.afterSet = async () => {
+    written();
+    await new Promise(resolve => {
+      release = resolve;
+    });
+  };
+  const discarding = service.discardSuperseded(operation.id, scanned);
+  await pending;
+  try {
+    assert.ok(service.get(operation.id));
+    await assert.rejects(
+      service.discardSuperseded(operation.id, scanned),
+      /already running/,
+    );
+    await assert.rejects(service.restart(operation.id), /already running/);
+  } finally {
+    release();
+  }
+  await discarding;
+  assert.deepEqual(service.operations, []);
+});
+
+test('maintenance batch guards identify each invalid target without saving a partial batch', async () => {
+  const storage = storageFixture();
+  const service = await CardMaintenanceService.create(storage);
+  const {preparations} = await batchFixture(service);
+  for (const [change, message] of [
+    [
+      operation => {
+        operation.card.publicKey = undefined;
+      },
+      'A maintenance target has no card identity',
+    ],
+    [
+      operation => {
+        operation.card.bundle = false;
+      },
+      'Maintenance targets must belong to the same Bundle',
+    ],
+    [
+      operation => {
+        operation.batchId = 'pending';
+      },
+      'Finish the maintenance batch first',
+    ],
+    [
+      operation => {
+        operation.phase = 'restore';
+      },
+      'Card maintenance has already started',
+    ],
+    [
+      operation => {
+        operation.mode = 'fresh';
+      },
+      'Fresh installation cannot be part of a maintenance batch',
+    ],
+    [
+      operation => {
+        operation.replaceStages = ['security-key'];
+      },
+      'A maintenance batch must replace card storage',
+    ],
+    [
+      operation => {
+        operation.archive = {items: []};
+      },
+      'This card recovery cannot be replaced',
+    ],
+    [
+      operation => {
+        operation.card.publicKey = preparations[0].operation.card.publicKey;
+      },
+      'The same card cannot be added to a maintenance batch twice',
+    ],
+    [
+      operation => {
+        operation.card.fingerprint = preparations[0].operation.card.fingerprint;
+      },
+      'The same card cannot be added to a maintenance batch twice',
+    ],
+  ]) {
+    const invalid = structuredClone(preparations);
+    change(invalid[1].operation);
+    await assert.rejects(
+      service.saveBundleRecoveryBatch(invalid),
+      error => error instanceof MonoidCardError && error.message === message,
+    );
+    assert.deepEqual(storage.writes, []);
+    assert.deepEqual(service.operations, []);
+    assert.deepEqual(service.batches, []);
+  }
+});
+
+for (const failure of ['write', 'read']) {
+  test(`superseded discard retains in-memory recovery and its PIN until ${failure} verification succeeds`, async () => {
+    const {storage, service, operation, scanned} = await supersededFixture();
+    service.holdSecretPIN(operation.card, 'Secret-42');
+    if (failure === 'write') storage.failWrite = true;
+    else {
+      const get = storage.get;
+      storage.get = async function () {
+        const saved = await get.call(this);
+        saved.operations.push(operation);
+        return saved;
+      };
+    }
+    await assert.rejects(
+      service.discardSuperseded(operation.id, scanned),
+      /Disk full|verify/,
+    );
+    assert.deepEqual(service.get(operation.id), operation);
+    assert.equal(service.secretPIN(operation.card), 'Secret-42');
+  });
 }
 
 test('a batch can save after obsolete operations for earlier identities of the same chip are discarded', async () => {

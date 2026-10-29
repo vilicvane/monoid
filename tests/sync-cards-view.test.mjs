@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {afterEach, mock, test} from 'node:test';
 import {setImmediate} from 'node:timers/promises';
 
@@ -17,7 +18,10 @@ import {
   authenticateCardPIN,
 } from '../.bld/app/@lib/monoid/card-pins.js';
 import * as monoid from '../.bld/app/@lib/monoid/index.js';
-import {assertCardMaintenanceBundleRecovery} from '../.bld/app/@services/card-maintenance-service.js';
+import {
+  CardMaintenanceService,
+  assertCardMaintenanceBundleRecovery,
+} from '../.bld/app/@services/card-maintenance-service.js';
 import {CardStore} from '../.bld/app/@services/card-store.js';
 import {
   getWalletReference,
@@ -1621,6 +1625,149 @@ test('maintenance collection records each peer own optional applets independentl
     [['otp'], ['security-key'], []],
   );
 });
+
+for (const mode of ['update', 'reinstall']) {
+  test(`maintenance ${mode} rejects superseded recovery while adding the card before further scans`, async () => {
+    const state = await mountMaintenance({addPeer: false});
+    state.draft.mode = mode;
+    state.peer.hello.id = bytes('08a3d7ed');
+    state.peer.hello.alias = '10sn';
+    const items = [
+      {index: '02400000000000000001', alias: 'dev', secret: true, data: '01'},
+      {index: 'ffff0000000000000002', secret: false, data: '01'},
+    ];
+    const old = {
+      id: 'old-reinstall',
+      createdAt: 1,
+      mode: 'reinstall',
+      phase: 'restore',
+      checkpoint: 'verify',
+      card: {
+        id: 'd33490cd',
+        publicKey: hex(hello(9).publicKey),
+        bundle: false,
+        appletAid: monoid.getBundledMonoidAppletAid(),
+        fingerprint: monoid.getCardMaintenanceFingerprint({
+          cplc: {icSerialNumber: 'card'},
+        }),
+      },
+      bundleHashes: monoid.getMonoidAppletBundleHashes(),
+      archive: {
+        items,
+        checksum: `0x${createHash('sha256').update(JSON.stringify(items)).digest('hex')}`,
+      },
+    };
+    const service = await CardMaintenanceService.create({
+      get: async () => structuredClone({version: 1, operations: [old]}),
+      set: async () => assert.fail('Rejected targets must not save recovery'),
+    });
+    let preparations = 0;
+    state.entrances.cardMaintenanceService.prepare = async (
+      applet,
+      options,
+    ) => {
+      preparations++;
+      assert.equal(options.mode, mode);
+      return service.prepare(applet, options);
+    };
+    state.entrances.cardMaintenanceService.saveBundleRecoveryBatch = () =>
+      assert.fail('The conflict must be rejected before the final batch save');
+    state.peer.applet.aid = bytes(monoid.getBundledMonoidAppletAid());
+    state.peer.applet.hello = async () => state.peer.hello;
+
+    await state.startScan('Add another card');
+    const scan = await state.tap(state.peer.hello, state.peer.applet);
+    assert.equal(preparations, 1);
+    assert.ok(scan.error instanceof MonoidCardError);
+    assert.equal(
+      scan.error.message,
+      'This card still has unfinished maintenance of card d33490cd. Discard it in Card Applets first.',
+    );
+    assert.deepEqual(state.errors, [scan.error]);
+    assert.equal(state.scans.length, 1);
+    assert.equal(state.session.phase, 'collect');
+    assert.equal(state.session.cards.length, 1);
+    assert.equal(
+      state.flow.maintenanceCards.has(hex(state.peer.hello.publicKey)),
+      false,
+    );
+    assert.equal(state.flow.maintenanceTargets.length, 1);
+    assert.equal(state.flow.maintenanceSaved, false);
+    assert.equal(state.button('Continue'), undefined);
+    assert.equal(
+      find(state.tree, node => node.type === 'ConfirmPopup'),
+      undefined,
+    );
+    assert.deepEqual(state.savedRecoveries, []);
+    assert.deepEqual(state.target.requests, []);
+    assert.deepEqual(state.peer.requests, []);
+    assert.deepEqual(state.peer.exports, []);
+    assert.deepEqual(
+      service.operations.map(operation => operation.id),
+      [old.id],
+    );
+  });
+}
+
+for (const cleanupState of ['not added', 'busy', 'fixed', 'remove fails']) {
+  test(`maintenance collection preserves the original failure when cleanup is ${cleanupState}`, async () => {
+    const state = await mountMaintenance({addPeer: false});
+    const failure = new Error('Maintenance preparation failed');
+    const gate = deferred();
+    let pendingRead;
+    let removals = 0;
+    const remove = state.session.remove.bind(state.session);
+    state.session.remove = publicKey => {
+      removals++;
+      if (cleanupState === 'remove fails')
+        throw new MonoidCardError('Card list is fixed');
+      remove(publicKey);
+    };
+    if (cleanupState === 'not added')
+      state.peer.applet.list = async () => {
+        throw failure;
+      };
+    state.entrances.cardMaintenanceService.prepare = async () => {
+      if (cleanupState === 'busy') {
+        const list = state.target.applet.list;
+        state.target.applet.list = async (...args) => {
+          await gate.promise;
+          return list(...args);
+        };
+        pendingRead = state.session.add(
+          state.target.applet,
+          state.target.hello,
+          signal(),
+        );
+      } else if (cleanupState === 'fixed') {
+        state.session.prepare();
+      }
+      throw failure;
+    };
+
+    try {
+      await state.startScan('Add another card');
+      const scan = await state.tap(state.peer.hello, state.peer.applet);
+      assert.equal(scan.error, failure);
+      assert.deepEqual(state.errors, [failure]);
+      assert.equal(removals, cleanupState === 'remove fails' ? 1 : 0);
+      assert.equal(
+        state.session.cards.some(
+          card => card.publicKey === hex(state.peer.hello.publicKey),
+        ),
+        cleanupState !== 'not added',
+      );
+      if (cleanupState === 'busy') assert.equal(state.session.busy, true);
+      if (cleanupState === 'fixed')
+        assert.notEqual(state.session.phase, 'collect');
+      assert.equal(state.flow.maintenanceTargets.length, 1);
+      assert.deepEqual(state.savedRecoveries, []);
+    } finally {
+      gate.resolve();
+      await pendingRead;
+    }
+  });
+}
 
 for (const written of [false, true]) {
   test(`maintenance Start over returns to Card Applets ${written ? 'after peer writes' : 'during collection'}`, async () => {
