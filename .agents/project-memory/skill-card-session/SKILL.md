@@ -5,7 +5,7 @@ description: Monoid NFC card sessions, Access/Safe PIN ownership, biometric vaul
 
 # Monoid card sessions
 
-Source: `../records.md`, especially records 29–32, 34, 38–41, 47–50, 63, 83, 90–92 and 98, and `../29.md`, `../48.md` and `../50.md`. Treat records
+Source: `../records.md`, especially records 29–32, 34, 38–41, 47–50, 63, 83, 90–92, 98 and 103, and `../29.md`, `../48.md` and `../50.md`. Treat records
 as authoritative and keep them up to date. Records 19–24 describe an older WIP;
 do not reintroduce their plain-storage design or assume those TODOs still exist.
 
@@ -95,6 +95,7 @@ do not reintroduce their plain-storage design or assume those TODOs still exist.
   End the system sheet with a disconnect error for tag loss; successful post-read
   removal retains the normal completion indication.
 - A WebView page reload ends the native Android scan and session it started (`onPageStarted`, `PageSessionScope`); late results never reach the new page (record 98).
+- Android keeps Reader Mode on (linger) after an ordinary `stopScan` and offers a still-present card to the next scan after a silent presence probe; `NfcAdapter.ignore` hides an in-range card until it leaves, so call it only on the final stop (idle 5 min, pause, NFC off, reload, destroy) (record 103).
 - iOS requires the applet/card-manager AIDs in `Info.plist`. Keep them aligned with
   both the bundled CAP manifest and actual SELECT bytes, including the normal
   version-independent Monoid prefix `F06D6F6E6F69640201`. Native removal detection

@@ -5,11 +5,12 @@ description: Monoid app development basics, sibling firmware, Capacitor iOS/Andr
 
 # Monoid app development
 
-Source: `../records.md`, records 13, 14, 25–38, 42–46, 62, 64, 69, 70, 84–89 and 94–100. Treat these records as authoritative and keep them up to date.
+Source: `../records.md`, records 13, 14, 25–38, 42–46, 62, 64, 69, 70, 84–89, 94–100 and 102. Treat these records as authoritative and keep them up to date.
 
 - The app (Ionic React + Capacitor, iOS and Android) drives the card applets of the sibling repo `monoid-javacard`, which owns the card protocol. The app mirrors its commands as x-value schemas in `src/@lib/monoid/monoid-applet.ts`, on top of the generic `CBORApplet`/`Applet` transport in `src/@lib`.
 - The app installs cards from bundled applets in `src/@assets/applets` (+ `@applet-bundle.ts`), copied by `npm run prepare:applets` from `../monoid-javacard/build/javacard`. `npm run android`, `ios:sync` and `build:web` run it automatically; build the firmware from a clean commit first and commit the refreshed applets with the app change that mirrors it, or app-installed cards keep the old protocol (records 94, 97).
 - Card maintenance (fresh, update, reinstall) can always Start over once it has written to the card: it reinstalls every applet from the bundled applets and keeps the recovery archive and card identity; untouched plans are just discarded; batches cannot restart (record 95).
+- A saved maintenance operation for the same chip that no longer matches the scanned identity (superseded, e.g. fresh installed since) blocks new maintenance with a specific error; Card Applets shows it and offers a confirmed discard. Never let a new operation silently orphan an older one (record 102).
 - A popup menu of two or more action buttons wraps them in `<Buttons data-popup-animation-group>` (8px), like the Card page menu and `ConfirmPopup`; never place such lists directly in `DetailsPopup` (record 96).
 - The project is old: point out whenever the user's choices conflict with the interactions its existing code implies.
 - The phone's HTTP development WebView is not a secure context: `crypto.randomUUID` is unavailable even when it works in Node or desktop localhost. Use the shared `createFlowId()` from `@utils` for flow IDs; it uses `crypto.getRandomValues`, which remains available over HTTP. Preserve the same constraint for QR/NFC scan IDs. For route regressions, test the real route initializer with `randomUUID` absent; a mocked button handler misses this failure. The user chose project-memory guidance, not a lint restriction (record 46).
