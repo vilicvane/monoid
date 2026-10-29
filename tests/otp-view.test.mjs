@@ -12,6 +12,7 @@ const {parseOTPURI, validateOTPAccountLabel} = await import(
 
 let fixture;
 let rendering;
+let platform = 'android';
 const owners = [];
 const PIN = 'Access-42';
 const OTP_AID = Uint8Array.from(Buffer.from('f06d6f6e6f69640501', 'hex'));
@@ -90,17 +91,21 @@ mock.module('../.bld/app/@components/@key/expandable-key-group.js', {
 mock.module('@capacitor/app', {
   namedExports: {
     App: {
-      addListener: async (_name, handler) => {
+      addListener: async (name, handler) => {
         const owner = fixture;
-        owner.background = handler;
+        owner.listeners.set(name, handler);
         return {
           remove() {
-            if (owner.background === handler) owner.background = undefined;
+            if (owner.listeners.get(name) === handler)
+              owner.listeners.delete(name);
           },
         };
       },
     },
   },
+});
+mock.module('@capacitor/core', {
+  namedExports: {Capacitor: {getPlatform: () => platform}},
 });
 mock.module('../.bld/app/@entrances.js', {
   namedExports: {useEntrances: () => fixture.entrances},
@@ -381,6 +386,7 @@ function mount(cards = [cachedCard(1)], context = {}, importURI, cached = []) {
     index: 0,
     events: [],
     errors: [],
+    listeners: new Map(),
     scans: [],
     groups: new Map(),
     mounted: true,
@@ -456,6 +462,12 @@ function mount(cards = [cachedCard(1)], context = {}, importURI, cached = []) {
         state.view.$match.$exact.$active = false;
       });
     },
+    background(event) {
+      state.listeners.get('appStateChange')?.(event);
+    },
+    pause() {
+      state.listeners.get('pause')?.();
+    },
     unmount() {
       state.mounted = false;
       state.slots.splice(0).forEach(slot => slot.cleanup?.());
@@ -467,6 +479,11 @@ function mount(cards = [cachedCard(1)], context = {}, importURI, cached = []) {
     addEventListener: (name, handler) => visibility.set(name, handler),
     removeEventListener: name => visibility.delete(name),
   };
+  state.hide = () => {
+    globalThis.document.hidden = true;
+    visibility.get('visibilitychange')?.();
+  };
+  state.visibility = visibility;
   state.view = observable({
     ...context,
     $leaving: false,
@@ -560,6 +577,7 @@ function mount(cards = [cachedCard(1)], context = {}, importURI, cached = []) {
 afterEach(() => {
   owners.splice(0).forEach(owner => owner.unmount());
   delete globalThis.document;
+  platform = 'android';
 });
 
 test('OTP uses the main scanner and has no page-specific QR button', () => {
@@ -1102,6 +1120,71 @@ test('backgrounding clears visible codes', async () => {
   );
 });
 
+test('iOS NFC inactivity allows the OTP card list to finish reading', async () => {
+  platform = 'ios';
+  const card = cachedCard(1);
+  const state = mount([card]);
+  state.click('Scan a card');
+  await state.flush();
+  state.background({isActive: false});
+  assert.equal(state.scans[0].signal.aborted, false);
+  await state.tap(card);
+  assert.deepEqual(state.events, [
+    'unlock',
+    'scan',
+    'authenticate',
+    'read',
+    'cache',
+  ]);
+  assert.deepEqual(state.errors, []);
+});
+
+test('iOS NFC inactivity preserves account calculation and the resulting codes', async () => {
+  platform = 'ios';
+  const card = cachedCard(1);
+  const state = mount([card]);
+  state.calculation = deferred();
+  state.openAccount(card);
+  await state.flush();
+  state.background({isActive: false});
+  assert.equal(state.scans[0].signal.aborted, false);
+  const tapping = state.tap(card);
+  await setImmediate();
+  assert.equal(state.events.at(-1), 'calculate');
+  state.background({isActive: false});
+  state.calculation.resolve();
+  await tapping;
+  assert.equal(state.scans[0].signal.aborted, false);
+  assert.ok(find(state.tree, node => node.type === 'CopyButton'));
+  state.background({isActive: false});
+  await state.flush();
+  assert.ok(find(state.tree, node => node.type === 'CopyButton'));
+  assert.deepEqual(state.errors, []);
+});
+
+test('iOS pause and hidden visibility clear codes and release background listeners', async () => {
+  platform = 'ios';
+  for (const event of ['pause', 'hide']) {
+    const card = cachedCard(1);
+    const state = mount([card]);
+    state.openAccount(card);
+    await state.flush();
+    await state.tap(card);
+    assert.ok(find(state.tree, node => node.type === 'CopyButton'));
+    state[event]();
+    await state.flush();
+    assert.equal(
+      find(state.tree, node => node.type === 'CopyButton'),
+      undefined,
+    );
+    assert.equal(state.scans.length, 1);
+    state.unmount();
+    await setImmediate();
+    assert.equal(state.listeners.size, 0);
+    assert.equal(state.visibility.size, 0);
+  }
+});
+
 test('Scan again stays visible, changes color with code availability and preserves a valid code during a retry', async () => {
   const card = cachedCard(1),
     state = mount([card]);
@@ -1249,6 +1332,29 @@ test('backgrounding during calculation aborts the operation and never publishes 
     undefined,
   );
   assert.deepEqual(state.errors, []);
+});
+
+test('iOS pause and hidden visibility cancel calculation without publishing a late code', async () => {
+  platform = 'ios';
+  for (const event of ['pause', 'hide']) {
+    const card = cachedCard(1);
+    const state = mount([card]);
+    state.calculation = deferred();
+    state.openAccount(card);
+    await state.flush();
+    const tapping = state.tap(card);
+    await setImmediate();
+    assert.equal(state.events.at(-1), 'calculate');
+    state[event]();
+    state.calculation.resolve();
+    await tapping;
+    assert.equal(state.scans[0].signal.aborted, true);
+    assert.equal(
+      find(state.tree, node => node.type === 'CopyButton'),
+      undefined,
+    );
+    assert.deepEqual(state.errors, []);
+  }
 });
 
 test('biometric background notification during PIN unlock does not cancel card management input', async () => {

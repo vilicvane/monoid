@@ -1,4 +1,5 @@
 import {App} from '@capacitor/app';
+import {Capacitor} from '@capacitor/core';
 import {reaction} from 'mobx';
 import {useEffect, useRef, useState} from 'react';
 
@@ -63,10 +64,13 @@ export function useCardOperation({
     const visibility = (): void => {
       if (document.hidden) background();
     };
+    // iOS inactivity also includes its NFC and biometric system panels.
     const listener = watchBackground
-      ? App.addListener('appStateChange', ({isActive}) => {
-          if (!isActive) background();
-        })
+      ? Capacitor.getPlatform() === 'ios'
+        ? App.addListener('pause', background)
+        : App.addListener('appStateChange', ({isActive}) => {
+            if (!isActive) background();
+          })
       : undefined;
     if (watchBackground)
       document.addEventListener('visibilitychange', visibility);

@@ -5,6 +5,7 @@ import {setImmediate} from 'node:timers/promises';
 import {observable, runInAction} from 'mobx';
 
 let rendering;
+let platform = 'android';
 const owners = [];
 
 mock.module('react', {
@@ -37,17 +38,21 @@ mock.module('react', {
 mock.module('@capacitor/app', {
   namedExports: {
     App: {
-      addListener: async (_event, callback) => {
+      addListener: async (event, callback) => {
         const owner = rendering;
-        owner.background = callback;
+        owner.listeners.set(event, callback);
         return {
           remove: () => {
-            owner.background = undefined;
+            if (owner.listeners.get(event) === callback)
+              owner.listeners.delete(event);
           },
         };
       },
     },
   },
+});
+mock.module('@capacitor/core', {
+  namedExports: {Capacitor: {getPlatform: () => platform}},
 });
 mock.module('../.bld/app/@components/@monoid/monoid-scan-prompt.js', {
   namedExports: {
@@ -75,6 +80,7 @@ function mount({background = false} = {}) {
     mounted: true,
     route: observable({active: true}),
     events: [],
+    listeners: new Map(),
     scans: [],
     pins: {'00000001': 'Access-42'},
     slot: create => (owner.slots[owner.index++] ??= create()),
@@ -89,6 +95,12 @@ function mount({background = false} = {}) {
       runInAction(() => {
         owner.route.active = false;
       });
+    },
+    background(event) {
+      owner.listeners.get('appStateChange')?.(event);
+    },
+    pause() {
+      owner.listeners.get('pause')?.();
     },
     unmount() {
       owner.mounted = false;
@@ -138,7 +150,10 @@ function mount({background = false} = {}) {
   return owner;
 }
 
-afterEach(() => owners.splice(0).forEach(owner => owner.unmount()));
+afterEach(() => {
+  owners.splice(0).forEach(owner => owner.unmount());
+  platform = 'android';
+});
 
 test('one operation owns the slot before render and through awaited cleanup', async () => {
   const state = mount();
@@ -303,7 +318,56 @@ test('inactivity and visibility notify privacy handlers and abort NFC, leaving P
     assert.equal(state.options.onBackground.mock.callCount(), 3);
     state.unmount();
     await setImmediate();
-    assert.equal(state.background, undefined);
+    assert.equal(state.listeners.size, 0);
+    assert.equal(state.visibility.size, 0);
+  }
+});
+
+test('iOS NFC inactivity preserves the scan and its callback without running privacy cleanup', async () => {
+  platform = 'ios';
+  const state = mount({background: true});
+  const callback = mock.fn(async () => {});
+  const task = state.runner.run(async ({scan}) => {
+    await scan('scan', callback);
+  });
+  await setImmediate();
+  const scan = state.scans[0];
+  state.background({isActive: false});
+  assert.equal(scan.signal.aborted, false);
+  assert.equal(state.options.onBackground.mock.callCount(), 0);
+  await scan.callback({}, () => {}, {}, scan.signal);
+  assert.equal(callback.mock.callCount(), 1);
+  state.background({isActive: true});
+  scan.finished.resolve();
+  await task;
+  assert.equal(state.render().busy, false);
+  assert.equal(state.scans.length, 1);
+  state.unmount();
+  await setImmediate();
+  assert.equal(state.listeners.size, 0);
+  assert.equal(state.visibility.size, 0);
+});
+
+test('iOS pause and hidden visibility still abort NFC without replaying the operation', async () => {
+  platform = 'ios';
+  for (const event of ['pause', 'hide']) {
+    const state = mount({background: true});
+    const task = state.runner.run(async ({scan}) => {
+      await scan('scan', async () => {});
+    });
+    await setImmediate();
+    state[event]();
+    assert.equal(state.scans[0].signal.aborted, true);
+    assert.equal(state.options.onBackground.mock.callCount(), 1);
+    state.scans[0].finished.resolve();
+    await task;
+    globalThis.document.hidden = false;
+    state.background({isActive: true});
+    await setImmediate();
+    assert.equal(state.scans.length, 1);
+    state.unmount();
+    await setImmediate();
+    assert.equal(state.listeners.size, 0);
     assert.equal(state.visibility.size, 0);
   }
 });
