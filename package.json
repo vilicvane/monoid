@@ -2,6 +2,13 @@
   "name": "monoid-app",
   "private": true,
   "version": "0.0.1",
+  "description": "Mobile companion app for Monoid smart cards: keys, wallets, WalletConnect, security key and OTP on a card you can hold.",
+  "homepage": "https://monoid.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vilicvane/monoid.git"
+  },
+  "bugs": "https://github.com/vilicvane/monoid/issues",
   "license": "MIT",
   "author": "vilicvane",
   "type": "module",
@@ -18,7 +25,8 @@
     "dev": "vite",
     "lint": "node scripts/lint.mjs",
     "lint-prettier": "prettier --check .",
-    "test": "npm run lint-prettier && npm run build && npm run lint",
+    "test": "npm run lint-prettier && npm run build && npm run lint && npm run test:app",
+    "test:app": "node --experimental-test-module-mocks --test \"tests/*.test.mjs\"",
     "android": "npm run prepare:applets && ionic cap run android --livereload --external",
     "ionic:build": "npm run build:web",
     "ios": "npm run ios:sync && cap open ios",

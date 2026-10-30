@@ -168,14 +168,15 @@ export class Entrances {
     return WalletKit.init({
       signConfig: WALLET_CONNECT_SIGN_CONFIG,
       core: new Core({
-        projectId: 'f1bac1f17e8531e322bd69250c6cc7b4',
+        projectId: import.meta.env.VITE_WALLETCONNECT_PROJECT_ID,
       }),
       metadata: {
         name: 'Monoid',
         description: 'A smart identity gateway.',
         url: 'https://monoid.app',
         icons: [
-          'https://raw.githubusercontent.com/vilicvane/monoid-javacard/master/res/monoid.png',
+          // Requires this repository to be public.
+          'https://raw.githubusercontent.com/vilicvane/monoid/main/resources/icon.png',
         ],
       },
     });

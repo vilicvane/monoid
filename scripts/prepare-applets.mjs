@@ -285,5 +285,17 @@ if (
     3,
     'Usage: node scripts/prepare-applets.mjs <approved-cap-directory>',
   );
-  await prepareApplets(path.resolve(process.argv[2]));
+  const source = path.resolve(process.argv[2]);
+  // Contributors without the firmware checkout build with the committed applets.
+  const found = await stat(source).then(
+    entry => entry.isDirectory(),
+    () => false,
+  );
+  if (found) {
+    await prepareApplets(source);
+  } else {
+    console.warn(
+      `Applet directory ${source} not found; using the committed applets in src/@assets/applets.`,
+    );
+  }
 }

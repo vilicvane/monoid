@@ -120,7 +120,7 @@ Namespaces are immutable `(source, id)` pairs. User-assigned labels override
 namespace display names, not `account.displayName`, ownership or roots. Wallet
 and organization labels are shared by their currently authorized controllers.
 The bundle name is an optional second level: an owner alone is a valid bundle.
-For example, `id@wsh.earth` and `id@wsh.earth / treasury` identify different
+For example, `alice@example.com` and `alice@example.com / treasury` identify different
 bundles. Omit `groupName` or send `groupName: ""` for the unnamed bundle; both
 canonicalize to the empty string `""`. Issuance responses always include
 `groupName: ""` for it, and bundle listings return `name: ""`.
