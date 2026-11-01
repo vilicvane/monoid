@@ -19,7 +19,9 @@ body {
   flex: none;
   color: var(--color-text-secondary);
   font-size: 13px;
-  line-height: 1.5;
+  /* A whole-pixel line height keeps the sign-in buttons above on the pixel
+     grid; a half-pixel offset makes iOS draw their 0.5px borders uneven. */
+  line-height: 20px;
   text-align: center;
 }
 
