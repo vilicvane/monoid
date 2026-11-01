@@ -224,3 +224,7 @@
 ## ff9dc4e
 
 113. [user] approved the low-risk dependency-audit fixes (remove unused dependencies, update within ranges, bump wrangler/miniflare). [agent] removed unused root dependencies; Vite 7.3.7 with the reconnect plugin re-verified and enabled for 7.3.7 (updates record 99); styled-components held at `~6.3.12` and Prettier at 3.6.2; the Authority login page's deduped shared packages pin the app's resolved versions; remaining advisories need `@ionic/cli` replacement, Capacitor 8.6, an ESLint major or Reown moving to zod 4. Details in [113.md](./113.md). Dependency audit, npm audit, classNames.
+
+## 611e57a
+
+114. [user] on iOS Safari the Authority sign-in buttons' borders looked like shadows (top edge fading, bottom solid), while the authority capsule on the same page and the app's buttons were solid; a 1px border was solid but not good enough. [agent] Cause: the buttons stack from the page bottom above the legal links, whose 13px × 1.5 line height (27.5px with padding) put every button half a pixel off; at that offset iOS rounds the inner and outer edges of a 0.5px (one device pixel) border to different pixels, drawing a crescent. The links now use `line-height: 20px`; the user confirmed it on the iPhone through a Tailscale-served copy of the real page with a mocked sign-in context. `appearance: none` on the button was tried first, had no effect and was reverted. Hairline borders, half pixel, subpixel.
