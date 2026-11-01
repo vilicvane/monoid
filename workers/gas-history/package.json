@@ -12,10 +12,10 @@
     "deploy": "wrangler deploy"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20261016.1",
+    "@cloudflare/workers-types": "5.20261101.1",
     "@mufan/eslint-plugin": "^0.2.19",
     "eslint": "^8.57.1",
     "typescript": "~5.8.3",
-    "wrangler": "4.151.1"
+    "wrangler": "4.156.0"
   }
 }

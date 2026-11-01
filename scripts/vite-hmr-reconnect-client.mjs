@@ -223,7 +223,7 @@ export function installHmrReconnect(window, endpoint, initialSequence) {
       }
     }
 
-    // Vite 7.0.6 uses EventTarget methods, send/close, readyState/OPEN and url.
+    // Vite 7.3.7 uses EventTarget methods, send/close, readyState/OPEN and url.
     // Delegate other WebSocket properties to the current native socket.
     const facade = new Proxy(events, {
       get(target, key) {

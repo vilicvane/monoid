@@ -8,18 +8,18 @@
     "test": "node --experimental-vm-modules --test tests/*.test.mjs"
   },
   "dependencies": {
-    "@ionic/react": "8.6.5",
+    "@ionic/react": "8.8.19",
     "@reown/appkit": "1.8.24",
     "@reown/appkit-adapter-ethers": "1.8.24",
     "@reown/appkit-controllers": "1.8.24",
     "classnames": "2.5.1",
     "ethers": "6.17.0",
-    "lucide-react": "1.59.0",
-    "mobx": "6.13.7",
-    "mobx-react-lite": "4.1.0",
+    "lucide-react": "1.66.0",
+    "mobx": "6.16.1",
+    "mobx-react-lite": "4.1.1",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "styled-components": "6.1.19"
+    "styled-components": "6.3.12"
   },
   "devDependencies": {
     "@types/react": "19.1.8",

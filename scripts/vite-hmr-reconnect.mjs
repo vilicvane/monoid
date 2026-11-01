@@ -6,12 +6,12 @@ import {installHmrReconnect} from './vite-hmr-reconnect-client.mjs';
 
 /** @returns {import('vite').Plugin} */
 export function viteHmrReconnect() {
-  // Intentional dependency on Vite 7.0.6 client internals (client.mjs):
+  // Intentional dependency on Vite 7.3.7 client internals (client.mjs):
   // vite-hmr transport -> close -> vite:ws:disconnect -> vite-ping -> reload.
   // The transport retains one socket and sends JSON pings AND custom messages.
   // Recheck that contract before enabling another version. Otherwise use Vite.
   // https://github.com/vitejs/vite/issues/5675
-  const supported = version === '7.0.6';
+  const supported = version === '7.3.7';
   let snapshot;
   let endpoint;
   const disposers = [];
