@@ -34,6 +34,7 @@ function setup() {
   const sessions = {};
   const requests = [];
   const responses = [];
+  const extensions = [];
   const snapshots = [];
   let stored;
   const storage = {
@@ -56,6 +57,10 @@ function setup() {
           request.id === response.response.id,
       );
       if (index >= 0) requests.splice(index, 1);
+    },
+    async extendSession({topic}) {
+      extensions.push(topic);
+      return {acknowledged: async () => {}};
     },
   };
   const service = new SSHWalletService(kit, storage);
@@ -105,6 +110,7 @@ function setup() {
     sessions,
     requests,
     responses,
+    extensions,
     snapshots,
     session,
     request,
@@ -154,6 +160,79 @@ test('same request never prompts or signs twice and terminal persists before res
   await f.service.receive(request);
   assert.equal(f.service.pending.size, 0);
   assert.equal(f.responses.at(-1).response.error.code, -32007);
+  assert.deepEqual(f.extensions, ['topic']);
+});
+
+test('SSH renewal waits for signature publication without blocking subsequent signing', async () => {
+  const f = setup();
+  await f.session();
+  const publishing = deferred();
+  const published = deferred();
+  const peer = deferred();
+  const respond = f.kit.respondSessionRequest;
+  f.kit.respondSessionRequest = async response => {
+    publishing.resolve();
+    await published.promise;
+    await respond(response);
+  };
+  const extend = f.kit.extendSession;
+  f.kit.extendSession = async options => {
+    await extend(options);
+    return {acknowledged: () => peer.promise};
+  };
+  const sign = async id => {
+    await f.service.receive(f.request(id));
+    await f.service.sign([...f.service.pending.values()][0], async () =>
+      signed(),
+    );
+  };
+  const first = sign(1);
+  await publishing.promise;
+  assert.deepEqual(f.extensions, []);
+  published.resolve();
+  await first;
+  await sign(2);
+  assert.deepEqual(f.extensions, ['topic']);
+  assert.ok(f.responses.every(({response}) => response.result.signature));
+
+  // A lost confirmation releases the renewal slot for a later signature.
+  peer.reject(new Error('Renewal not acknowledged'));
+  await assert.rejects(peer.promise);
+  f.kit.extendSession = extend;
+  const confirmed = deferred();
+  f.service.onSessionExtended = confirmed.resolve;
+  await sign(3);
+  await confirmed.promise;
+  assert.deepEqual(f.extensions, ['topic', 'topic']);
+});
+
+test('SSH signature publication failure does not extend the session', async () => {
+  const f = setup();
+  await f.session();
+  await f.service.receive(f.request());
+  f.kit.respondSessionRequest = async () => {
+    throw new Error('Relay disconnected');
+  };
+  await assert.rejects(
+    f.service.sign([...f.service.pending.values()][0], async () => signed()),
+  );
+  assert.deepEqual(f.extensions, []);
+});
+
+test('SSH does not extend an authorization revoked during signature publication', async () => {
+  const f = setup();
+  await f.session();
+  await f.service.receive(f.request());
+  const respond = f.kit.respondSessionRequest;
+  f.kit.respondSessionRequest = async response => {
+    await respond(response);
+    f.service.invalidateSession(response.topic);
+  };
+  await f.service.sign([...f.service.pending.values()][0], async () =>
+    signed(),
+  );
+  assert.ok(f.responses[0].response.result.signature);
+  assert.deepEqual(f.extensions, []);
 });
 
 test('one global approval slot rejects another session with durable Busy', async () => {

@@ -225,6 +225,8 @@ export class WalletKitService {
   ) {
     this.ssh =
       ssh ?? new SSHWalletService(kit, storage, undefined, sshCandidates);
+    // The SDK's session_extend event is for incoming extensions.
+    this.ssh.onSessionExtended = () => this.refreshSessions();
     this.signingLock = this.ssh.signingLock;
     runInAction(() => {
       this.sessionRecords.replace(records);

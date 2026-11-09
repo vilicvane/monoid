@@ -71,6 +71,7 @@ export class SSHWalletService {
     deep: false,
   });
   readonly syncing = observable.set<string>();
+  onSessionExtended?: () => void;
   private state: SSHWalletState;
   private writing = Promise.resolve();
   private receiving = Promise.resolve();
@@ -80,6 +81,7 @@ export class SSHWalletService {
   private storageFailed = false;
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   private completing = new Map<string, Promise<void>>();
+  private extending = new Set<string>();
   private registering = new Set<string>();
   private metadataRequests = new Map<string, Promise<void>>();
   private metadataSending = new Set<string>();
@@ -590,12 +592,30 @@ export class SSHWalletService {
       });
       if (signingResult && signature === undefined)
         throw error ?? new SSHProtocolError(SSH_ERROR_CODES.cancelled);
+      if (signature !== undefined) void this.extendSession(value);
     } finally {
       clearTimeout(this.timers.get(key));
       this.timers.delete(key);
       runInAction(() => this.pending.delete(key));
       if (this.claimed === key) this.claimed = undefined;
       this.releaseIfIdle();
+    }
+  }
+
+  private async extendSession(value: SSHWalletRequest): Promise<void> {
+    const {topic} = value.request;
+    if (this.extending.has(topic)) return;
+    this.extending.add(topic);
+    try {
+      // The session or account may have been revoked during response publication.
+      this.assertAuthorization(value);
+      const {acknowledged} = await this.kit.extendSession({topic});
+      await acknowledged();
+      this.onSessionExtended?.();
+    } catch {
+      // A renewal failure cannot undo the signature; a later sign can try again.
+    } finally {
+      this.extending.delete(topic);
     }
   }
 
